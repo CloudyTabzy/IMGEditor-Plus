@@ -1,6 +1,8 @@
 pub use eframe::egui;
 
+use crate::config::{Config, Theme};
 use crate::editor::{Editor, TaskMessage};
+use crate::hotkeys::Hotkey;
 use crate::parser::{ImgParser, ImgVersion};
 #[cfg(feature = "native-dialogs")]
 use crate::ui::dialogs;
@@ -18,36 +20,65 @@ const ABOUT_TEXT: &str = concat!(
 
 pub struct MainWindow {
     editor: Editor,
+    config: Config,
     search_filter: String,
     rename_buffer: String,
     show_about: bool,
+    show_welcome: bool,
     show_unsupported: bool,
     unsupported_path: String,
     completion_receiver: async_channel::Receiver<TaskMessage>,
     completion_sender: async_channel::Sender<TaskMessage>,
+    last_applied_theme: Option<Theme>,
+    window_rect: Option<egui::Rect>,
 }
 
 impl Default for MainWindow {
     fn default() -> Self {
+        Self::new(Config::default())
+    }
+}
+
+impl MainWindow {
+    pub fn new(config: Config) -> Self {
         let (sender, receiver) = async_channel::bounded(64);
         let mut editor = Editor::new();
         editor.set_task_sender(sender.clone());
+        let show_welcome = !config.first_run_complete;
         Self {
             editor,
+            config,
             search_filter: String::new(),
             rename_buffer: String::new(),
             show_about: false,
+            show_welcome,
             show_unsupported: false,
             unsupported_path: String::new(),
             completion_receiver: receiver,
             completion_sender: sender,
+            last_applied_theme: None,
+            window_rect: None,
         }
     }
 }
 
 impl eframe::App for MainWindow {
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        if let Some(rect) = self.window_rect {
+            self.config.window_size = Some([rect.width(), rect.height()]);
+            self.config.window_position = Some([rect.min.x, rect.min.y]);
+        }
+        let _ = self.config.save();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_completion_messages();
+
+        if self.last_applied_theme != Some(self.config.theme) {
+            self.config.theme.apply(ctx);
+            self.last_applied_theme = Some(self.config.theme);
+        }
+
         self.handle_dropped_files(ctx);
         self.handle_global_hotkeys(ctx);
 
@@ -56,6 +87,7 @@ impl eframe::App for MainWindow {
                 self.file_menu(ui);
                 self.edit_menu(ui);
                 self.selection_menu(ui);
+                self.option_menu(ui);
                 self.help_menu(ui);
             });
         });
@@ -69,6 +101,8 @@ impl eframe::App for MainWindow {
         if self.has_active_progress() {
             ctx.request_repaint();
         }
+
+        self.window_rect = ctx.input(|i| i.viewport().outer_rect);
     }
 }
 
@@ -159,6 +193,19 @@ impl MainWindow {
                     ui.close_menu();
                 }
             });
+        });
+    }
+
+    fn option_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Option", |ui| {
+            ui.label("Theme:");
+            for theme in [Theme::Light, Theme::Dark, Theme::System] {
+                let selected = self.config.theme == theme;
+                if ui.selectable_label(selected, theme.as_str()).clicked() {
+                    self.config.theme = theme;
+                    ui.close_menu();
+                }
+            }
         });
     }
 
@@ -456,6 +503,22 @@ impl MainWindow {
     }
 
     fn modals(&mut self, ctx: &egui::Context) {
+        if self.show_welcome {
+            egui::Window::new("Welcome")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label("Welcome to IMGEditor!");
+                    ui.label("Open or create an archive to get started.");
+                    ui.label("Supported formats: GTA III, Vice City, San Andreas, Bully SE.");
+                    if ui.button("Get started").clicked() {
+                        self.show_welcome = false;
+                        self.config.first_run_complete = true;
+                        let _ = self.config.save();
+                    }
+                });
+        }
+
         if self.show_about {
             egui::Window::new("About")
                 .collapsible(false)
@@ -492,33 +555,31 @@ impl MainWindow {
             return;
         }
 
-        let modifiers = ctx.input(|input| input.modifiers);
-        let ctrl = modifiers.ctrl || modifiers.mac_cmd;
-        let shift = modifiers.shift;
+        let input = ctx.input(|i| i.clone());
 
-        if ctrl && ctx.input(|input| input.key_pressed(egui::Key::N)) {
+        if Hotkey::new(egui::Key::N, None).pressed(&input, egui::Modifiers::CTRL) {
             self.editor.new_archive();
-        } else if ctrl && ctx.input(|input| input.key_pressed(egui::Key::O)) {
+        } else if Hotkey::new(egui::Key::O, None).pressed(&input, egui::Modifiers::CTRL) {
             self.open_archive_dialog();
-        } else if ctrl && ctx.input(|input| input.key_pressed(egui::Key::S)) {
+        } else if Hotkey::new(egui::Key::S, None).pressed(&input, egui::Modifiers::CTRL) {
             let _ = self.editor.save_archive_in_place();
-        } else if shift && ctx.input(|input| input.key_pressed(egui::Key::S)) {
+        } else if Hotkey::new(egui::Key::S, None).pressed(&input, egui::Modifiers::SHIFT) {
             self.save_as_dialog();
-        } else if ctrl && ctx.input(|input| input.key_pressed(egui::Key::I)) {
+        } else if Hotkey::new(egui::Key::I, None).pressed(&input, egui::Modifiers::CTRL) {
             self.import_dialog(false);
-        } else if shift && ctx.input(|input| input.key_pressed(egui::Key::I)) {
+        } else if Hotkey::new(egui::Key::I, None).pressed(&input, egui::Modifiers::SHIFT) {
             self.import_dialog(true);
-        } else if ctrl && ctx.input(|input| input.key_pressed(egui::Key::E)) {
+        } else if Hotkey::new(egui::Key::E, None).pressed(&input, egui::Modifiers::CTRL) {
             self.export_dialog(false);
-        } else if shift && ctx.input(|input| input.key_pressed(egui::Key::E)) {
+        } else if Hotkey::new(egui::Key::E, None).pressed(&input, egui::Modifiers::SHIFT) {
             self.export_dialog(true);
-        } else if ctrl && ctx.input(|input| input.key_pressed(egui::Key::A)) {
+        } else if Hotkey::new(egui::Key::A, None).pressed(&input, egui::Modifiers::CTRL) {
             self.editor.select_all(true);
-        } else if shift && ctx.input(|input| input.key_pressed(egui::Key::A)) {
+        } else if Hotkey::new(egui::Key::A, None).pressed(&input, egui::Modifiers::SHIFT) {
             self.editor.invert_selection();
-        } else if shift && ctx.input(|input| input.key_pressed(egui::Key::X)) {
+        } else if Hotkey::new(egui::Key::X, None).pressed(&input, egui::Modifiers::SHIFT) {
             self.editor.close_selected_archive();
-        } else if ctx.input(|input| input.key_pressed(egui::Key::Delete)) {
+        } else if Hotkey::new(egui::Key::Delete, None).pressed(&input, egui::Modifiers::NONE) {
             self.editor.delete_selected();
         }
     }

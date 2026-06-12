@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod archive;
+mod config;
 mod editor;
 mod hotkeys;
 mod parser;

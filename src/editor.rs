@@ -24,7 +24,22 @@ impl Editor {
     }
 
     pub fn run() -> anyhow::Result<()> {
-        crate::ui::application::run(crate::ui::renderer::MainWindow::default())
+        let config = crate::config::Config::load();
+
+        let mut viewport = egui::ViewportBuilder::default()
+            .with_title("Grinch_'s IMG Editor")
+            .with_inner_size(config.window_size.unwrap_or([900.0, 600.0]));
+        if let Some(position) = config.window_position {
+            viewport = viewport.with_position(position);
+        }
+
+        let options = eframe::NativeOptions {
+            viewport,
+            persist_window: false,
+            ..Default::default()
+        };
+
+        crate::ui::application::run(crate::ui::renderer::MainWindow::new(config), options)
             .map_err(|err| anyhow::anyhow!("{}", err))
     }
 
