@@ -9,9 +9,17 @@ impl Hotkey {
         Self { primary, secondary }
     }
 
-    pub fn pressed(&self, input: &egui::InputState, modifiers: egui::Modifiers) -> bool {
-        input.modifiers == modifiers
-            && input.key_pressed(self.primary)
+    pub fn pressed(&self, input: &egui::InputState, required: egui::Modifiers) -> bool {
+        input.key_pressed(self.primary)
             && self.secondary.map_or(true, |key| input.key_pressed(key))
+            && modifiers_match(input.modifiers, required)
     }
+}
+
+fn modifiers_match(input: egui::Modifiers, required: egui::Modifiers) -> bool {
+    (!required.command || input.command)
+        && (!required.ctrl || input.ctrl)
+        && (!required.shift || input.shift)
+        && (!required.alt || input.alt)
+        && (!required.mac_cmd || input.mac_cmd)
 }

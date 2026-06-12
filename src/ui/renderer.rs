@@ -342,7 +342,7 @@ impl MainWindow {
     }
 
     fn entry_table(&mut self, ui: &mut egui::Ui, archive_index: usize) {
-        let row_height = ui.text_style_height(&egui::TextStyle::Body);
+        let row_height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
 
         let filtered: Vec<usize> = {
             let archive = &self.editor.archives()[archive_index];
@@ -350,30 +350,44 @@ impl MainWindow {
         };
         let total_entries = filtered.len();
 
-        egui::ScrollArea::vertical()
-            .id_source("entry_scroll")
-            .auto_shrink([false; 2])
-            .show_rows(ui, row_height, total_entries, |ui, row_range| {
-                let width = ui.available_width();
-                ui.set_width(width);
-
-                ui.horizontal(|ui| {
-                    ui.label("Name");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label("Size");
-                        ui.label("Type");
+        ui.push_id(format!("entry_table_{archive_index}"), |ui| {
+            egui_extras::TableBuilder::new(ui)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .column(egui_extras::Column::remainder().at_least(200.0))
+                .column(egui_extras::Column::auto().at_least(100.0))
+                .column(egui_extras::Column::auto().at_least(80.0))
+                .header(row_height, |mut header| {
+                    header.col(|ui| {
+                        ui.label("Name");
+                    });
+                    header.col(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Type")
+                        });
+                    });
+                    header.col(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Size")
+                        });
+                    });
+                })
+                .body(|body| {
+                    body.rows(row_height, total_entries, |mut row| {
+                        let display_index = row.index();
+                        if let Some(&entry_index) = filtered.get(display_index) {
+                            self.entry_row(&mut row, archive_index, entry_index);
+                        }
                     });
                 });
-                ui.separator();
-
-                for display_index in row_range {
-                    let entry_index = filtered[display_index];
-                    self.entry_row(ui, archive_index, entry_index);
-                }
-            });
+        });
     }
 
-    fn entry_row(&mut self, ui: &mut egui::Ui, archive_index: usize, entry_index: usize) {
+    fn entry_row(
+        &mut self,
+        row: &mut egui_extras::TableRow,
+        archive_index: usize,
+        entry_index: usize,
+    ) {
         let entry = &self.editor.archives()[archive_index].entries[entry_index];
         let is_selected = entry.selected;
         let is_renaming = entry.rename;
@@ -382,7 +396,7 @@ impl MainWindow {
         let size_kb = entry.sector * 2;
 
         if is_renaming {
-            ui.horizontal(|ui| {
+            row.col(|ui| {
                 let response = ui.text_edit_singleline(&mut self.rename_buffer);
                 if response.lost_focus() {
                     if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
@@ -393,51 +407,69 @@ impl MainWindow {
                 }
                 response.request_focus();
             });
+            row.col(|_ui| {});
+            row.col(|_ui| {});
             return;
-        }
-
-        let response = ui
-            .horizontal(|ui| {
-                ui.selectable_label(
-                    is_selected,
-                    format!("{file_name}    {file_type}    {size_kb} kb"),
-                )
-            })
-            .inner;
-
-        if response.clicked() {
-            let modifiers = ui.input(|input| input.modifiers);
-            self.editor.select_entry(
-                entry_index,
-                modifiers.shift,
-                modifiers.ctrl || modifiers.mac_cmd,
-            );
         }
 
         let mut rename_requested = false;
         let mut delete_requested = false;
         let mut export_requested = false;
 
-        response.context_menu(|ui| {
-            if ui.button("Copy name").clicked() {
-                ui.ctx().output_mut(|output| {
-                    output.copied_text = file_name.clone();
-                });
-                ui.close_menu();
-            }
-            if ui.button("Rename").clicked() {
-                rename_requested = true;
-                ui.close_menu();
-            }
-            if ui.button("Delete").clicked() {
-                delete_requested = true;
-                ui.close_menu();
-            }
-            if ui.button("Export").clicked() {
-                export_requested = true;
-                ui.close_menu();
-            }
+        let mut name_response: Option<egui::Response> = None;
+
+        row.col(|ui| {
+            name_response =
+                Some(ui.add(egui::SelectableLabel::new(is_selected, file_name.clone())));
         });
+        row.col(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(file_type.clone())
+            });
+        });
+        row.col(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(format!("{size_kb} kb"))
+            });
+        });
+
+        if let Some(name_response) = name_response {
+            if name_response.clicked() {
+                let modifiers = name_response.ctx.input(|input| input.modifiers);
+                self.editor.select_entry(
+                    entry_index,
+                    modifiers.shift,
+                    modifiers.ctrl || modifiers.mac_cmd,
+                );
+            }
+
+            name_response.context_menu(|ui| {
+                if ui.button("Copy name").clicked() {
+                    ui.ctx().output_mut(|output| {
+                        output.copied_text = file_name.clone();
+                    });
+                    ui.close_menu();
+                }
+                if ui.button("Rename").clicked() {
+                    rename_requested = true;
+                    ui.close_menu();
+                }
+                if ui.button("Delete").clicked() {
+                    delete_requested = true;
+                    ui.close_menu();
+                }
+                if ui.button("Export").clicked() {
+                    export_requested = true;
+                    ui.close_menu();
+                }
+            });
+
+            if name_response.double_clicked() {
+                self.rename_buffer = file_name.clone();
+                self.editor.set_selected_entry(Some(entry_index));
+                self.editor.archives_mut()[archive_index].entries[entry_index].rename = true;
+            }
+        }
 
         if rename_requested {
             self.rename_buffer = file_name.clone();
@@ -453,12 +485,6 @@ impl MainWindow {
         if export_requested {
             self.editor.archives_mut()[archive_index].entries[entry_index].selected = true;
             self.export_dialog(true);
-        }
-
-        if response.double_clicked() {
-            self.rename_buffer = file_name;
-            self.editor.set_selected_entry(Some(entry_index));
-            self.editor.archives_mut()[archive_index].entries[entry_index].rename = true;
         }
     }
 
@@ -639,35 +665,59 @@ impl MainWindow {
 
     fn handle_global_hotkeys(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
-            return;
+            let modifiers = ctx.input(|i| i.modifiers);
+            if !modifiers.any() {
+                return;
+            }
         }
 
         let input = ctx.input(|i| i.clone());
+        let mut consumed = false;
 
         if Hotkey::new(egui::Key::N, None).pressed(&input, egui::Modifiers::CTRL) {
             self.editor.new_archive();
+            consumed = true;
         } else if Hotkey::new(egui::Key::O, None).pressed(&input, egui::Modifiers::CTRL) {
             self.open_archive_dialog();
+            consumed = true;
         } else if Hotkey::new(egui::Key::S, None).pressed(&input, egui::Modifiers::CTRL) {
             let _ = self.editor.save_archive_in_place();
+            consumed = true;
         } else if Hotkey::new(egui::Key::S, None).pressed(&input, egui::Modifiers::SHIFT) {
             self.save_as_dialog();
+            consumed = true;
         } else if Hotkey::new(egui::Key::I, None).pressed(&input, egui::Modifiers::CTRL) {
             self.import_dialog(false);
+            consumed = true;
         } else if Hotkey::new(egui::Key::I, None).pressed(&input, egui::Modifiers::SHIFT) {
             self.import_dialog(true);
+            consumed = true;
         } else if Hotkey::new(egui::Key::E, None).pressed(&input, egui::Modifiers::CTRL) {
             self.export_dialog(false);
+            consumed = true;
         } else if Hotkey::new(egui::Key::E, None).pressed(&input, egui::Modifiers::SHIFT) {
             self.export_dialog(true);
+            consumed = true;
         } else if Hotkey::new(egui::Key::A, None).pressed(&input, egui::Modifiers::CTRL) {
             self.editor.select_all(true);
+            consumed = true;
         } else if Hotkey::new(egui::Key::A, None).pressed(&input, egui::Modifiers::SHIFT) {
             self.editor.invert_selection();
+            consumed = true;
         } else if Hotkey::new(egui::Key::X, None).pressed(&input, egui::Modifiers::SHIFT) {
             self.editor.close_selected_archive();
+            consumed = true;
         } else if Hotkey::new(egui::Key::Delete, None).pressed(&input, egui::Modifiers::NONE) {
             self.editor.delete_selected();
+            consumed = true;
+        }
+
+        if consumed {
+            ctx.memory_mut(|memory| {
+                if let Some(id) = memory.focused() {
+                    memory.surrender_focus(id);
+                }
+            });
         }
     }
 
