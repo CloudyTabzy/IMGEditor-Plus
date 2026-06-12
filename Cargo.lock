@@ -1748,6 +1748,7 @@ name = "imgeditor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "eframe",
  "egui",
  "rfd",

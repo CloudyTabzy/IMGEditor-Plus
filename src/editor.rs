@@ -3,12 +3,19 @@ use std::path::{Path, PathBuf};
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{ImgParser, ImgVersion, PcV1Parser, PcV2Parser, import_entry};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Editor {
     archives: Vec<ArchiveInfo>,
     selected_archive: Option<usize>,
     selected_entry: Option<usize>,
     pending_messages: Vec<String>,
+    task_sender: Option<async_channel::Sender<TaskMessage>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TaskMessage {
+    SaveCompleted { index: usize, archive: ArchiveInfo },
+    ExportCompleted { index: usize },
 }
 
 impl Editor {
@@ -21,8 +28,16 @@ impl Editor {
             .map_err(|err| anyhow::anyhow!("{}", err))
     }
 
+    pub fn set_task_sender(&mut self, sender: async_channel::Sender<TaskMessage>) {
+        self.task_sender = Some(sender);
+    }
+
     pub fn archives(&self) -> &[ArchiveInfo] {
         &self.archives
+    }
+
+    pub fn archives_mut(&mut self) -> &mut Vec<ArchiveInfo> {
+        &mut self.archives
     }
 
     pub fn selected_archive(&self) -> Option<usize> {
@@ -215,9 +230,14 @@ impl Editor {
             let archive = self.archives[index].clone();
             let progress = archive.progress.clone();
             let folder = folder.to_path_buf();
+            let sender = self.task_sender.clone();
 
             let task = smol::spawn(async move {
-                export_task(archive, folder, ExportMode::All, progress).await
+                let result = export_task(archive, folder, ExportMode::All, progress).await;
+                if let Some(sender) = sender {
+                    let _ = sender.send(TaskMessage::ExportCompleted { index }).await;
+                }
+                result
             });
 
             self.archives[index].task = Some(task);
@@ -229,9 +249,14 @@ impl Editor {
             let archive = self.archives[index].clone();
             let progress = archive.progress.clone();
             let folder = folder.to_path_buf();
+            let sender = self.task_sender.clone();
 
             let task = smol::spawn(async move {
-                export_task(archive, folder, ExportMode::Selected, progress).await
+                let result = export_task(archive, folder, ExportMode::Selected, progress).await;
+                if let Some(sender) = sender {
+                    let _ = sender.send(TaskMessage::ExportCompleted { index }).await;
+                }
+                result
             });
 
             self.archives[index].task = Some(task);
@@ -244,11 +269,21 @@ impl Editor {
             let progress = archive.progress.clone();
             let path = path.to_path_buf();
             let parser_version = version;
+            let sender = self.task_sender.clone();
 
             let task = smol::spawn(async move {
                 let result = save_task(archive, path, parser_version, progress).await;
                 if let Err(ref err) = result {
                     eprintln!("save failed: {err}");
+                } else if let Some(sender) = sender {
+                    if let Ok(ref archive) = result {
+                        let _ = sender
+                            .send(TaskMessage::SaveCompleted {
+                                index,
+                                archive: archive.clone(),
+                            })
+                            .await;
+                    }
                 }
                 result
             });
@@ -288,17 +323,6 @@ impl Editor {
         self.archives
             .iter()
             .any(|archive| archive.file_name == name)
-    }
-}
-
-impl Default for Editor {
-    fn default() -> Self {
-        Self {
-            archives: Vec::new(),
-            selected_archive: None,
-            selected_entry: None,
-            pending_messages: Vec::new(),
-        }
     }
 }
 

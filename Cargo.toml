@@ -9,6 +9,7 @@ native-dialogs = ["dep:rfd"]
 
 [dependencies]
 anyhow = "1.0"
+async-channel = "2"
 eframe = "0.27"
 egui = "0.27"
 thiserror = "1.0"
