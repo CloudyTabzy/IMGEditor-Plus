@@ -136,15 +136,11 @@ impl PcV2Parser {
         out.write_all(&total.to_le_bytes())?;
 
         let mut data_offset = 0x300000_u64;
-        archive.progress.in_use = true;
-        archive.progress.cancel = false;
-        archive.progress.percentage = 0.0;
+        archive.progress.start();
 
         for (index, entry) in archive.entries.iter_mut().enumerate() {
-            if archive.progress.cancel {
-                archive.progress.in_use = false;
-                archive.progress.cancel = false;
-                archive.progress.percentage = 0.0;
+            if archive.progress.is_cancelled() {
+                archive.progress.finish();
                 anyhow::bail!("Rebuild cancelled");
             }
 
@@ -164,11 +160,12 @@ impl PcV2Parser {
             out.write_all(&mut data)?;
 
             data_offset += size;
-            archive.progress.percentage = (index + 1) as f32 / total as f32;
+            archive
+                .progress
+                .set_percentage((index + 1) as f32 / total as f32);
         }
 
-        archive.progress.in_use = false;
-        archive.progress.percentage = 1.0;
+        archive.progress.set_percentage(1.0);
         Ok(())
     }
 }

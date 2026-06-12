@@ -138,15 +138,11 @@ impl PcV1Parser {
 
         let mut offset = 0u64;
         let total = archive.entries.len();
-        archive.progress.in_use = true;
-        archive.progress.cancel = false;
-        archive.progress.percentage = 0.0;
+        archive.progress.start();
 
         for (index, entry) in archive.entries.iter_mut().enumerate() {
-            if archive.progress.cancel {
-                archive.progress.in_use = false;
-                archive.progress.cancel = false;
-                archive.progress.percentage = 0.0;
+            if archive.progress.is_cancelled() {
+                archive.progress.finish();
                 anyhow::bail!("Rebuild cancelled");
             }
 
@@ -162,11 +158,12 @@ impl PcV1Parser {
             img_out.write_all(&mut data)?;
 
             offset += size;
-            archive.progress.percentage = (index + 1) as f32 / total as f32;
+            archive
+                .progress
+                .set_percentage((index + 1) as f32 / total as f32);
         }
 
-        archive.progress.in_use = false;
-        archive.progress.percentage = 1.0;
+        archive.progress.set_percentage(1.0);
         Ok(())
     }
 }
