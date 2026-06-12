@@ -3,11 +3,16 @@ name = "imgeditor"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["native-dialogs"]
+native-dialogs = ["dep:rfd"]
+
 [dependencies]
 anyhow = "1.0"
 eframe = "0.27"
 egui = "0.27"
 thiserror = "1.0"
+rfd = { version = "0.17", default-features = false, optional = true }
 
 [dev-dependencies]
 tempfile = "3"
