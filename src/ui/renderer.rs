@@ -6,10 +6,13 @@ use crate::hotkeys::Hotkey;
 use crate::parser::{ImgParser, ImgVersion};
 #[cfg(feature = "native-dialogs")]
 use crate::ui::dialogs;
+use crate::updater::{UpdateResult, Updater};
 
 const ABOUT_TEXT: &str = concat!(
     "Grinch_'s IMG Editor\n",
-    "Version 0.1.0\n",
+    "Version ",
+    env!("CARGO_PKG_VERSION"),
+    "\n",
     "\n",
     "Supported formats:\n",
     "- GTA III\n",
@@ -20,6 +23,7 @@ const ABOUT_TEXT: &str = concat!(
 
 pub struct MainWindow {
     editor: Editor,
+    updater: Updater,
     config: Config,
     search_filter: String,
     rename_buffer: String,
@@ -27,6 +31,12 @@ pub struct MainWindow {
     show_welcome: bool,
     show_unsupported: bool,
     unsupported_path: String,
+    show_update: bool,
+    update_version: String,
+    update_url: String,
+    show_update_status: bool,
+    update_status_text: String,
+    update_check_manual: bool,
     completion_receiver: async_channel::Receiver<TaskMessage>,
     completion_sender: async_channel::Sender<TaskMessage>,
     last_applied_theme: Option<Theme>,
@@ -45,8 +55,12 @@ impl MainWindow {
         let mut editor = Editor::new();
         editor.set_task_sender(sender.clone());
         let show_welcome = !config.first_run_complete;
+        let version = env!("CARGO_PKG_VERSION").to_string();
+        let mut updater = Updater::new("CloudyTabzy/IMGEditor-rs", version.clone());
+        updater.check();
         Self {
             editor,
+            updater,
             config,
             search_filter: String::new(),
             rename_buffer: String::new(),
@@ -54,6 +68,12 @@ impl MainWindow {
             show_welcome,
             show_unsupported: false,
             unsupported_path: String::new(),
+            show_update: false,
+            update_version: String::new(),
+            update_url: String::new(),
+            show_update_status: false,
+            update_status_text: String::new(),
+            update_check_manual: false,
             completion_receiver: receiver,
             completion_sender: sender,
             last_applied_theme: None,
@@ -73,6 +93,7 @@ impl eframe::App for MainWindow {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_completion_messages();
+        self.poll_updater();
 
         if self.last_applied_theme != Some(self.config.theme) {
             self.config.theme.apply(ctx);
@@ -107,6 +128,31 @@ impl eframe::App for MainWindow {
 }
 
 impl MainWindow {
+    fn poll_updater(&mut self) {
+        if let Some(result) = self.updater.poll() {
+            match result {
+                UpdateResult::Available { version, url } => {
+                    self.update_version = version;
+                    self.update_url = url;
+                    self.show_update = true;
+                }
+                UpdateResult::UpToDate => {
+                    if self.update_check_manual {
+                        self.update_status_text = "You are using the latest version.".to_string();
+                        self.show_update_status = true;
+                    }
+                }
+                UpdateResult::Error(message) => {
+                    if self.update_check_manual {
+                        self.update_status_text = format!("Update check failed: {message}");
+                        self.show_update_status = true;
+                    }
+                }
+            }
+            self.update_check_manual = false;
+        }
+    }
+
     fn file_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("File", |ui| {
             let has_archive = self.editor.selected_archive().is_some();
@@ -211,6 +257,15 @@ impl MainWindow {
 
     fn help_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Help", |ui| {
+            if ui.button("Check for updates").clicked() {
+                self.update_check_manual = true;
+                self.updater.check();
+                ui.close_menu();
+            }
+            if ui.button("Visit repository").clicked() {
+                let _ = webbrowser::open("https://github.com/CloudyTabzy/IMGEditor-rs");
+                ui.close_menu();
+            }
             if ui.button("About").clicked() {
                 self.show_about = true;
                 ui.close_menu();
@@ -515,6 +570,38 @@ impl MainWindow {
                         self.show_welcome = false;
                         self.config.first_run_complete = true;
                         let _ = self.config.save();
+                    }
+                });
+        }
+
+        if self.show_update {
+            egui::Window::new("Update available")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label("A new update is available.");
+                    ui.label(format!("Current version: {}", env!("CARGO_PKG_VERSION")));
+                    ui.label(format!("Latest version: {}", self.update_version));
+                    ui.label("Newer versions may contain more features and bug fixes.");
+                    ui.horizontal(|ui| {
+                        if ui.button("Download update").clicked() {
+                            let _ = webbrowser::open(&self.update_url);
+                        }
+                        if ui.button("Close").clicked() {
+                            self.show_update = false;
+                        }
+                    });
+                });
+        }
+
+        if self.show_update_status {
+            egui::Window::new("Update check")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(&self.update_status_text);
+                    if ui.button("OK").clicked() {
+                        self.show_update_status = false;
                     }
                 });
         }

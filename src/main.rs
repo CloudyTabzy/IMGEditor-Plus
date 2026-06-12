@@ -17,7 +17,7 @@ fn main() -> Result<()> {
     if args.len() > 1 {
         match args[1].as_str() {
             "-h" | "--help" => {
-                println!("IMGEditor 0.1.0");
+                println!("IMGEditor {}", env!("CARGO_PKG_VERSION"));
                 println!("Usage: imgeditor [OPTIONS]");
                 println!();
                 println!("Options:");
