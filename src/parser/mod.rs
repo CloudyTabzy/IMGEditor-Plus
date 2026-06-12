@@ -1,3 +1,4 @@
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::archive::{ArchiveInfo, EntryInfo};
@@ -69,6 +70,83 @@ pub fn encode_entry_name(name: &str) -> [u8; MAX_ENTRY_NAME_BYTES] {
     raw
 }
 
+pub fn unique_output_path(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+
+    let stem = path.file_stem().unwrap_or_default();
+    let ext = path.extension().unwrap_or_default();
+    let mut index = 2;
+
+    loop {
+        let mut name = format!("{} ({})", stem.to_string_lossy(), index);
+        if !ext.is_empty() {
+            name.push('.');
+            name.push_str(&ext.to_string_lossy());
+        }
+
+        let candidate = path.with_file_name(&name);
+        if !candidate.exists() {
+            return candidate;
+        }
+
+        index += 1;
+    }
+}
+
+pub fn read_entry_data(archive: &ArchiveInfo, entry: &EntryInfo) -> anyhow::Result<Vec<u8>> {
+    read_entry_data_from_source(entry, archive.path.as_deref())
+}
+
+pub fn read_entry_data_from_source(
+    entry: &EntryInfo,
+    archive_source: Option<&Path>,
+) -> anyhow::Result<Vec<u8>> {
+    if entry.imported {
+        let source = entry
+            .source_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
+        let actual_len = std::fs::metadata(source)?.len();
+        let rounded_len = sector_rounded_size(actual_len);
+        let mut data = vec![0u8; rounded_len as usize];
+        let mut file = std::fs::File::open(source)?;
+        file.read_exact(&mut data[..actual_len as usize])?;
+        Ok(data)
+    } else {
+        let source = archive_source.ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
+        let size = u64::from(entry.sector) * SECTOR_SIZE;
+        let offset = u64::from(entry.offset) * SECTOR_SIZE;
+        let mut file = std::fs::File::open(source)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut data = vec![0u8; size as usize];
+        file.read_exact(&mut data)?;
+        Ok(data)
+    }
+}
+
+pub fn export_entry_to_file(
+    archive: &ArchiveInfo,
+    entry: &EntryInfo,
+    output_path: &Path,
+) -> anyhow::Result<()> {
+    let output_path = unique_output_path(output_path);
+
+    if entry.imported {
+        let source = entry
+            .source_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
+        std::fs::copy(source, &output_path)?;
+        return Ok(());
+    }
+
+    let data = read_entry_data(archive, entry)?;
+    std::fs::write(&output_path, data)?;
+    Ok(())
+}
+
 pub fn import_entry(archive: &mut ArchiveInfo, path: &Path, replace: bool) -> anyhow::Result<()> {
     if path.extension().is_none() {
         return Ok(());
@@ -97,10 +175,6 @@ pub fn import_entry(archive: &mut ArchiveInfo, path: &Path, replace: bool) -> an
     entry.sector = (sector_rounded_size(byte_len) / SECTOR_SIZE) as u32;
     archive.entries.push(entry);
     Ok(())
-}
-
-pub fn source_path_for_import(path: impl Into<PathBuf>) -> PathBuf {
-    path.into()
 }
 
 #[cfg(test)]
@@ -145,6 +219,15 @@ mod tests {
         let raw = encode_entry_name(&name);
         let decoded = decode_entry_name(&raw);
         assert_eq!(decoded.chars().count(), 11);
+    }
+
+    #[test]
+    fn unique_output_path_avoids_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("file.txt");
+        std::fs::write(&base, "x").unwrap();
+
+        assert_eq!(unique_output_path(&base), dir.path().join("file (2).txt"));
     }
 
     #[test]

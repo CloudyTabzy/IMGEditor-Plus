@@ -1,12 +1,12 @@
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{
-    ImgParser, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE, decode_entry_name, import_entry,
-    sector_rounded_size,
+    ImgParser, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE, decode_entry_name, export_entry_to_file,
+    import_entry, read_entry_data_from_source,
 };
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -17,31 +17,6 @@ impl PcV1Parser {
         let mut path = img_path.to_path_buf();
         path.set_extension("dir");
         path
-    }
-
-    fn unique_output_path(path: &Path) -> PathBuf {
-        if !path.exists() {
-            return path.to_path_buf();
-        }
-
-        let stem = path.file_stem().unwrap_or_default();
-        let ext = path.extension().unwrap_or_default();
-        let mut index = 2;
-
-        loop {
-            let mut name = format!("{} ({})", stem.to_string_lossy(), index);
-            if !ext.is_empty() {
-                name.push('.');
-                name.push_str(&ext.to_string_lossy());
-            }
-
-            let candidate = path.with_file_name(&name);
-            if !candidate.exists() {
-                return candidate;
-            }
-
-            index += 1;
-        }
     }
 }
 
@@ -83,27 +58,7 @@ impl ImgParser for PcV1Parser {
         entry: &EntryInfo,
         output_path: &Path,
     ) -> Result<()> {
-        if entry.imported {
-            let Some(source) = entry.source_path.as_ref() else {
-                anyhow::bail!("imported entry has no source path");
-            };
-            std::fs::copy(source, output_path).context("failed to copy imported entry")?;
-            return Ok(());
-        }
-
-        let Some(path) = archive.path.as_ref() else {
-            anyhow::bail!("archive has no source path");
-        };
-
-        let output_path = Self::unique_output_path(output_path);
-        let mut img = std::fs::File::open(path).context("failed to open IMG archive")?;
-        let output = std::fs::File::create(&output_path).context("failed to create output file")?;
-
-        let size = u64::from(entry.sector) * SECTOR_SIZE;
-        let offset = u64::from(entry.offset) * SECTOR_SIZE;
-        img.seek(SeekFrom::Start(offset))?;
-        std::io::copy(&mut img.take(size), &mut BufWriter::new(output))?;
-        Ok(())
+        export_entry_to_file(archive, entry, output_path)
     }
 
     fn import_entry(archive: &mut ArchiveInfo, path: &Path, replace: bool) -> Result<()> {
@@ -154,6 +109,7 @@ impl ImgParser for PcV1Parser {
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Untitled".to_string());
+        archive.version = crate::parser::ImgVersion::One;
         archive.add_log("Archive saved".to_string());
         Ok(())
     }
@@ -194,38 +150,16 @@ impl PcV1Parser {
                 anyhow::bail!("Rebuild cancelled");
             }
 
-            let mut buf = if entry.imported {
-                let source = entry
-                    .source_path
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
-                let actual_len = std::fs::metadata(source)?.len();
-                let rounded_len = sector_rounded_size(actual_len);
-                let mut data = vec![0u8; rounded_len as usize];
-                let mut file = std::fs::File::open(source)?;
-                file.read_exact(&mut data[..actual_len as usize])?;
-                data
-            } else {
-                let source = source_path
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
-                let size = u64::from(entry.sector) * SECTOR_SIZE;
-                let file_offset = u64::from(entry.offset) * SECTOR_SIZE;
-                let mut file = std::fs::File::open(source)?;
-                file.seek(SeekFrom::Start(file_offset))?;
-                let mut data = vec![0u8; size as usize];
-                file.read_exact(&mut data)?;
-                data
-            };
+            let mut data = read_entry_data_from_source(entry, source_path.as_deref())?;
 
-            let size = buf.len() as u64;
+            let size = data.len() as u64;
             entry.offset = (offset / SECTOR_SIZE) as u32;
             entry.sector = (size / SECTOR_SIZE) as u32;
 
             dir_out.write_all(&entry.offset.to_le_bytes())?;
             dir_out.write_all(&entry.sector.to_le_bytes())?;
             dir_out.write_all(&entry.file_name_raw)?;
-            img_out.write_all(&mut buf)?;
+            img_out.write_all(&mut data)?;
 
             offset += size;
             archive.progress.percentage = (index + 1) as f32 / total as f32;
