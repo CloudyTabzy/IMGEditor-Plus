@@ -26,7 +26,12 @@ impl ImgParser for UnknownParser {
         Ok(())
     }
 
-    fn save(&self, _archive: &mut ArchiveInfo, _output_path: &Path) -> Result<()> {
+    fn save(
+        &self,
+        _archive: &mut ArchiveInfo,
+        _output_path: &Path,
+        _remove_existing: bool,
+    ) -> Result<()> {
         Ok(())
     }
 

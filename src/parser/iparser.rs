@@ -11,7 +11,12 @@ pub trait ImgParser {
         output_path: &Path,
     ) -> anyhow::Result<()>;
     fn import_entry(archive: &mut ArchiveInfo, path: &Path, replace: bool) -> anyhow::Result<()>;
-    fn save(&self, archive: &mut ArchiveInfo, output_path: &Path) -> anyhow::Result<()>;
+    fn save(
+        &self,
+        archive: &mut ArchiveInfo,
+        output_path: &Path,
+        remove_existing: bool,
+    ) -> anyhow::Result<()>;
     fn version_text(&self) -> &'static str;
     fn is_valid(&self, path: &Path) -> bool;
 }

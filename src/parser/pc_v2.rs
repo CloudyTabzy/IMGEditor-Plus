@@ -68,7 +68,12 @@ impl ImgParser for PcV2Parser {
         import_entry(archive, path, replace)
     }
 
-    fn save(&self, _archive: &mut ArchiveInfo, _output_path: &Path) -> Result<()> {
+    fn save(
+        &self,
+        _archive: &mut ArchiveInfo,
+        _output_path: &Path,
+        _remove_existing: bool,
+    ) -> Result<()> {
         Ok(())
     }
 
