@@ -1,6 +1,6 @@
-# IMGEditor v1.0 — Rust port
+# IMGEditor v2.0 — Rust port
 
-A pure Rust desktop editor for GTA IMG archives.
+A pure Rust desktop editor for GTA IMG archives, built with [Iced](https://iced.rs/) and Tokio.
 
 ## Supported formats
 
@@ -9,7 +9,7 @@ A pure Rust desktop editor for GTA IMG archives.
 
 ## Building
 
-Requires Rust 1.70+ and a Windows desktop environment.
+Requires Rust **1.96+** and a Windows desktop environment.
 
 ```powershell
 cargo build --release
@@ -35,10 +35,11 @@ See [docs/windows_file_association.md](docs/windows_file_association.md).
 
 - Open, save, import, and export IMG v1 and v2 archives.
 - Native file dialogs (can be disabled with `--no-default-features`).
-- Drag-and-drop file opening.
+- Drag-and-drop file opening into the active archive tab.
 - Searchable entry list with aligned Name / Type / Size columns.
-- Theme selection (Light / Dark / System).
-- Persistent window size, position, and first-run state.
+- Theme selection (System / Light / Catppuccin Mocha / Tokyo Night / Gruvbox Dark).
+- Lucide icon toolbar for common actions.
+- Persistent window size, position, last-used folders, and theme.
 - Background GitHub update checks.
 - Keyboard shortcuts matching the original editor.
 

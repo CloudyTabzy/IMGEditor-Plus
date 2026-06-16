@@ -21,8 +21,14 @@ if (-not (Test-Path $BinaryPath)) {
 Write-Host "Creating distribution directory..."
 New-Item -ItemType Directory -Force -Path $DistPath | Out-Null
 
-Write-Host "Copying binary and docs..."
+Write-Host "Copying binary, README, and docs..."
 Copy-Item -Path $BinaryPath -Destination $DistPath -Force
+if (Test-Path (Join-Path $ProjectRoot "README.md")) {
+    Copy-Item -Path (Join-Path $ProjectRoot "README.md") -Destination $DistPath -Force
+}
+if (Test-Path (Join-Path $ProjectRoot "LICENSE")) {
+    Copy-Item -Path (Join-Path $ProjectRoot "LICENSE") -Destination $DistPath -Force
+}
 if (Test-Path (Join-Path $ProjectRoot "docs")) {
     Copy-Item -Path (Join-Path $ProjectRoot "docs") -Destination $DistPath -Recurse -Force
 }
