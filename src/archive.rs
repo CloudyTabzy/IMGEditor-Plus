@@ -118,6 +118,7 @@ pub struct ArchiveInfo {
     pub update_search: bool,
     pub dirty: bool,
     pub source_mmap: Option<Arc<Mmap>>,
+    pub last_export_folder: Option<PathBuf>,
 }
 
 impl ArchiveInfo {
@@ -135,6 +136,7 @@ impl ArchiveInfo {
             update_search: false,
             dirty: false,
             source_mmap: None,
+            last_export_folder: None,
         };
 
         archive.add_log("Created archive".to_string());
@@ -162,6 +164,7 @@ impl ArchiveInfo {
             update_search: false,
             dirty: false,
             source_mmap: None,
+            last_export_folder: None,
         };
 
         match version {

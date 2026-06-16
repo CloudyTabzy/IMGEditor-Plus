@@ -94,6 +94,7 @@ pub enum Message {
     SetTheme(ThemeMode),
     TickProgress,
     PaneResized(pane_grid::ResizeEvent),
+    OpenLastExportFolder,
 
     FilesDropped(PathBuf),
 }
@@ -371,6 +372,9 @@ impl App {
                 self.last_export_selected_only = false;
                 self.config.last_export_folder = Some(folder.clone());
                 self.save_config();
+                if let Some(archive) = self.editor.selected_archive_mut() {
+                    archive.last_export_folder = Some(folder.clone());
+                }
                 let task = ExportTask::new(archive, folder, mode);
                 Task::perform(
                     async move { task.run().await.map_err(|e| e.to_string()) },
@@ -593,6 +597,16 @@ impl App {
                 self.context_menu = None;
                 Task::none()
             }
+            Message::OpenLastExportFolder => {
+                if let Some(index) = self.editor.selected_archive() {
+                    if let Some(archive) = self.editor.archives().get(index) {
+                        if let Some(folder) = archive.last_export_folder.clone() {
+                            open_export_folder(&folder);
+                        }
+                    }
+                }
+                Task::none()
+            }
 
             Message::FilesDropped(path) => {
                 if self.editor.selected_archive().is_some() {
@@ -766,6 +780,21 @@ impl App {
                 ..Default::default()
             })
             .into()
+    }
+}
+
+fn open_export_folder(path: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer").arg(path).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(path).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
     }
 }
 

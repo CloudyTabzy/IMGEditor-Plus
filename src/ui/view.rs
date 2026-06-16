@@ -126,11 +126,13 @@ impl App {
         let visible = archive.selected_indices.len();
         let progress = archive.progress.percentage();
         let in_use = archive.progress.in_use();
+        let percent_text = format!("{:.0}%", progress * 100.0);
 
         let mut col = column![
             text(format!("Format: {version_text}")),
             text(format!("Entries: {total} (visible: {visible})")),
             rule::horizontal(1),
+            text(format!("Progress: {percent_text}")),
             progress_bar(0.0..=1.0, progress),
         ]
         .spacing(6)
@@ -139,6 +141,15 @@ impl App {
 
         if in_use {
             col = col.push(button(text("Cancel")).on_press(Message::CancelActive));
+        }
+
+        if let Some(_folder) = archive.last_export_folder.as_ref() {
+            if !in_use {
+                col = col.push(
+                    button(text("Open export folder"))
+                        .on_press(Message::OpenLastExportFolder),
+                );
+            }
         }
 
         col = col.push(rule::horizontal(1));
