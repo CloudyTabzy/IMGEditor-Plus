@@ -1,12 +1,14 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{
     ENTRY_SIZE, ImgParser, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE, decode_entry_name,
-    export_entry_to_file, import_entry, read_entry_data_from_source,
+    export_entry_to_file, import_entry, read_entry_data_with_source,
 };
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -51,6 +53,8 @@ impl ImgParser for PcV2Parser {
             entry.sector = sector;
             archive.entries.push(entry);
         }
+
+        archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img)? }));
 
         archive.add_log("Opened archive".to_string());
         Ok(())
@@ -127,7 +131,7 @@ impl PcV2Parser {
         &self,
         archive: &mut ArchiveInfo,
         temp_path: &Path,
-        source_path: &Option<PathBuf>,
+        _source_path: &Option<PathBuf>,
     ) -> Result<()> {
         let mut out = std::fs::File::create(temp_path).context("failed to create temp img")?;
 
@@ -136,6 +140,8 @@ impl PcV2Parser {
         out.write_all(&total.to_le_bytes())?;
 
         let mut data_offset = 0x300000_u64;
+        let source_path = archive.path.clone();
+        let source_mmap = archive.source_mmap.clone();
         archive.progress.start();
 
         for (index, entry) in archive.entries.iter_mut().enumerate() {
@@ -144,7 +150,11 @@ impl PcV2Parser {
                 anyhow::bail!("Rebuild cancelled");
             }
 
-            let mut data = read_entry_data_from_source(entry, source_path.as_deref())?;
+            let mut data = read_entry_data_with_source(
+                entry,
+                source_path.as_deref(),
+                source_mmap.as_deref(),
+            )?;
 
             let size = data.len() as u64;
             entry.offset = (data_offset / SECTOR_SIZE) as u32;

@@ -1,6 +1,9 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use compact_str::CompactString;
+use memmap2::Mmap;
+
 use crate::archive::{ArchiveInfo, EntryInfo};
 
 pub mod iparser;
@@ -48,9 +51,9 @@ pub fn sector_rounded_size(byte_len: u64) -> u64 {
     }
 }
 
-pub fn decode_entry_name(raw: &[u8; MAX_ENTRY_NAME_BYTES]) -> String {
+pub fn decode_entry_name(raw: &[u8; MAX_ENTRY_NAME_BYTES]) -> CompactString {
     let trimmed = raw.split(|&b| b == 0).next().unwrap_or(&[]);
-    String::from_utf8_lossy(trimmed).into_owned()
+    CompactString::from_utf8_lossy(trimmed)
 }
 
 pub fn encode_entry_name(name: &str) -> [u8; MAX_ENTRY_NAME_BYTES] {
@@ -96,34 +99,72 @@ pub fn unique_output_path(path: &Path) -> PathBuf {
 }
 
 pub fn read_entry_data(archive: &ArchiveInfo, entry: &EntryInfo) -> anyhow::Result<Vec<u8>> {
-    read_entry_data_from_source(entry, archive.path.as_deref())
+    read_entry_data_with_source(
+        entry,
+        archive.path.as_deref(),
+        archive.source_mmap.as_deref(),
+    )
 }
 
-pub fn read_entry_data_from_source(
+fn read_entry_data_with_source(
     entry: &EntryInfo,
     archive_source: Option<&Path>,
+    source_mmap: Option<&Mmap>,
 ) -> anyhow::Result<Vec<u8>> {
     if entry.imported {
         let source = entry
             .source_path
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
-        let actual_len = std::fs::metadata(source)?.len();
-        let rounded_len = sector_rounded_size(actual_len);
-        let mut data = vec![0u8; rounded_len as usize];
-        let mut file = std::fs::File::open(source)?;
-        file.read_exact(&mut data[..actual_len as usize])?;
-        Ok(data)
-    } else {
-        let source = archive_source.ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
-        let size = u64::from(entry.sector) * SECTOR_SIZE;
-        let offset = u64::from(entry.offset) * SECTOR_SIZE;
-        let mut file = std::fs::File::open(source)?;
-        file.seek(SeekFrom::Start(offset))?;
-        let mut data = vec![0u8; size as usize];
-        file.read_exact(&mut data)?;
-        Ok(data)
+        return read_imported_file(source);
     }
+
+    let source = archive_source.ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
+    let size = u64::from(entry.sector) * SECTOR_SIZE;
+    let offset = u64::from(entry.offset) * SECTOR_SIZE;
+
+    if let Some(mmap) = source_mmap {
+        let end = (offset + size).min(mmap.len() as u64) as usize;
+        let start = offset.min(mmap.len() as u64) as usize;
+        return Ok(mmap[start..end].to_vec());
+    }
+
+    let mut file = std::fs::File::open(source)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut data = vec![0u8; size as usize];
+    file.read_exact(&mut data)?;
+    Ok(data)
+}
+
+fn read_imported_file(source: &std::path::Path) -> anyhow::Result<Vec<u8>> {
+    let actual_len = std::fs::metadata(source)?.len();
+    let rounded_len = sector_rounded_size(actual_len);
+    let mut data = vec![0u8; rounded_len as usize];
+    let mut file = std::fs::File::open(source)?;
+    file.read_exact(&mut data[..actual_len as usize])?;
+    Ok(data)
+}
+
+pub fn read_entry_data_from_source(
+    entry: &EntryInfo,
+    archive_source: Option<&std::path::Path>,
+) -> anyhow::Result<Vec<u8>> {
+    if entry.imported {
+        let source = entry
+            .source_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
+        return read_imported_file(source);
+    }
+
+    let source = archive_source.ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
+    let size = u64::from(entry.sector) * SECTOR_SIZE;
+    let offset = u64::from(entry.offset) * SECTOR_SIZE;
+    let mut file = std::fs::File::open(source)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut data = vec![0u8; size as usize];
+    file.read_exact(&mut data)?;
+    Ok(data)
 }
 
 pub fn export_entry_to_file(

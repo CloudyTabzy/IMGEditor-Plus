@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+use compact_str::CompactString;
+use rayon::prelude::*;
+
 use crate::archive::{ArchiveInfo, EntryInfo, ProgressInfo};
 use crate::parser::{ImgParser, ImgVersion, PcV1Parser, PcV2Parser};
 
@@ -97,46 +100,38 @@ impl ExportTask {
             }
         };
 
-        let total = entries.len();
-        let mut count = 0;
-
-        for (index, entry) in entries.iter().enumerate() {
-            if progress.is_cancelled() {
-                progress.finish();
-                anyhow::bail!("Export cancelled");
-            }
-
-            let output_path = folder.join(&entry.file_name);
-            let archive_for_task = archive.clone();
-            let entry_clone = entry.clone();
-            let output_path_clone = output_path.clone();
-
-            let result: anyhow::Result<()> = match archive.version {
-                ImgVersion::One => tokio::task::spawn_blocking(move || {
-                    PcV1Parser.export_entry(&archive_for_task, &entry_clone, &output_path_clone)
-                })
-                .await
-                .map_err(anyhow_forward)?,
-                ImgVersion::Two => tokio::task::spawn_blocking(move || {
-                    PcV2Parser.export_entry(&archive_for_task, &entry_clone, &output_path_clone)
-                })
-                .await
-                .map_err(anyhow_forward)?,
-                ImgVersion::Unknown => {
-                    progress.finish();
-                    anyhow::bail!("unknown archive format cannot be exported");
+        let results: Vec<(CompactString, anyhow::Result<()>)> = entries
+            .par_iter()
+            .map(|entry| {
+                if progress.is_cancelled() {
+                    return (entry.file_name.clone(), Err(anyhow::anyhow!("Export cancelled")));
                 }
-            };
 
-            if result.is_ok() {
-                count += 1;
-            } else if let Err(err) = result {
-                eprintln!("failed to export {}: {err}", entry.file_name);
+                let output_path = folder.join(&entry.file_name);
+                let result = match archive.version {
+                    ImgVersion::One => {
+                        PcV1Parser.export_entry(&archive, entry, &output_path)
+                    }
+                    ImgVersion::Two => {
+                        PcV2Parser.export_entry(&archive, entry, &output_path)
+                    }
+                    ImgVersion::Unknown => {
+                        Err(anyhow::anyhow!("unknown archive format cannot be exported"))
+                    }
+                };
+
+                (entry.file_name.clone(), result)
+            })
+            .collect();
+
+        let count = results.iter().filter(|(_, r)| r.is_ok()).count();
+        for (name, result) in results {
+            if let Err(err) = result {
+                eprintln!("failed to export {name}: {err}");
             }
-
-            progress.set_percentage((index + 1) as f32 / total.max(1) as f32);
         }
 
+        progress.set_percentage(1.0);
         progress.finish();
         Ok(count)
     }

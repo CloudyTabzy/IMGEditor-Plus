@@ -60,8 +60,8 @@ impl App {
         let is_renaming = entry.rename;
         let is_selected = entry.selected;
         let size_kb = entry.sector * 2;
-        let version = entry.file_type.clone();
-        let file_name = entry.file_name.clone();
+        let version = entry.file_type.clone().to_string();
+        let file_name = entry.file_name.clone().to_string();
 
         let name_widget: Element<'_, Message> = if is_renaming {
             text_input("", &self.rename_buffer)

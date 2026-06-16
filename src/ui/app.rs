@@ -394,7 +394,7 @@ impl App {
                         .get(self.editor.selected_archive().unwrap_or(0))
                     {
                         if let Some(entry) = archive.entries.get(index) {
-                            self.rename_buffer = entry.file_name.clone();
+                                    self.rename_buffer = entry.file_name.to_string();
                         }
                     }
                     if let Some(archive) = self.editor.selected_archive_mut() {
@@ -448,7 +448,7 @@ impl App {
                 if let Some(archive) = self.editor.selected_archive_mut() {
                     if let Some(entry) = archive.entries.get_mut(index) {
                         entry.rename = true;
-                        self.rename_buffer = entry.file_name.clone();
+                        self.rename_buffer = entry.file_name.to_string();
                     }
                 }
                 Task::none()

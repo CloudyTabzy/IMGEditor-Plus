@@ -2,6 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use compact_str::CompactString;
+use memmap2::Mmap;
+use smallvec::SmallVec;
+
 use crate::parser::{ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, encode_entry_name};
 
 #[derive(Debug, Clone)]
@@ -71,9 +75,9 @@ impl ProgressInfo {
 pub struct EntryInfo {
     pub offset: u32,
     pub sector: u32,
-    pub file_name: String,
+    pub file_name: CompactString,
     pub file_name_raw: [u8; MAX_ENTRY_NAME_BYTES],
-    pub file_type: String,
+    pub file_type: CompactString,
     pub source_path: Option<PathBuf>,
     pub imported: bool,
     pub rename: bool,
@@ -81,10 +85,10 @@ pub struct EntryInfo {
 }
 
 impl EntryInfo {
-    pub fn new(file_name: impl Into<String>) -> Self {
+    pub fn new(file_name: impl Into<CompactString>) -> Self {
         let file_name = file_name.into();
         let file_name_raw = encode_entry_name(&file_name);
-        let file_type = infer_file_type(&file_name).to_string();
+        let file_type = infer_file_type(&file_name);
 
         Self {
             offset: 0,
@@ -105,7 +109,7 @@ pub struct ArchiveInfo {
     pub path: Option<PathBuf>,
     pub file_name: String,
     pub entries: Vec<EntryInfo>,
-    pub selected_indices: Vec<usize>,
+    pub selected_indices: SmallVec<[usize; 8]>,
     pub logs: Vec<String>,
     pub progress: ProgressInfo,
     pub version: ImgVersion,
@@ -113,6 +117,7 @@ pub struct ArchiveInfo {
     pub create_new: bool,
     pub update_search: bool,
     pub dirty: bool,
+    pub source_mmap: Option<Arc<Mmap>>,
 }
 
 impl ArchiveInfo {
@@ -121,7 +126,7 @@ impl ArchiveInfo {
             path: None,
             file_name: file_name.into(),
             entries: Vec::new(),
-            selected_indices: Vec::new(),
+            selected_indices: SmallVec::new(),
             logs: Vec::new(),
             progress: ProgressInfo::default(),
             version,
@@ -129,6 +134,7 @@ impl ArchiveInfo {
             create_new,
             update_search: false,
             dirty: false,
+            source_mmap: None,
         };
 
         archive.add_log("Created archive".to_string());
@@ -147,7 +153,7 @@ impl ArchiveInfo {
                 .unwrap_or("Untitled")
                 .to_string(),
             entries: Vec::new(),
-            selected_indices: Vec::new(),
+            selected_indices: SmallVec::new(),
             logs: Vec::new(),
             progress: ProgressInfo::default(),
             version,
@@ -155,6 +161,7 @@ impl ArchiveInfo {
             create_new: false,
             update_search: false,
             dirty: false,
+            source_mmap: None,
         };
 
         match version {
@@ -183,29 +190,29 @@ impl ArchiveInfo {
     }
 }
 
-pub fn infer_file_type(file_name: &str) -> String {
+pub fn infer_file_type(file_name: &str) -> CompactString {
     let lower = file_name.to_ascii_lowercase();
 
     if lower.contains(".dff") {
-        "Model".to_string()
+        CompactString::new("Model")
     } else if lower.contains(".txd") {
-        "Texture".to_string()
+        CompactString::new("Texture")
     } else if lower.contains(".col") {
-        "Collision".to_string()
+        CompactString::new("Collision")
     } else if lower.contains(".ifp") {
-        "Animation".to_string()
+        CompactString::new("Animation")
     } else if lower.contains(".ipl") {
-        "Placement".to_string()
+        CompactString::new("Placement")
     } else if lower.contains(".ide") {
-        "Definition".to_string()
+        CompactString::new("Definition")
     } else if lower.contains(".dat") {
-        "Data".to_string()
+        CompactString::new("Data")
     } else {
         std::path::Path::new(file_name)
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| format!(".{ext} file", ext = ext.to_ascii_lowercase()))
-            .unwrap_or_else(|| "file".to_string())
+            .map(|ext| CompactString::new(format!(".{ext} file", ext = ext.to_ascii_lowercase())))
+            .unwrap_or_else(|| CompactString::new("file"))
     }
 }
 
@@ -255,10 +262,10 @@ mod tests {
         archive.entries.push(EntryInfo::new("aab.dff"));
 
         archive.update_selected_list("aa");
-        assert_eq!(archive.selected_indices, vec![0, 2]);
+        assert_eq!(archive.selected_indices.as_slice(), &[0, 2]);
 
         archive.update_selected_list("txd");
-        assert_eq!(archive.selected_indices, vec![1]);
+        assert_eq!(archive.selected_indices.as_slice(), &[1]);
     }
 
     #[test]
