@@ -141,6 +141,7 @@ impl Editor {
                     entry.selected = true;
                 }
             }
+            archive.refresh_export_status();
             archive.rebuild_row_cache();
         } else if let Some(archive) = self.selected_archive_mut() {
             for entry in &mut archive.entries {
@@ -156,6 +157,7 @@ impl Editor {
             if let Some(entry) = archive.entries.get_mut(clicked) {
                 entry.selected = !entry.selected;
             }
+            archive.refresh_export_status();
             archive.rebuild_row_cache();
         } else {
             return;
@@ -169,6 +171,7 @@ impl Editor {
             for entry in &mut archive.entries {
                 entry.selected = selected;
             }
+            archive.refresh_export_status();
             archive.rebuild_row_cache();
         }
     }
@@ -178,6 +181,7 @@ impl Editor {
             for entry in &mut archive.entries {
                 entry.selected = !entry.selected;
             }
+            archive.refresh_export_status();
             archive.rebuild_row_cache();
         }
     }

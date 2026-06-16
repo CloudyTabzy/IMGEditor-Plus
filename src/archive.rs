@@ -8,6 +8,14 @@ use smallvec::SmallVec;
 
 use crate::parser::{EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, encode_entry_name};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportStatus {
+    Idle,
+    Ready,
+    Exporting,
+    Done,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProgressInfo {
     inner: Arc<ProgressInner>,
@@ -42,6 +50,12 @@ impl ProgressInfo {
     }
 
     pub fn finish(&self) {
+        self.inner.in_use.store(false, Ordering::Release);
+        self.inner.cancel.store(false, Ordering::Release);
+        self.inner.percentage.store(f32::to_bits(1.0), Ordering::Release);
+    }
+
+    pub fn reset(&self) {
         self.inner.in_use.store(false, Ordering::Release);
         self.inner.cancel.store(false, Ordering::Release);
         self.inner.percentage.store(0, Ordering::Release);
@@ -149,6 +163,9 @@ pub struct ArchiveInfo {
     pub selected_indices: SmallVec<[usize; 8]>,
     pub logs: Vec<String>,
     pub progress: ProgressInfo,
+    pub export_status: ExportStatus,
+    pub last_export_count: usize,
+    pub recent_exports: Vec<String>,
     pub version: ImgVersion,
     pub open: bool,
     pub create_new: bool,
@@ -170,6 +187,9 @@ impl ArchiveInfo {
             selected_indices: SmallVec::new(),
             logs: Vec::new(),
             progress: ProgressInfo::default(),
+            export_status: ExportStatus::Idle,
+            last_export_count: 0,
+            recent_exports: Vec::new(),
             version,
             open: true,
             create_new,
@@ -201,6 +221,9 @@ impl ArchiveInfo {
             selected_indices: SmallVec::new(),
             logs: Vec::new(),
             progress: ProgressInfo::default(),
+            export_status: ExportStatus::Idle,
+            last_export_count: 0,
+            recent_exports: Vec::new(),
             version,
             open: true,
             create_new: false,
@@ -279,7 +302,43 @@ impl ArchiveInfo {
             self.selected_indices.push(index);
         }
 
+        self.refresh_export_status();
         self.rebuild_row_cache();
+    }
+
+    pub fn refresh_export_status(&mut self) {
+        if self.progress.in_use() {
+            self.export_status = ExportStatus::Exporting;
+        } else {
+            let selected = self.entries.iter().filter(|e| e.selected).count();
+            match self.export_status {
+                ExportStatus::Done if selected == 0 => {
+                    self.export_status = ExportStatus::Idle;
+                }
+                ExportStatus::Done if selected != self.last_export_count => {
+                    self.export_status = ExportStatus::Ready;
+                    self.progress.reset();
+                }
+                ExportStatus::Exporting => {
+                    self.export_status = if selected > 0 {
+                        ExportStatus::Ready
+                    } else {
+                        ExportStatus::Idle
+                    };
+                    self.progress.reset();
+                }
+                _ => {
+                    self.export_status = if selected > 0 {
+                        ExportStatus::Ready
+                    } else {
+                        ExportStatus::Idle
+                    };
+                    if self.export_status == ExportStatus::Idle {
+                        self.progress.reset();
+                    }
+                }
+            }
+        }
     }
 
     pub fn rebuild_row_cache(&mut self) {

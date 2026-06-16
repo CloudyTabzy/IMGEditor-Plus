@@ -84,7 +84,7 @@ impl ExportTask {
         }
     }
 
-    pub async fn run(self) -> anyhow::Result<usize> {
+    pub async fn run(self) -> anyhow::Result<(usize, Vec<String>)> {
         let ExportTask {
             archive,
             folder,
@@ -139,7 +139,11 @@ impl ExportTask {
 
         progress.set_percentage(1.0);
         progress.finish();
-        Ok(count)
+        let exported_names: Vec<String> = entries
+            .iter()
+            .map(|e| e.file_name.to_string())
+            .collect();
+        Ok((count, exported_names))
     }
 }
 

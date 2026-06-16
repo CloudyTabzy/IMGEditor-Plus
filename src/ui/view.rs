@@ -5,7 +5,7 @@ use iced::widget::{
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_fonts::lucide;
 
-use crate::archive::{RowDisplay, SortColumn, SortDirection};
+use crate::archive::{ExportStatus, RowDisplay, SortColumn, SortDirection};
 
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
@@ -257,13 +257,21 @@ impl App {
         let visible = archive.selected_indices.len();
         let progress = archive.progress.percentage();
         let in_use = archive.progress.in_use();
-        let percent_text = format!("{:.0}%", progress * 100.0);
+        let (progress_label, percent_text) = if in_use {
+            ("Progress", format!("{:.0}%", progress * 100.0))
+        } else {
+            match archive.export_status {
+                ExportStatus::Ready => ("Progress", "Ready to export".to_string()),
+                ExportStatus::Done => ("Progress", "100%".to_string()),
+                _ => ("Progress", format!("{:.0}%", progress * 100.0)),
+            }
+        };
 
         let mut col = column![
             label_value_owned("Format", version_text.to_string()),
             label_value("Entries", format!("{total} (visible: {visible})")),
             rule::horizontal(1),
-            label_value("Progress", percent_text),
+            label_value(progress_label, percent_text),
             progress_bar(0.0..=1.0, progress),
         ]
         .spacing(6)
@@ -300,9 +308,20 @@ impl App {
             Scrollable::new(Column::with_children(
                 logs.into_iter().map(|m| fonts::caption(m).into()),
             ))
-                .height(Length::Fixed(180.0));
+                .height(Length::Fixed(120.0));
 
         col = col.push(log_widget);
+
+        if !archive.recent_exports.is_empty() {
+            col = col.push(rule::horizontal(1));
+            col = col.push(fonts::header("Recent exports:"));
+            let exports: Vec<String> = archive.recent_exports.iter().rev().take(8).cloned().collect();
+            let exports_widget = Scrollable::new(Column::with_children(
+                exports.into_iter().map(|m| fonts::caption(m).into()),
+            ))
+                .height(Length::Fixed(100.0));
+            col = col.push(exports_widget);
+        }
 
         col.into()
     }

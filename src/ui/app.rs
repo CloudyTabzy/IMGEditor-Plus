@@ -10,7 +10,7 @@ use iced_aw::menu::{Item, Menu, MenuBar};
 use iced_fonts::LUCIDE_FONT_BYTES;
 use memmap2::Mmap;
 
-use crate::archive::{ArchiveInfo, EntryInfo, SortColumn, SortDirection};
+use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn, SortDirection};
 use crate::config::{Config, ThemeMode};
 use crate::editor::Editor;
 use crate::parser::{
@@ -70,7 +70,7 @@ pub enum Message {
     ExportFolderResult(Option<PathBuf>),
     ExportCompleted {
         index: usize,
-        result: Result<usize, String>,
+        result: Result<(usize, Vec<String>), String>,
     },
 
     SelectAll,
@@ -508,14 +508,29 @@ impl App {
             Message::ExportFolderResult(None) => Task::none(),
 
             Message::ExportCompleted { index, result } => {
-                self.editor
-                    .add_log_to(index, format!("Exported {} entries", result.as_ref().unwrap_or(&0)));
-                match result {
-                    Ok(count) => {
-                        self.toast = Some(format!("Exported {count} entries."));
-                    }
-                    Err(err) => {
-                        self.toast = Some(format!("Export failed: {err}"));
+                if let Some(archive) = self.editor.archives_mut().get_mut(index) {
+                    match result {
+                        Ok((count, names)) => {
+                            archive.export_status = ExportStatus::Done;
+                            archive.last_export_count = count;
+                            let now = chrono::Local::now().format("%H:%M:%S");
+                            let summary = if count == 1 {
+                                names.first().cloned().unwrap_or_else(|| "1 file".to_string())
+                            } else {
+                                format!("{count} files")
+                            };
+                            archive
+                                .recent_exports
+                                .push(format!("[{now}] Exported {summary}"));
+                            archive.add_log(format!("Exported {count} entries"));
+                            self.toast = Some(format!("Exported {count} entries."));
+                        }
+                        Err(err) => {
+                            archive.export_status = ExportStatus::Idle;
+                            archive.last_export_count = 0;
+                            archive.add_log(format!("Export failed: {err}"));
+                            self.toast = Some(format!("Export failed: {err}"));
+                        }
                     }
                 }
                 Task::none()
