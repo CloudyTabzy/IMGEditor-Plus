@@ -629,7 +629,7 @@ impl App {
         });
 
         let tick = if self.has_active_progress() {
-            iced::time::every(Duration::from_millis(120)).map(|_| Message::TickProgress)
+            iced::time::every(Duration::from_millis(60)).map(|_| Message::TickProgress)
         } else {
             Subscription::none()
         };

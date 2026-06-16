@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use compact_str::CompactString;
 use rayon::prelude::*;
@@ -100,6 +101,8 @@ impl ExportTask {
             }
         };
 
+        let total = entries.len();
+        let completed = AtomicUsize::new(0);
         let results: Vec<(CompactString, anyhow::Result<()>)> = entries
             .par_iter()
             .map(|entry| {
@@ -119,6 +122,9 @@ impl ExportTask {
                         Err(anyhow::anyhow!("unknown archive format cannot be exported"))
                     }
                 };
+
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                progress.set_percentage(done as f32 / total as f32);
 
                 (entry.file_name.clone(), result)
             })
