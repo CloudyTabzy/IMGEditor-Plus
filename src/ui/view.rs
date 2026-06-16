@@ -2,7 +2,8 @@ use iced::widget::{
     Column, Container, Row, Scrollable, Space, button, column, container, mouse_area,
     pane_grid, progress_bar, rule, row, stack, text_input, tooltip,
 };
-use iced::{Alignment, Border, Color, Element, Length};
+use iced::widget::text_input::{self, Status as TextInputStatus};
+use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 use iced_fonts::lucide;
 
 use crate::archive::{ExportStatus, RowDisplay, SortColumn, SortDirection};
@@ -295,27 +296,27 @@ impl App {
 
         if let Some((index, inspection)) = self.inspected_entry.as_ref() {
             if archive.entries.get(*index).is_some() {
-                col = col.push(fonts::header("Selected entry:"));
+                col = col.push(selectable_header("Selected entry:"));
                 col = col.push(Self::build_inspection_panel(inspection));
                 col = col.push(rule::horizontal(1));
             }
         }
 
-        col = col.push(fonts::header("Logs:"));
+        col = col.push(selectable_header("Logs:"));
 
         let logs: Vec<String> = archive.logs.iter().rev().take(50).cloned().collect();
         let log_widget = Column::with_children(
-            logs.into_iter().map(|m| fonts::caption(m).into()),
+            logs.into_iter().map(|m| selectable_caption(m).into()),
         );
 
         col = col.push(log_widget);
 
         if !archive.recent_exports.is_empty() {
             col = col.push(rule::horizontal(1));
-            col = col.push(fonts::header("Recent exports:"));
+            col = col.push(selectable_header("Recent exports:"));
             let exports: Vec<String> = archive.recent_exports.iter().rev().take(8).cloned().collect();
             let exports_widget = Column::with_children(
-                exports.into_iter().map(|m| fonts::caption(m).into()),
+                exports.into_iter().map(|m| selectable_caption(m).into()),
             );
             col = col.push(exports_widget);
         }
@@ -370,7 +371,7 @@ impl App {
 
         if let Some(preview) = &inspection.preview_hex {
             panel = panel.push(Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(6.0)));
-            panel = panel.push(fonts::body("Preview (hex):"));
+            panel = panel.push(selectable_body("Preview (hex):"));
             panel = panel.push(
                 Scrollable::new(fonts::body_monospace(preview.clone()))
                     .direction(iced::widget::scrollable::Direction::Horizontal(
@@ -775,20 +776,65 @@ fn context_button(label: &str, message: Message) -> iced::widget::Button<'_, Mes
 
 fn label_value(label: &str, value: String) -> Element<'_, Message> {
     row![
-        fonts::header(format!("{label}:")),
+        selectable_header(format!("{label}:")),
         Space::new().width(Length::Fixed(4.0)),
-        fonts::body(value),
+        selectable_body(value),
     ]
     .into()
 }
 
 fn label_value_owned(label: &str, value: String) -> Element<'_, Message> {
     row![
-        fonts::header(format!("{label}:")),
+        selectable_header(format!("{label}:")),
         Space::new().width(Length::Fixed(4.0)),
-        fonts::body(value),
+        selectable_body(value),
     ]
     .into()
+}
+
+fn selectable_header(label: impl Into<String>) -> Element<'_, Message> {
+    selectable_text(label, 14.0, fonts::INTER_SEMIBOLD)
+}
+
+fn selectable_body(label: impl Into<String>) -> Element<'_, Message> {
+    selectable_text(label, 14.0, fonts::INTER)
+}
+
+fn selectable_caption(label: impl Into<String>) -> Element<'_, Message> {
+    selectable_text(label, 12.0, fonts::INTER)
+}
+
+fn selectable_text<'a>(
+    label: impl Into<String>,
+    size: f32,
+    font: iced::Font,
+) -> Element<'a, Message> {
+    let label = label.into();
+    text_input("", &label)
+        .size(size)
+        .font(font)
+        .read_only(true)
+        .on_input(|_| Message::Noop)
+        .style(read_only_text_input_style)
+        .padding(0)
+        .width(Length::Fill)
+        .into()
+}
+
+fn read_only_text_input_style(theme: &Theme, status: TextInputStatus) -> text_input::Style {
+    let default = text_input::default(theme, status);
+    text_input::Style {
+        background: Background::Color(Color::TRANSPARENT),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+        icon: default.icon,
+        placeholder: default.placeholder,
+        value: default.value,
+        selection: default.selection,
+    }
 }
 
 pub fn version_label(version: ImgVersion) -> &'static str {

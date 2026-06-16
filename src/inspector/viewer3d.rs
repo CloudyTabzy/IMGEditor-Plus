@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use crate::inspector::nif::{
     self, BlockPayload, NifFile, NiTriShapeDataPayload, NiTriStripsDataPayload,
 };
+use crate::inspector::texture::{IdeMap, resolve_textures_for_nif};
 
 #[derive(Debug, Clone)]
 pub enum ViewerEvent {
@@ -26,15 +27,14 @@ pub enum ViewerEvent {
 pub fn spawn_render_window(
     nif_data: Vec<u8>,
     name: String,
-    texture_search_root: Option<PathBuf>,
-    texture_files: HashMap<String, Vec<u8>>,
+    game_root: Option<PathBuf>,
 ) -> mpsc::UnboundedReceiver<ViewerEvent> {
     let (tx, rx) = mpsc::unbounded_channel();
     thread::Builder::new()
         .name(format!("nif-viewer-{name}"))
         .spawn(move || {
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                export_viewer(nif_data, name, texture_search_root, texture_files, tx.clone());
+                export_viewer(nif_data, name, game_root, tx.clone());
             }));
             if let Err(err) = result {
                 let msg = match err.downcast_ref::<&str>() {
@@ -57,8 +57,7 @@ pub fn spawn_render_window(
 fn export_viewer(
     nif_data: Vec<u8>,
     name: String,
-    texture_search_root: Option<PathBuf>,
-    texture_files: HashMap<String, Vec<u8>>,
+    game_root: Option<PathBuf>,
     tx: mpsc::UnboundedSender<ViewerEvent>,
 ) {
     let data_len = nif_data.len();
@@ -92,9 +91,8 @@ fn export_viewer(
     };
 
     let diffuse_texture = find_diffuse_texture(&nif);
-
-    if let Some(ref tex) = diffuse_texture {
-        eprintln!("[IMGEditor] viewer: diffuse texture found: {tex}");
+    if let Some(ref t) = diffuse_texture {
+        eprintln!("[IMGEditor] viewer: diffuse texture found: {t}");
     } else {
         eprintln!("[IMGEditor] viewer: no diffuse texture found in NIF");
     }
@@ -103,10 +101,24 @@ fn export_viewer(
     let temp_dir = std::env::temp_dir().join("IMGEditor").join("preview");
     let _ = fs::create_dir_all(&temp_dir);
 
-    // Try exporting textured OBJ when a diffuse texture name is available.
+    // Resolve texture via IDE → NFT pipeline.
+    let nif_basename = Path::new(&name).file_stem().and_then(|s| s.to_str()).unwrap_or(stem);
+    eprintln!("[IMGEditor] viewer: nif basename = {nif_basename}, game_root = {game_root:?}");
+    let ide_map = game_root.as_ref().map(|root| IdeMap::build(root));
+    let nft_catalog = ide_map.as_ref().and_then(|map| resolve_textures_for_nif(nif_basename, map));
+    if let Some(ref cat) = nft_catalog {
+        eprintln!("[IMGEditor] viewer: NFT catalog has {} entries", cat.entries.len());
+        for (k, v) in &cat.entries {
+            eprintln!("  {k}: {} bytes, source={}", v.pixel_data.as_ref().map_or(0, |d| d.len()), v.source_path);
+        }
+    } else {
+        eprintln!("[IMGEditor] viewer: no NFT catalog resolved");
+    }
+
+    // Try exporting textured OBJ when texture data is available.
     let used_obj = if let Some(ref tex_name) = diffuse_texture {
-        let tex_data = locate_texture_data(tex_name, &texture_search_root, &texture_files);
-        if let Some(ref data) = tex_data {
+        let tex_data = nft_catalog.as_ref().and_then(|cat| cat.get_pixels(tex_name));
+        if let Some(data) = tex_data {
             match write_obj_with_texture(&temp_dir, stem, &mesh_data, tex_name, data) {
                 Ok(out_path) => {
                     eprintln!("[IMGEditor] viewer: wrote textured OBJ to {out_path:?}");
@@ -118,10 +130,11 @@ fn export_viewer(
                 }
             }
         } else {
-            eprintln!("[IMGEditor] viewer: texture {tex_name} not found on disk or in archive, falling back to PLY");
+            eprintln!("[IMGEditor] viewer: texture {tex_name} not found in NFT, falling back to PLY");
             false
         }
     } else {
+        eprintln!("[IMGEditor] viewer: no diffuse texture found in NIF, falling back to PLY");
         false
     };
 
