@@ -68,6 +68,7 @@ impl App {
                 .on_input(Message::CommitRename)
                 .on_submit(Message::CommitRename(self.rename_buffer.clone()))
                 .size(13)
+                .width(Length::FillPortion(6))
                 .into()
         } else {
             let label = if is_selected {
@@ -75,7 +76,7 @@ impl App {
             } else {
                 file_name
             };
-            text(label).size(13).into()
+            text(label).size(13).width(Length::FillPortion(6)).into()
         };
 
         let row_content: Element<'_, Message> = row![
@@ -194,9 +195,12 @@ fn build_toolbar() -> Element<'static, Message> {
     ]
     .spacing(4)
     .padding(4)
-    .align_y(Alignment::Center);
+    .align_y(Alignment::Center)
+    .width(Length::Fill);
 
     Container::new(toolbar)
+        .width(Length::Fill)
+        .height(Length::Fixed(42.0))
         .style(|theme: &iced::Theme| iced::widget::container::Style {
             background: Some(theme.extended_palette().background.weak.color.into()),
             ..Default::default()
@@ -266,7 +270,10 @@ pub fn build(app: &App) -> Element<'_, Message> {
     };
 
     let status = app.build_status_bar();
-    let base = column![menubar, toolbar, tab_bar, body, status];
+    let base = column![menubar, toolbar, tab_bar, body, status]
+        .spacing(0)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
     let overlays: Vec<Element<'_, Message>> = vec![
         build_about(app),

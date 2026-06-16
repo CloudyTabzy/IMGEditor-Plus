@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use iced::keyboard::Event as KeyboardEvent;
-use iced::widget::{Space, text};
+use iced::widget::{Space, container};
 use iced::{Element, Subscription, Task, Theme};
 use iced_fonts::LUCIDE_FONT_BYTES;
 use iced_aw::menu::{Item, Menu, MenuBar};
@@ -698,15 +698,22 @@ impl App {
             Item::new(menu_button("About".to_string(), Message::ShowAbout)),
         ]);
 
+        fn menu_label(label: &'static str) -> iced::Element<'static, Message> {
+            container(iced::widget::text(label))
+                .padding([4, 12])
+                .into()
+        }
+
         let bar = MenuBar::new(vec![
-            Item::with_menu(text("File"), file_menu),
-            Item::with_menu(text("Edit"), edit_menu),
-            Item::with_menu(text("Selection"), selection_menu),
-            Item::with_menu(text("Option"), option_menu),
-            Item::with_menu(text("Help"), help_menu),
+            Item::with_menu(menu_label("File"), file_menu),
+            Item::with_menu(menu_label("Edit"), edit_menu),
+            Item::with_menu(menu_label("Selection"), selection_menu),
+            Item::with_menu(menu_label("Option"), option_menu),
+            Item::with_menu(menu_label("Help"), help_menu),
         ]);
 
         iced::widget::Container::new(bar)
+            .width(iced::Length::Fill)
             .style(|theme| iced::widget::container::Style {
                 background: Some(theme.extended_palette().background.weak.color.into()),
                 ..Default::default()
