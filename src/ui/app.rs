@@ -645,7 +645,9 @@ impl App {
                 format!("Close tab ({})", shortcut_display(Shortcut::Close)),
                 Message::CloseSelectedArchive,
             )),
-        ]);
+        ])
+        .width(iced::Length::Shrink)
+        .max_width(220.0);
 
         let edit_menu = Menu::new(vec![
             Item::new(menu_button(
@@ -663,7 +665,9 @@ impl App {
                 ),
                 Message::ExportSelected,
             )),
-        ]);
+        ])
+        .width(iced::Length::Shrink)
+        .max_width(220.0);
 
         let selection_menu = Menu::new(vec![
             Item::new(menu_button(
@@ -684,7 +688,9 @@ impl App {
                 ),
                 Message::DeleteSelected,
             )),
-        ]);
+        ])
+        .width(iced::Length::Shrink)
+        .max_width(220.0);
 
         let option_items: Vec<Item<'_, Message, iced::Theme, iced::Renderer>> = ThemeMode::ALL
             .iter()
@@ -698,7 +704,9 @@ impl App {
             })
             .collect();
 
-        let option_menu = Menu::new(option_items);
+        let option_menu = Menu::new(option_items)
+            .width(iced::Length::Shrink)
+            .max_width(220.0);
 
         let help_menu = Menu::new(vec![
             Item::new(menu_button(
@@ -713,7 +721,9 @@ impl App {
                 Message::VisitRepository,
             )),
             Item::new(menu_button("About".to_string(), Message::ShowAbout)),
-        ]);
+        ])
+        .width(iced::Length::Shrink)
+        .max_width(220.0);
 
         fn menu_label(label: &'static str) -> iced::Element<'static, Message> {
             container(iced::widget::text(label))
