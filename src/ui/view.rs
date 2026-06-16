@@ -1,12 +1,12 @@
 use iced::widget::{
-    Column, Container, Row, Scrollable, Space, button, column, mouse_area, pane_grid,
-    progress_bar, rule, row, stack, text, text_input, tooltip,
+    Column, Container, Row, Scrollable, Space, button, column, container, mouse_area,
+    pane_grid, progress_bar, rule, row, stack, text, text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_fonts::lucide;
 
 use crate::parser::ImgVersion;
-use crate::ui::app::{App, Message, Pane, ABOUT_TEXT};
+use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
 
 impl App {
     pub(crate) fn build_entry_table(&self) -> Element<'_, Message> {
@@ -33,7 +33,7 @@ impl App {
             return Container::new(
                 column![
                     Space::new().height(Length::Fixed(8.0)),
-                    text("No entries match the current filter.").size(13),
+                    text("No entries match the current filter."),
                 ]
                 .align_x(Alignment::Center),
             )
@@ -67,7 +67,6 @@ impl App {
             text_input("", &self.rename_buffer)
                 .on_input(Message::CommitRename)
                 .on_submit(Message::CommitRename(self.rename_buffer.clone()))
-                .size(13)
                 .width(Length::FillPortion(6))
                 .into()
         } else {
@@ -76,14 +75,13 @@ impl App {
             } else {
                 file_name
             };
-            text(label).size(13).width(Length::FillPortion(6)).into()
+            text(label).width(Length::FillPortion(6)).into()
         };
 
         let row_content: Element<'_, Message> = row![
             name_widget,
-            text(version).size(13).width(Length::FillPortion(2)),
+            text(version).width(Length::FillPortion(2)),
             text(format!("{size_kb} KB"))
-                .size(13)
                 .width(Length::FillPortion(2))
         ]
         .spacing(8)
@@ -127,8 +125,8 @@ impl App {
         let in_use = archive.progress.in_use();
 
         let mut col = column![
-            text(format!("Format: {version_text}")).size(13),
-            text(format!("Entries: {total} (visible: {visible})")).size(13),
+            text(format!("Format: {version_text}")),
+            text(format!("Entries: {total} (visible: {visible})")),
             rule::horizontal(1),
             progress_bar(0.0..=1.0, progress),
         ]
@@ -141,12 +139,12 @@ impl App {
         }
 
         col = col.push(rule::horizontal(1));
-        col = col.push(text("Logs:").size(13));
+        col = col.push(text("Logs:"));
 
         let logs: Vec<String> = archive.logs.iter().rev().take(50).cloned().collect();
         let log_widget =
             Scrollable::new(Column::with_children(
-                logs.into_iter().map(|m| text(m).size(12).into()),
+                logs.into_iter().map(|m| text(m).into()),
             ))
                 .height(Length::Fixed(180.0));
 
@@ -161,7 +159,7 @@ impl App {
         });
         let bar = Container::new(
             Row::new()
-                .push(text(status_text).size(12))
+                .push(text(status_text))
                 .push(Space::new().width(Length::Fill))
                 .align_y(Alignment::Center)
                 .padding(6),
@@ -189,34 +187,34 @@ fn build_toolbar() -> Element<'static, Message> {
     let toolbar = row![
         tooltip(
             toolbar_button(lucide::file_plus().size(18).into(), Message::NewArchive),
-            text("New").size(12),
+            text("New"),
             tooltip::Position::Bottom,
         ),
         tooltip(
             toolbar_button(lucide::folder_open().size(18).into(), Message::OpenArchive),
-            text("Open").size(12),
+            text("Open"),
             tooltip::Position::Bottom,
         ),
         tooltip(
             toolbar_button(lucide::save().size(18).into(), Message::SaveArchive),
-            text("Save").size(12),
+            text("Save"),
             tooltip::Position::Bottom,
         ),
         rule::vertical(1),
         tooltip(
             toolbar_button(lucide::download().size(18).into(), Message::ImportFiles),
-            text("Import").size(12),
+            text("Import"),
             tooltip::Position::Bottom,
         ),
         tooltip(
             toolbar_button(lucide::upload().size(18).into(), Message::ExportSelected),
-            text("Export selected").size(12),
+            text("Export selected"),
             tooltip::Position::Bottom,
         ),
         rule::vertical(1),
         tooltip(
             toolbar_button(lucide::trash_two().size(18).into(), Message::DeleteSelected),
-            text("Delete selected").size(12),
+            text("Delete selected"),
             tooltip::Position::Bottom,
         ),
     ]
@@ -308,6 +306,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_welcome(app),
         build_unsupported(app),
         build_update_status(app),
+        build_context_menu(app),
     ]
     .into_iter()
     .flatten()
@@ -431,6 +430,67 @@ fn modal_box<'a>(
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .into()
+}
+
+fn build_context_menu(app: &App) -> Option<Element<'_, Message>> {
+    let index = app.context_menu?;
+    let Some(archive) = app
+        .editor
+        .archives()
+        .get(app.editor.selected_archive().unwrap_or(0))
+    else {
+        return None;
+    };
+    let entry = archive.entries.get(index)?;
+
+    let card = container(
+        column![
+            text(format!("{}", entry.file_name)),
+            rule::horizontal(1),
+            context_button("Export", Message::EntryContextAction(EntryAction::Export)),
+            context_button("Rename", Message::EntryContextAction(EntryAction::Rename)),
+            context_button("Copy name", Message::EntryContextAction(EntryAction::CopyName)),
+            context_button("Delete", Message::EntryContextAction(EntryAction::Delete)),
+        ]
+        .spacing(4)
+        .padding(8)
+        .max_width(180),
+    )
+    .style(|theme: &iced::Theme| iced::widget::container::Style {
+        background: Some(theme.extended_palette().background.base.color.into()),
+        border: Border {
+            color: theme.extended_palette().background.strong.color,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
+            offset: iced::Vector::new(0.0, 2.0),
+            blur_radius: 6.0,
+        },
+        ..Default::default()
+    });
+
+    let menu = container(card)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into();
+
+    let backdrop = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+        .on_press(Message::HideContextMenu);
+
+    Some(stack(vec![backdrop.into(), menu]).into())
+}
+
+fn context_button(label: &str, message: Message) -> iced::widget::Button<'_, Message> {
+    button(
+        text(label)
+            .align_x(iced::alignment::Horizontal::Left)
+            .width(Length::Fill),
+    )
+    .on_press(message)
+    .width(Length::Fill)
+    .style(crate::ui::view::menu_button_style)
 }
 
 pub fn version_label(version: ImgVersion) -> &'static str {

@@ -76,6 +76,7 @@ pub enum Message {
     EntryDoubleClicked(usize),
     EntryRightClicked(usize),
     EntryContextAction(EntryAction),
+    HideContextMenu,
 
     ShowAbout,
     HideAbout,
@@ -124,6 +125,7 @@ pub struct App {
     pub toast: Option<String>,
     pub last_export_selected_only: bool,
     pub panes: pane_grid::State<Pane>,
+    pub context_menu: Option<usize>,
 }
 
 impl Default for App {
@@ -153,6 +155,7 @@ impl App {
             toast: None,
             last_export_selected_only: false,
             panes,
+            context_menu: None,
         }
     }
 
@@ -468,15 +471,20 @@ impl App {
             }
             Message::EntryRightClicked(index) => {
                 self.editor.set_selected_entry(Some(index));
+                self.context_menu = Some(index);
                 Task::none()
             }
-            Message::EntryContextAction(action) => match action {
+            Message::EntryContextAction(action) => {
+                self.context_menu = None;
+                match action {
                 EntryAction::CopyName => {
                     if let Some(archive_index) = self.editor.selected_archive() {
                         if let Some(entry_index) = self.editor.selected_entry() {
                             if let Some(archive) = self.editor.archives().get(archive_index) {
                                 if let Some(entry) = archive.entries.get(entry_index) {
-                                    self.toast = Some(format!("Copied name: {}", entry.file_name));
+                                    let name = entry.file_name.to_string();
+                                    self.toast = Some(format!("Copied name: {}", name));
+                                    return iced::clipboard::write::<Message>(name);
                                 }
                             }
                         }
@@ -492,7 +500,7 @@ impl App {
                     self.last_export_selected_only = true;
                     dialogs::save_folder().map(Message::ExportFolderResult)
                 }
-            },
+            }},
 
             Message::ShowAbout => {
                 self.show_about = true;
@@ -566,6 +574,10 @@ impl App {
             Message::TickProgress => Task::none(),
             Message::PaneResized(event) => {
                 self.panes.resize(event.split, event.ratio);
+                Task::none()
+            }
+            Message::HideContextMenu => {
+                self.context_menu = None;
                 Task::none()
             }
 
@@ -787,6 +799,10 @@ pub fn run_app(config: Config) -> iced::Result {
     )
     .theme(|state: &App| -> Option<Theme> { Some(state.theme()) })
     .subscription(App::subscription)
+    .settings(iced::Settings {
+        default_text_size: iced::Pixels(14.0),
+        ..iced::Settings::default()
+    })
     .window_size(size)
     .resizable(true)
     .centered()
