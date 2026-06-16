@@ -2,9 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use iced::advanced::widget::operation::scrollable::{AbsoluteOffset, scroll_to};
 use iced::keyboard::Event as KeyboardEvent;
 use iced::widget::{Space, container, pane_grid};
-use iced::{Element, Subscription, Task, Theme};
+use iced::{Element, Point, Subscription, Task, Theme};
 use iced_fonts::LUCIDE_FONT_BYTES;
 use iced_aw::menu::{Item, Menu, MenuBar};
 use memmap2::Mmap;
@@ -34,6 +35,13 @@ pub const ABOUT_TEXT: &str = concat!(
     "- GTA San Andreas\n",
     "- Bully Scholarship Edition"
 );
+
+#[derive(Debug, Clone, Copy)]
+pub struct AutoScroll {
+    pub anchor: Option<Point>,
+    pub initial_scroll_y: f32,
+    pub current: Option<Point>,
+}
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -81,6 +89,10 @@ pub enum Message {
     EntryRightClicked(usize),
     EntryContextAction(EntryAction),
     HideContextMenu,
+    AutoScrollStarted,
+    AutoScrollStartedAtRow(usize),
+    AutoScrollMoved(Point),
+    AutoScrollEnded,
 
     ShowAbout,
     HideAbout,
@@ -140,6 +152,8 @@ pub struct App {
     pub inspected_entry: Option<(usize, EntryInspection)>,
     pub scroll_y: f32,
     pub search_pending: Option<String>,
+    pub autoscroll: Option<AutoScroll>,
+    pub entry_table_id: iced::widget::Id,
 }
 
 impl Default for App {
@@ -173,6 +187,8 @@ impl App {
             inspected_entry: None,
             scroll_y: 0.0,
             search_pending: None,
+            autoscroll: None,
+            entry_table_id: iced::widget::Id::unique(),
         }
     }
 
@@ -731,6 +747,41 @@ impl App {
                 self.context_menu = None;
                 Task::none()
             }
+            Message::AutoScrollStarted | Message::AutoScrollStartedAtRow(_) => {
+                // Middle-clicking while the context menu is open just dismisses it.
+                if self.context_menu.take().is_some() {
+                    return Task::none();
+                }
+                self.autoscroll = Some(AutoScroll {
+                    anchor: None,
+                    initial_scroll_y: self.scroll_y,
+                    current: None,
+                });
+                Task::none()
+            }
+            Message::AutoScrollMoved(position) => {
+                let Some(state) = self.autoscroll.as_mut() else {
+                    return Task::none();
+                };
+                if state.anchor.is_none() {
+                    state.anchor = Some(position);
+                    state.current = Some(position);
+                    return Task::none();
+                }
+                state.current = Some(position);
+                let anchor = state.anchor.unwrap_or(position);
+                let delta_y = position.y - anchor.y;
+                const SENSITIVITY: f32 = 2.5;
+                let new_y = (state.initial_scroll_y + delta_y * SENSITIVITY).max(0.0);
+                iced::advanced::widget::operate(scroll_to(
+                    self.entry_table_id.clone(),
+                    AbsoluteOffset { x: None, y: Some(new_y) },
+                ))
+            }
+            Message::AutoScrollEnded => {
+                self.autoscroll = None;
+                Task::none()
+            }
             Message::OpenLastExportFolder => {
                 if let Some(index) = self.editor.selected_archive() {
                     if let Some(archive) = self.editor.archives().get(index) {
@@ -830,7 +881,24 @@ impl App {
             _ => Message::Noop,
         });
 
-        Subscription::batch([key, tick, debounce, window])
+        let autoscroll = if self.autoscroll.is_some() {
+            iced::event::listen().map(|event| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Message::AutoScrollMoved(position)
+                }
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(_)) => {
+                    Message::AutoScrollEnded
+                }
+                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+                    iced::mouse::Button::Left | iced::mouse::Button::Right,
+                )) => Message::AutoScrollEnded,
+                _ => Message::Noop,
+            })
+        } else {
+            Subscription::none()
+        };
+
+        Subscription::batch([key, tick, debounce, window, autoscroll])
     }
 }
 

@@ -114,7 +114,11 @@ impl App {
         let content = content.height(Length::Fixed(total_height));
 
         let scrollable = Scrollable::new(content)
+            .id(self.entry_table_id.clone())
             .height(Length::Fill)
+            .direction(iced::widget::scrollable::Direction::Vertical(
+                iced::widget::scrollable::Scrollbar::new().scroller_width(16.0),
+            ))
             .on_scroll(|viewport| Message::ScrollOffsetChanged(viewport.absolute_offset().y));
 
         // Context menu overlay sits above the scrollable but below the rest of
@@ -133,6 +137,19 @@ impl App {
             stack(vec![scrollable.into(), overlay]).into()
         } else {
             scrollable.into()
+        };
+
+        // Middle-click anywhere in the table body to start autoscroll mode.
+        let table_body = mouse_area(table_body)
+            .on_middle_press(Message::AutoScrollStarted)
+            .into();
+
+        // Autoscroll indicator overlay.
+        let table_body = if self.autoscroll.is_some() {
+            let indicator = build_autoscroll_indicator();
+            stack(vec![table_body, indicator]).into()
+        } else {
+            table_body
         };
 
         column![headers, table_body]
@@ -206,6 +223,7 @@ impl App {
             .on_press(Message::EntryClicked(display_row))
             .on_double_click(Message::EntryDoubleClicked(display_row))
             .on_right_press(Message::EntryRightClicked(display_row))
+            .on_middle_press(Message::AutoScrollStartedAtRow(display_row))
             .into()
     }
 
@@ -665,6 +683,30 @@ fn build_context_menu(
         .on_press(Message::HideContextMenu);
 
     Some(stack(vec![backdrop.into(), menu]).into())
+}
+
+fn build_autoscroll_indicator() -> Element<'static, Message> {
+    let dot = container(
+        Space::new()
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0)),
+    )
+    .style(|theme: &iced::Theme| iced::widget::container::Style {
+        background: Some(theme.extended_palette().primary.strong.color.into()),
+        border: Border {
+            color: theme.extended_palette().background.base.color,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    });
+
+    container(dot)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
 }
 
 fn context_button(label: &str, message: Message) -> iced::widget::Button<'_, Message> {
