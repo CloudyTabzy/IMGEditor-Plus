@@ -5,6 +5,7 @@ use std::time::Duration;
 use iced::keyboard::Event as KeyboardEvent;
 use iced::widget::{Space, text};
 use iced::{Element, Subscription, Task, Theme};
+use iced_fonts::LUCIDE_FONT_BYTES;
 use iced_aw::menu::{Item, Menu, MenuBar};
 
 use crate::archive::ArchiveInfo;
@@ -147,13 +148,16 @@ impl App {
     }
 
     pub fn startup_task() -> Task<Message> {
-        Task::perform(
-            check_updates_future(
-                UPDATER_REPO.to_string(),
-                env!("CARGO_PKG_VERSION").to_string(),
+        Task::batch(vec![
+            iced::font::load(LUCIDE_FONT_BYTES).map(|_| Message::Noop),
+            Task::perform(
+                check_updates_future(
+                    UPDATER_REPO.to_string(),
+                    env!("CARGO_PKG_VERSION").to_string(),
+                ),
+                Message::UpdateResultReceived,
             ),
-            Message::UpdateResultReceived,
-        )
+        ])
     }
 
     pub fn save_config(&self) {

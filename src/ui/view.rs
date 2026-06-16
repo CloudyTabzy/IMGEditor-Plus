@@ -3,6 +3,7 @@ use iced::widget::{
     row, stack, text, text_input,
 };
 use iced::{Alignment, Border, Color, Element, Length};
+use iced_fonts::lucide;
 
 use crate::parser::ImgVersion;
 use crate::ui::app::{App, Message, ABOUT_TEXT};
@@ -172,8 +173,40 @@ impl App {
     }
 }
 
+fn toolbar_button(icon: Element<'static, Message>, msg: Message) -> iced::widget::Button<'static, Message> {
+    button(icon)
+        .on_press(msg)
+        .padding(6)
+        .width(Length::Fixed(34.0))
+        .height(Length::Fixed(34.0))
+}
+
+fn build_toolbar() -> Element<'static, Message> {
+    let toolbar = row![
+        toolbar_button(lucide::file_plus().size(18).into(), Message::NewArchive),
+        toolbar_button(lucide::folder_open().size(18).into(), Message::OpenArchive),
+        toolbar_button(lucide::save().size(18).into(), Message::SaveArchive),
+        rule::vertical(1),
+        toolbar_button(lucide::download().size(18).into(), Message::ImportFiles),
+        toolbar_button(lucide::upload().size(18).into(), Message::ExportSelected),
+        rule::vertical(1),
+        toolbar_button(lucide::trash_two().size(18).into(), Message::DeleteSelected),
+    ]
+    .spacing(4)
+    .padding(4)
+    .align_y(Alignment::Center);
+
+    Container::new(toolbar)
+        .style(|theme: &iced::Theme| iced::widget::container::Style {
+            background: Some(theme.extended_palette().background.weak.color.into()),
+            ..Default::default()
+        })
+        .into()
+}
+
 pub fn build(app: &App) -> Element<'_, Message> {
     let menubar = app.menubar();
+    let toolbar = build_toolbar();
 
     let tab_bar: Element<'_, Message> = if app.editor.archives().is_empty() {
         Space::new().height(Length::Fixed(0.0)).into()
@@ -233,7 +266,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
     };
 
     let status = app.build_status_bar();
-    let base = column![menubar, tab_bar, body, status];
+    let base = column![menubar, toolbar, tab_bar, body, status];
 
     let overlays: Vec<Element<'_, Message>> = vec![
         build_about(app),
