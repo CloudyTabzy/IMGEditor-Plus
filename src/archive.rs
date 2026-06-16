@@ -135,6 +135,13 @@ impl EntryInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct RowDisplay {
+    pub name: String,
+    pub file_type: String,
+    pub size_kb: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct ArchiveInfo {
     pub path: Option<PathBuf>,
     pub file_name: String,
@@ -151,6 +158,7 @@ pub struct ArchiveInfo {
     pub last_export_folder: Option<PathBuf>,
     pub sort: SortState,
     pub inspection_cache: std::collections::HashMap<usize, EntryInspection>,
+    pub row_cache: Vec<RowDisplay>,
 }
 
 impl ArchiveInfo {
@@ -171,6 +179,7 @@ impl ArchiveInfo {
             last_export_folder: None,
             sort: SortState::default(),
             inspection_cache: std::collections::HashMap::new(),
+            row_cache: Vec::new(),
         };
 
         archive.add_log("Created archive".to_string());
@@ -201,6 +210,7 @@ impl ArchiveInfo {
             last_export_folder: None,
             sort: SortState::default(),
             inspection_cache: std::collections::HashMap::new(),
+            row_cache: Vec::new(),
         };
 
         match version {
@@ -267,6 +277,26 @@ impl ArchiveInfo {
 
         for (index, _) in matches {
             self.selected_indices.push(index);
+        }
+
+        self.rebuild_row_cache();
+    }
+
+    pub fn rebuild_row_cache(&mut self) {
+        self.row_cache.clear();
+        for &index in &self.selected_indices {
+            if let Some(entry) = self.entries.get(index) {
+                let name = if entry.selected {
+                    format!("✓ {}", entry.file_name)
+                } else {
+                    entry.file_name.to_string()
+                };
+                self.row_cache.push(RowDisplay {
+                    name,
+                    file_type: entry.file_type.to_string(),
+                    size_kb: format!("{} KB", entry.sector * 2),
+                });
+            }
         }
     }
 

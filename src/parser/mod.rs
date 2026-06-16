@@ -16,7 +16,7 @@ pub use iparser::ImgParser;
 pub use pc_v1::PcV1Parser;
 pub use pc_v2::PcV2Parser;
 pub use unknown::UnknownParser;
-pub use inspector::{EntryInspection, inspect_entry_cached};
+pub use inspector::{EntryInspection, inspect_entry_cached, inspect_entry_standalone};
 
 pub const SECTOR_SIZE: u64 = 2048;
 pub const ENTRY_SIZE: usize = 32;
@@ -113,6 +113,20 @@ pub fn read_entry_header(
     entry: &EntryInfo,
     max_bytes: usize,
 ) -> anyhow::Result<Vec<u8>> {
+    read_entry_header_standalone(
+        entry,
+        archive.path.as_deref(),
+        archive.source_mmap.as_deref(),
+        max_bytes,
+    )
+}
+
+pub fn read_entry_header_standalone(
+    entry: &EntryInfo,
+    archive_path: Option<&Path>,
+    source_mmap: Option<&Mmap>,
+    max_bytes: usize,
+) -> anyhow::Result<Vec<u8>> {
     if entry.imported {
         let source = entry
             .source_path
@@ -125,13 +139,10 @@ pub fn read_entry_header(
         return Ok(data);
     }
 
-    let source = archive
-        .path
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
+    let source = archive_path.ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
     let offset = u64::from(entry.offset) * SECTOR_SIZE;
 
-    if let Some(mmap) = archive.source_mmap.as_deref() {
+    if let Some(mmap) = source_mmap {
         let mmap_len = mmap.len() as u64;
         let start = offset.min(mmap_len) as usize;
         let end = (offset + max_bytes as u64).min(mmap_len) as usize;

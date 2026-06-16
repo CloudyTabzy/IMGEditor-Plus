@@ -7,11 +7,14 @@ use iced::widget::{Space, container, pane_grid};
 use iced::{Element, Subscription, Task, Theme};
 use iced_fonts::LUCIDE_FONT_BYTES;
 use iced_aw::menu::{Item, Menu, MenuBar};
+use memmap2::Mmap;
 
-use crate::archive::{ArchiveInfo, SortColumn, SortDirection};
+use crate::archive::{ArchiveInfo, EntryInfo, SortColumn, SortDirection};
 use crate::config::{Config, ThemeMode};
 use crate::editor::Editor;
-use crate::parser::{EntryInspection, ImgVersion, inspect_entry_cached};
+use crate::parser::{
+    EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
+};
 use crate::tasks::{ExportMode, ExportTask, SaveTask};
 use crate::ui::dialogs::{self, SaveArchiveChoice};
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
@@ -70,6 +73,7 @@ pub enum Message {
     CancelActive,
 
     SearchChanged(String),
+    DebounceTick,
     RefreshFilter,
 
     EntryClicked(usize),
@@ -77,7 +81,6 @@ pub enum Message {
     EntryRightClicked(usize),
     EntryContextAction(EntryAction),
     HideContextMenu,
-    CursorMoved(iced::Point),
 
     ShowAbout,
     HideAbout,
@@ -96,6 +99,11 @@ pub enum Message {
     PaneResized(pane_grid::ResizeEvent),
     OpenLastExportFolder,
     SortBy(SortColumn),
+    ScrollOffsetChanged(f32),
+    EntryInspected {
+        index: usize,
+        inspection: EntryInspection,
+    },
 
     FilesDropped(PathBuf),
 }
@@ -128,9 +136,10 @@ pub struct App {
     pub toast: Option<String>,
     pub last_export_selected_only: bool,
     pub panes: pane_grid::State<Pane>,
-    pub context_menu: Option<(usize, iced::Point)>,
-    pub cursor_position: iced::Point,
+    pub context_menu: Option<(usize, usize)>,
     pub inspected_entry: Option<(usize, EntryInspection)>,
+    pub scroll_y: f32,
+    pub search_pending: Option<String>,
 }
 
 impl Default for App {
@@ -161,8 +170,9 @@ impl App {
             last_export_selected_only: false,
             panes,
             context_menu: None,
-            cursor_position: iced::Point::new(0.0, 0.0),
             inspected_entry: None,
+            scroll_y: 0.0,
+            search_pending: None,
         }
     }
 
@@ -197,19 +207,95 @@ impl App {
         self.editor.has_active_progress()
     }
 
-    fn refresh_inspection(&mut self) {
+    fn refresh_inspection(&mut self) -> Task<Message> {
         let selected_archive = self.editor.selected_archive();
         let selected_entry = self.editor.selected_entry();
 
-        if let (Some(archive_index), Some(entry_index)) = (selected_archive, selected_entry) {
-            if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
-                if let Some(inspection) = inspect_entry_cached(archive, entry_index) {
-                    self.inspected_entry = Some((entry_index, inspection));
-                    return;
-                }
-            }
+        let (Some(archive_index), Some(entry_index)) = (selected_archive, selected_entry) else {
+            self.inspected_entry = None;
+            return Task::none();
+        };
+
+        // Fast path: serve from the per-archive cache (mmap reads -> instant).
+        struct Miss {
+            entry: EntryInfo,
+            archive_path: Option<PathBuf>,
+            mmap: Option<Arc<Mmap>>,
+            archive_file_name: String,
         }
+
+        let miss = {
+            let archive = self.editor.archives_mut().get_mut(archive_index);
+            let archive = match archive {
+                Some(a) => a,
+                None => {
+                    self.inspected_entry = None;
+                    return Task::none();
+                }
+            };
+            if let Some(inspection) = inspect_entry_cached(archive, entry_index) {
+                self.inspected_entry = Some((entry_index, inspection));
+                return Task::none();
+            }
+            // Cache miss: capture minimal data while the borrow is live.
+            let entry = archive.entries.get(entry_index).cloned();
+            let archive_path = archive.path.clone();
+            let mmap = archive.source_mmap.clone();
+            let archive_file_name = archive.file_name.clone();
+            match entry {
+                Some(entry) => Some(Miss {
+                    entry,
+                    archive_path,
+                    mmap,
+                    archive_file_name,
+                }),
+                None => None,
+            }
+        };
+
+        let Some(miss) = miss else {
+            self.inspected_entry = None;
+            return Task::none();
+        };
+
         self.inspected_entry = None;
+
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let mmap_ref = miss.mmap.as_deref();
+                    inspect_entry_standalone(
+                        &miss.entry,
+                        miss.archive_path.as_deref(),
+                        mmap_ref,
+                        &miss.archive_file_name,
+                    )
+                })
+                .await
+                .ok()
+            },
+            move |maybe| {
+                let Some(inspection) = maybe else {
+                    return Message::Noop;
+                };
+                Message::EntryInspected {
+                    index: entry_index,
+                    inspection,
+                }
+            },
+        )
+    }
+
+    fn display_row_to_entry(&self, display_row: usize) -> Option<usize> {
+        self.editor
+            .selected_archive()
+            .and_then(|_| self.editor.archives().get(self.editor.selected_archive().unwrap_or(0)))
+            .and_then(|a| a.selected_indices.get(display_row).copied())
+    }
+
+    fn run_refresh_filter(&mut self) -> Task<Message> {
+        self.editor.update_filtered_list(&self.search);
+        Task::none()
     }
 
     fn run_save(
@@ -344,18 +430,18 @@ impl App {
 
             Message::CloseSelectedArchive => {
                 self.editor.close_selected_archive();
-                self.refresh_inspection();
-                Task::none()
+                let task = self.refresh_inspection();
+                Task::batch(vec![task, Task::none()])
             }
             Message::CloseArchiveTab(index) => {
                 self.editor.close_archive(index);
-                self.refresh_inspection();
-                Task::none()
+                let task = self.refresh_inspection();
+                Task::batch(vec![task, Task::none()])
             }
             Message::SelectArchiveTab(index) => {
                 self.editor.select_archive(index);
-                self.refresh_inspection();
-                Task::none()
+                let task = self.refresh_inspection();
+                Task::batch(vec![task, Task::none()])
             }
 
             Message::ImportFiles => {
@@ -420,18 +506,18 @@ impl App {
 
             Message::SelectAll => {
                 self.editor.select_all(true);
-                self.refresh_inspection();
-                Task::none()
+                let task = self.refresh_inspection();
+                Task::batch(vec![task, Task::none()])
             }
             Message::InvertSelection => {
                 self.editor.invert_selection();
-                self.refresh_inspection();
-                Task::none()
+                let task = self.refresh_inspection();
+                Task::batch(vec![task, Task::none()])
             }
             Message::DeleteSelected => {
                 self.editor.delete_selected();
-                self.refresh_inspection();
-                Task::none()
+                let task = self.refresh_inspection();
+                Task::batch(vec![task, Task::none()])
             }
             Message::StartRename => {
                 if let Some(index) = self.editor.selected_entry() {
@@ -476,8 +562,16 @@ impl App {
             }
 
             Message::SearchChanged(value) => {
-                self.search = value;
-                self.editor.update_filtered_list(&self.search);
+                self.search_pending = Some(value);
+                Task::none()
+            }
+            Message::DebounceTick => {
+                if let Some(query) = self.search_pending.take() {
+                    if query != self.search {
+                        self.search = query;
+                        return self.run_refresh_filter();
+                    }
+                }
                 Task::none()
             }
             Message::RefreshFilter => {
@@ -485,38 +579,41 @@ impl App {
                 Task::none()
             }
 
-            Message::EntryClicked(index) => {
-                self.editor.select_entry(index, false, false);
-                self.refresh_inspection();
-                Task::none()
+            Message::EntryClicked(display_row) => {
+                let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
+                    self.editor.select_entry(entry_index, false, false);
+                    self.refresh_inspection()
+                } else {
+                    Task::none()
+                };
+                Task::batch(vec![task, Task::none()])
             }
-            Message::EntryDoubleClicked(index) => {
-                self.editor.set_selected_entry(Some(index));
-                self.editor.select_entry(index, false, false);
-                if let Some(archive) = self.editor.selected_archive_mut() {
-                    if let Some(entry) = archive.entries.get_mut(index) {
-                        entry.rename = true;
-                        self.rename_buffer = entry.file_name.to_string();
+            Message::EntryDoubleClicked(display_row) => {
+                let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
+                    self.editor.set_selected_entry(Some(entry_index));
+                    self.editor.select_entry(entry_index, false, false);
+                    if let Some(archive) = self.editor.selected_archive_mut() {
+                        if let Some(entry) = archive.entries.get_mut(entry_index) {
+                            entry.rename = true;
+                            self.rename_buffer = entry.file_name.to_string();
+                        }
+                        archive.rebuild_row_cache();
                     }
-                }
-                self.refresh_inspection();
-                Task::none()
+                    self.refresh_inspection()
+                } else {
+                    Task::none()
+                };
+                Task::batch(vec![task, Task::none()])
             }
-            Message::EntryRightClicked(index) => {
-                self.editor.set_selected_entry(Some(index));
-                self.context_menu = Some((index, self.cursor_position));
-                self.refresh_inspection();
-                Task::none()
-            }
-            Message::CursorMoved(point) => {
-                if self.context_menu.is_none() {
-                    let dx = point.x - self.cursor_position.x;
-                    let dy = point.y - self.cursor_position.y;
-                    if dx * dx + dy * dy > 4.0 {
-                        self.cursor_position = point;
-                    }
-                }
-                Task::none()
+            Message::EntryRightClicked(display_row) => {
+                let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
+                    self.editor.set_selected_entry(Some(entry_index));
+                    self.context_menu = Some((entry_index, display_row));
+                    self.refresh_inspection()
+                } else {
+                    Task::none()
+                };
+                Task::batch(vec![task, Task::none()])
             }
             Message::EntryContextAction(action) => {
                 self.context_menu = None;
@@ -620,6 +717,16 @@ impl App {
                 self.panes.resize(event.split, event.ratio);
                 Task::none()
             }
+            Message::ScrollOffsetChanged(y) => {
+                self.scroll_y = y;
+                Task::none()
+            }
+            Message::EntryInspected { index, inspection } => {
+                if self.editor.selected_entry() == Some(index) {
+                    self.inspected_entry = Some((index, inspection));
+                }
+                Task::none()
+            }
             Message::HideContextMenu => {
                 self.context_menu = None;
                 Task::none()
@@ -716,12 +823,14 @@ impl App {
             Subscription::none()
         };
 
+        let debounce = iced::time::every(Duration::from_millis(150)).map(|_| Message::DebounceTick);
+
         let window = iced::window::events().map(|(_id, event)| match event {
             iced::window::Event::FileDropped(path) => Message::FilesDropped(path),
             _ => Message::Noop,
         });
 
-        Subscription::batch([key, tick, window])
+        Subscription::batch([key, tick, debounce, window])
     }
 }
 

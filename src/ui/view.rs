@@ -5,10 +5,19 @@ use iced::widget::{
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_fonts::lucide;
 
-use crate::archive::{SortColumn, SortDirection};
+use crate::archive::{RowDisplay, SortColumn, SortDirection};
 
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
+
+/// Height (px) of a single entry row. Must stay in sync with the `height(Length::Fixed(ROW_HEIGHT))`
+/// applied in `build_entry_row`; virtualization math depends on it.
+const ROW_HEIGHT: f32 = 32.0;
+/// Height (px) of the fixed column-header row.
+const HEADER_HEIGHT: f32 = 32.0;
+/// Number of rows to keep rendered above and below the scroll viewport. 10 rows ≈ 320 px of
+/// over-render — negligible cost, eliminates any chance of a blank band at the edges.
+const OVERSCAN_ROWS: i32 = 10;
 
 impl App {
     pub(crate) fn build_entry_table(&self) -> Element<'_, Message> {
@@ -48,47 +57,114 @@ impl App {
                 .style(button::text),
         ]
         .spacing(8)
-        .padding(6);
-
-        let mut content = Column::new().spacing(0).width(Length::Fill);
-        content = content.push(headers);
+        .padding(6)
+        .height(Length::Fixed(HEADER_HEIGHT));
 
         if archive.selected_indices.is_empty() {
-            return Container::new(
-                column![
-                    Space::new().height(Length::Fixed(8.0)),
-                    text("No entries match the current filter."),
-                ]
-                .align_x(Alignment::Center),
-            )
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into();
+            return column![headers, empty_state()]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
         }
 
-        for &display_index in &archive.selected_indices {
-            let Some(entry) = archive.entries.get(display_index) else {
+        let total = archive.selected_indices.len();
+        let total_height = total as f32 * ROW_HEIGHT;
+        let scroll_y = self.scroll_y.max(0.0);
+
+        // Window of visible rows, with an overscan to cover any tall viewport.
+        let raw_first = ((scroll_y / ROW_HEIGHT) as i32) - OVERSCAN_ROWS;
+        let last_inclusive = ((scroll_y / ROW_HEIGHT) as i32) + 64;
+        let mut first = raw_first.max(0) as usize;
+        let mut last = (last_inclusive as usize + 1).min(total);
+
+        // Always render the renaming row so its text_input never disappears.
+        if let Some(rename_row) = renaming_display_row(archive) {
+            if rename_row < first {
+                first = rename_row;
+            } else if rename_row >= last {
+                last = (rename_row + 1).min(total);
+            }
+        }
+
+        let top_pad_rows = first;
+        let bottom_pad_rows = total - last;
+        let top_pad_height = top_pad_rows as f32 * ROW_HEIGHT;
+        let bottom_pad_height = bottom_pad_rows as f32 * ROW_HEIGHT;
+
+        let mut content = Column::new().spacing(0).width(Length::Fill);
+        if top_pad_rows > 0 {
+            content = content.push(Space::new().height(Length::Fixed(top_pad_height)));
+        }
+
+        for display_row in first..last {
+            let Some(entry_index) = archive.selected_indices.get(display_row).copied() else {
                 continue;
             };
-            content = content.push(self.build_entry_row(display_index, entry));
+            let Some(entry) = archive.entries.get(entry_index) else {
+                continue;
+            };
+            let row_display = archive.row_cache.get(display_row);
+            content = content.push(self.build_entry_row(display_row, entry, row_display));
         }
 
-        let table = Scrollable::new(content).height(Length::Fill);
-        mouse_area(table)
-            .on_move(Message::CursorMoved)
+        if bottom_pad_rows > 0 {
+            content = content.push(Space::new().height(Length::Fixed(bottom_pad_height)));
+        }
+
+        let content = content.height(Length::Fixed(total_height));
+
+        let scrollable = Scrollable::new(content)
+            .height(Length::Fill)
+            .on_scroll(|viewport| Message::ScrollOffsetChanged(viewport.absolute_offset().y));
+
+        // Context menu overlay sits above the scrollable but below the rest of
+        // the UI. It is anchored to the right-clicked row's position within
+        // the table pane (so we don't need the absolute cursor coordinates,
+        // which Iced 0.14's MouseArea doesn't expose).
+        let table_body: Element<'_, Message> = if let Some((entry_index, display_row)) =
+            self.context_menu
+        {
+            let overlay: Element<'_, Message> = build_context_menu(
+                archive, entry_index, display_row, scroll_y,
+            )
+            .unwrap_or_else(|| {
+                Space::new().width(Length::Fill).height(Length::Fill).into()
+            });
+            stack(vec![scrollable.into(), overlay]).into()
+        } else {
+            scrollable.into()
+        };
+
+        column![headers, table_body]
+            .width(Length::Fill)
+            .height(Length::Fill)
             .into()
     }
 
     fn build_entry_row(
         &self,
-        display_index: usize,
+        display_row: usize,
         entry: &crate::archive::EntryInfo,
+        row_display: Option<&RowDisplay>,
     ) -> Element<'_, Message> {
         let is_renaming = entry.rename;
         let is_selected = entry.selected;
-        let size_kb = entry.sector * 2;
-        let version = entry.file_type.clone().to_string();
-        let file_name = entry.file_name.clone().to_string();
+
+        let (file_name, file_type, size_kb) = match row_display {
+            Some(rd) => (rd.name.clone(), rd.file_type.clone(), rd.size_kb.clone()),
+            None => {
+                let name = if is_selected {
+                    format!("✓ {}", entry.file_name)
+                } else {
+                    entry.file_name.to_string()
+                };
+                (
+                    name,
+                    entry.file_type.to_string(),
+                    format!("{} KB", entry.sector * 2),
+                )
+            }
+        };
 
         let name_widget: Element<'_, Message> = if is_renaming {
             text_input("", &self.rename_buffer)
@@ -97,25 +173,20 @@ impl App {
                 .width(Length::FillPortion(6))
                 .into()
         } else {
-            let label = if is_selected {
-                format!("✓ {file_name}")
-            } else {
-                file_name
-            };
-            text(label).width(Length::FillPortion(6)).into()
+            text(file_name).width(Length::FillPortion(6)).into()
         };
 
         let row_content: Element<'_, Message> = row![
             name_widget,
-            text(version).width(Length::FillPortion(2)),
-            text(format!("{size_kb} KB"))
-                .width(Length::FillPortion(2))
+            text(file_type).width(Length::FillPortion(2)),
+            text(size_kb).width(Length::FillPortion(2)),
         ]
         .spacing(8)
         .padding(6)
         .into();
 
-        let cell: iced::widget::Container<'_, Message> = Container::new(row_content)
+        let cell = Container::new(row_content)
+            .height(Length::Fixed(ROW_HEIGHT))
             .style(move |theme: &iced::Theme| {
                 if is_selected {
                     iced::widget::container::Style {
@@ -126,14 +197,16 @@ impl App {
                     iced::widget::container::Style::default()
                 }
             });
-        let cell: Element<'_, Message> = cell.into();
 
-        let cell = mouse_area(cell)
-            .on_press(Message::EntryClicked(display_index))
-            .on_double_click(Message::EntryDoubleClicked(display_index))
-            .on_right_press(Message::EntryRightClicked(display_index));
-
-        cell.into()
+        // Per-row mouse_area so the click is attributed to this exact row.
+        // Iced 0.14's MouseArea only carries a Message (no position), so the
+        // right-click absolute position is captured separately by a global
+        // event subscription and read by the context menu.
+        mouse_area(cell)
+            .on_press(Message::EntryClicked(display_row))
+            .on_double_click(Message::EntryDoubleClicked(display_row))
+            .on_right_press(Message::EntryRightClicked(display_row))
+            .into()
     }
 
     pub(crate) fn build_info_panel(&self) -> Element<'_, Message> {
@@ -409,7 +482,6 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_welcome(app),
         build_unsupported(app),
         build_update_status(app),
-        build_context_menu(app),
     ]
     .into_iter()
     .flatten()
@@ -535,16 +607,13 @@ fn modal_box<'a>(
         .into()
 }
 
-fn build_context_menu(app: &App) -> Option<Element<'_, Message>> {
-    let (index, pos) = app.context_menu?;
-    let Some(archive) = app
-        .editor
-        .archives()
-        .get(app.editor.selected_archive().unwrap_or(0))
-    else {
-        return None;
-    };
-    let entry = archive.entries.get(index)?;
+fn build_context_menu(
+    archive: &crate::archive::ArchiveInfo,
+    entry_index: usize,
+    display_row: usize,
+    scroll_y: f32,
+) -> Option<Element<'_, Message>> {
+    let entry = archive.entries.get(entry_index)?;
 
     let card = container(
         column![
@@ -574,10 +643,15 @@ fn build_context_menu(app: &App) -> Option<Element<'_, Message>> {
         ..Default::default()
     });
 
+    // Position the menu at the right-clicked row. The row's y in the table pane
+    // equals the fixed header height plus the row's position within the
+    // scrollable viewport (its content position minus the current scroll).
+    let row_y = HEADER_HEIGHT + (display_row as f32 * ROW_HEIGHT - scroll_y).max(0.0);
+
     let menu = container(card)
         .padding(iced::Padding {
-            top: pos.y,
-            left: pos.x,
+            top: row_y,
+            left: 12.0,
             right: 0.0,
             bottom: 0.0,
         })
@@ -636,4 +710,25 @@ pub fn menu_button_style(theme: &iced::Theme, status: button::Status) -> button:
         text_color: theme.extended_palette().background.base.text,
         ..button::Style::default()
     }
+}
+
+fn renaming_display_row(archive: &crate::archive::ArchiveInfo) -> Option<usize> {
+    let renaming_entry = archive.entries.iter().position(|e| e.rename)?;
+    archive
+        .selected_indices
+        .iter()
+        .position(|&i| i == renaming_entry)
+}
+
+fn empty_state() -> Element<'static, Message> {
+    Container::new(
+        column![
+            Space::new().height(Length::Fixed(8.0)),
+            text("No entries match the current filter."),
+        ]
+        .align_x(Alignment::Center),
+    )
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .into()
 }

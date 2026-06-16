@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use compact_str::CompactString;
+use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
-use crate::parser::{SECTOR_SIZE, read_entry_header};
+use crate::parser::{SECTOR_SIZE, read_entry_header_standalone};
 
 #[derive(Debug, Clone, Default)]
 pub struct EntryInspection {
@@ -18,6 +19,20 @@ pub struct EntryInspection {
 }
 
 pub fn inspect_entry(archive: &ArchiveInfo, entry: &EntryInfo) -> EntryInspection {
+    inspect_entry_standalone(
+        entry,
+        archive.path.as_deref(),
+        archive.source_mmap.as_deref(),
+        &archive.file_name,
+    )
+}
+
+pub fn inspect_entry_standalone(
+    entry: &EntryInfo,
+    archive_path: Option<&Path>,
+    mmap: Option<&Mmap>,
+    archive_file_name: &str,
+) -> EntryInspection {
     let mut inspection = EntryInspection {
         file_name: entry.file_name.clone(),
         file_type: entry.file_type.clone(),
@@ -26,7 +41,7 @@ pub fn inspect_entry(archive: &ArchiveInfo, entry: &EntryInfo) -> EntryInspectio
         ..Default::default()
     };
 
-    let header = read_entry_header(archive, entry, 8192).unwrap_or_default();
+    let header = read_entry_header_standalone(entry, archive_path, mmap, 8192).unwrap_or_default();
     let actual_size = actual_file_size(entry);
     inspection.size_bytes = actual_size;
 
@@ -37,11 +52,9 @@ pub fn inspect_entry(archive: &ArchiveInfo, entry: &EntryInfo) -> EntryInspectio
             .map(|p| CompactString::new(format!("Imported from {}", p.display())))
             .unwrap_or_else(|| CompactString::new("Imported"))
     } else {
-        let archive_name = archive
-            .path
-            .as_ref()
+        let archive_name = archive_path
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| archive.file_name.clone());
+            .unwrap_or_else(|| archive_file_name.to_string());
         CompactString::new(format!(
             "Archive {} at sector {}",
             archive_name, entry.offset

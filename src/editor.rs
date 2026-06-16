@@ -118,15 +118,15 @@ impl Editor {
 
     pub fn select_entry(&mut self, clicked: usize, shift: bool, ctrl: bool) {
         let anchor = self.selected_entry.unwrap_or(clicked);
-        let Some(archive) = self.selected_archive_mut() else {
-            return;
-        };
-
-        for entry in &mut archive.entries {
-            entry.rename = false;
-        }
+        let new_selected = Some(clicked);
 
         if shift {
+            let Some(archive) = self.selected_archive_mut() else {
+                return;
+            };
+            for entry in &mut archive.entries {
+                entry.rename = false;
+            }
             let start = anchor.min(clicked);
             let end = anchor.max(clicked);
 
@@ -141,20 +141,27 @@ impl Editor {
                     entry.selected = true;
                 }
             }
-            self.selected_entry = Some(clicked);
+            archive.rebuild_row_cache();
+        } else if let Some(archive) = self.selected_archive_mut() {
+            for entry in &mut archive.entries {
+                entry.rename = false;
+            }
+
+            if !ctrl {
+                for entry in &mut archive.entries {
+                    entry.selected = false;
+                }
+            }
+
+            if let Some(entry) = archive.entries.get_mut(clicked) {
+                entry.selected = !entry.selected;
+            }
+            archive.rebuild_row_cache();
+        } else {
             return;
         }
 
-        if !ctrl {
-            for entry in &mut archive.entries {
-                entry.selected = false;
-            }
-        }
-
-        if let Some(entry) = archive.entries.get_mut(clicked) {
-            entry.selected = !entry.selected;
-        }
-        self.selected_entry = Some(clicked);
+        self.selected_entry = new_selected;
     }
 
     pub fn select_all(&mut self, selected: bool) {
@@ -162,6 +169,7 @@ impl Editor {
             for entry in &mut archive.entries {
                 entry.selected = selected;
             }
+            archive.rebuild_row_cache();
         }
     }
 
@@ -170,6 +178,7 @@ impl Editor {
             for entry in &mut archive.entries {
                 entry.selected = !entry.selected;
             }
+            archive.rebuild_row_cache();
         }
     }
 
