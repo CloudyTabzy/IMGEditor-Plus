@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use iced::keyboard::Event as KeyboardEvent;
-use iced::widget::{Space, container};
+use iced::widget::{Space, container, pane_grid};
 use iced::{Element, Subscription, Task, Theme};
 use iced_fonts::LUCIDE_FONT_BYTES;
 use iced_aw::menu::{Item, Menu, MenuBar};
@@ -91,6 +91,7 @@ pub enum Message {
 
     SetTheme(ThemeMode),
     TickProgress,
+    PaneResized(pane_grid::ResizeEvent),
 
     FilesDropped(PathBuf),
 }
@@ -101,6 +102,12 @@ pub enum EntryAction {
     Rename,
     Delete,
     Export,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    Table,
+    Info,
 }
 
 pub struct App {
@@ -116,6 +123,7 @@ pub struct App {
     pub update_check_manual: bool,
     pub toast: Option<String>,
     pub last_export_selected_only: bool,
+    pub panes: pane_grid::State<Pane>,
 }
 
 impl Default for App {
@@ -127,6 +135,10 @@ impl Default for App {
 impl App {
     pub fn new(config: Config) -> Self {
         let show_welcome = !config.first_run_complete;
+        let (panes, pane) = pane_grid::State::new(Pane::Table);
+        let mut panes = panes;
+        panes.split(pane_grid::Axis::Vertical, pane, Pane::Info);
+
         Self {
             editor: Editor::new(),
             config,
@@ -140,6 +152,7 @@ impl App {
             update_check_manual: false,
             toast: None,
             last_export_selected_only: false,
+            panes,
         }
     }
 
@@ -551,6 +564,10 @@ impl App {
                 Task::none()
             }
             Message::TickProgress => Task::none(),
+            Message::PaneResized(event) => {
+                self.panes.resize(event.split, event.ratio);
+                Task::none()
+            }
 
             Message::FilesDropped(path) => {
                 if self.editor.selected_archive().is_some() {
@@ -723,10 +740,10 @@ impl App {
 }
 
 fn menu_button<'a>(label: String, message: Message) -> Element<'a, Message> {
-    iced::widget::button(iced::widget::text(label))
-        .on_press(message)
-        .width(iced::Length::Fill)
-        .style(|theme: &iced::Theme, status: iced::widget::button::Status| iced::widget::button::Style {
+        iced::widget::button(iced::widget::text(label))
+            .on_press(message)
+            .width(iced::Length::Shrink)
+            .style(|theme: &iced::Theme, status: iced::widget::button::Status| iced::widget::button::Style {
             background: if matches!(
                 status,
                 iced::widget::button::Status::Hovered | iced::widget::button::Status::Pressed

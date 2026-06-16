@@ -1,12 +1,12 @@
 use iced::widget::{
-    Column, Container, Row, Scrollable, Space, button, column, mouse_area, progress_bar, rule,
-    row, stack, text, text_input,
+    Column, Container, Row, Scrollable, Space, button, column, mouse_area, pane_grid,
+    progress_bar, rule, row, stack, text, text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_fonts::lucide;
 
 use crate::parser::ImgVersion;
-use crate::ui::app::{App, Message, ABOUT_TEXT};
+use crate::ui::app::{App, Message, Pane, ABOUT_TEXT};
 
 impl App {
     pub(crate) fn build_entry_table(&self) -> Element<'_, Message> {
@@ -174,7 +174,10 @@ impl App {
     }
 }
 
-fn toolbar_button(icon: Element<'static, Message>, msg: Message) -> iced::widget::Button<'static, Message> {
+fn toolbar_button(
+    icon: Element<'static, Message>,
+    msg: Message,
+) -> iced::widget::Button<'static, Message> {
     button(icon)
         .on_press(msg)
         .padding(6)
@@ -184,14 +187,38 @@ fn toolbar_button(icon: Element<'static, Message>, msg: Message) -> iced::widget
 
 fn build_toolbar() -> Element<'static, Message> {
     let toolbar = row![
-        toolbar_button(lucide::file_plus().size(18).into(), Message::NewArchive),
-        toolbar_button(lucide::folder_open().size(18).into(), Message::OpenArchive),
-        toolbar_button(lucide::save().size(18).into(), Message::SaveArchive),
+        tooltip(
+            toolbar_button(lucide::file_plus().size(18).into(), Message::NewArchive),
+            text("New").size(12),
+            tooltip::Position::Bottom,
+        ),
+        tooltip(
+            toolbar_button(lucide::folder_open().size(18).into(), Message::OpenArchive),
+            text("Open").size(12),
+            tooltip::Position::Bottom,
+        ),
+        tooltip(
+            toolbar_button(lucide::save().size(18).into(), Message::SaveArchive),
+            text("Save").size(12),
+            tooltip::Position::Bottom,
+        ),
         rule::vertical(1),
-        toolbar_button(lucide::download().size(18).into(), Message::ImportFiles),
-        toolbar_button(lucide::upload().size(18).into(), Message::ExportSelected),
+        tooltip(
+            toolbar_button(lucide::download().size(18).into(), Message::ImportFiles),
+            text("Import").size(12),
+            tooltip::Position::Bottom,
+        ),
+        tooltip(
+            toolbar_button(lucide::upload().size(18).into(), Message::ExportSelected),
+            text("Export selected").size(12),
+            tooltip::Position::Bottom,
+        ),
         rule::vertical(1),
-        toolbar_button(lucide::trash_two().size(18).into(), Message::DeleteSelected),
+        tooltip(
+            toolbar_button(lucide::trash_two().size(18).into(), Message::DeleteSelected),
+            text("Delete selected").size(12),
+            tooltip::Position::Bottom,
+        ),
     ]
     .spacing(4)
     .padding(4)
@@ -258,13 +285,14 @@ pub fn build(app: &App) -> Element<'_, Message> {
         .spacing(8)
         .padding(8);
 
-        let table = app.build_entry_table();
-        let info = app.build_info_panel();
-
-        let main_row = row![table, rule::vertical(1), info]
-            .spacing(4)
-            .padding(4)
-            .height(Length::Fill);
+        let main_row = pane_grid(&app.panes, |_pane, state, _is_maximized| {
+            pane_grid::Content::new(match state {
+                Pane::Table => app.build_entry_table(),
+                Pane::Info => app.build_info_panel(),
+            })
+        })
+        .on_resize(10, Message::PaneResized)
+        .height(Length::Fill);
 
         column![search, main_row].into()
     };
