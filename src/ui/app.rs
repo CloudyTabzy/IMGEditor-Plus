@@ -479,7 +479,11 @@ impl App {
             }
             Message::CursorMoved(point) => {
                 if self.context_menu.is_none() {
-                    self.cursor_position = point;
+                    let dx = point.x - self.cursor_position.x;
+                    let dy = point.y - self.cursor_position.y;
+                    if dx * dx + dy * dy > 4.0 {
+                        self.cursor_position = point;
+                    }
                 }
                 Task::none()
             }
@@ -635,12 +639,16 @@ impl App {
             _ => Message::Noop,
         });
 
-        let mouse = iced::event::listen().map(|event| match event {
-            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-                Message::CursorMoved(position)
-            }
-            _ => Message::Noop,
-        });
+        let mouse = if self.context_menu.is_none() {
+            iced::event::listen().map(|event| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Message::CursorMoved(position)
+                }
+                _ => Message::Noop,
+            })
+        } else {
+            Subscription::none()
+        };
 
         Subscription::batch([key, tick, window, mouse])
     }
