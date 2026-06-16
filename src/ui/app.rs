@@ -77,6 +77,7 @@ pub enum Message {
     EntryRightClicked(usize),
     EntryContextAction(EntryAction),
     HideContextMenu,
+    CursorMoved(iced::Point),
 
     ShowAbout,
     HideAbout,
@@ -126,6 +127,7 @@ pub struct App {
     pub last_export_selected_only: bool,
     pub panes: pane_grid::State<Pane>,
     pub context_menu: Option<usize>,
+    pub cursor_position: iced::Point,
 }
 
 impl Default for App {
@@ -156,6 +158,7 @@ impl App {
             last_export_selected_only: false,
             panes,
             context_menu: None,
+            cursor_position: iced::Point::new(0.0, 0.0),
         }
     }
 
@@ -474,6 +477,10 @@ impl App {
                 self.context_menu = Some(index);
                 Task::none()
             }
+            Message::CursorMoved(point) => {
+                self.cursor_position = point;
+                Task::none()
+            }
             Message::EntryContextAction(action) => {
                 self.context_menu = None;
                 match action {
@@ -626,7 +633,14 @@ impl App {
             _ => Message::Noop,
         });
 
-        Subscription::batch([key, tick, window])
+        let mouse = iced::event::listen().map(|event| match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Message::CursorMoved(position)
+            }
+            _ => Message::Noop,
+        });
+
+        Subscription::batch([key, tick, window, mouse])
     }
 }
 

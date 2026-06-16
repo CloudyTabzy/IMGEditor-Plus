@@ -442,6 +442,7 @@ fn build_context_menu(app: &App) -> Option<Element<'_, Message>> {
         return None;
     };
     let entry = archive.entries.get(index)?;
+    let pos = app.cursor_position;
 
     let card = container(
         column![
@@ -454,7 +455,7 @@ fn build_context_menu(app: &App) -> Option<Element<'_, Message>> {
         ]
         .spacing(4)
         .padding(8)
-        .max_width(180),
+        .width(Length::Shrink),
     )
     .style(|theme: &iced::Theme| iced::widget::container::Style {
         background: Some(theme.extended_palette().background.base.color.into()),
@@ -472,8 +473,16 @@ fn build_context_menu(app: &App) -> Option<Element<'_, Message>> {
     });
 
     let menu = container(card)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
+        .padding(iced::Padding {
+            top: pos.y,
+            left: pos.x,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .align_x(iced::alignment::Horizontal::Left)
+        .align_y(iced::alignment::Vertical::Top)
+        .width(Length::Fill)
+        .height(Length::Fill)
         .into();
 
     let backdrop = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
