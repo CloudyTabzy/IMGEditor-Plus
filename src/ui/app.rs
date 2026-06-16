@@ -6,8 +6,8 @@ use iced::advanced::widget::operation::scrollable::{AbsoluteOffset, scroll_to};
 use iced::keyboard::Event as KeyboardEvent;
 use iced::widget::{Space, container, pane_grid};
 use iced::{Element, Point, Subscription, Task, Theme};
-use iced_fonts::LUCIDE_FONT_BYTES;
 use iced_aw::menu::{Item, Menu, MenuBar};
+use iced_fonts::LUCIDE_FONT_BYTES;
 use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo, SortColumn, SortDirection};
@@ -18,6 +18,7 @@ use crate::parser::{
 };
 use crate::tasks::{ExportMode, ExportTask, SaveTask};
 use crate::ui::dialogs::{self, SaveArchiveChoice};
+use crate::ui::fonts;
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
 use crate::ui::theme::resolve_theme;
 use crate::updater::{UpdateResult, UpdateState, check_updates_future};
@@ -1005,7 +1006,7 @@ impl App {
         .max_width(220.0);
 
         fn menu_label(label: &'static str) -> iced::Element<'static, Message> {
-            container(iced::widget::text(label))
+            container(fonts::header(label))
                 .padding([4, 12])
                 .into()
         }
@@ -1045,7 +1046,7 @@ fn open_export_folder(path: &std::path::Path) {
 
 fn menu_button<'a>(label: String, message: Message) -> Element<'a, Message> {
     iced::widget::button(
-        iced::widget::text(label)
+        fonts::body(label)
             .align_x(iced::alignment::Horizontal::Left)
             .width(iced::Length::Fill),
     )
@@ -1088,8 +1089,13 @@ pub fn run_app(config: Config) -> iced::Result {
     .subscription(App::subscription)
     .settings(iced::Settings {
         default_text_size: iced::Pixels(14.0),
+        fonts: vec![
+            crate::ui::fonts::INTER_FONT_BYTES.into(),
+            crate::ui::fonts::BRICOLAGE_DISPLAY_FONT_BYTES.into(),
+        ],
         ..iced::Settings::default()
     })
+    .default_font(crate::ui::fonts::INTER)
     .window_size(size)
     .resizable(true)
     .centered()

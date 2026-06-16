@@ -1,6 +1,6 @@
 use iced::widget::{
     Column, Container, Row, Scrollable, Space, button, column, container, mouse_area,
-    pane_grid, progress_bar, rule, row, stack, text, text_input, tooltip,
+    pane_grid, progress_bar, rule, row, stack, text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_fonts::lucide;
@@ -9,6 +9,7 @@ use crate::archive::{RowDisplay, SortColumn, SortDirection};
 
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
+use crate::ui::fonts;
 
 /// Height (px) of a single entry row. Must stay in sync with the `height(Length::Fixed(ROW_HEIGHT))`
 /// applied in `build_entry_row`; virtualization math depends on it.
@@ -43,15 +44,15 @@ impl App {
         let size_label = sort_label("Size", archive.sort.column == SortColumn::Size, archive.sort.direction);
 
         let headers = row![
-            button(text(name_label))
+            button(fonts::header(name_label))
                 .on_press(Message::SortBy(SortColumn::Name))
                 .width(Length::FillPortion(6))
                 .style(button::text),
-            button(text(type_label))
+            button(fonts::header(type_label))
                 .on_press(Message::SortBy(SortColumn::Type))
                 .width(Length::FillPortion(2))
                 .style(button::text),
-            button(text(size_label))
+            button(fonts::header(size_label))
                 .on_press(Message::SortBy(SortColumn::Size))
                 .width(Length::FillPortion(2))
                 .style(button::text),
@@ -190,13 +191,26 @@ impl App {
                 .width(Length::FillPortion(6))
                 .into()
         } else {
-            text(file_name).width(Length::FillPortion(6)).into()
+            let label = if is_selected {
+                fonts::strong(file_name)
+            } else {
+                fonts::body(file_name)
+            };
+            label.width(Length::FillPortion(6)).into()
         };
 
         let row_content: Element<'_, Message> = row![
             name_widget,
-            text(file_type).width(Length::FillPortion(2)),
-            text(size_kb).width(Length::FillPortion(2)),
+            if is_selected {
+                fonts::strong(file_type).width(Length::FillPortion(2))
+            } else {
+                fonts::body(file_type).width(Length::FillPortion(2))
+            },
+            if is_selected {
+                fonts::strong(size_kb).width(Length::FillPortion(2))
+            } else {
+                fonts::body(size_kb).width(Length::FillPortion(2))
+            },
         ]
         .spacing(8)
         .padding(6)
@@ -244,10 +258,10 @@ impl App {
         let percent_text = format!("{:.0}%", progress * 100.0);
 
         let mut col = column![
-            text(format!("Format: {version_text}")),
-            text(format!("Entries: {total} (visible: {visible})")),
+            label_value_owned("Format", version_text.to_string()),
+            label_value("Entries", format!("{total} (visible: {visible})")),
             rule::horizontal(1),
-            text(format!("Progress: {percent_text}")),
+            label_value("Progress", percent_text),
             progress_bar(0.0..=1.0, progress),
         ]
         .spacing(6)
@@ -255,13 +269,13 @@ impl App {
         .width(Length::Fixed(280.0));
 
         if in_use {
-            col = col.push(button(text("Cancel")).on_press(Message::CancelActive));
+            col = col.push(button(fonts::body("Cancel")).on_press(Message::CancelActive));
         }
 
         if let Some(_folder) = archive.last_export_folder.as_ref() {
             if !in_use {
                 col = col.push(
-                    button(text("Open export folder"))
+                    button(fonts::body("Open export folder"))
                         .on_press(Message::OpenLastExportFolder),
                 );
             }
@@ -271,18 +285,18 @@ impl App {
 
         if let Some((index, inspection)) = self.inspected_entry.as_ref() {
             if archive.entries.get(*index).is_some() {
-                col = col.push(text("Selected entry:").size(16));
+                col = col.push(fonts::header("Selected entry:"));
                 col = col.push(Self::build_inspection_panel(inspection));
                 col = col.push(rule::horizontal(1));
             }
         }
 
-        col = col.push(text("Logs:"));
+        col = col.push(fonts::header("Logs:"));
 
         let logs: Vec<String> = archive.logs.iter().rev().take(50).cloned().collect();
         let log_widget =
             Scrollable::new(Column::with_children(
-                logs.into_iter().map(|m| text(m).into()),
+                logs.into_iter().map(|m| fonts::caption(m).into()),
             ))
                 .height(Length::Fixed(180.0));
 
@@ -291,52 +305,53 @@ impl App {
         col.into()
     }
 
-    fn build_inspection_panel(inspection: &EntryInspection) -> Element<'static, Message> {
+    fn build_inspection_panel(inspection: &EntryInspection) -> Element<'_, Message> {
         let mut panel = Column::new().spacing(4);
 
-        panel = panel.push(text(format!("Name: {}", inspection.file_name)));
-        panel = panel.push(text(format!("Type: {}", inspection.file_type)));
+        panel = panel.push(label_value_owned("Name", inspection.file_name.to_string()));
+        panel = panel.push(label_value_owned("Type", inspection.file_type.to_string()));
 
         let size_text = if inspection.size_bytes >= 1024 * 1024 {
             format!(
-                "Size: {:.2} MB ({} bytes, {} sectors)",
+                "{:.2} MB ({} bytes, {} sectors)",
                 inspection.size_bytes as f64 / (1024.0 * 1024.0),
                 inspection.size_bytes,
                 inspection.size_sectors
             )
         } else if inspection.size_bytes >= 1024 {
             format!(
-                "Size: {:.2} KB ({} bytes, {} sectors)",
+                "{:.2} KB ({} bytes, {} sectors)",
                 inspection.size_bytes as f64 / 1024.0,
                 inspection.size_bytes,
                 inspection.size_sectors
             )
         } else {
             format!(
-                "Size: {} bytes ({} sectors)",
+                "{} bytes ({} sectors)",
                 inspection.size_bytes, inspection.size_sectors
             )
         };
-        panel = panel.push(text(size_text));
-        panel = panel.push(text(format!(
-            "Offset: sector {} (byte {})",
+        panel = panel.push(label_value_owned("Size", size_text));
+        let offset_text = format!(
+            "sector {} (byte {})",
             inspection.offset_bytes / 2048,
             inspection.offset_bytes
-        )));
-        panel = panel.push(text(format!("Source: {}", inspection.source)));
+        );
+        panel = panel.push(label_value_owned("Offset", offset_text));
+        panel = panel.push(label_value_owned("Source", inspection.source.to_string()));
 
         if !inspection.summary.is_empty() {
             panel = panel.push(Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(6.0)));
             for (key, value) in &inspection.summary {
-                panel = panel.push(text(format!("{key}: {value}")));
+                panel = panel.push(label_value_owned(key, value.to_string()));
             }
         }
 
         if let Some(preview) = &inspection.preview_hex {
             panel = panel.push(Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(6.0)));
-            panel = panel.push(text("Preview (hex):"));
+            panel = panel.push(fonts::body("Preview (hex):"));
             panel = panel.push(
-                Scrollable::new(text(preview.clone()).font(iced::Font::MONOSPACE))
+                Scrollable::new(fonts::body_monospace(preview.clone()))
                     .direction(iced::widget::scrollable::Direction::Horizontal(
                         iced::widget::scrollable::Scrollbar::new(),
                     ))
@@ -353,7 +368,7 @@ impl App {
         });
         let bar = Container::new(
             Row::new()
-                .push(text(status_text))
+                .push(fonts::caption(status_text))
                 .push(Space::new().width(Length::Fill))
                 .align_y(Alignment::Center)
                 .padding(6),
@@ -381,34 +396,34 @@ fn build_toolbar() -> Element<'static, Message> {
     let toolbar = row![
         tooltip(
             toolbar_button(lucide::file_plus().size(18).into(), Message::NewArchive),
-            text("New"),
+            fonts::body("New"),
             tooltip::Position::Bottom,
         ),
         tooltip(
             toolbar_button(lucide::folder_open().size(18).into(), Message::OpenArchive),
-            text("Open"),
+            fonts::body("Open"),
             tooltip::Position::Bottom,
         ),
         tooltip(
             toolbar_button(lucide::save().size(18).into(), Message::SaveArchive),
-            text("Save"),
+            fonts::body("Save"),
             tooltip::Position::Bottom,
         ),
         rule::vertical(1),
         tooltip(
             toolbar_button(lucide::download().size(18).into(), Message::ImportFiles),
-            text("Import"),
+            fonts::body("Import"),
             tooltip::Position::Bottom,
         ),
         tooltip(
             toolbar_button(lucide::upload().size(18).into(), Message::ExportSelected),
-            text("Export selected"),
+            fonts::body("Export selected"),
             tooltip::Position::Bottom,
         ),
         rule::vertical(1),
         tooltip(
             toolbar_button(lucide::trash_two().size(18).into(), Message::DeleteSelected),
-            text("Delete selected"),
+            fonts::body("Delete selected"),
             tooltip::Position::Bottom,
         ),
     ]
@@ -443,7 +458,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
             } else {
                 archive.file_name.clone()
             };
-            let tab = button(text(label))
+            let tab = button(fonts::body(label))
                 .on_press(Message::SelectArchiveTab(index))
                 .style(if is_selected {
                     button::primary
@@ -459,7 +474,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         Container::new(
             column![
                 Space::new().height(Length::Fill),
-                text("Open or create an archive to get started.").size(18),
+                fonts::display("Open or create an archive to get started."),
                 Space::new().height(Length::Fill),
             ]
             .align_x(Alignment::Center),
@@ -469,7 +484,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         .into()
     } else {
         let search = row![
-            text("Search:"),
+            fonts::header("Search:"),
             text_input("", &app.search)
                 .on_input(Message::SearchChanged)
                 .width(Length::Fill),
@@ -525,14 +540,14 @@ fn build_about(app: &App) -> Option<Element<'_, Message>> {
     Some(modal_box(
         "About",
         column![
-            text(ABOUT_TEXT).size(13),
+            fonts::body(ABOUT_TEXT),
             Space::new().height(Length::Fixed(8.0)),
             row![
-                button(text("Visit repository"))
+                button(fonts::body("Visit repository"))
                     .on_press(Message::VisitRepository)
                     .style(button::primary),
                 Space::new().width(Length::Fixed(8.0)),
-                button(text("Close")).on_press(Message::HideAbout),
+                button(fonts::body("Close")).on_press(Message::HideAbout),
             ]
         ]
         .spacing(6),
@@ -546,11 +561,11 @@ fn build_welcome(app: &App) -> Option<Element<'_, Message>> {
     Some(modal_box(
         "Welcome",
         column![
-            text("Welcome to IMGEditor v2!").size(16),
-            text("Open or create an archive to get started.").size(13),
-            text("Supported formats: GTA III, VC, San Andreas, Bully SE.").size(13),
+            fonts::display("Welcome to IMGEditor v2!"),
+            fonts::body("Open or create an archive to get started."),
+            fonts::body("Supported formats: GTA III, VC, San Andreas, Bully SE."),
             Space::new().height(Length::Fixed(8.0)),
-            button(text("Get started"))
+            button(fonts::strong("Get started"))
                 .on_press(Message::HideWelcome)
                 .style(button::primary),
         ]
@@ -563,11 +578,11 @@ fn build_unsupported(app: &App) -> Option<Element<'_, Message>> {
     Some(modal_box(
         "Unsupported format",
         column![
-            text("IMG format not supported.").size(14),
-            text(format!("Path: {}", path.display())).size(12),
-            text("Supported formats: GTA III, Vice City, San Andreas, Bully SE.").size(12),
+            fonts::body("IMG format not supported."),
+            fonts::caption(format!("Path: {}", path.display())),
+            fonts::caption("Supported formats: GTA III, Vice City, San Andreas, Bully SE."),
             Space::new().height(Length::Fixed(8.0)),
-            button(text("Close")).on_press(Message::HideUnsupported),
+            button(fonts::body("Close")).on_press(Message::HideUnsupported),
         ]
         .spacing(6),
     ))
@@ -578,14 +593,14 @@ fn build_update_status(app: &App) -> Option<Element<'_, Message>> {
     Some(modal_box(
         "Update check",
         column![
-            text(msg).size(13),
+            fonts::body(msg),
             Space::new().height(Length::Fixed(8.0)),
             row![
-                button(text("Open releases"))
+                button(fonts::body("Open releases"))
                     .on_press(Message::VisitRepository)
                     .style(button::primary),
                 Space::new().width(Length::Fixed(8.0)),
-                button(text("Close")).on_press(Message::HideUpdateStatus),
+                button(fonts::body("Close")).on_press(Message::HideUpdateStatus),
             ]
         ]
         .spacing(6),
@@ -598,7 +613,7 @@ fn modal_box<'a>(
 ) -> Element<'a, Message> {
     let content: Element<'a, Message> = content.into();
     let card: iced::widget::Container<'_, Message> = Container::new(
-        column![text(title).size(16), content]
+        column![fonts::display(title), content]
             .spacing(8)
             .padding(16)
             .max_width(480),
@@ -635,7 +650,7 @@ fn build_context_menu(
 
     let card = container(
         column![
-            text(format!("{}", entry.file_name)),
+            fonts::strong(entry.file_name.to_string()),
             rule::horizontal(1),
             context_button("Export", Message::EntryContextAction(EntryAction::Export)),
             context_button("Rename", Message::EntryContextAction(EntryAction::Rename)),
@@ -711,13 +726,31 @@ fn build_autoscroll_indicator() -> Element<'static, Message> {
 
 fn context_button(label: &str, message: Message) -> iced::widget::Button<'_, Message> {
     button(
-        text(label)
+        fonts::body(label)
             .align_x(iced::alignment::Horizontal::Left)
             .width(Length::Fill),
     )
     .on_press(message)
     .width(Length::Fill)
     .style(crate::ui::view::menu_button_style)
+}
+
+fn label_value(label: &str, value: String) -> Element<'_, Message> {
+    row![
+        fonts::header(format!("{label}:")),
+        Space::new().width(Length::Fixed(4.0)),
+        fonts::body(value),
+    ]
+    .into()
+}
+
+fn label_value_owned(label: &str, value: String) -> Element<'_, Message> {
+    row![
+        fonts::header(format!("{label}:")),
+        Space::new().width(Length::Fixed(4.0)),
+        fonts::body(value),
+    ]
+    .into()
 }
 
 pub fn version_label(version: ImgVersion) -> &'static str {
@@ -766,7 +799,7 @@ fn empty_state() -> Element<'static, Message> {
     Container::new(
         column![
             Space::new().height(Length::Fixed(8.0)),
-            text("No entries match the current filter."),
+            fonts::body("No entries match the current filter."),
         ]
         .align_x(Alignment::Center),
     )
