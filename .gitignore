@@ -2,3 +2,4 @@
 /dist/
 /Dist/
 *.rs.bk
+.codesearch.db/
