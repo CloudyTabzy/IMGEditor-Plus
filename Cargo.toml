@@ -26,6 +26,11 @@ ureq = "2"
 webbrowser = "1"
 rfd = { version = "0.15", default-features = false, features = ["tokio", "common-controls-v6"], optional = true }
 
+# NIF inspector (v3.0). The 3D viewer writes geometry to a temporary PLY file
+# and opens it with the system default handler, avoiding the need for an
+# embedded 3D renderer (OpenGL/winit threading is incompatible with Iced's
+# winit on the main thread). See `src/inspector/viewer3d.rs`.
+
 [dev-dependencies]
 tempfile = "3"
 

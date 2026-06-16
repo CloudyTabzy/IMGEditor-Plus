@@ -669,18 +669,35 @@ fn build_context_menu(
 ) -> Option<Element<'_, Message>> {
     let entry = archive.entries.get(entry_index)?;
 
+    let mut items: Vec<Element<'_, Message>> = vec![
+        fonts::strong(entry.file_name.to_string()).into(),
+        rule::horizontal(1).into(),
+    ];
+
+    if entry.file_name.to_lowercase().ends_with(".nif") {
+        items.push(
+            context_button("Render", Message::EntryContextAction(EntryAction::Render)).into(),
+        );
+    }
+
+    items.push(
+        context_button("Export", Message::EntryContextAction(EntryAction::Export)).into(),
+    );
+    items.push(
+        context_button("Rename", Message::EntryContextAction(EntryAction::Rename)).into(),
+    );
+    items.push(
+        context_button("Copy name", Message::EntryContextAction(EntryAction::CopyName)).into(),
+    );
+    items.push(
+        context_button("Delete", Message::EntryContextAction(EntryAction::Delete)).into(),
+    );
+
     let card = container(
-        column![
-            fonts::strong(entry.file_name.to_string()),
-            rule::horizontal(1),
-            context_button("Export", Message::EntryContextAction(EntryAction::Export)),
-            context_button("Rename", Message::EntryContextAction(EntryAction::Rename)),
-            context_button("Copy name", Message::EntryContextAction(EntryAction::CopyName)),
-            context_button("Delete", Message::EntryContextAction(EntryAction::Delete)),
-        ]
-        .spacing(4)
-        .padding(8)
-        .width(Length::Shrink),
+        iced::widget::Column::with_children(items)
+            .spacing(4)
+            .padding(8)
+            .width(Length::Shrink),
     )
     .style(|theme: &iced::Theme| iced::widget::container::Style {
         background: Some(theme.extended_palette().background.base.color.into()),

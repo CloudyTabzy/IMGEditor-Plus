@@ -13,6 +13,7 @@ use memmap2::Mmap;
 use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn, SortDirection};
 use crate::config::{Config, ThemeMode};
 use crate::editor::Editor;
+use crate::inspector::viewer3d::{self, ViewerEvent};
 use crate::parser::{
     EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
 };
@@ -127,6 +128,7 @@ pub enum EntryAction {
     Rename,
     Delete,
     Export,
+    Render,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +157,7 @@ pub struct App {
     pub search_pending: Option<String>,
     pub autoscroll: Option<AutoScroll>,
     pub entry_table_id: iced::widget::Id,
+    viewer_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>>,
 }
 
 impl Default for App {
@@ -190,6 +193,7 @@ impl App {
             search_pending: None,
             autoscroll: None,
             entry_table_id: iced::widget::Id::unique(),
+            viewer_rxs: Vec::new(),
         }
     }
 
@@ -673,6 +677,97 @@ impl App {
                     self.last_export_selected_only = true;
                     dialogs::save_folder().map(Message::ExportFolderResult)
                 }
+                EntryAction::Render => {
+                    let Some(archive_index) = self.editor.selected_archive() else {
+                        return Task::none();
+                    };
+                    let Some(entry_index) = self.editor.selected_entry() else {
+                        return Task::none();
+                    };
+                    let (entry_clone, archive_path, name) = {
+                        let Some(archive) = self.editor.archives().get(archive_index) else {
+                            return Task::none();
+                        };
+                        let Some(entry) = archive.entries.get(entry_index) else {
+                            return Task::none();
+                        };
+                        (entry.clone(), archive.path.clone(), entry.file_name.to_string())
+                    };
+                    let data = match crate::parser::read_entry_data_from_source(
+                        &entry_clone,
+                        archive_path.as_deref(),
+                    ) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            self.toast = Some(format!("Failed to read {name}: {e}"));
+                            return Task::none();
+                        }
+                    };
+
+                    // Pre-extract any .tga/.dds/.png/.bmp/.jpg entries from ALL
+                    // open archives so the viewer has textures available.
+                    let mut texture_files = std::collections::HashMap::new();
+                    let tex_extensions = [".tga", ".dds", ".png", ".bmp", ".jpg", ".jpeg"];
+                    for archive in self.editor.archives() {
+                        for tex_entry in &archive.entries {
+                            let lower = tex_entry.file_name.to_lowercase();
+                            if tex_extensions.iter().any(|e| lower.ends_with(e)) {
+                                if let Ok(tex_data) = crate::parser::read_entry_data_from_source(
+                                    tex_entry,
+                                    archive.path.as_deref(),
+                                ) {
+                                    let key = tex_entry.file_name.to_string();
+                                    texture_files.entry(key).or_insert_with(|| tex_data);
+                                }
+                            }
+                        }
+                    }
+                    // Also scan sibling .img files in the archive's directory
+                    // for texture entries (Bully spreads textures across multiple
+                    // archives).
+                    if let Some(ref ap) = archive_path {
+                        if let Some(parent) = ap.parent() {
+                            if let Ok(entries) = std::fs::read_dir(parent) {
+                                for sibling in entries.flatten() {
+                                    let sib_path = sibling.path();
+                                    let sib_lower = sib_path.to_string_lossy().to_lowercase();
+                                    if !sib_lower.ends_with(".img") {
+                                        continue;
+                                    }
+                                    // Skip the archive we already scanned.
+                                    if sib_path == *ap {
+                                        continue;
+                                    }
+                                    if let Ok(sib_archive) = crate::archive::ArchiveInfo::open(&sib_path) {
+                                        for tex_entry in &sib_archive.entries {
+                                            let lower = tex_entry.file_name.to_lowercase();
+                                            if tex_extensions.iter().any(|e| lower.ends_with(e)) {
+                                                if let Ok(tex_data) =
+                                                    crate::parser::read_entry_data_from_source(
+                                                        tex_entry,
+                                                        Some(&sib_path),
+                                                    )
+                                                {
+                                                    let key = tex_entry.file_name.to_string();
+                                                    texture_files.entry(key).or_insert_with(|| tex_data);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    eprintln!("[IMGEditor] extracted {} texture files", texture_files.len());
+
+                    let texture_root = archive_path.as_ref().and_then(|p| p.parent().map(|p| p.to_path_buf()));
+                    let rx = viewer3d::spawn_render_window(data, name.clone(), texture_root, texture_files);
+                    self.viewer_rxs.push(rx);
+                    if let Some(archive) = self.editor.selected_archive_mut() {
+                        archive.add_log(format!("Opening 3D viewer for {name}"));
+                    }
+                    Task::none()
+                }
             }},
 
             Message::ShowAbout => {
@@ -744,7 +839,10 @@ impl App {
                 self.save_config();
                 Task::none()
             }
-            Message::TickProgress => Task::none(),
+            Message::TickProgress => {
+                self.poll_viewer_rxs();
+                Task::none()
+            }
             Message::PaneResized(event) => {
                 self.panes.resize(event.split, event.ratio);
                 Task::none()
@@ -869,6 +967,35 @@ impl App {
         self.toast = None;
         dialogs::save_folder().map(Message::ExportFolderResult)
     }
+
+    fn poll_viewer_rxs(&mut self) {
+        let mut logs: Vec<String> = Vec::new();
+        let mut toast: Option<String> = None;
+        self.viewer_rxs.retain_mut(|rx| loop {
+            match rx.try_recv() {
+                Ok(ViewerEvent::Opened { name }) => {
+                    logs.push(format!("3D viewer opened: {name}"));
+                }
+                Ok(ViewerEvent::Failed { reason }) => {
+                    toast = Some(reason.clone());
+                    logs.push(format!("3D viewer failed: {reason}"));
+                }
+                Ok(ViewerEvent::Closed) => {
+                    logs.push("3D viewer closed".to_string());
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break true,
+            }
+        });
+        if let Some(msg) = toast {
+            self.toast = Some(msg);
+        }
+        if let Some(archive) = self.editor.selected_archive_mut() {
+            for log in logs {
+                archive.add_log(log);
+            }
+        }
+    }
 }
 
 impl App {
@@ -884,11 +1011,7 @@ impl App {
             _ => Message::Noop,
         });
 
-        let tick = if self.has_active_progress() {
-            iced::time::every(Duration::from_millis(60)).map(|_| Message::TickProgress)
-        } else {
-            Subscription::none()
-        };
+        let tick = iced::time::every(Duration::from_millis(250)).map(|_| Message::TickProgress);
 
         let debounce = iced::time::every(Duration::from_millis(150)).map(|_| Message::DebounceTick);
 

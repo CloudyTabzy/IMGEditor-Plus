@@ -3,6 +3,7 @@
 mod archive;
 mod config;
 mod editor;
+mod inspector;
 mod parser;
 mod runtime;
 mod tasks;
