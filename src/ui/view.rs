@@ -304,11 +304,9 @@ impl App {
         col = col.push(fonts::header("Logs:"));
 
         let logs: Vec<String> = archive.logs.iter().rev().take(50).cloned().collect();
-        let log_widget =
-            Scrollable::new(Column::with_children(
-                logs.into_iter().map(|m| fonts::caption(m).into()),
-            ))
-                .height(Length::Fixed(120.0));
+        let log_widget = Column::with_children(
+            logs.into_iter().map(|m| fonts::caption(m).into()),
+        );
 
         col = col.push(log_widget);
 
@@ -316,14 +314,16 @@ impl App {
             col = col.push(rule::horizontal(1));
             col = col.push(fonts::header("Recent exports:"));
             let exports: Vec<String> = archive.recent_exports.iter().rev().take(8).cloned().collect();
-            let exports_widget = Scrollable::new(Column::with_children(
+            let exports_widget = Column::with_children(
                 exports.into_iter().map(|m| fonts::caption(m).into()),
-            ))
-                .height(Length::Fixed(100.0));
+            );
             col = col.push(exports_widget);
         }
 
-        col.into()
+        Scrollable::new(col)
+            .width(Length::Fixed(280.0))
+            .height(Length::Fill)
+            .into()
     }
 
     fn build_inspection_panel(inspection: &EntryInspection) -> Element<'_, Message> {
