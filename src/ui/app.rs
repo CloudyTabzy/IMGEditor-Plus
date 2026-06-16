@@ -639,18 +639,7 @@ impl App {
             _ => Message::Noop,
         });
 
-        let mouse = if self.context_menu.is_none() {
-            iced::event::listen().map(|event| match event {
-                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-                    Message::CursorMoved(position)
-                }
-                _ => Message::Noop,
-            })
-        } else {
-            Subscription::none()
-        };
-
-        Subscription::batch([key, tick, window, mouse])
+        Subscription::batch([key, tick, window])
     }
 }
 

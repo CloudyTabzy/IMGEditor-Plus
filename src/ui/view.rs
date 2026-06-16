@@ -49,7 +49,10 @@ impl App {
             content = content.push(self.build_entry_row(display_index, entry));
         }
 
-        Scrollable::new(content).height(Length::Fill).into()
+        let table = Scrollable::new(content).height(Length::Fill);
+        mouse_area(table)
+            .on_move(Message::CursorMoved)
+            .into()
     }
 
     fn build_entry_row(
