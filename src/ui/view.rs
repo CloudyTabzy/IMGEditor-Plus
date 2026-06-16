@@ -7,7 +7,7 @@ use iced_fonts::lucide;
 
 use crate::archive::{SortColumn, SortDirection};
 
-use crate::parser::ImgVersion;
+use crate::parser::{EntryInspection, ImgVersion};
 use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
 
 impl App {
@@ -177,6 +177,15 @@ impl App {
         }
 
         col = col.push(rule::horizontal(1));
+
+        if let Some((index, inspection)) = self.inspected_entry.as_ref() {
+            if archive.entries.get(*index).is_some() {
+                col = col.push(text("Selected entry:").size(16));
+                col = col.push(Self::build_inspection_panel(inspection));
+                col = col.push(rule::horizontal(1));
+            }
+        }
+
         col = col.push(text("Logs:"));
 
         let logs: Vec<String> = archive.logs.iter().rev().take(50).cloned().collect();
@@ -189,6 +198,62 @@ impl App {
         col = col.push(log_widget);
 
         col.into()
+    }
+
+    fn build_inspection_panel(inspection: &EntryInspection) -> Element<'static, Message> {
+        let mut panel = Column::new().spacing(4);
+
+        panel = panel.push(text(format!("Name: {}", inspection.file_name)));
+        panel = panel.push(text(format!("Type: {}", inspection.file_type)));
+
+        let size_text = if inspection.size_bytes >= 1024 * 1024 {
+            format!(
+                "Size: {:.2} MB ({} bytes, {} sectors)",
+                inspection.size_bytes as f64 / (1024.0 * 1024.0),
+                inspection.size_bytes,
+                inspection.size_sectors
+            )
+        } else if inspection.size_bytes >= 1024 {
+            format!(
+                "Size: {:.2} KB ({} bytes, {} sectors)",
+                inspection.size_bytes as f64 / 1024.0,
+                inspection.size_bytes,
+                inspection.size_sectors
+            )
+        } else {
+            format!(
+                "Size: {} bytes ({} sectors)",
+                inspection.size_bytes, inspection.size_sectors
+            )
+        };
+        panel = panel.push(text(size_text));
+        panel = panel.push(text(format!(
+            "Offset: sector {} (byte {})",
+            inspection.offset_bytes / 2048,
+            inspection.offset_bytes
+        )));
+        panel = panel.push(text(format!("Source: {}", inspection.source)));
+
+        if !inspection.summary.is_empty() {
+            panel = panel.push(Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(6.0)));
+            for (key, value) in &inspection.summary {
+                panel = panel.push(text(format!("{key}: {value}")));
+            }
+        }
+
+        if let Some(preview) = &inspection.preview_hex {
+            panel = panel.push(Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(6.0)));
+            panel = panel.push(text("Preview (hex):"));
+            panel = panel.push(
+                Scrollable::new(text(preview.clone()).font(iced::Font::MONOSPACE))
+                    .direction(iced::widget::scrollable::Direction::Horizontal(
+                        iced::widget::scrollable::Scrollbar::new(),
+                    ))
+                    .height(Length::Fixed(40.0)),
+            );
+        }
+
+        panel.into()
     }
 
     pub(crate) fn build_status_bar(&self) -> Element<'_, Message> {

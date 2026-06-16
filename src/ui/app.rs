@@ -11,7 +11,7 @@ use iced_aw::menu::{Item, Menu, MenuBar};
 use crate::archive::{ArchiveInfo, SortColumn, SortDirection};
 use crate::config::{Config, ThemeMode};
 use crate::editor::Editor;
-use crate::parser::ImgVersion;
+use crate::parser::{EntryInspection, ImgVersion, inspect_entry_cached};
 use crate::tasks::{ExportMode, ExportTask, SaveTask};
 use crate::ui::dialogs::{self, SaveArchiveChoice};
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
@@ -130,6 +130,7 @@ pub struct App {
     pub panes: pane_grid::State<Pane>,
     pub context_menu: Option<(usize, iced::Point)>,
     pub cursor_position: iced::Point,
+    pub inspected_entry: Option<(usize, EntryInspection)>,
 }
 
 impl Default for App {
@@ -161,6 +162,7 @@ impl App {
             panes,
             context_menu: None,
             cursor_position: iced::Point::new(0.0, 0.0),
+            inspected_entry: None,
         }
     }
 
@@ -193,6 +195,21 @@ impl App {
 
     pub fn has_active_progress(&self) -> bool {
         self.editor.has_active_progress()
+    }
+
+    fn refresh_inspection(&mut self) {
+        let selected_archive = self.editor.selected_archive();
+        let selected_entry = self.editor.selected_entry();
+
+        if let (Some(archive_index), Some(entry_index)) = (selected_archive, selected_entry) {
+            if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
+                if let Some(inspection) = inspect_entry_cached(archive, entry_index) {
+                    self.inspected_entry = Some((entry_index, inspection));
+                    return;
+                }
+            }
+        }
+        self.inspected_entry = None;
     }
 
     fn run_save(
@@ -327,14 +344,17 @@ impl App {
 
             Message::CloseSelectedArchive => {
                 self.editor.close_selected_archive();
+                self.refresh_inspection();
                 Task::none()
             }
             Message::CloseArchiveTab(index) => {
                 self.editor.close_archive(index);
+                self.refresh_inspection();
                 Task::none()
             }
             Message::SelectArchiveTab(index) => {
                 self.editor.select_archive(index);
+                self.refresh_inspection();
                 Task::none()
             }
 
@@ -400,14 +420,17 @@ impl App {
 
             Message::SelectAll => {
                 self.editor.select_all(true);
+                self.refresh_inspection();
                 Task::none()
             }
             Message::InvertSelection => {
                 self.editor.invert_selection();
+                self.refresh_inspection();
                 Task::none()
             }
             Message::DeleteSelected => {
                 self.editor.delete_selected();
+                self.refresh_inspection();
                 Task::none()
             }
             Message::StartRename => {
@@ -464,6 +487,7 @@ impl App {
 
             Message::EntryClicked(index) => {
                 self.editor.select_entry(index, false, false);
+                self.refresh_inspection();
                 Task::none()
             }
             Message::EntryDoubleClicked(index) => {
@@ -475,11 +499,13 @@ impl App {
                         self.rename_buffer = entry.file_name.to_string();
                     }
                 }
+                self.refresh_inspection();
                 Task::none()
             }
             Message::EntryRightClicked(index) => {
                 self.editor.set_selected_entry(Some(index));
                 self.context_menu = Some((index, self.cursor_position));
+                self.refresh_inspection();
                 Task::none()
             }
             Message::CursorMoved(point) => {

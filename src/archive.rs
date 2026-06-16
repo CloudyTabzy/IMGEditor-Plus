@@ -6,7 +6,7 @@ use compact_str::CompactString;
 use memmap2::Mmap;
 use smallvec::SmallVec;
 
-use crate::parser::{ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, encode_entry_name};
+use crate::parser::{EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, encode_entry_name};
 
 #[derive(Debug, Clone)]
 pub struct ProgressInfo {
@@ -150,6 +150,7 @@ pub struct ArchiveInfo {
     pub source_mmap: Option<Arc<Mmap>>,
     pub last_export_folder: Option<PathBuf>,
     pub sort: SortState,
+    pub inspection_cache: std::collections::HashMap<usize, EntryInspection>,
 }
 
 impl ArchiveInfo {
@@ -169,6 +170,7 @@ impl ArchiveInfo {
             source_mmap: None,
             last_export_folder: None,
             sort: SortState::default(),
+            inspection_cache: std::collections::HashMap::new(),
         };
 
         archive.add_log("Created archive".to_string());
@@ -198,6 +200,7 @@ impl ArchiveInfo {
             source_mmap: None,
             last_export_folder: None,
             sort: SortState::default(),
+            inspection_cache: std::collections::HashMap::new(),
         };
 
         match version {
@@ -211,7 +214,8 @@ impl ArchiveInfo {
     }
 
     pub fn add_log(&mut self, message: String) {
-        self.logs.push(message);
+        let now = chrono::Local::now().format("%H:%M:%S");
+        self.logs.push(format!("[{}] {}", now, message));
     }
 
     pub fn update_selected_list(&mut self, filter: &str) {

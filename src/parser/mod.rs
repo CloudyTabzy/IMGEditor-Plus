@@ -10,11 +10,13 @@ pub mod iparser;
 pub mod pc_v1;
 pub mod pc_v2;
 pub mod unknown;
+pub mod inspector;
 
 pub use iparser::ImgParser;
 pub use pc_v1::PcV1Parser;
 pub use pc_v2::PcV2Parser;
 pub use unknown::UnknownParser;
+pub use inspector::{EntryInspection, inspect_entry_cached};
 
 pub const SECTOR_SIZE: u64 = 2048;
 pub const ENTRY_SIZE: usize = 32;
@@ -104,6 +106,44 @@ pub fn read_entry_data(archive: &ArchiveInfo, entry: &EntryInfo) -> anyhow::Resu
         archive.path.as_deref(),
         archive.source_mmap.as_deref(),
     )
+}
+
+pub fn read_entry_header(
+    archive: &ArchiveInfo,
+    entry: &EntryInfo,
+    max_bytes: usize,
+) -> anyhow::Result<Vec<u8>> {
+    if entry.imported {
+        let source = entry
+            .source_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
+        let mut file = std::fs::File::open(source)?;
+        let mut data = vec![0u8; max_bytes];
+        let read = file.read(&mut data)?;
+        data.truncate(read);
+        return Ok(data);
+    }
+
+    let source = archive
+        .path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
+    let offset = u64::from(entry.offset) * SECTOR_SIZE;
+
+    if let Some(mmap) = archive.source_mmap.as_deref() {
+        let mmap_len = mmap.len() as u64;
+        let start = offset.min(mmap_len) as usize;
+        let end = (offset + max_bytes as u64).min(mmap_len) as usize;
+        return Ok(mmap[start..end].to_vec());
+    }
+
+    let mut file = std::fs::File::open(source)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut data = vec![0u8; max_bytes];
+    let read = file.read(&mut data)?;
+    data.truncate(read);
+    Ok(data)
 }
 
 fn read_entry_data_with_source(
