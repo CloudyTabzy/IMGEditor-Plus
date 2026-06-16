@@ -2,7 +2,7 @@ use iced::widget::{
     Column, Container, Row, Scrollable, Space, button, column, container, mouse_area,
     pane_grid, progress_bar, rule, row, stack, text_input, tooltip,
 };
-use iced::widget::text_input::{self, Status as TextInputStatus};
+use iced::widget::text_input::Status as TextInputStatus;
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 use iced_fonts::lucide;
 
@@ -792,15 +792,15 @@ fn label_value_owned(label: &str, value: String) -> Element<'_, Message> {
     .into()
 }
 
-fn selectable_header(label: impl Into<String>) -> Element<'_, Message> {
+fn selectable_header<'a>(label: impl Into<String>) -> Element<'a, Message> {
     selectable_text(label, 14.0, fonts::INTER_SEMIBOLD)
 }
 
-fn selectable_body(label: impl Into<String>) -> Element<'_, Message> {
+fn selectable_body<'a>(label: impl Into<String>) -> Element<'a, Message> {
     selectable_text(label, 14.0, fonts::INTER)
 }
 
-fn selectable_caption(label: impl Into<String>) -> Element<'_, Message> {
+fn selectable_caption<'a>(label: impl Into<String>) -> Element<'a, Message> {
     selectable_text(label, 12.0, fonts::INTER)
 }
 
@@ -813,7 +813,6 @@ fn selectable_text<'a>(
     text_input("", &label)
         .size(size)
         .font(font)
-        .read_only(true)
         .on_input(|_| Message::Noop)
         .style(read_only_text_input_style)
         .padding(0)
