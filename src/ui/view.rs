@@ -5,6 +5,8 @@ use iced::widget::{
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_fonts::lucide;
 
+use crate::archive::{SortColumn, SortDirection};
+
 use crate::parser::ImgVersion;
 use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
 
@@ -18,10 +20,32 @@ impl App {
             return Space::new().width(Length::Fill).height(Length::Fill).into();
         };
 
+        let name_label = sort_label("Name", archive.sort.column == SortColumn::Name, archive.sort.direction);
+        let type_label = if archive.sort.column == SortColumn::Type {
+            let unique_types = archive.unique_file_types();
+            let primary = unique_types
+                .get(archive.sort.type_index % unique_types.len().max(1))
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            format!("Type ↑ {}", primary)
+        } else {
+            "Type".to_string()
+        };
+        let size_label = sort_label("Size", archive.sort.column == SortColumn::Size, archive.sort.direction);
+
         let headers = row![
-            text("Name").width(Length::FillPortion(6)),
-            text("Type").width(Length::FillPortion(2)),
-            text("Size").width(Length::FillPortion(2)),
+            button(text(name_label))
+                .on_press(Message::SortBy(SortColumn::Name))
+                .width(Length::FillPortion(6))
+                .style(button::text),
+            button(text(type_label))
+                .on_press(Message::SortBy(SortColumn::Type))
+                .width(Length::FillPortion(2))
+                .style(button::text),
+            button(text(size_label))
+                .on_press(Message::SortBy(SortColumn::Size))
+                .width(Length::FillPortion(2))
+                .style(button::text),
         ]
         .spacing(8)
         .padding(6);
@@ -521,6 +545,17 @@ pub fn version_label(version: ImgVersion) -> &'static str {
         ImgVersion::Two => "PC v2",
         ImgVersion::Unknown => "Unknown",
     }
+}
+
+fn sort_label(name: &str, active: bool, direction: SortDirection) -> String {
+    if !active {
+        return name.to_string();
+    }
+    let arrow = match direction {
+        SortDirection::Ascending => "▲",
+        SortDirection::Descending => "▼",
+    };
+    format!("{name} {arrow}")
 }
 
 pub fn menu_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {

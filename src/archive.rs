@@ -71,6 +71,36 @@ impl ProgressInfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortColumn {
+    Name,
+    Type,
+    Size,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Ascending,
+    Descending,
+}
+
+#[derive(Debug, Clone)]
+pub struct SortState {
+    pub column: SortColumn,
+    pub direction: SortDirection,
+    pub type_index: usize,
+}
+
+impl Default for SortState {
+    fn default() -> Self {
+        Self {
+            column: SortColumn::Name,
+            direction: SortDirection::Ascending,
+            type_index: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryInfo {
     pub offset: u32,
@@ -119,6 +149,7 @@ pub struct ArchiveInfo {
     pub dirty: bool,
     pub source_mmap: Option<Arc<Mmap>>,
     pub last_export_folder: Option<PathBuf>,
+    pub sort: SortState,
 }
 
 impl ArchiveInfo {
@@ -137,6 +168,7 @@ impl ArchiveInfo {
             dirty: false,
             source_mmap: None,
             last_export_folder: None,
+            sort: SortState::default(),
         };
 
         archive.add_log("Created archive".to_string());
@@ -165,6 +197,7 @@ impl ArchiveInfo {
             dirty: false,
             source_mmap: None,
             last_export_folder: None,
+            sort: SortState::default(),
         };
 
         match version {
@@ -185,11 +218,60 @@ impl ArchiveInfo {
         let filter = filter.to_lowercase();
         self.selected_indices.clear();
 
-        for (index, entry) in self.entries.iter().enumerate() {
-            if entry.file_name.to_lowercase().contains(&filter) {
-                self.selected_indices.push(index);
+        let mut matches: Vec<(usize, &EntryInfo)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.file_name.to_lowercase().contains(&filter))
+            .collect();
+
+        let unique_types = self.unique_file_types();
+
+        matches.sort_by(|(_, a), (_, b)| match self.sort.column {
+            SortColumn::Name => {
+                let ord = a.file_name.cmp(&b.file_name);
+                if self.sort.direction == SortDirection::Descending {
+                    ord.reverse()
+                } else {
+                    ord
+                }
             }
+            SortColumn::Type => {
+                let primary = if unique_types.is_empty() {
+                    CompactString::new("")
+                } else {
+                    unique_types[self.sort.type_index % unique_types.len()].clone()
+                };
+                let a_primary = a.file_type == primary;
+                let b_primary = b.file_type == primary;
+                let primary_ord = b_primary.cmp(&a_primary);
+                if primary_ord != std::cmp::Ordering::Equal {
+                    primary_ord
+                } else {
+                    a.file_name.cmp(&b.file_name)
+                }
+            }
+            SortColumn::Size => {
+                let ord = a.sector.cmp(&b.sector);
+                if self.sort.direction == SortDirection::Descending {
+                    ord.reverse()
+                } else {
+                    ord
+                }
+            }
+        });
+
+        for (index, _) in matches {
+            self.selected_indices.push(index);
         }
+    }
+
+    pub(crate) fn unique_file_types(&self) -> Vec<CompactString> {
+        let mut types: Vec<CompactString> =
+            self.entries.iter().map(|e| e.file_type.clone()).collect();
+        types.sort();
+        types.dedup();
+        types
     }
 }
 

@@ -8,7 +8,7 @@ use iced::{Element, Subscription, Task, Theme};
 use iced_fonts::LUCIDE_FONT_BYTES;
 use iced_aw::menu::{Item, Menu, MenuBar};
 
-use crate::archive::ArchiveInfo;
+use crate::archive::{ArchiveInfo, SortColumn, SortDirection};
 use crate::config::{Config, ThemeMode};
 use crate::editor::Editor;
 use crate::parser::ImgVersion;
@@ -95,6 +95,7 @@ pub enum Message {
     TickProgress,
     PaneResized(pane_grid::ResizeEvent),
     OpenLastExportFolder,
+    SortBy(SortColumn),
 
     FilesDropped(PathBuf),
 }
@@ -604,6 +605,47 @@ impl App {
                             open_export_folder(&folder);
                         }
                     }
+                }
+                Task::none()
+            }
+            Message::SortBy(column) => {
+                if let Some(archive) = self.editor.selected_archive_mut() {
+                    let unique_types = archive.unique_file_types();
+                    match column {
+                        SortColumn::Name => {
+                            if archive.sort.column == SortColumn::Name {
+                                archive.sort.direction = match archive.sort.direction {
+                                    SortDirection::Ascending => SortDirection::Descending,
+                                    SortDirection::Descending => SortDirection::Ascending,
+                                };
+                            } else {
+                                archive.sort.column = SortColumn::Name;
+                                archive.sort.direction = SortDirection::Ascending;
+                            }
+                        }
+                        SortColumn::Type => {
+                            if archive.sort.column == SortColumn::Type {
+                                let count = unique_types.len().max(1);
+                                archive.sort.type_index = (archive.sort.type_index + 1) % count;
+                            } else {
+                                archive.sort.column = SortColumn::Type;
+                                archive.sort.type_index = 0;
+                            }
+                        }
+                        SortColumn::Size => {
+                            if archive.sort.column == SortColumn::Size {
+                                archive.sort.direction = match archive.sort.direction {
+                                    SortDirection::Ascending => SortDirection::Descending,
+                                    SortDirection::Descending => SortDirection::Ascending,
+                                };
+                            } else {
+                                archive.sort.column = SortColumn::Size;
+                                archive.sort.direction = SortDirection::Descending;
+                            }
+                        }
+                    }
+                    let filter = self.search.clone();
+                    archive.update_selected_list(&filter);
                 }
                 Task::none()
             }
