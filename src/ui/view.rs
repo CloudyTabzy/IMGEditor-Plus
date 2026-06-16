@@ -220,8 +220,10 @@ impl App {
             .height(Length::Fixed(ROW_HEIGHT))
             .style(move |theme: &iced::Theme| {
                 if is_selected {
+                    let palette = theme.extended_palette();
                     iced::widget::container::Style {
-                        background: Some(theme.extended_palette().primary.weak.color.into()),
+                        background: Some(palette.primary.weak.color.into()),
+                        text_color: Some(palette.primary.weak.text),
                         ..Default::default()
                     }
                 } else {
