@@ -626,86 +626,82 @@ impl App {
     pub fn menubar(&self) -> Element<'_, Message> {
         let file_menu = Menu::new(vec![
             Item::new(menu_button(
-                format!("New ({})\u{200B}", shortcut_display(Shortcut::New)),
+                format!("New ({})", shortcut_display(Shortcut::New)),
                 Message::NewArchive,
             )),
             Item::new(menu_button(
-                format!("Open… ({})\u{200B}", shortcut_display(Shortcut::Open)),
+                format!("Open… ({})", shortcut_display(Shortcut::Open)),
                 Message::OpenArchive,
             )),
             Item::new(menu_button(
-                format!("Save ({})\u{200B}", shortcut_display(Shortcut::Save)),
+                format!("Save ({})", shortcut_display(Shortcut::Save)),
                 Message::SaveArchive,
             )),
             Item::new(menu_button(
-                format!("Save as… ({})\u{200B}", shortcut_display(Shortcut::SaveAs)),
+                format!("Save as… ({})", shortcut_display(Shortcut::SaveAs)),
                 Message::SaveArchiveAs,
             )),
             Item::new(menu_button(
-                format!("Close tab ({})\u{200B}", shortcut_display(Shortcut::Close)),
+                format!("Close tab ({})", shortcut_display(Shortcut::Close)),
                 Message::CloseSelectedArchive,
             )),
         ])
-        .width(iced::Length::Shrink)
         .max_width(220.0);
 
         let edit_menu = Menu::new(vec![
             Item::new(menu_button(
-                format!("Import ({})\u{200B}", shortcut_display(Shortcut::Import)),
+                format!("Import ({})", shortcut_display(Shortcut::Import)),
                 Message::ImportFiles,
             )),
             Item::new(menu_button(
-                format!("Export all ({})\u{200B}", shortcut_display(Shortcut::ExportAll)),
+                format!("Export all ({})", shortcut_display(Shortcut::ExportAll)),
                 Message::ExportAll,
             )),
             Item::new(menu_button(
                 format!(
-                    "Export selected ({})\u{200B}",
+                    "Export selected ({})",
                     shortcut_display(Shortcut::ExportSelected)
                 ),
                 Message::ExportSelected,
             )),
         ])
-        .width(iced::Length::Shrink)
         .max_width(220.0);
 
         let selection_menu = Menu::new(vec![
             Item::new(menu_button(
-                format!("Select all ({})\u{200B}", shortcut_display(Shortcut::SelectAll)),
+                format!("Select all ({})", shortcut_display(Shortcut::SelectAll)),
                 Message::SelectAll,
             )),
             Item::new(menu_button(
                 format!(
-                    "Invert selection ({})\u{200B}",
+                    "Invert selection ({})",
                     shortcut_display(Shortcut::InvertSelection)
                 ),
                 Message::InvertSelection,
             )),
             Item::new(menu_button(
                 format!(
-                    "Delete selected ({})\u{200B}",
+                    "Delete selected ({})",
                     shortcut_display(Shortcut::Delete)
                 ),
                 Message::DeleteSelected,
             )),
         ])
-        .width(iced::Length::Shrink)
         .max_width(220.0);
 
         let option_items: Vec<Item<'_, Message, iced::Theme, iced::Renderer>> = ThemeMode::ALL
             .iter()
             .map(|mode| {
                 let label = if *mode == self.config.theme {
-                    format!("● {}\u{200B}", mode.as_str())
+                    format!("● {}", mode.as_str())
                 } else {
-                    format!("○ {}\u{200B}", mode.as_str())
+                    format!("○ {}", mode.as_str())
                 };
                 Item::new(menu_button(label, Message::SetTheme(*mode)))
             })
             .collect();
 
         let option_menu = Menu::new(option_items)
-            .width(iced::Length::Shrink)
             .max_width(220.0);
 
         let help_menu = Menu::new(vec![
@@ -720,9 +716,8 @@ impl App {
                 "Visit repository\u{200B}".to_string(),
                 Message::VisitRepository,
             )),
-            Item::new(menu_button("About\u{200B}".to_string(), Message::ShowAbout)),
+            Item::new(menu_button("About".to_string(), Message::ShowAbout)),
         ])
-        .width(iced::Length::Shrink)
         .max_width(220.0);
 
         fn menu_label(label: &'static str) -> iced::Element<'static, Message> {
@@ -756,7 +751,7 @@ fn menu_button<'a>(label: String, message: Message) -> Element<'a, Message> {
             .width(iced::Length::Fill),
     )
     .on_press(message)
-    .width(iced::Length::Shrink)
+    .width(iced::Length::Fill)
     .style(|theme: &iced::Theme, status: iced::widget::button::Status| iced::widget::button::Style {
             background: if matches!(
                 status,
