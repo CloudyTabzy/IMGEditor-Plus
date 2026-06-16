@@ -170,6 +170,8 @@ pub enum BlockPayload {
     NiSpecularProperty(NiSpecularPropertyData),
     NiStencilProperty(NiStencilPropertyData),
     NiVertexColorProperty(NiVertexColorPropertyData),
+    /// Pixel data block containing raw texture pixel bytes.
+    NiPixelData(NiPixelDataPayload),
     /// Block type not yet implemented; the raw bytes are preserved
     /// for the hex view in the inspector panel.
     Unsupported { raw: Vec<u8> },
@@ -343,6 +345,17 @@ pub struct NiStencilPropertyData {
 #[derive(Debug, Clone, Default)]
 pub struct NiVertexColorPropertyData {
     pub flags: u16,
+}
+
+/// Raw pixel data payload for NiPixelData blocks.
+#[derive(Debug, Clone, Default)]
+pub struct NiPixelDataPayload {
+    pub pixel_format: u32,
+    pub num_faces: u32,
+    pub num_mipmaps: u32,
+    pub bytes_per_pixel: u32,
+    pub num_pixels: u32,
+    pub raw_pixels: Vec<u8>,
 }
 
 /// Single texture slot in a `NiTexturingProperty`.
@@ -784,7 +797,7 @@ fn parse_block(type_name: &str, raw: &[u8], endian: Endian) -> NifResult<BlockPa
         t @ ("NiStringExtraData" | "NiSourceTexture" | "NiMaterialProperty"
              | "NiTexturingProperty" | "NiAlphaProperty" | "NiZBufferProperty"
              | "NiSpecularProperty" | "NiStencilProperty"
-             | "NiVertexColorProperty") => {
+             | "NiVertexColorProperty" | "NiPixelData") => {
             match t {
                 "NiStringExtraData" => read_ni_string_extra_data(&mut r)
                     .map(BlockPayload::NiStringExtraData),
@@ -804,6 +817,8 @@ fn parse_block(type_name: &str, raw: &[u8], endian: Endian) -> NifResult<BlockPa
                     .map(BlockPayload::NiStencilProperty),
                 "NiVertexColorProperty" => read_ni_vertex_color_property(&mut r)
                     .map(BlockPayload::NiVertexColorProperty),
+                "NiPixelData" => read_ni_pixel_data(&mut r)
+                    .map(BlockPayload::NiPixelData),
                 _ => unreachable!(),
             }
             .unwrap_or_else(|e| {
@@ -1019,6 +1034,36 @@ fn read_ni_stencil_property(r: &mut Reader<'_>) -> NifResult<NiStencilPropertyDa
         flags: r.read_u16("flags")?,
         stencil_ref: r.read_u32("stencil_ref")?,
         stencil_mask: r.read_u32("stencil_mask")?,
+    })
+}
+
+fn read_ni_pixel_data(r: &mut Reader<'_>) -> NifResult<NiPixelDataPayload> {
+    let pixel_format = r.read_u32("pixel_format")?;
+    let num_faces = r.read_u32("num_faces")?;
+    let num_mipmaps = r.read_u32("num_mipmaps")?;
+    let bytes_per_pixel = r.read_u32("bytes_per_pixel")?;
+    let _mipmap_stored = r.read_u32("mipmap_stored")?;
+    let num_pixels = r.read_u32("num_pixels")?;
+    let num_frames = r.read_u32("num_frames")?;
+    let _ = num_frames;
+    if num_pixels > 16_777_216 || bytes_per_pixel > 16 || num_faces > 32 {
+        return Err(NifError::InvalidField("pixel_data", format!("unreasonable: {num_pixels}px, {bytes_per_pixel}bpp, {num_faces} faces")));
+    }
+    let raw_size = (num_pixels as usize).saturating_mul(bytes_per_pixel as usize).saturating_mul(num_faces as usize);
+    if raw_size > 256 * 1024 * 1024 {
+        return Err(NifError::InvalidField("pixel_data", format!("raw_size {raw_size} too large")));
+    }
+    let mut raw_pixels = Vec::with_capacity(raw_size);
+    for _ in 0..raw_size {
+        raw_pixels.push(r.read_u8("pixel_data")?);
+    }
+    Ok(NiPixelDataPayload {
+        pixel_format,
+        num_faces,
+        num_mipmaps,
+        bytes_per_pixel,
+        num_pixels,
+        raw_pixels,
     })
 }
 

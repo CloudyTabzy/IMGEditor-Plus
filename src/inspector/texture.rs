@@ -257,7 +257,7 @@ pub fn resolve_textures_for_nif(
         let Some(key) = base_name else {
             continue;
         };
-        let pixel_data = extract_embedded_pixels(&nft, &nft_bytes, idx);
+        let pixel_data = extract_pixels_for_nft(&nft, &nft_bytes, idx);
         entries.insert(
             key,
             TextureEntry {
@@ -268,4 +268,59 @@ pub fn resolve_textures_for_nif(
     }
 
     Some(NftCatalog { entries })
+}
+
+/// Try to find NiPixelData associated with a NiSourceTexture by scanning
+/// forward from the NiSourceTexture block for the next NiPixelData block.
+/// This function is also called by the NFT catalog builder as a fallback
+/// when inline pixel data is absent.
+fn extract_pixels_for_nft(
+    nft: &NifFile,
+    nft_bytes: &[u8],
+    tex_block_idx: usize,
+) -> Option<Vec<u8>> {
+    // Check inline pixel data first.
+    if let Some(tga) = extract_embedded_pixels(nft, nft_bytes, tex_block_idx) {
+        if tga.len() > 22 {
+            // More than a 1x1 pixel — looks like real data.
+            return Some(tga);
+        }
+    }
+    // Fall back to NiPixelData blocks nearby.
+    for candidate in tex_block_idx + 1..nft.blocks.len().min(tex_block_idx + 10) {
+        let Some(Some(BlockPayload::NiPixelData(pd))) = nft.payloads.get(candidate) else {
+            continue;
+        };
+        if pd.raw_pixels.is_empty() { continue; }
+        let num_px = pd.num_pixels as usize;
+        if num_px == 0 { continue; }
+        let area = num_px;
+        let side = (area as f32).sqrt() as u32;
+        let w = side.max(1);
+        let h = (area as u32 + w - 1) / w;
+        if w > 4096 || h > 4096 { continue; }
+        let bpp = pd.bytes_per_pixel as usize;
+        let mip0_size = area * bpp;
+        let raw = if mip0_size <= pd.raw_pixels.len() { &pd.raw_pixels[..mip0_size] } else { &pd.raw_pixels };
+        let mut tga = Vec::with_capacity(18 + raw.len());
+        tga.push(0); tga.push(0); tga.push(2);
+        tga.extend_from_slice(&[0, 0, 0, 0, 0]);
+        tga.extend_from_slice(&[0, 0]); tga.extend_from_slice(&[0, 0]);
+        tga.extend_from_slice(&(w as u16).to_le_bytes());
+        tga.extend_from_slice(&(h as u16).to_le_bytes());
+        tga.push((bpp * 8) as u8); tga.push(0x20);
+        if bpp == 4 {
+            for i in (0..raw.len()).step_by(4) {
+                tga.push(raw[i+2]); tga.push(raw[i+1]); tga.push(raw[i]); tga.push(raw[i+3]);
+            }
+        } else if bpp == 3 {
+            for i in (0..raw.len()).step_by(3) {
+                tga.push(raw[i+2]); tga.push(raw[i+1]); tga.push(raw[i]);
+            }
+        } else {
+            tga.extend_from_slice(raw);
+        }
+        return Some(tga);
+    }
+    None
 }
