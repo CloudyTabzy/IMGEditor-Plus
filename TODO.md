@@ -22,19 +22,25 @@ The `.nft` (NIF texture catalog) files store **path metadata only** — source p
 
 **A. Reverse NiPixelData header for 20.3.0.9**
 - Dump raw bytes of a known NiPixelData block and reverse the field layout.
-- Initial observations from `observ4.nft` block 3 (43891 bytes):
+- Initial observations from `observ4.nft` block 3 (43891 bytes) and block 7 (2907 bytes):
   ```
-  +0:  pixel_format = 4 (RGBA8 plausible)
-  +4:  7 bytes of unknown structure
-  +11: ???
-  +16: width? = 4
-  +20: height? = 4
-  +28: 19, 5, 0    ← mip entry 0: w=19, h=5, data_offset=0?
-  +40: 19, 5, 0    ← mip entry 1
-  +52: 19, 5, -1   ← mip entry 2 (sentinel?)
-  +64: face/misc fields, then raw pixel bytes
+  Header (first ~72 bytes):
+  +0:    pixel_format (u32) = 4  (RGB8? RGBA8? DXT?)
+  +4-7:  ??? (0x00FFFFFF in both blocks — constant)
+  +8-15: ??? (255, 256 — constant)
+  +16-23: 1024, 1024? (0x0400 as u16 — seen in both)
+  +24-27: 0
+  +28-63: 3 × (width=19, height=5?) repeated — possibly mipmap or face descriptors
+  +64:    sentinel (0xFFFFFFFF)
+  +68:    count (9 in block 3, 7 in block 7 — different!)
+  +72+:   array of (width?, height?, data_offset?) at variable offset
   ```
-- The exact header structure needs to be determined by comparing multiple NiPixelData blocks with different texture dimensions.
+- Block 7: total 2907 bytes. At +80-87: (64, 64) — plausible texture size.
+- Block 3: total 43891 bytes. At +80-87: (1, 1) — plausible smallest mip size.
+- Pixel data starts somewhere after offset ~96 bytes; the remaining bytes
+  are likely DXT-compressed (block 7: 2907-96=2811 px bytes fits 64x64 DXT).
+- Key unknowns: pixel_format enum values for 20.3.0.9, exact mipmap descriptor
+  layout, face count field location.
 
 **B. Cross-reference unnamed IMG entries with NFT source paths**
 - For each unnamed IMG entry, read its raw bytes and compute a hash
