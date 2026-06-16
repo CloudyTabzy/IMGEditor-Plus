@@ -750,10 +750,14 @@ impl App {
 }
 
 fn menu_button<'a>(label: String, message: Message) -> Element<'a, Message> {
-        iced::widget::button(iced::widget::text(label))
-            .on_press(message)
-            .width(iced::Length::Shrink)
-            .style(|theme: &iced::Theme, status: iced::widget::button::Status| iced::widget::button::Style {
+    iced::widget::button(
+        iced::widget::text(label)
+            .align_x(iced::alignment::Horizontal::Left)
+            .width(iced::Length::Fill),
+    )
+    .on_press(message)
+    .width(iced::Length::Fill)
+    .style(|theme: &iced::Theme, status: iced::widget::button::Status| iced::widget::button::Style {
             background: if matches!(
                 status,
                 iced::widget::button::Status::Hovered | iced::widget::button::Status::Pressed
