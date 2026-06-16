@@ -433,7 +433,7 @@ fn modal_box<'a>(
 }
 
 fn build_context_menu(app: &App) -> Option<Element<'_, Message>> {
-    let index = app.context_menu?;
+    let (index, pos) = app.context_menu?;
     let Some(archive) = app
         .editor
         .archives()
@@ -442,7 +442,6 @@ fn build_context_menu(app: &App) -> Option<Element<'_, Message>> {
         return None;
     };
     let entry = archive.entries.get(index)?;
-    let pos = app.cursor_position;
 
     let card = container(
         column![

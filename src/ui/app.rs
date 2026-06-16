@@ -126,7 +126,7 @@ pub struct App {
     pub toast: Option<String>,
     pub last_export_selected_only: bool,
     pub panes: pane_grid::State<Pane>,
-    pub context_menu: Option<usize>,
+    pub context_menu: Option<(usize, iced::Point)>,
     pub cursor_position: iced::Point,
 }
 
@@ -474,11 +474,13 @@ impl App {
             }
             Message::EntryRightClicked(index) => {
                 self.editor.set_selected_entry(Some(index));
-                self.context_menu = Some(index);
+                self.context_menu = Some((index, self.cursor_position));
                 Task::none()
             }
             Message::CursorMoved(point) => {
-                self.cursor_position = point;
+                if self.context_menu.is_none() {
+                    self.cursor_position = point;
+                }
                 Task::none()
             }
             Message::EntryContextAction(action) => {
