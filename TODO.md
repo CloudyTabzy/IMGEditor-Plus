@@ -9,24 +9,37 @@ The `.nft` (NIF texture catalog) files store **path metadata only** — source p
 
 | Fact | Detail |
 |------|--------|
-| `World.img` has ~11980 entries | NIFs, NFTs, collisions, animations, and ~900 entries with **no file extension** |
-| No `.tga`/`.dds` files exist on disk | The game directory has zero loose texture image files |
+| `World.img` has 11980 entries | 5724 NIFs, 4469 NFTs, 550 `.agr`, 493 `.lip`, 488 `.col`, 119 `.cat`, 85 `.ipb`, 52 `.lur`. **Zero `.tga`/`.dds`** entries |
 | NFT `NiSourceTexture.use_external == 0` | Implies embedded pixel data, but 0 bytes follow the header fields in practice |
-| NFT has `NiPixelData` blocks | Our parser's field layout produces garbage values (`67108864px, 256bpp, 4294967040 faces`) — the real format differs from the nifxml schema |
-| 902 unnamed IMG entries | Likely the texture data, stored under names that **don't match** the NFT's texture basenames |
-| `.txd` files exist in `TXD\` dir | Only frontend/UI textures (7 files, ~6 MB total) — not world textures |
+| NFT has `NiPixelData` blocks | e.g. **43891 bytes** of data for `observ4.nft` — the pixels ARE there but the header format is unknown |
+| NiPixelData header (attempted) | `pixel_format=4` at offset 0 (plausible), but `num_faces=0xFFFFFF00` garbage at offset 4 |
+| Plausible mipmap entries at offset+28 | `19×5`, repeated 3 times with `data_offset=0` — suggests a variable-length mipmap table before pixel data |
+| Pixel data starts somewhere after offset 64+ | Full block is 43891 bytes, so data section is ~43800 bytes |
+| No `.tga`/`.dds` on disk at all | Confirmed: neither as loose files nor as named IMG entries. Pixels live **inside NFT NIFs** |
+| `.txd` files in `TXD\` dir | Only frontend/UI textures (7 files, ~6 MB total) — not world textures |
 
 ### Investigation approaches
 
-**A. Cross-reference unnamed IMG entries with NFT source paths**
+**A. Reverse NiPixelData header for 20.3.0.9**
+- Dump raw bytes of a known NiPixelData block and reverse the field layout.
+- Initial observations from `observ4.nft` block 3 (43891 bytes):
+  ```
+  +0:  pixel_format = 4 (RGBA8 plausible)
+  +4:  7 bytes of unknown structure
+  +11: ???
+  +16: width? = 4
+  +20: height? = 4
+  +28: 19, 5, 0    ← mip entry 0: w=19, h=5, data_offset=0?
+  +40: 19, 5, 0    ← mip entry 1
+  +52: 19, 5, -1   ← mip entry 2 (sentinel?)
+  +64: face/misc fields, then raw pixel bytes
+  ```
+- The exact header structure needs to be determined by comparing multiple NiPixelData blocks with different texture dimensions.
+
+**B. Cross-reference unnamed IMG entries with NFT source paths**
 - For each unnamed IMG entry, read its raw bytes and compute a hash
 - For each NFT, hash the known texture source paths and look for matches
 - If a match is found, record the IMG entry name → texture mapping
-
-**B. Study the NiPixelData format in the NFT NIFs**
-- The current parser reads: `pixel_format`, `num_faces`, `num_mipmaps`, `bytes_per_pixel`, `mipmap_stored`, `num_pixels`, `num_frames`, `pixel_data`
-- The garbage output suggests the actual 20.3.0.9 format has different field ordering or additional fields
-- Investigate nifxml for version-specific `NiPixelData` schemas, or hex-dump actual NiPixelData blocks to reverse the format
 
 **C. Scan the IMG directory for entries containing TGA/DDS magic bytes**
 - Even without matching names, the first few bytes of each entry can reveal the format (TGA starts with `0x00 0x00 0x02`, DDS with `0x44 0x44 0x53 0x20`)
