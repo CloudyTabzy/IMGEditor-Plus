@@ -86,6 +86,9 @@ pub enum Message {
     DebounceTick,
     RefreshFilter,
 
+    CopySelectedEntryDetails,
+    CopyLogs,
+
     EntryClicked(usize),
     EntryDoubleClicked(usize),
     EntryRightClicked(usize),
@@ -613,6 +616,39 @@ impl App {
             Message::RefreshFilter => {
                 self.editor.update_filtered_list(&self.search);
                 Task::none()
+            }
+
+            Message::CopySelectedEntryDetails => {
+                let Some((_, inspection)) = self.inspected_entry.as_ref() else {
+                    return Task::none();
+                };
+                let mut lines = Vec::new();
+                lines.push(format!("Name: {}", inspection.file_name));
+                lines.push(format!("Type: {}", inspection.file_type));
+                lines.push(format!(
+                    "Size: {} bytes ({} sectors)",
+                    inspection.size_bytes, inspection.size_sectors
+                ));
+                lines.push(format!(
+                    "Offset: sector {} (byte {})",
+                    inspection.offset_bytes / 2048,
+                    inspection.offset_bytes
+                ));
+                lines.push(format!("Source: {}", inspection.source));
+                for (key, value) in &inspection.summary {
+                    lines.push(format!("{key}: {value}"));
+                }
+                let text = lines.join("\n");
+                self.toast = Some("Copied selected entry details".to_string());
+                iced::clipboard::write::<Message>(text)
+            }
+            Message::CopyLogs => {
+                let Some(archive) = self.editor.archives().get(self.editor.selected_archive().unwrap_or(0)) else {
+                    return Task::none();
+                };
+                let text = archive.logs.join("\n");
+                self.toast = Some("Copied logs".to_string());
+                iced::clipboard::write::<Message>(text)
             }
 
             Message::EntryClicked(display_row) => {
