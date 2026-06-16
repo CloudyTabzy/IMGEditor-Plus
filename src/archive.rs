@@ -1,77 +1,69 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32};
-
-use smol::Task;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::parser::{ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, encode_entry_name};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProgressInfo {
-    percentage: Arc<AtomicU32>,
-    cancel: Arc<AtomicBool>,
-    in_use: Arc<AtomicBool>,
+    inner: Arc<ProgressInner>,
 }
 
-impl ProgressInfo {
-    pub fn start(&self) {
-        self.in_use
-            .store(true, std::sync::atomic::Ordering::Release);
-        self.cancel
-            .store(false, std::sync::atomic::Ordering::Release);
-        self.percentage
-            .store(0.0f32.to_bits(), std::sync::atomic::Ordering::Release);
-    }
 
-    pub fn finish(&self) {
-        self.in_use
-            .store(false, std::sync::atomic::Ordering::Release);
-        self.cancel
-            .store(false, std::sync::atomic::Ordering::Release);
-        self.percentage
-            .store(0.0f32.to_bits(), std::sync::atomic::Ordering::Release);
-    }
 
-    pub fn set_percentage(&self, value: f32) {
-        self.percentage
-            .store(value.to_bits(), std::sync::atomic::Ordering::Release);
-    }
-
-    pub fn request_cancel(&self) {
-        self.cancel
-            .store(true, std::sync::atomic::Ordering::Release);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancel.load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    pub fn percentage(&self) -> f32 {
-        f32::from_bits(self.percentage.load(std::sync::atomic::Ordering::Acquire))
-    }
-
-    pub fn in_use(&self) -> bool {
-        self.in_use.load(std::sync::atomic::Ordering::Acquire)
-    }
+#[derive(Debug)]
+struct ProgressInner {
+    percentage: AtomicU32,
+    cancel: AtomicBool,
+    in_use: AtomicBool,
 }
 
 impl Default for ProgressInfo {
     fn default() -> Self {
         Self {
-            percentage: Arc::new(AtomicU32::new(0.0f32.to_bits())),
-            cancel: Arc::new(AtomicBool::new(false)),
-            in_use: Arc::new(AtomicBool::new(false)),
+            inner: Arc::new(ProgressInner {
+                percentage: AtomicU32::new(0),
+                cancel: AtomicBool::new(false),
+                in_use: AtomicBool::new(false),
+            }),
         }
     }
 }
 
-impl Clone for ProgressInfo {
-    fn clone(&self) -> Self {
-        Self {
-            percentage: Arc::clone(&self.percentage),
-            cancel: Arc::clone(&self.cancel),
-            in_use: Arc::clone(&self.in_use),
-        }
+impl ProgressInfo {
+    pub fn start(&self) {
+        self.inner.cancel.store(false, Ordering::Release);
+        self.inner.percentage.store(0, Ordering::Release);
+        self.inner.in_use.store(true, Ordering::Release);
+    }
+
+    pub fn finish(&self) {
+        self.inner.in_use.store(false, Ordering::Release);
+        self.inner.cancel.store(false, Ordering::Release);
+        self.inner.percentage.store(0, Ordering::Release);
+    }
+
+    pub fn set_percentage(&self, value: f32) {
+        let clamped = value.clamp(0.0, 1.0);
+        self.inner
+            .percentage
+            .store(clamped.to_bits(), Ordering::Release);
+    }
+
+    pub fn percentage(&self) -> f32 {
+        f32::from_bits(self.inner.percentage.load(Ordering::Acquire))
+    }
+
+    pub fn request_cancel(&self) {
+        self.inner.cancel.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.inner.cancel.load(Ordering::Acquire)
+    }
+
+    pub fn in_use(&self) -> bool {
+        self.inner.in_use.load(Ordering::Acquire)
     }
 }
 
@@ -108,7 +100,7 @@ impl EntryInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArchiveInfo {
     pub path: Option<PathBuf>,
     pub file_name: String,
@@ -120,25 +112,7 @@ pub struct ArchiveInfo {
     pub open: bool,
     pub create_new: bool,
     pub update_search: bool,
-    pub task: Option<Task<anyhow::Result<ArchiveInfo>>>,
-}
-
-impl Clone for ArchiveInfo {
-    fn clone(&self) -> Self {
-        Self {
-            path: self.path.clone(),
-            file_name: self.file_name.clone(),
-            entries: self.entries.clone(),
-            selected_indices: self.selected_indices.clone(),
-            logs: self.logs.clone(),
-            progress: self.progress.clone(),
-            version: self.version,
-            open: self.open,
-            create_new: self.create_new,
-            update_search: self.update_search,
-            task: None,
-        }
-    }
+    pub dirty: bool,
 }
 
 impl ArchiveInfo {
@@ -154,7 +128,7 @@ impl ArchiveInfo {
             open: true,
             create_new,
             update_search: false,
-            task: None,
+            dirty: false,
         };
 
         archive.add_log("Created archive".to_string());
@@ -180,7 +154,7 @@ impl ArchiveInfo {
             open: true,
             create_new: false,
             update_search: false,
-            task: None,
+            dirty: false,
         };
 
         match version {
@@ -285,5 +259,18 @@ mod tests {
 
         archive.update_selected_list("txd");
         assert_eq!(archive.selected_indices, vec![1]);
+    }
+
+    #[test]
+    fn progress_clamps_to_unit_range() {
+        let progress = ProgressInfo::default();
+        progress.start();
+        progress.set_percentage(2.0);
+        assert!((progress.percentage() - 1.0).abs() < 0.001);
+        progress.set_percentage(-0.5);
+        assert!(progress.percentage().abs() < 0.001);
+        progress.set_percentage(0.42);
+        assert!((progress.percentage() - 0.42).abs() < 0.001);
+        progress.finish();
     }
 }

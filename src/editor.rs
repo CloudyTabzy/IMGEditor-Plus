@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
-use crate::parser::{ImgParser, ImgVersion, PcV1Parser, PcV2Parser, import_entry};
+use crate::parser::{ImgVersion, import_entry};
 
 #[derive(Debug, Default)]
 pub struct Editor {
@@ -9,42 +9,19 @@ pub struct Editor {
     selected_archive: Option<usize>,
     selected_entry: Option<usize>,
     pending_messages: Vec<String>,
-    task_sender: Option<async_channel::Sender<TaskMessage>>,
 }
 
-#[derive(Debug, Clone)]
-pub enum TaskMessage {
-    SaveCompleted { index: usize, archive: ArchiveInfo },
-    ExportCompleted { index: usize },
+#[derive(Debug, thiserror::Error)]
+pub enum OpenArchiveError {
+    #[error("IMG format not supported")]
+    UnsupportedFormat,
+    #[error(transparent)]
+    OpenFailed(#[from] anyhow::Error),
 }
 
 impl Editor {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn run() -> anyhow::Result<()> {
-        let config = crate::config::Config::load();
-
-        let mut viewport = egui::ViewportBuilder::default()
-            .with_title("Grinch_'s IMG Editor")
-            .with_inner_size(config.window_size.unwrap_or([900.0, 600.0]));
-        if let Some(position) = config.window_position {
-            viewport = viewport.with_position(position);
-        }
-
-        let options = eframe::NativeOptions {
-            viewport,
-            persist_window: false,
-            ..Default::default()
-        };
-
-        crate::ui::application::run(crate::ui::renderer::MainWindow::new(config), options)
-            .map_err(|err| anyhow::anyhow!("{}", err))
-    }
-
-    pub fn set_task_sender(&mut self, sender: async_channel::Sender<TaskMessage>) {
-        self.task_sender = Some(sender);
     }
 
     pub fn archives(&self) -> &[ArchiveInfo] {
@@ -79,6 +56,7 @@ impl Editor {
     pub fn add_archive(&mut self, archive: ArchiveInfo) {
         self.archives.push(archive);
         self.selected_archive = Some(self.archives.len() - 1);
+        self.selected_entry = None;
     }
 
     pub fn new_archive(&mut self) {
@@ -199,6 +177,7 @@ impl Editor {
         if let Some(archive) = self.selected_archive_mut() {
             archive.entries.retain(|entry| !entry.selected);
             archive.update_selected_list("");
+            archive.dirty = true;
             self.selected_entry = None;
         }
     }
@@ -215,6 +194,7 @@ impl Editor {
                     updated.imported = entry.imported;
                     updated.selected = entry.selected;
                     *entry = updated;
+                    archive.dirty = true;
                     archive.update_selected_list("");
                 }
             }
@@ -236,95 +216,11 @@ impl Editor {
             }
         }
 
+        if count > 0 {
+            archive.dirty = true;
+        }
         archive.add_log(format!("Imported {count} entries"));
         archive.update_search = true;
-    }
-
-    pub fn export_all(&mut self, folder: &Path) {
-        if let Some(index) = self.selected_archive {
-            let archive = self.archives[index].clone();
-            let progress = archive.progress.clone();
-            let folder = folder.to_path_buf();
-            let sender = self.task_sender.clone();
-
-            let task = smol::spawn(async move {
-                let result = export_task(archive, folder, ExportMode::All, progress).await;
-                if let Some(sender) = sender {
-                    let _ = sender.send(TaskMessage::ExportCompleted { index }).await;
-                }
-                result
-            });
-
-            self.archives[index].task = Some(task);
-        }
-    }
-
-    pub fn export_selected(&mut self, folder: &Path) {
-        if let Some(index) = self.selected_archive {
-            let archive = self.archives[index].clone();
-            let progress = archive.progress.clone();
-            let folder = folder.to_path_buf();
-            let sender = self.task_sender.clone();
-
-            let task = smol::spawn(async move {
-                let result = export_task(archive, folder, ExportMode::Selected, progress).await;
-                if let Some(sender) = sender {
-                    let _ = sender.send(TaskMessage::ExportCompleted { index }).await;
-                }
-                result
-            });
-
-            self.archives[index].task = Some(task);
-        }
-    }
-
-    pub fn save_archive(&mut self, path: &Path, version: ImgVersion) -> anyhow::Result<()> {
-        if let Some(index) = self.selected_archive {
-            let archive = self.archives[index].clone();
-            let progress = archive.progress.clone();
-            let path = path.to_path_buf();
-            let parser_version = version;
-            let sender = self.task_sender.clone();
-
-            let task = smol::spawn(async move {
-                let result = save_task(archive, path, parser_version, progress).await;
-                if let Err(ref err) = result {
-                    eprintln!("save failed: {err}");
-                } else if let Some(sender) = sender {
-                    if let Ok(ref archive) = result {
-                        let _ = sender
-                            .send(TaskMessage::SaveCompleted {
-                                index,
-                                archive: archive.clone(),
-                            })
-                            .await;
-                    }
-                }
-                result
-            });
-
-            self.archives[index].task = Some(task);
-        }
-        Ok(())
-    }
-
-    pub fn save_archive_in_place(&mut self) -> anyhow::Result<()> {
-        let Some(index) = self.selected_archive else {
-            return Ok(());
-        };
-        let (path, version) = {
-            let archive = &self.archives[index];
-            let Some(path) = archive.path.clone() else {
-                return Ok(());
-            };
-            (path, archive.version)
-        };
-
-        if !path.is_absolute() || !path.exists() {
-            return Ok(());
-        }
-
-        self.save_archive(&path, version)
     }
 
     pub fn update_filtered_list(&mut self, filter: &str) {
@@ -334,25 +230,53 @@ impl Editor {
         }
     }
 
+    /// Take a clone of the currently selected archive (returns None if none).
+    /// Used by the App layer to launch async I/O tasks without holding &mut self.
+    pub fn clone_selected_archive(&self) -> Option<(usize, ArchiveInfo)> {
+        let index = self.selected_archive?;
+        self.archives.get(index).map(|a| (index, a.clone()))
+    }
+
+    /// Replace the archive at `index` (used after an async save completes).
+    pub fn replace_archive(&mut self, index: usize, archive: ArchiveInfo) {
+        if index < self.archives.len() {
+            self.archives[index] = archive;
+        }
+    }
+
+    pub fn add_log_to(&mut self, index: usize, message: String) {
+        if let Some(archive) = self.archives.get_mut(index) {
+            archive.add_log(message);
+        }
+    }
+
+    pub fn append_import(&mut self, index: usize, paths: Vec<PathBuf>, replace: bool) {
+        if let Some(archive) = self.archives.get_mut(index) {
+            let mut count = 0;
+            for path in &paths {
+                if import_entry(archive, path, replace).is_ok() {
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                archive.dirty = true;
+            }
+            archive.add_log(format!("Imported {count} entries"));
+            archive.update_search = true;
+        }
+    }
+
+    pub fn has_active_progress(&self) -> bool {
+        self.archives
+            .iter()
+            .any(|archive| archive.progress.in_use())
+    }
+
     fn archive_exists_by_name(&self, name: &str) -> bool {
         self.archives
             .iter()
             .any(|archive| archive.file_name == name)
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum OpenArchiveError {
-    #[error("IMG format not supported")]
-    UnsupportedFormat,
-    #[error(transparent)]
-    OpenFailed(#[from] anyhow::Error),
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ExportMode {
-    All,
-    Selected,
 }
 
 fn unique_archive_name(archives: &[ArchiveInfo], base: &str) -> String {
@@ -371,74 +295,6 @@ fn unique_archive_name(archives: &[ArchiveInfo], base: &str) -> String {
     }
 
     base.to_string()
-}
-
-async fn export_task(
-    archive: ArchiveInfo,
-    folder: PathBuf,
-    mode: ExportMode,
-    progress: crate::archive::ProgressInfo,
-) -> anyhow::Result<ArchiveInfo> {
-    progress.start();
-
-    let entries: Vec<&EntryInfo> = match mode {
-        ExportMode::All => archive.entries.iter().collect(),
-        ExportMode::Selected => archive
-            .entries
-            .iter()
-            .filter(|entry| entry.selected)
-            .collect(),
-    };
-
-    let total = entries.len();
-    for (index, entry) in entries.iter().enumerate() {
-        if progress.is_cancelled() {
-            progress.finish();
-            anyhow::bail!("Export cancelled");
-        }
-
-        let output_path = folder.join(&entry.file_name);
-        match archive.version {
-            ImgVersion::One => PcV1Parser.export_entry(&archive, entry, &output_path)?,
-            ImgVersion::Two => PcV2Parser.export_entry(&archive, entry, &output_path)?,
-            ImgVersion::Unknown => {
-                progress.finish();
-                anyhow::bail!("unknown archive format cannot be exported");
-            }
-        }
-
-        progress.set_percentage((index + 1) as f32 / total.max(1) as f32);
-    }
-
-    progress.finish();
-    Ok(archive)
-}
-
-async fn save_task(
-    mut archive: ArchiveInfo,
-    path: PathBuf,
-    version: ImgVersion,
-    progress: crate::archive::ProgressInfo,
-) -> anyhow::Result<ArchiveInfo> {
-    progress.start();
-
-    let result = match version {
-        ImgVersion::One => PcV1Parser.save(&mut archive, &path, true),
-        ImgVersion::Two => PcV2Parser.save(&mut archive, &path, true),
-        ImgVersion::Unknown => {
-            progress.finish();
-            anyhow::bail!("cannot save unknown archive format");
-        }
-    };
-
-    if result.is_err() {
-        progress.finish();
-    }
-
-    let _ = result?;
-    archive.version = version;
-    archive.add_log("Archive saved".to_string());
-    Ok(archive)
 }
 
 #[cfg(test)]

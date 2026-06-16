@@ -1,62 +1,83 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Theme {
-    Light,
-    Dark,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemeMode {
+    #[default]
     System,
+    Light,
+    DarkCatppuccin,
+    DarkTokyoNight,
+    DarkGruvbox,
 }
 
-impl Theme {
+impl ThemeMode {
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Theme::Light => "Light",
-            Theme::Dark => "Dark",
-            Theme::System => "System",
+            ThemeMode::System => "System",
+            ThemeMode::Light => "Light",
+            ThemeMode::DarkCatppuccin => "Catppuccin Mocha",
+            ThemeMode::DarkTokyoNight => "Tokyo Night",
+            ThemeMode::DarkGruvbox => "Gruvbox",
         }
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
-        match value.trim() {
-            "Light" => Some(Theme::Light),
-            "Dark" => Some(Theme::Dark),
-            "System" => Some(Theme::System),
-            _ => None,
-        }
+    pub const fn is_dark(&self) -> bool {
+        !matches!(self, ThemeMode::Light)
     }
 
-    pub fn apply(&self, ctx: &egui::Context) {
-        match self {
-            Theme::Light => ctx.set_visuals(egui::Visuals::light()),
-            Theme::Dark => ctx.set_visuals(egui::Visuals::dark()),
-            Theme::System => {}
+    pub const ALL: [ThemeMode; 5] = [
+        ThemeMode::System,
+        ThemeMode::Light,
+        ThemeMode::DarkCatppuccin,
+        ThemeMode::DarkTokyoNight,
+        ThemeMode::DarkGruvbox,
+    ];
+}
+
+impl FromStr for ThemeMode {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "System" => Ok(ThemeMode::System),
+            "Light" => Ok(ThemeMode::Light),
+            "Catppuccin Mocha" | "Catppuccin" => Ok(ThemeMode::DarkCatppuccin),
+            "Tokyo Night" | "TokyoNight" => Ok(ThemeMode::DarkTokyoNight),
+            "Gruvbox" => Ok(ThemeMode::DarkGruvbox),
+            _ => Err(()),
         }
     }
 }
 
-impl Default for Theme {
-    fn default() -> Self {
-        Theme::System
-    }
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowGeometry {
+    pub size: Option<[f32; 2]>,
+    pub position: Option<[f32; 2]>,
+    pub maximized: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub first_run_complete: bool,
-    pub theme: Theme,
-    pub window_size: Option<[f32; 2]>,
-    pub window_position: Option<[f32; 2]>,
+    pub theme: ThemeMode,
+    pub window: WindowGeometry,
+    pub last_export_folder: Option<PathBuf>,
+    pub last_open_folder: Option<PathBuf>,
+    pub update_check_enabled: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             first_run_complete: false,
-            theme: Theme::default(),
-            window_size: None,
-            window_position: None,
+            theme: ThemeMode::default(),
+            window: WindowGeometry::default(),
+            last_export_folder: None,
+            last_open_folder: None,
+            update_check_enabled: true,
         }
     }
 }
@@ -89,15 +110,31 @@ impl Config {
                     config.first_run_complete = value.eq_ignore_ascii_case("true");
                 }
                 "theme" => {
-                    if let Some(theme) = Theme::from_str(value) {
+                    if let Ok(theme) = ThemeMode::from_str(value) {
                         config.theme = theme;
                     }
                 }
                 "window_size" => {
-                    config.window_size = parse_pair(value);
+                    config.window.size = parse_pair(value);
                 }
                 "window_position" => {
-                    config.window_position = parse_pair(value);
+                    config.window.position = parse_pair(value);
+                }
+                "window_maximized" => {
+                    config.window.maximized = value.eq_ignore_ascii_case("true");
+                }
+                "last_export_folder" => {
+                    if !value.is_empty() {
+                        config.last_export_folder = Some(PathBuf::from(value));
+                    }
+                }
+                "last_open_folder" => {
+                    if !value.is_empty() {
+                        config.last_open_folder = Some(PathBuf::from(value));
+                    }
+                }
+                "update_check_enabled" => {
+                    config.update_check_enabled = value.eq_ignore_ascii_case("true");
                 }
                 _ => {}
             }
@@ -115,7 +152,7 @@ impl Config {
 
     pub fn save_to_path(&self, path: &Path) -> io::Result<()> {
         let mut file = fs::File::create(path)?;
-        writeln!(file, "; IMGEditor configuration")?;
+        writeln!(file, "; IMGEditor v2 configuration")?;
         writeln!(
             file,
             "first_run_complete={}",
@@ -126,16 +163,34 @@ impl Config {
             }
         )?;
         writeln!(file, "theme={}", self.theme.as_str())?;
-        if let Some(size) = self.window_size {
+        if let Some(size) = self.window.size {
             writeln!(file, "window_size={:.1},{:.1}", size[0], size[1])?;
         }
-        if let Some(position) = self.window_position {
+        if let Some(position) = self.window.position {
             writeln!(
                 file,
                 "window_position={:.1},{:.1}",
                 position[0], position[1]
             )?;
         }
+        if self.window.maximized {
+            writeln!(file, "window_maximized=true")?;
+        }
+        if let Some(folder) = &self.last_export_folder {
+            writeln!(file, "last_export_folder={}", folder.display())?;
+        }
+        if let Some(folder) = &self.last_open_folder {
+            writeln!(file, "last_open_folder={}", folder.display())?;
+        }
+        writeln!(
+            file,
+            "update_check_enabled={}",
+            if self.update_check_enabled {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
         Ok(())
     }
 
@@ -171,9 +226,9 @@ mod tests {
     fn config_defaults_are_sensible() {
         let config = Config::default();
         assert!(!config.first_run_complete);
-        assert_eq!(config.theme, Theme::System);
-        assert!(config.window_size.is_none());
-        assert!(config.window_position.is_none());
+        assert_eq!(config.theme, ThemeMode::System);
+        assert!(config.window.size.is_none());
+        assert!(config.window.position.is_none());
     }
 
     #[test]
@@ -183,17 +238,27 @@ mod tests {
 
         let original = Config {
             first_run_complete: true,
-            theme: Theme::Dark,
-            window_size: Some([1200.0, 800.0]),
-            window_position: Some([100.0, 50.0]),
+            theme: ThemeMode::DarkTokyoNight,
+            window: WindowGeometry {
+                size: Some([1280.0, 800.0]),
+                position: Some([100.0, 50.0]),
+                maximized: true,
+            },
+            last_export_folder: Some(PathBuf::from("C:/out")),
+            last_open_folder: Some(PathBuf::from("C:/in")),
+            update_check_enabled: false,
         };
         original.save_to_path(&path).unwrap();
 
         let loaded = Config::load_from_path(&path);
-        assert_eq!(loaded.first_run_complete, true);
-        assert_eq!(loaded.theme, Theme::Dark);
-        assert_eq!(loaded.window_size, Some([1200.0, 800.0]));
-        assert_eq!(loaded.window_position, Some([100.0, 50.0]));
+        assert!(loaded.first_run_complete);
+        assert_eq!(loaded.theme, ThemeMode::DarkTokyoNight);
+        assert_eq!(loaded.window.size, Some([1280.0, 800.0]));
+        assert_eq!(loaded.window.position, Some([100.0, 50.0]));
+        assert!(loaded.window.maximized);
+        assert_eq!(loaded.last_export_folder, Some(PathBuf::from("C:/out")));
+        assert_eq!(loaded.last_open_folder, Some(PathBuf::from("C:/in")));
+        assert!(!loaded.update_check_enabled);
     }
 
     #[test]
@@ -206,12 +271,25 @@ mod tests {
         drop(file);
 
         let loaded = Config::load_from_path(&path);
-        assert_eq!(loaded.theme, Theme::Light);
+        assert_eq!(loaded.theme, ThemeMode::Light);
     }
 
     #[test]
     fn config_handles_missing_file() {
         let loaded = Config::load_from_path(Path::new("does_not_exist.ini"));
-        assert_eq!(loaded.theme, Theme::System);
+        assert_eq!(loaded.theme, ThemeMode::System);
+    }
+
+    #[test]
+    fn theme_mode_from_str_accepts_aliases() {
+        assert_eq!(
+            "Catppuccin".parse::<ThemeMode>().unwrap(),
+            ThemeMode::DarkCatppuccin
+        );
+        assert_eq!(
+            "TokyoNight".parse::<ThemeMode>().unwrap(),
+            ThemeMode::DarkTokyoNight
+        );
+        assert_eq!("Gruvbox".parse::<ThemeMode>().unwrap(), ThemeMode::DarkGruvbox);
     }
 }

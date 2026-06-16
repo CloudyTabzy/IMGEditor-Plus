@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use iced::Task;
+
 use crate::parser::ImgVersion;
 
 #[derive(Debug, Clone)]
@@ -9,98 +11,98 @@ pub struct SaveArchiveChoice {
 }
 
 #[cfg(feature = "native-dialogs")]
-pub fn open_file() -> anyhow::Result<Option<PathBuf>> {
-    let path = rfd::FileDialog::new()
-        .set_title("Open IMG archive")
-        .add_filter("IMG Archive", &["img"])
-        .pick_file();
-
-    Ok(path)
+pub fn open_file() -> Task<Option<PathBuf>> {
+    Task::perform(
+        async {
+            rfd::AsyncFileDialog::new()
+                .set_title("Open IMG archive")
+                .add_filter("IMG Archive", &["img"])
+                .pick_file()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        },
+        |path| path,
+    )
 }
 
 #[cfg(not(feature = "native-dialogs"))]
-pub fn open_file() -> anyhow::Result<Option<PathBuf>> {
-    Ok(None)
+pub fn open_file() -> Task<Option<PathBuf>> {
+    Task::none()
 }
 
 #[cfg(feature = "native-dialogs")]
-pub fn import_files() -> anyhow::Result<Vec<PathBuf>> {
-    let paths = rfd::FileDialog::new()
-        .set_title("Import files")
-        .add_filter(
-            "Importable files",
-            &["dff", "txd", "col", "ifp", "ipl", "ide", "dat"],
-        )
-        .pick_files()
-        .unwrap_or_default();
-
-    Ok(paths)
+pub fn import_files() -> Task<Vec<PathBuf>> {
+    Task::perform(
+        async {
+            rfd::AsyncFileDialog::new()
+                .set_title("Import files")
+                .add_filter(
+                    "Importable files",
+                    &["dff", "txd", "col", "ifp", "ipl", "ide", "dat"],
+                )
+                .pick_files()
+                .await
+                .map(|handles| {
+                    handles
+                        .into_iter()
+                        .map(|h| h.path().to_path_buf())
+                        .collect()
+                })
+                .unwrap_or_default()
+        },
+        |paths| paths,
+    )
 }
 
 #[cfg(not(feature = "native-dialogs"))]
-pub fn import_files() -> anyhow::Result<Vec<PathBuf>> {
-    Ok(Vec::new())
+pub fn import_files() -> Task<Vec<PathBuf>> {
+    Task::none()
 }
 
 #[cfg(feature = "native-dialogs")]
-pub fn save_archive(
-    default_path: impl Into<PathBuf>,
-    version: ImgVersion,
-) -> anyhow::Result<Option<SaveArchiveChoice>> {
-    let default_path = default_path.into();
+pub fn save_archive(default_path: PathBuf, version: ImgVersion) -> Task<Option<SaveArchiveChoice>> {
     let file_name = default_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("archive.img")
         .to_string();
-
-    let path = rfd::FileDialog::new()
-        .set_title("Save IMG archive")
-        .add_filter("IMG Archive", &["img"])
-        .set_file_name(file_name)
-        .save_file();
-
-    Ok(path.map(|path| SaveArchiveChoice { path, version }))
+    Task::perform(
+        async move {
+            rfd::AsyncFileDialog::new()
+                .set_title("Save IMG archive")
+                .add_filter("IMG Archive", &["img"])
+                .set_file_name(file_name)
+                .save_file()
+                .await
+                .map(|handle| SaveArchiveChoice {
+                    path: handle.path().to_path_buf(),
+                    version,
+                })
+        },
+        |choice| choice,
+    )
 }
 
 #[cfg(not(feature = "native-dialogs"))]
-pub fn save_archive(
-    default_path: impl Into<PathBuf>,
-    version: ImgVersion,
-) -> anyhow::Result<Option<SaveArchiveChoice>> {
-    let _ = default_path.into();
-    let _ = version;
-    Ok(None)
+pub fn save_archive(_default_path: PathBuf, _version: ImgVersion) -> Task<Option<SaveArchiveChoice>> {
+    Task::none()
 }
 
 #[cfg(feature = "native-dialogs")]
-pub fn save_folder() -> anyhow::Result<Option<PathBuf>> {
-    let path = rfd::FileDialog::new()
-        .set_title("Select folder")
-        .pick_folder();
-
-    Ok(path)
+pub fn save_folder() -> Task<Option<PathBuf>> {
+    Task::perform(
+        async {
+            rfd::AsyncFileDialog::new()
+                .set_title("Select export folder")
+                .pick_folder()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        },
+        |folder| folder,
+    )
 }
 
 #[cfg(not(feature = "native-dialogs"))]
-pub fn save_folder() -> anyhow::Result<Option<PathBuf>> {
-    Ok(None)
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    #[cfg(not(feature = "native-dialogs"))]
-    fn stubs_return_empty_results() {
-        use crate::parser::ImgVersion;
-
-        assert!(super::open_file().unwrap().is_none());
-        assert!(super::import_files().unwrap().is_empty());
-        assert!(
-            super::save_archive("test.img", ImgVersion::One)
-                .unwrap()
-                .is_none()
-        );
-        assert!(super::save_folder().unwrap().is_none());
-    }
+pub fn save_folder() -> Task<Option<PathBuf>> {
+    Task::none()
 }
