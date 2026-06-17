@@ -12,6 +12,8 @@ use iced_fonts::LUCIDE_FONT_BYTES;
 use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn, SortDirection};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::config::{Config, ThemeMode};
 use crate::editor::Editor;
 use crate::inspector::viewer3d::{self, ViewerEvent};
@@ -181,6 +183,8 @@ pub struct App {
     viewer_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>>,
     pub animator: Animator,
     prev_tick: Option<std::time::Instant>,
+    toast_pulses_remaining: u32,
+    toast_pulse_target: f32,
 }
 
 impl Default for App {
@@ -220,6 +224,8 @@ impl App {
             viewer_rxs: Vec::new(),
             animator: Animator::new(),
             prev_tick: None,
+            toast_pulses_remaining: 0,
+            toast_pulse_target: 0.0,
         }
     }
 
@@ -883,27 +889,60 @@ impl App {
                         );
                     }
                 }
-                // Animate toast color: pulse to success-green when visible.
-                if self.toast.is_some() {
-                    let current_opacity = self.animator.get(ANIM_TOAST_OPACITY);
-                    if current_opacity < 0.99 {
-                        self.animator.animate_from_current(
-                            ANIM_TOAST_OPACITY,
-                            1.0,
-                            Duration::from_millis(300),
-                            crate::ui::easing::Easing::CubicOut,
-                        );
+                // Toast pulse: a finite random number (3–6) of smooth
+                // green → neutral → green cycles, then settle.
+                let toast_active = self.toast.is_some();
+                if toast_active && self.toast_pulses_remaining == 0 {
+                    // Toast just appeared: start N random pulses (3–6).
+                    let seed = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos();
+                    let count = 3 + (seed % 4) as u32;
+                    self.toast_pulses_remaining = count;
+                    self.toast_pulse_target = 1.0;
+                    self.animator.animate_from_current(
+                        ANIM_TOAST_OPACITY,
+                        self.toast_pulse_target,
+                        Duration::from_millis(300),
+                        crate::ui::easing::Easing::CubicOut,
+                    );
+                } else if toast_active && self.toast_pulses_remaining > 0 {
+                    // A pulse finished: chain to the next if more remain.
+                    if !self.animator.is_running(ANIM_TOAST_OPACITY) {
+                        self.toast_pulses_remaining -= 1;
+                        if self.toast_pulses_remaining > 0 {
+                            // Toggle target: 1.0 → 0.0 → 1.0 → 0.0 → ...
+                            self.toast_pulse_target = if self.toast_pulse_target > 0.5 { 0.0 } else { 1.0 };
+                            self.animator.animate(
+                                ANIM_TOAST_OPACITY,
+                                self.animator.get(ANIM_TOAST_OPACITY),
+                                self.toast_pulse_target,
+                                Duration::from_millis(300),
+                                crate::ui::easing::Easing::CubicOut,
+                            );
+                        } else {
+                            // Final pulse: settle on green.
+                            self.toast_pulse_target = 1.0;
+                            self.animator.animate(
+                                ANIM_TOAST_OPACITY,
+                                self.animator.get(ANIM_TOAST_OPACITY),
+                                1.0,
+                                Duration::from_millis(300),
+                                crate::ui::easing::Easing::CubicOut,
+                            );
+                        }
                     }
-                } else {
-                    let current_opacity = self.animator.get(ANIM_TOAST_OPACITY);
-                    if current_opacity > 0.01 {
-                        self.animator.animate_from_current(
-                            ANIM_TOAST_OPACITY,
-                            0.0,
-                            Duration::from_millis(200),
-                            crate::ui::easing::Easing::CubicOut,
-                        );
-                    }
+                } else if !toast_active && self.toast_pulses_remaining > 0 {
+                    // Toast was cleared mid-pulse: fade back immediately.
+                    self.toast_pulses_remaining = 0;
+                    self.toast_pulse_target = 0.0;
+                    self.animator.animate_from_current(
+                        ANIM_TOAST_OPACITY,
+                        0.0,
+                        Duration::from_millis(200),
+                        crate::ui::easing::Easing::CubicOut,
+                    );
                 }
                 // Reap finished animations to keep the animator lean.
                 self.animator.reap_finished();
