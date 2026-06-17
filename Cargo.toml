@@ -7,6 +7,15 @@ rust-version = "1.96"
 [features]
 default = ["native-dialogs"]
 native-dialogs = ["dep:rfd"]
+bench = []
+
+[lib]
+name = "imgeditor"
+path = "src/main.rs"
+
+[[bin]]
+name = "imgeditor"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
