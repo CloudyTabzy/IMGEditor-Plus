@@ -38,7 +38,7 @@ pub const ABOUT_TEXT: &str = concat!(
     "IMG Editor Plus v",
     env!("CARGO_PKG_VERSION"),
     "\n\nA pure Rust desktop editor for GTA IMG archives.\n\n",
-    "Made by CloudyTaby & Agents\n",
+    "Made by CloudyTabzy & Agents\n",
     "Based on the original ",
     "IMG Editor by Grinch_\n",
     "(https://github.com/user-grinch/IMGEditor)\n\n",

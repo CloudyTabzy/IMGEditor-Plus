@@ -1,61 +1,142 @@
-# IMGEditor v2.0 — Rust port
+# 🎮 IMG Editor Plus v3.1
 
-A pure Rust desktop editor for GTA IMG archives, built with [Iced](https://iced.rs/) and Tokio.
+A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
-## Supported formats
+> Forked and evolved from [Grinch_'s IMG Editor](https://github.com/user-grinch/IMGEditor).  
+> Rewritten in Rust to eliminate crashes, memory bugs, and dependency hell.
 
-- IMG v1: GTA III, GTA Vice City, Bully Scholarship Edition
-- IMG v2: GTA San Andreas
+---
 
-## Building
+## 🔥 Why Rust?
 
-Requires Rust **1.96+** and a Windows desktop environment.
+The original C++ IMG Editor worked well, but maintaining it meant fighting:
+
+| Problem | Rust fixes it |
+|---------|---------------|
+| 💥 **Null pointers / use-after-free** | Ownership + borrow checker at compile time |
+| 🧵 **UI thread blocking on I/O** | Tokio `async` + spawn blocking for save/export |
+| 📦 **Vendored C++ libs** (FreeType, FreeImage, GLFW, GLM, GLEW) | All dependencies via `cargo` — no manual setup |
+| 🐛 **Memory corruption in format parsers** | `Result`-based error propagation, no unsafe |
+| 🐌 **Slow exports on large archives** | `rayon` parallel file I/O + `memmap2` zero-copy reads |
+| 🎨 **ImGui theming limitations** | Iced 0.14 reactive UI with a full design token system |
+
+**Result**: a portable, single-binary editor that _won't_ segfault on a 10,000-entry archive.
+
+---
+
+## ✨ Features
+
+### 📁 Archive Management
+- ✅ **IMG v1** — GTA III, Vice City, Bully Scholarship Edition
+- ✅ **IMG v2** — GTA San Andreas
+- ✅ **Create / Open / Save / Save As** with version selection
+- ✅ **Import files** — single, multiple, or replace mode
+- ✅ **Export all or selected entries** — async with progress bar + cancel
+- ✅ **Memory-mapped reads** — instant open on large archives
+- ✅ **Multiple archive tabs** with dirty-file indicator
+- ✅ **Drag-and-drop** file import from Explorer
+
+### 🔍 Entry Table
+- ✅ **Virtualised scrolling** — smooth even at 10,000+ entries
+- ✅ **Real-time search filter** with debounced input (150ms)
+- ✅ **Sort by Name / Type / Size** with arrow indicators
+- ✅ **Multi-selection** — Ctrl+click toggle, Shift+click range
+- ✅ **Inline rename** — double-click to edit
+- ✅ **Context menu** — Render, View textures, Export, Rename, Delete
+
+### 🖼️ 3D Model Viewer
+- ✅ **NIF** (Gamebryo 20.3.0.9) — Bully Scholarship Edition models, textured OBJ+MTL or PLY export → system viewer
+- ✅ **DFF** (RenderWare Clump) — GTA III/VC/SA models, PLY export → system viewer
+- ✅ **COL** (Collision v1/v2/v3) — collision meshes with sphere/box debug shapes, PLY export → system viewer
+
+### 🎨 Texture Viewer
+- ✅ **TXD** (RenderWare Texture Dictionary) — full parser + 13 raster format decoder (DXT1/3/5, 1555, 565, 4444, 8888, PAL4, PAL8, + more)
+- ✅ **Inline preview** — `image::Viewer` widget in the info panel
+- ✅ **Multi-texture selector** — navigate textures within a TXD
+- ✅ **Export to TGA** — dump all textures to `.tga` files
+
+### 🧪 Entry Inspector
+- ✅ **Per-entry metadata** — name, type, size, offset, source
+- ✅ **RenderWare detection** — chunk type + version for `.txd`/`.dff`/`.ifp`
+- ✅ **Collision version detection** — COLL / COL2 / COL3 / COL4
+- ✅ **Text file line counts** — for `.ipl`/`.ide`/`.dat`/`.scm`
+- ✅ **Hex preview** — first 32 bytes for unknown formats
+- ✅ **Copy entry details** to clipboard
+
+### 🏗️ Design & UX
+- ✅ **5 theme modes** — System, Light, Catppuccin Mocha, Tokyo Night, Gruvbox Dark
+- ✅ **Design token system** — Tailwind-inspired color/spacing/radius/elevation scales, vendored in-tree
+- ✅ **Smooth animation engine** — 26 easing curves, animated progress bar, animated status-bar pulse
+- ✅ **Inter + Bricolage + Lucide icon fonts** — clean, modern typography
+- ✅ **Resizable master/detail panes** — drag the splitter
+- ✅ **Editable keyboard shortcuts** — see table below
+- ✅ **DPI-aware** window sizing
+
+### ⚙️ Configuration
+- ✅ **`settings.ini`** — persists theme, window geometry, last-used folders, update preferences
+- ✅ **Auto-update checker** — GitHub release tags, semver comparison
+- ✅ **Toggle update checks** — from the welcome dialog or Help menu
+- ✅ **"Don't show again"** — welcome screen toggle
+
+---
+
+## 🚀 Quick start
+
+Requires **Rust 1.96+** and a Windows desktop.
 
 ```powershell
 cargo build --release
 ```
 
-The binary is produced at `target\release\imgeditor.exe`.
+Binary: `target\release\imgeditor.exe`
 
-## Packaging a release
-
-Run the packaging script from the project root:
+Or package a release:
 
 ```powershell
 .\package-release.ps1
 ```
 
-This builds a release binary and copies it into `dist\` along with the file-association notes.
+The `dist\` folder then contains the portable `.exe` plus file-association notes.
 
-## Windows file association
+---
 
-See [docs/windows_file_association.md](docs/windows_file_association.md).
-
-## Features
-
-- Open, save, import, and export IMG v1 and v2 archives.
-- Native file dialogs (can be disabled with `--no-default-features`).
-- Drag-and-drop file opening into the active archive tab.
-- Searchable entry list with aligned Name / Type / Size columns.
-- Theme selection (System / Light / Catppuccin Mocha / Tokyo Night / Gruvbox Dark).
-- Lucide icon toolbar for common actions.
-- Persistent window size, position, last-used folders, and theme.
-- Background GitHub update checks.
-- Keyboard shortcuts matching the original editor.
-
-## Keyboard shortcuts
+## ⌨️ Keyboard shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| Ctrl + N | New archive |
-| Ctrl + O | Open archive |
-| Ctrl + S | Save archive in place |
-| Shift + S | Save archive as |
-| Ctrl + I | Import files |
-| Shift + I | Import and replace |
-| Ctrl + E | Export all |
-| Shift + E | Export selected |
-| Ctrl + A | Select all |
-| Shift + A | Invert selection |
-| Shift + X | Close selected archive |
-| Delete | Delete selected entries |
+| `Ctrl+N` | New archive |
+| `Ctrl+O` | Open archive |
+| `Ctrl+S` | Save in place |
+| `Shift+S` | Save as |
+| `Ctrl+I` | Import files |
+| `Shift+I` | Import and replace |
+| `Ctrl+E` | Export all |
+| `Shift+E` | Export selected |
+| `Ctrl+A` | Select all |
+| `Shift+A` | Invert selection |
+| `Shift+X` | Close tab |
+| `Delete` | Delete selected |
+
+---
+
+## 📦 Dependencies
+
+Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable crates:
+
+| Crate | Purpose |
+|-------|---------|
+| `iced 0.14` | Reactive GUI (image, svg, advanced, lazy) |
+| `iced_aw 0.14` | Menu bar, tabs, context menus |
+| `tokio 1.40` | Async runtime (multi-thread, fs, sync) |
+| `memmap2` | Zero-copy archive reads |
+| `rayon` | Parallel entry export |
+| `rfd` | Native Windows file dialogs |
+| `ureq` | Update checker (HTTP) |
+
+---
+
+## 🙏 Credits
+
+- **Grinch_** — the original [IMG Editor](https://github.com/user-grinch/IMGEditor) that made this possible
+- **CloudyTabzy & Agents** — Rust port, parsers, design system, 3D viewers
+- **Iced team** — the reactive GUI framework this is built on
