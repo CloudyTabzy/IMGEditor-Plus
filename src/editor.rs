@@ -117,53 +117,41 @@ impl Editor {
     }
 
     pub fn select_entry(&mut self, clicked: usize, shift: bool, ctrl: bool) {
-        let anchor = self.selected_entry.unwrap_or(clicked);
-        let new_selected = Some(clicked);
+        let anchor = self.selected_entry;
 
-        if shift {
+        {
             let Some(archive) = self.selected_archive_mut() else {
                 return;
             };
-            for entry in &mut archive.entries {
-                entry.rename = false;
-            }
-            let start = anchor.min(clicked);
-            let end = anchor.max(clicked);
 
-            if !ctrl {
-                for entry in &mut archive.entries {
-                    entry.selected = false;
-                }
-            }
-
-            for i in start..=end {
-                if let Some(entry) = archive.entries.get_mut(i) {
-                    entry.selected = true;
-                }
-            }
-            archive.refresh_export_status();
-            archive.rebuild_row_cache();
-        } else if let Some(archive) = self.selected_archive_mut() {
             for entry in &mut archive.entries {
                 entry.rename = false;
             }
 
-            if !ctrl {
-                for entry in &mut archive.entries {
-                    entry.selected = false;
+            if shift {
+                let a = anchor.unwrap_or(clicked);
+                let lo = a.min(clicked);
+                let hi = a.max(clicked);
+                let all_selected = archive.entries[lo..=hi].iter().all(|e| e.selected);
+                for e in archive.entries[lo..=hi].iter_mut() {
+                    e.selected = !all_selected;
                 }
+            } else if !ctrl {
+                for e in &mut archive.entries {
+                    e.selected = false;
+                }
+                if let Some(e) = archive.entries.get_mut(clicked) {
+                    e.selected = true;
+                }
+            } else if let Some(e) = archive.entries.get_mut(clicked) {
+                e.selected = !e.selected;
             }
 
-            if let Some(entry) = archive.entries.get_mut(clicked) {
-                entry.selected = !entry.selected;
-            }
             archive.refresh_export_status();
             archive.rebuild_row_cache();
-        } else {
-            return;
-        }
+        } // archive borrow drops here
 
-        self.selected_entry = new_selected;
+        self.selected_entry = Some(clicked);
     }
 
     pub fn select_all(&mut self, selected: bool) {

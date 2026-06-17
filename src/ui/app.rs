@@ -3,9 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use iced::advanced::widget::operation::scrollable::{AbsoluteOffset, scroll_to};
-use iced::keyboard::Event as KeyboardEvent;
+use iced::keyboard::{Event as KeyboardEvent, Modifiers};
 use iced::widget::{Space, container, pane_grid};
-use crate::ui::design::Design;
 use iced::{Element, Point, Subscription, Task, Theme};
 use iced_aw::menu::{Item, Menu, MenuBar};
 use iced_fonts::LUCIDE_FONT_BYTES;
@@ -22,6 +21,7 @@ use crate::parser::{
 };
 use crate::tasks::{ExportMode, ExportTask, SaveTask};
 use crate::ui::animator::Animator;
+use crate::ui::design::Design;
 use crate::ui::dialogs::{self, SaveArchiveChoice};
 use crate::ui::fonts;
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
@@ -101,6 +101,7 @@ pub enum Message {
     EntryRightClicked(usize),
     EntryContextAction(EntryAction),
     HideContextMenu,
+    ModifiersChanged(Modifiers),
     AnimationTick(std::time::Instant),
     AutoScrollStarted,
     AutoScrollStartedAtRow(usize),
@@ -179,6 +180,7 @@ pub struct App {
     pub scroll_y: f32,
     pub search_pending: Option<String>,
     pub autoscroll: Option<AutoScroll>,
+    pub modifiers: Modifiers,
     pub entry_table_id: iced::widget::Id,
     viewer_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>>,
     pub animator: Animator,
@@ -220,6 +222,7 @@ impl App {
             scroll_y: 0.0,
             search_pending: None,
             autoscroll: None,
+            modifiers: Modifiers::default(),
             entry_table_id: iced::widget::Id::unique(),
             viewer_rxs: Vec::new(),
             animator: Animator::new(),
@@ -694,7 +697,9 @@ impl App {
 
             Message::EntryClicked(display_row) => {
                 let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
-                    self.editor.select_entry(entry_index, false, false);
+                    let shift = self.modifiers.shift();
+                    let ctrl = self.modifiers.command();
+                    self.editor.select_entry(entry_index, shift, ctrl);
                     self.refresh_inspection()
                 } else {
                     Task::none()
@@ -972,6 +977,10 @@ impl App {
             }
             Message::HideContextMenu => {
                 self.context_menu = None;
+                Task::none()
+            }
+            Message::ModifiersChanged(mods) => {
+                self.modifiers = mods;
                 Task::none()
             }
             Message::AutoScrollStarted | Message::AutoScrollStartedAtRow(_) => {
@@ -1264,6 +1273,18 @@ impl App {
 
 impl App {
     pub fn subscription(&self) -> Subscription<Message> {
+        // Track modifier keys from ALL keyboard events (press + release).
+        let mod_tracker = iced::event::listen().map(|event| match event {
+            iced::Event::Keyboard(ke) => match ke {
+                KeyboardEvent::KeyPressed { modifiers, .. }
+                | KeyboardEvent::KeyReleased { modifiers, .. }
+                | KeyboardEvent::ModifiersChanged(modifiers) => {
+                    Message::ModifiersChanged(modifiers)
+                }
+            },
+            _ => Message::Noop,
+        });
+
         let key = iced::keyboard::listen().map(|event| match event {
             KeyboardEvent::KeyPressed {
                 physical_key,
@@ -1303,7 +1324,7 @@ impl App {
             Subscription::none()
         };
 
-        Subscription::batch([key, tick, anim_tick, debounce, window, autoscroll])
+        Subscription::batch([mod_tracker, key, tick, anim_tick, debounce, window, autoscroll])
     }
 }
 
