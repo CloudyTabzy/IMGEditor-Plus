@@ -463,9 +463,22 @@ impl App {
 
     pub(crate) fn build_status_bar(&self) -> Element<'_, Message> {
         let design = self.design();
-        let status_text = self.toast.clone().unwrap_or_else(|| {
-            format!("{} v{}", crate::ui::theme::APP_NAME, env!("CARGO_PKG_VERSION"))
+
+        // Build the status text: left side.
+        let selected_count = self.editor.selected_archive().map_or(0, |idx| {
+            self.editor.archives().get(idx).map_or(0, |a| {
+                a.entries.iter().filter(|e| e.selected).count()
+            })
         });
+
+        let left_text = if self.toast.is_some() {
+            self.toast.clone().unwrap_or_default()
+        } else if selected_count > 0 {
+            format!("Selected: {selected_count}")
+        } else {
+            format!("{} v{}", crate::ui::theme::APP_NAME, env!("CARGO_PKG_VERSION"))
+        };
+
         // Animate a smooth transition between the normal surface color
         // and a success-green tint when a toast is active.
         let normal_bg = design.surface_subtle();
@@ -477,9 +490,10 @@ impl App {
             b: normal_bg.b + (toast_bg.b - normal_bg.b) * mix,
             a: 1.0,
         };
+
         let bar = Container::new(
             Row::new()
-                .push(fonts::caption(status_text))
+                .push(fonts::caption(left_text))
                 .push(Space::new().width(Length::Fill))
                 .align_y(Alignment::Center)
                 .padding(6),

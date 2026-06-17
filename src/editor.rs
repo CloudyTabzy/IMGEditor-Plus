@@ -129,12 +129,12 @@ impl Editor {
             }
 
             if shift {
+                // Select the full range from anchor to clicked.
                 let a = anchor.unwrap_or(clicked);
                 let lo = a.min(clicked);
                 let hi = a.max(clicked);
-                let all_selected = archive.entries[lo..=hi].iter().all(|e| e.selected);
                 for e in archive.entries[lo..=hi].iter_mut() {
-                    e.selected = !all_selected;
+                    e.selected = true;
                 }
             } else if !ctrl {
                 for e in &mut archive.entries {
