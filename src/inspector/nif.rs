@@ -1039,30 +1039,25 @@ fn read_ni_stencil_property(r: &mut Reader<'_>) -> NifResult<NiStencilPropertyDa
 
 fn read_ni_pixel_data(r: &mut Reader<'_>) -> NifResult<NiPixelDataPayload> {
     let pixel_format = r.read_u32("pixel_format")?;
-    let num_faces = r.read_u32("num_faces")?;
-    let num_mipmaps = r.read_u32("num_mipmaps")?;
-    let bytes_per_pixel = r.read_u32("bytes_per_pixel")?;
-    let _mipmap_stored = r.read_u32("mipmap_stored")?;
-    let num_pixels = r.read_u32("num_pixels")?;
-    let num_frames = r.read_u32("num_frames")?;
-    let _ = num_frames;
-    if num_pixels > 16_777_216 || bytes_per_pixel > 16 || num_faces > 32 {
-        return Err(NifError::InvalidField("pixel_data", format!("unreasonable: {num_pixels}px, {bytes_per_pixel}bpp, {num_faces} faces")));
+    // The remaining bytes of the block are the pixel data (DXT1/DXT5
+    // compressed with full mip chain, preceded by a variable-length
+    // header of ~147–211 bytes).  We store the whole remainder; the
+    // texture resolver in `texture.rs` will extract DXT data from it
+    // by computing the header size from candidate resolutions.
+    let remaining = r.remaining();
+    if remaining > 64 * 1024 * 1024 {
+        return Err(NifError::InvalidField("pixel_data", "block too large".to_string()));
     }
-    let raw_size = (num_pixels as usize).saturating_mul(bytes_per_pixel as usize).saturating_mul(num_faces as usize);
-    if raw_size > 256 * 1024 * 1024 {
-        return Err(NifError::InvalidField("pixel_data", format!("raw_size {raw_size} too large")));
-    }
-    let mut raw_pixels = Vec::with_capacity(raw_size);
-    for _ in 0..raw_size {
+    let mut raw_pixels = Vec::with_capacity(remaining);
+    for _ in 0..remaining {
         raw_pixels.push(r.read_u8("pixel_data")?);
     }
     Ok(NiPixelDataPayload {
         pixel_format,
-        num_faces,
-        num_mipmaps,
-        bytes_per_pixel,
-        num_pixels,
+        num_faces: 0,
+        num_mipmaps: 0,
+        bytes_per_pixel: 0,
+        num_pixels: 0,
         raw_pixels,
     })
 }

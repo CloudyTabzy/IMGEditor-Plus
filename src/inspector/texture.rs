@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::inspector::nif::{BlockPayload, NifFile};
+use crate::inspector::nif::{BlockPayload, NifFile, NiPixelDataPayload};
 
 /// Maps model name (lowercase) → txd/NFT name (from .ide `objs` entries).
 #[derive(Debug, Default)]
@@ -272,17 +272,14 @@ pub fn resolve_textures_for_nif(
 
 /// Try to find NiPixelData associated with a NiSourceTexture by scanning
 /// forward from the NiSourceTexture block for the next NiPixelData block.
-/// This function is also called by the NFT catalog builder as a fallback
-/// when inline pixel data is absent.
 fn extract_pixels_for_nft(
     nft: &NifFile,
     nft_bytes: &[u8],
     tex_block_idx: usize,
 ) -> Option<Vec<u8>> {
-    // Check inline pixel data first.
+    // Check inline pixel data first (NiSourceTexture embedded).
     if let Some(tga) = extract_embedded_pixels(nft, nft_bytes, tex_block_idx) {
         if tga.len() > 22 {
-            // More than a 1x1 pixel — looks like real data.
             return Some(tga);
         }
     }
@@ -291,36 +288,168 @@ fn extract_pixels_for_nft(
         let Some(Some(BlockPayload::NiPixelData(pd))) = nft.payloads.get(candidate) else {
             continue;
         };
-        if pd.raw_pixels.is_empty() { continue; }
-        let num_px = pd.num_pixels as usize;
-        if num_px == 0 { continue; }
-        let area = num_px;
-        let side = (area as f32).sqrt() as u32;
-        let w = side.max(1);
-        let h = (area as u32 + w - 1) / w;
-        if w > 4096 || h > 4096 { continue; }
-        let bpp = pd.bytes_per_pixel as usize;
-        let mip0_size = area * bpp;
-        let raw = if mip0_size <= pd.raw_pixels.len() { &pd.raw_pixels[..mip0_size] } else { &pd.raw_pixels };
-        let mut tga = Vec::with_capacity(18 + raw.len());
-        tga.push(0); tga.push(0); tga.push(2);
-        tga.extend_from_slice(&[0, 0, 0, 0, 0]);
-        tga.extend_from_slice(&[0, 0]); tga.extend_from_slice(&[0, 0]);
-        tga.extend_from_slice(&(w as u16).to_le_bytes());
-        tga.extend_from_slice(&(h as u16).to_le_bytes());
-        tga.push((bpp * 8) as u8); tga.push(0x20);
-        if bpp == 4 {
-            for i in (0..raw.len()).step_by(4) {
-                tga.push(raw[i+2]); tga.push(raw[i+1]); tga.push(raw[i]); tga.push(raw[i+3]);
-            }
-        } else if bpp == 3 {
-            for i in (0..raw.len()).step_by(3) {
-                tga.push(raw[i+2]); tga.push(raw[i+1]); tga.push(raw[i]);
-            }
-        } else {
-            tga.extend_from_slice(raw);
+        if pd.raw_pixels.len() < 40 {
+            continue;
         }
-        return Some(tga);
+        if let Some(dds) = extract_dds_from_nipixeldata(pd) {
+            return Some(dds);
+        }
+    }
+    None
+}
+
+/// Build a 128-byte DDS header for a DXT1/DXT5 texture.
+fn build_dds_header(w: u32, h: u32, fourcc: &[u8; 4], mip_count: u32) -> Vec<u8> {
+    let bpb: u32 = if fourcc == b"DXT1" { 8 } else { 16 };
+    let pitch = ((w + 3) / 4).max(1) * ((h + 3) / 4).max(1) * bpb;
+    let mut flags = 0x0008_1007u32; // CAPS|HEIGHT|WIDTH|PIXELFORMAT|LINEARSIZE
+    if mip_count > 1 { flags |= 0x0002_0000; }
+    let mut caps = 0x0000_1000u32; // TEXTURE
+    if mip_count > 1 { caps |= 0x0040_0008; } // COMPLEX|MIPMAP
+
+    let mut hdr = vec![0u8; 128];
+    hdr[0..4].copy_from_slice(b"DDS ");
+    hdr[4..8].copy_from_slice(&124u32.to_le_bytes());
+    hdr[8..12].copy_from_slice(&flags.to_le_bytes());
+    hdr[12..16].copy_from_slice(&h.to_le_bytes());
+    hdr[16..20].copy_from_slice(&w.to_le_bytes());
+    hdr[20..24].copy_from_slice(&pitch.to_le_bytes());
+    hdr[28..32].copy_from_slice(&mip_count.to_le_bytes());
+    hdr[76..80].copy_from_slice(&32u32.to_le_bytes()); // pfSize
+    hdr[80..84].copy_from_slice(&4u32.to_le_bytes());   // DDPF_FOURCC
+    hdr[84..88].copy_from_slice(fourcc);                 // dwFourCC
+    hdr[108..112].copy_from_slice(&caps.to_le_bytes());
+    hdr
+}
+
+/// Compute DXT mip chain size in bytes.
+fn dxt_chain_size(w: u32, h: u32, fourcc: &[u8; 4]) -> (u32, u32) {
+    let bpb = if *fourcc == *b"DXT1" { 8u32 } else { 16u32 };
+    let mut total = 0u32;
+    let mut mips = 0u32;
+    let mut tw = w;
+    let mut th = h;
+    loop {
+        total += ((tw + 3) / 4).max(1) * ((th + 3) / 4).max(1) * bpb;
+        mips += 1;
+        if tw == 1 && th == 1 { break; }
+        tw = (tw / 2).max(1);
+        th = (th / 2).max(1);
+    }
+    (total, mips)
+}
+
+/// Try to extract DDS data from a NiPixelData payload.
+/// Decompress a single DXT1 8-byte block to 4×4 RGBA pixels (64 bytes).
+fn dxt1_block_to_rgba(block: &[u8]) -> [[u8; 4]; 16] {
+    let c0 = u16::from_le_bytes([block[0], block[1]]);
+    let c1 = u16::from_le_bytes([block[2], block[3]]);
+    let expand = |c: u16| -> [u8; 4] {
+        let r5 = ((c >> 11) & 0x1F) as u8;
+        let g6 = ((c >> 5) & 0x3F) as u8;
+        let b5 = (c & 0x1F) as u8;
+        [(r5 << 3) | (r5 >> 2), (g6 << 2) | (g6 >> 4), (b5 << 3) | (b5 >> 2), 255]
+    };
+    let col0 = expand(c0);
+    let col1 = expand(c1);
+    let codes = u32::from_le_bytes([block[4], block[5], block[6], block[7]]);
+    let mut out = [[0u8; 4]; 16];
+    for i in 0..16 {
+        let idx = ((codes >> (i * 2)) & 3) as u8;
+        out[i] = match (c0 > c1, idx) {
+            (true, 0) | (false, 0) => col0,
+            (true, 1) | (false, 1) => col1,
+            (true, 2) => {
+                let r = ((col0[0] as u16 * 2 + col1[0] as u16) / 3) as u8;
+                let g = ((col0[1] as u16 * 2 + col1[1] as u16) / 3) as u8;
+                let b = ((col0[2] as u16 * 2 + col1[2] as u16) / 3) as u8;
+                [r, g, b, 255]
+            }
+            (true, 3) => {
+                let r = ((col0[0] as u16 + col1[0] as u16 * 2) / 3) as u8;
+                let g = ((col0[1] as u16 + col1[1] as u16 * 2) / 3) as u8;
+                let b = ((col0[2] as u16 + col1[2] as u16 * 2) / 3) as u8;
+                [r, g, b, 255]
+            }
+            (false, 2) => {
+                let avg = |a: u8, b: u8| ((a as u16 + b as u16) / 2) as u8;
+                [avg(col0[0], col1[0]), avg(col0[1], col1[1]), avg(col0[2], col1[2]), 255]
+            }
+            (false, 3) => [0, 0, 0, 0],
+            _ => unreachable!(),
+        };
+    }
+    out
+}
+
+/// Decompress DXT1 data to RGBA TGA bytes.
+fn dxt1_to_tga(data: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let bw = ((w + 3) / 4).max(1) as usize;
+    let bh = ((h + 3) / 4).max(1) as usize;
+    let mut tga = vec![0u8; 18 + (w * h * 4) as usize];
+    tga[2] = 2;
+    tga[12..14].copy_from_slice(&(w as u16).to_le_bytes());
+    tga[14..16].copy_from_slice(&(h as u16).to_le_bytes());
+    tga[16] = 32;
+    tga[17] = 0x20;
+
+    let mut block_px;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let src = (by * bw + bx) * 8;
+            if src + 8 > data.len() { continue; }
+            block_px = dxt1_block_to_rgba(&data[src..src+8]);
+            for row in 0..4 {
+                for col in 0..4 {
+                    let img_y = by * 4 + row;
+                    let img_x = bx * 4 + col;
+                    if img_y >= h as usize || img_x >= w as usize { continue; }
+                    let px = block_px[row * 4 + col];
+                    let dst = 18 + (img_y * w as usize + img_x) * 4;
+                    tga[dst..dst+4].copy_from_slice(&[px[2], px[1], px[0], px[3]]); // BGRA
+                }
+            }
+        }
+    }
+    tga
+}
+
+/// Try to extract pixel data from a NiPixelData block. Returns RGBA TGA
+/// bytes for DXT1, or DDS bytes for DXT5 (fallback).
+fn extract_dds_from_nipixeldata(pd: &NiPixelDataPayload) -> Option<Vec<u8>> {
+    let raw = &pd.raw_pixels;
+    let block_size = raw.len() as u32;
+
+    let candidates: [(u32, u32); 7] = [
+        (256, 256), (128, 128), (64, 64), (256, 128),
+        (128, 256), (256, 64), (512, 512),
+    ];
+    let four_dxt1 = b"DXT1";
+    let four_dxt5 = b"DXT5";
+
+    for &fourcc in &[four_dxt1, four_dxt5] {
+        for &(w, h) in &candidates {
+            let (chain, _mips) = dxt_chain_size(w, h, fourcc);
+            if chain > block_size { continue; }
+            let hdr_sz = block_size - chain;
+            if !(40..=512).contains(&hdr_sz) { continue; }
+
+            let px_start = hdr_sz as usize;
+            if px_start + chain as usize > raw.len() { continue; }
+            let pixel_data = &raw[px_start..px_start + chain as usize];
+
+            if fourcc == b"DXT1" {
+                // Decompress to RGBA TGA (universal viewer support)
+                return Some(dxt1_to_tga(pixel_data, w, h));
+            } else {
+                // DXT5: keep as DDS (complex alpha decoding)
+                let dds_hdr = build_dds_header(w, h, fourcc, 1);
+                let mut out = Vec::with_capacity(dds_hdr.len() + pixel_data.len());
+                out.extend_from_slice(&dds_hdr);
+                out.extend_from_slice(pixel_data);
+                return Some(out);
+            }
+        }
     }
     None
 }

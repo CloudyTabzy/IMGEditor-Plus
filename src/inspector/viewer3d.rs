@@ -170,10 +170,13 @@ fn write_obj_with_texture(
     dir: &Path,
     stem: &str,
     mesh: &MeshData,
-    tex_name: &str,
+    _tex_name: &str,
     tex_bytes: &[u8],
 ) -> std::io::Result<PathBuf> {
-    let tex_dst = dir.join(Path::new(tex_name).file_name().unwrap_or(tex_name.as_ref()));
+    // Detect format: DDS files start with b"DDS ", TGA otherwise.
+    let ext = if tex_bytes.starts_with(b"DDS ") { "dds" } else { "tga" };
+    let tex_filename = format!("{stem}.{ext}");
+    let tex_dst = dir.join(&tex_filename);
     fs::write(&tex_dst, tex_bytes)?;
 
     // Write MTL.
@@ -685,7 +688,7 @@ fn append_mesh(
         let uv_count = data.num_vertices as usize;
         for i in 0..uv_count {
             let uv = data.uvs[i];
-            uvs.push([uv.u, 1.0 - uv.v]);
+            uvs.push([uv.u, uv.v]);
         }
     }
 
