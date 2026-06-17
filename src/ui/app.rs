@@ -35,9 +35,13 @@ pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
 pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
 
 pub const ABOUT_TEXT: &str = concat!(
-    "IMG Editor v",
+    "IMG Editor Plus v",
     env!("CARGO_PKG_VERSION"),
     "\n\nA pure Rust desktop editor for GTA IMG archives.\n\n",
+    "Made by CloudyTaby & Agents\n",
+    "Based on the original ",
+    "IMG Editor by Grinch_\n",
+    "(https://github.com/user-grinch/IMGEditor)\n\n",
     "Supported formats:\n",
     "- GTA III\n",
     "- GTA Vice City\n",
@@ -1542,6 +1546,7 @@ pub fn run_app(config: Config) -> iced::Result {
         App::update,
         App::view,
     )
+    .title(|_: &App| "IMG Editor Plus".to_string())
     .theme(|state: &App| -> Option<Theme> { Some(state.theme()) })
     .subscription(App::subscription)
     .settings(iced::Settings {
