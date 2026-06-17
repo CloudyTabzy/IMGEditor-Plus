@@ -138,5 +138,14 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 ## 🙏 Credits
 
 - **Grinch_** — the original [IMG Editor](https://github.com/user-grinch/IMGEditor) that made this possible
+- **MexUK & the IMGF team** — the [IMG Factory](https://github.com/MexUK/IMGF) whose feature set inspired many of the Plus additions (TXD tools, orphan detection — adapted and reimplemented in Rust)
 - **CloudyTabzy & Agents** — Rust port, parsers, design system, 3D viewers
 - **Iced team** — the reactive GUI framework this is built on
+
+---
+
+## 📄 License
+
+This project is **MIT licensed** © 2025 CloudyTabzy. See [LICENSE](LICENSE) for the full text.
+
+**Dependency licenses:** every crate this project depends on is MIT-licensed (Iced, Iced AW, Tokio, Rayon, etc.). The bundled fonts — Inter, Bricolage Grotesque, and Lucide icons — are licensed under the SIL Open Font License 1.1.
