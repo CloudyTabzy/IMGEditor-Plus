@@ -5,6 +5,7 @@ use std::time::Duration;
 use iced::advanced::widget::operation::scrollable::{AbsoluteOffset, scroll_to};
 use iced::keyboard::Event as KeyboardEvent;
 use iced::widget::{Space, container, pane_grid};
+use crate::ui::design::Design;
 use iced::{Element, Point, Subscription, Task, Theme};
 use iced_aw::menu::{Item, Menu, MenuBar};
 use iced_fonts::LUCIDE_FONT_BYTES;
@@ -215,6 +216,18 @@ impl App {
 
     pub fn theme(&self) -> Theme {
         resolve_theme(self.config.theme)
+    }
+
+    /// The design-token system for the current theme.
+    pub fn design(&self) -> Design {
+        Design::from_tokens(
+            crate::ui::tokens::ThemeTokens::from(if self.theme().extended_palette().is_dark {
+                crate::ui::tokens::ThemeTokens::dark()
+            } else {
+                crate::ui::tokens::ThemeTokens::light()
+            }),
+            self.theme().extended_palette().is_dark,
+        )
     }
 
     pub fn startup_task() -> Task<Message> {
@@ -1315,10 +1328,24 @@ impl App {
             Item::with_menu(menu_label("Help"), help_menu),
         ]);
 
+        let design = self.design();
+        let (top, bottom) = design.menubar_gradient();
+        let border = design.border();
         iced::widget::Container::new(bar)
             .width(iced::Length::Fill)
-            .style(|theme| iced::widget::container::Style {
-                background: Some(theme.extended_palette().background.weak.color.into()),
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Gradient(
+                    iced::Gradient::Linear(
+                        iced::gradient::Linear::new(0.0)
+                            .add_stop(0.0, top)
+                            .add_stop(1.0, bottom)
+                    )
+                )),
+                border: iced::Border {
+                    color: border,
+                    width: 0.0,
+                    radius: 0.0.into(),
+                },
                 ..Default::default()
             })
             .into()

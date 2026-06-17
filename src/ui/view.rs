@@ -10,6 +10,7 @@ use crate::archive::{ExportStatus, RowDisplay, SortColumn, SortDirection};
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
 use crate::ui::fonts;
+use crate::ui::widgets as w;
 
 /// Height (px) of a single entry row. Must stay in sync with the `height(Length::Fixed(ROW_HEIGHT))`
 /// applied in `build_entry_row`; virtualization math depends on it.
@@ -458,9 +459,16 @@ impl App {
     }
 
     pub(crate) fn build_status_bar(&self) -> Element<'_, Message> {
+        let design = self.design();
+        let has_toast = self.toast.is_some();
         let status_text = self.toast.clone().unwrap_or_else(|| {
             format!("{} v{}", crate::ui::theme::APP_NAME, env!("CARGO_PKG_VERSION"))
         });
+        let bg = if has_toast {
+            design.success_gradient().0
+        } else {
+            design.surface_subtle()
+        };
         let bar = Container::new(
             Row::new()
                 .push(fonts::caption(status_text))
@@ -468,8 +476,8 @@ impl App {
                 .align_y(Alignment::Center)
                 .padding(6),
         )
-        .style(|theme: &iced::Theme| iced::widget::container::Style {
-            background: Some(theme.extended_palette().background.weak.color.into()),
+        .style(move |_| iced::widget::container::Style {
+            background: Some(iced::Background::Color(bg)),
             ..Default::default()
         });
         bar.into()
@@ -487,7 +495,7 @@ fn toolbar_button(
         .height(Length::Fixed(34.0))
 }
 
-fn build_toolbar() -> Element<'static, Message> {
+fn build_toolbar(accent: Color, bg: Color) -> Element<'static, Message> {
     let toolbar = row![
         tooltip(
             toolbar_button(lucide::file_plus().size(18).into(), Message::NewArchive),
@@ -527,25 +535,31 @@ fn build_toolbar() -> Element<'static, Message> {
     .align_y(Alignment::Center)
     .width(Length::Fill);
 
-    Container::new(toolbar)
-        .width(Length::Fill)
-        .height(Length::Fixed(42.0))
-        .style(|theme: &iced::Theme| iced::widget::container::Style {
-            background: Some(theme.extended_palette().background.weak.color.into()),
-            ..Default::default()
-        })
-        .into()
+    Container::new(
+        Row::new()
+            .push(w::accent_bar(accent, 42.0))
+            .push(toolbar)
+            .width(Length::Fill)
+            .align_y(Alignment::Center),
+    )
+    .height(Length::Fixed(42.0))
+    .style(move |_| iced::widget::container::Style {
+        background: Some(iced::Background::Color(bg)),
+        ..Default::default()
+    })
+    .into()
 }
 
 pub fn build(app: &App) -> Element<'_, Message> {
+    let design = app.design();
     let menubar = app.menubar();
-    let toolbar = build_toolbar();
+    let toolbar = build_toolbar(design.accent(), design.surface_subtle());
 
     let tab_bar: Element<'_, Message> = if app.editor.archives().is_empty() {
         Space::new().height(Length::Fixed(0.0)).into()
     } else {
         let selected = app.editor.selected_archive().unwrap_or(0);
-        let mut tabs_row = Row::new().spacing(4).padding(4);
+        let mut tab_rows = Vec::new();
         for (index, archive) in app.editor.archives().iter().enumerate() {
             let is_selected = index == selected;
             let label = if archive.dirty {
@@ -555,14 +569,25 @@ pub fn build(app: &App) -> Element<'_, Message> {
             };
             let tab = button(fonts::body(label))
                 .on_press(Message::SelectArchiveTab(index))
-                .style(if is_selected {
-                    button::primary
-                } else {
-                    button::secondary
-                });
-            tabs_row = tabs_row.push(tab);
+                .style(if is_selected { button::primary } else { button::secondary });
+            // Accent bar on the left of the active tab
+            if is_selected {
+                tab_rows.push(
+                    Row::new()
+                        .push(w::accent_bar(design.accent(), 32.0))
+                        .push(tab)
+                        .align_y(Alignment::Center)
+                        .into()
+                );
+            } else {
+                tab_rows.push(tab.into());
+            }
         }
-        Container::new(tabs_row).into()
+        let row = Row::with_children(tab_rows).spacing(4).padding(4);
+        Container::new(row).style(move |_| iced::widget::container::Style {
+            background: Some(iced::Background::Color(design.surface_subtle())),
+            ..Default::default()
+        }).into()
     };
 
     let body: Element<'_, Message> = if app.editor.archives().is_empty() {
@@ -707,26 +732,29 @@ fn modal_box<'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> Element<'a, Message> {
     let content: Element<'a, Message> = content.into();
-    let card: iced::widget::Container<'_, Message> = Container::new(
-        column![fonts::display(title), content]
-            .spacing(8)
-            .padding(16)
-            .max_width(480),
-    )
-    .style(|theme: &iced::Theme| iced::widget::container::Style {
-        background: Some(theme.extended_palette().background.base.color.into()),
-        border: Border {
-            color: theme.extended_palette().background.strong.color,
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        shadow: iced::Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
-            offset: iced::Vector::new(0.0, 2.0),
-            blur_radius: 8.0,
-        },
-        ..Default::default()
-    });
+    let content = column![fonts::display(title), content]
+        .spacing(8)
+        .padding(16)
+        .max_width(480);
+    // Build a floating card with the design-system colors.
+    // We use static defaults here because modal_box is called from a
+    // non-App context (Element builder). The design system colors tied
+    // to a live App would need App::design() passed in.
+    let card = Container::new(content)
+        .style(move |theme: &iced::Theme| iced::widget::container::Style {
+            background: Some(theme.extended_palette().background.base.color.into()),
+            border: Border {
+                color: theme.extended_palette().background.strong.color,
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            shadow: iced::Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+                offset: iced::Vector::new(0.0, 4.0),
+                blur_radius: 16.0,
+            },
+            ..Default::default()
+        });
 
     let card_element: Element<'_, Message> = card.into();
     Container::new(card_element)
