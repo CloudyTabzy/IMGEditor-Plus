@@ -126,19 +126,16 @@ impl App {
         // the UI. It is anchored to the right-clicked row's position within
         // the table pane (so we don't need the absolute cursor coordinates,
         // which Iced 0.14's MouseArea doesn't expose).
-        let table_body: Element<'_, Message> = if let Some((entry_index, display_row)) =
-            self.context_menu
-        {
-            let overlay: Element<'_, Message> = build_context_menu(
-                archive, entry_index, display_row, scroll_y,
-            )
-            .unwrap_or_else(|| {
-                Space::new().width(Length::Fill).height(Length::Fill).into()
-            });
-            stack(vec![scrollable.into(), overlay]).into()
-        } else {
-            scrollable.into()
-        };
+        let mut layers: Vec<Element<'_, Message>> = Vec::new();
+        layers.push(scrollable.into());
+
+        if let Some((entry_index, display_row)) = self.context_menu {
+            if let Some(overlay) = build_context_menu(archive, entry_index, display_row, scroll_y) {
+                layers.push(overlay);
+            }
+        }
+
+        let table_body: Element<'_, Message> = stack(layers).into();
 
         // Middle-click anywhere in the table body to start autoscroll mode.
         let table_body = mouse_area(table_body)
@@ -146,9 +143,8 @@ impl App {
             .into();
 
         // Autoscroll indicator overlay.
-        let table_body = if self.autoscroll.is_some() {
-            let indicator = build_autoscroll_indicator();
-            stack(vec![table_body, indicator]).into()
+        let table_body: Element<'_, Message> = if self.autoscroll.is_some() {
+            stack(vec![table_body, build_autoscroll_indicator()]).into()
         } else {
             table_body
         };
