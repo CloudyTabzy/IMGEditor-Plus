@@ -748,7 +748,8 @@ fn build_context_menu(
         rule::horizontal(1).into(),
     ];
 
-    if entry.file_name.to_lowercase().ends_with(".nif") {
+    let lower = entry.file_name.to_lowercase();
+    if lower.ends_with(".nif") || lower.ends_with(".dff") {
         items.push(
             context_button("Render", Message::EntryContextAction(EntryAction::Render)).into(),
         );

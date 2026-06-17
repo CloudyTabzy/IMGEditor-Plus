@@ -74,7 +74,11 @@ pub fn inspect_entry_standalone(
             inspect_renderware(&header, &mut inspection);
             inspect_txd(&header, &mut inspection);
         }
-        "dff" | "anm" | "ifp" => {
+        "dff" => {
+            inspect_renderware(&header, &mut inspection);
+            inspect_dff(&header, &mut inspection);
+        }
+        "anm" | "ifp" => {
             inspect_renderware(&header, &mut inspection);
         }
         "col" => {
@@ -181,6 +185,34 @@ fn inspect_text(header: &[u8], inspection: &mut EntryInspection) {
         inspection.summary.push(("Format".to_string(), "GTA item placement".to_string()));
     } else if inspection.file_name.as_str().to_ascii_lowercase().ends_with(".ide") {
         inspection.summary.push(("Format".to_string(), "GTA item definition".to_string()));
+    }
+}
+
+fn inspect_dff(header: &[u8], inspection: &mut EntryInspection) {
+    if header.len() < 12 {
+        return;
+    }
+    // Fast header-only scan: try to find the clump struct for vertex/tri counts.
+    let mut pos = 12usize;
+    let section_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+    let section_end = 12usize + section_size.min(header.len().saturating_sub(12));
+
+    while pos + 12 <= section_end {
+        let child_type = u32::from_le_bytes([header[pos], header[pos + 1], header[pos + 2], header[pos + 3]]);
+        let child_size = u32::from_le_bytes([header[pos + 4], header[pos + 5], header[pos + 6], header[pos + 7]]) as usize;
+        let child_end = (pos + 12 + child_size).min(section_end);
+
+        if child_type == 0x01 && pos + 12 + 16 <= section_end {
+            // Clump STRUCT: num_atomics, num_lights, num_cameras
+            let data_offset = pos + 12;
+            let num_atomics = u32::from_le_bytes([
+                header[data_offset], header[data_offset + 1],
+                header[data_offset + 2], header[data_offset + 3],
+            ]);
+            inspection.summary.push(("Atomics".to_string(), format!("{}", num_atomics)));
+            break;
+        }
+        pos = child_end;
     }
 }
 

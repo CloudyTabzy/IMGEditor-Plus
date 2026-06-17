@@ -11,6 +11,7 @@ use crate::inspector::nif::{
     self, BlockPayload, NifFile, NiTriShapeDataPayload, NiTriStripsDataPayload,
 };
 use crate::inspector::texture::{IdeMap, resolve_textures_for_nif};
+use crate::parser::dff::DffMesh;
 
 #[derive(Debug, Clone)]
 pub enum ViewerEvent {
@@ -295,6 +296,125 @@ fn write_ply(path: &Path, mesh: &MeshData) -> std::io::Result<()> {
     for tri in mesh.indices.chunks(3) {
         writeln!(f, "3 {} {} {}", tri[0], tri[1], tri[2])?;
     }
+    Ok(())
+}
+
+// ---- DFF render window ------------------------------------------------
+
+/// Spawn a render window for a DFF (RenderWare Clump) mesh.
+/// Parses the DFF, extracts geometry, writes a PLY file, and opens it
+/// with the system default 3D viewer.
+pub fn spawn_dff_render_window(
+    dff_data: Vec<u8>,
+    name: String,
+) -> mpsc::UnboundedReceiver<ViewerEvent> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    thread::Builder::new()
+        .name(format!("dff-viewer-{name}"))
+        .spawn(move || {
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                export_dff_viewer(dff_data, name, tx.clone());
+            }));
+            if let Err(err) = result {
+                let msg = match err.downcast_ref::<&str>() {
+                    Some(s) => s.to_string(),
+                    None => match err.downcast_ref::<String>() {
+                        Some(s) => s.clone(),
+                        None => "unknown panic".to_string(),
+                    },
+                };
+                eprintln!("[IMGEditor] DFF viewer panicked: {msg}");
+                let _ = tx.send(ViewerEvent::Failed {
+                    reason: format!("viewer panicked: {msg}"),
+                });
+            }
+        })
+        .expect("failed to spawn DFF viewer thread");
+    rx
+}
+
+fn export_dff_viewer(
+    dff_data: Vec<u8>,
+    name: String,
+    tx: mpsc::UnboundedSender<ViewerEvent>,
+) {
+    let meshes = match crate::parser::dff::parse_dff(&dff_data) {
+        Ok(m) => m,
+        Err(e) => {
+            let msg = format!("DFF parse failed: {e}");
+            eprintln!("[IMGEditor] viewer: {msg}");
+            let _ = tx.send(ViewerEvent::Failed { reason: msg });
+            return;
+        }
+    };
+
+    eprintln!(
+        "[IMGEditor] viewer: DFF has {} mesh(es), {} total vertices",
+        meshes.len(),
+        meshes.iter().map(|m| m.positions.len()).sum::<usize>()
+    );
+
+    let temp_dir = std::env::temp_dir().join("IMGEditor").join("preview");
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let stem = name.rsplit('.').next().unwrap_or(&name);
+    let ply_path = temp_dir.join(format!("{stem}.ply"));
+
+    // Flatten all meshes into one PLY with vertex-offset indexing.
+    let total_verts: usize = meshes.iter().map(|m| m.positions.len()).sum();
+    let total_indices: usize = meshes.iter().map(|m| m.indices.len()).sum();
+
+    match write_ply_from_meshes(&ply_path, &meshes, total_verts, total_indices) {
+        Ok(()) => {
+            eprintln!(
+                "[IMGEditor] viewer: wrote DFF PLY to {ply_path:?} ({} verts, {} faces)",
+                total_verts,
+                total_indices / 3
+            );
+            let _ = tx.send(ViewerEvent::Opened { name });
+            open_file_detached(&ply_path);
+        }
+        Err(e) => {
+            let msg = format!("Failed to write PLY: {e}");
+            eprintln!("[IMGEditor] viewer: {msg}");
+            let _ = tx.send(ViewerEvent::Failed { reason: msg });
+        }
+    }
+}
+
+fn write_ply_from_meshes(
+    path: &Path,
+    meshes: &[DffMesh],
+    total_verts: usize,
+    total_indices: usize,
+) -> std::io::Result<()> {
+    let mut f = fs::File::create(path)?;
+    writeln!(f, "ply")?;
+    writeln!(f, "format ascii 1.0")?;
+    writeln!(f, "element vertex {total_verts}")?;
+    writeln!(f, "property float x")?;
+    writeln!(f, "property float y")?;
+    writeln!(f, "property float z")?;
+    writeln!(f, "element face {}", total_indices / 3)?;
+    writeln!(f, "property list uchar int vertex_indices")?;
+    writeln!(f, "end_header")?;
+
+    for mesh in meshes {
+        for p in &mesh.positions {
+            writeln!(f, "{} {} {}", p[0], p[1], p[2])?;
+        }
+    }
+
+    let mut base: u32 = 0;
+    for mesh in meshes {
+        for chunk in mesh.indices.chunks(3) {
+            if chunk.len() == 3 {
+                writeln!(f, "3 {} {} {}", base + chunk[0], base + chunk[1], base + chunk[2])?;
+            }
+        }
+        base += mesh.positions.len() as u32;
+    }
+
     Ok(())
 }
 

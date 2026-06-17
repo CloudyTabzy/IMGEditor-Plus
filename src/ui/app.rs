@@ -756,16 +756,17 @@ impl App {
                         }
                     };
 
-                    // Derive the game root from the archive path:
-                    //   .../Bully - Scholarship Edition/Stream/World.img
-                    //   → parent/ = Stream/
-                    //   → parent/ = game root
-                    let game_root = archive_path.as_ref().and_then(|p| {
-                        p.parent().and_then(|stream| stream.parent())
-                    }).map(|p| p.to_path_buf());
+                    if name.to_lowercase().ends_with(".dff") {
+                        let rx = viewer3d::spawn_dff_render_window(data, name.clone());
+                        self.viewer_rxs.push(rx);
+                    } else {
+                        let game_root = archive_path.as_ref().and_then(|p| {
+                            p.parent().and_then(|stream| stream.parent())
+                        }).map(|p| p.to_path_buf());
+                        let rx = viewer3d::spawn_render_window(data, name.clone(), game_root);
+                        self.viewer_rxs.push(rx);
+                    }
 
-                    let rx = viewer3d::spawn_render_window(data, name.clone(), game_root);
-                    self.viewer_rxs.push(rx);
                     if let Some(archive) = self.editor.selected_archive_mut() {
                         archive.add_log(format!("Opening 3D viewer for {name}"));
                     }
