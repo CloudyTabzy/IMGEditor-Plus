@@ -2,7 +2,7 @@ use iced::Theme;
 
 use crate::config::ThemeMode;
 
-pub const APP_NAME: &str = "Grinch_'s IMG Editor";
+pub const APP_NAME: &str = "IMG Editor";
 
 /// Resolve the runtime [`Theme`] from the user-configured [`ThemeMode`],
 /// falling back to system preference when `ThemeMode::System` is selected.

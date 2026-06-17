@@ -35,7 +35,7 @@ pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
 pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
 
 pub const ABOUT_TEXT: &str = concat!(
-    "Grinch_'s IMG Editor v",
+    "IMG Editor v",
     env!("CARGO_PKG_VERSION"),
     "\n\nA pure Rust desktop editor for GTA IMG archives.\n\n",
     "Supported formats:\n",
@@ -112,6 +112,8 @@ pub enum Message {
     HideAbout,
     ShowWelcome,
     HideWelcome,
+    ToggleWelcomePersist(bool),
+    ToggleUpdateDisabled(bool),
     ShowUnsupported(PathBuf),
     HideUnsupported,
     VisitRepository,
@@ -166,6 +168,7 @@ pub struct App {
     pub rename_buffer: String,
     pub show_about: bool,
     pub show_welcome: bool,
+    pub welcome_persist: bool,
     pub show_unsupported: Option<PathBuf>,
     pub show_update_status: Option<String>,
     pub update_state: UpdateState,
@@ -209,6 +212,7 @@ impl App {
             rename_buffer: String::new(),
             show_about: false,
             show_welcome,
+            welcome_persist: true,
             show_unsupported: None,
             show_update_status: None,
             update_state: UpdateState::Idle,
@@ -248,17 +252,20 @@ impl App {
         )
     }
 
-    pub fn startup_task() -> Task<Message> {
-        Task::batch(vec![
+    pub fn startup_task(config: &Config) -> Task<Message> {
+        let mut tasks = vec![
             iced::font::load(LUCIDE_FONT_BYTES).map(|_| Message::Noop),
-            Task::perform(
+        ];
+        if config.update_check_enabled {
+            tasks.push(Task::perform(
                 check_updates_future(
                     UPDATER_REPO.to_string(),
                     env!("CARGO_PKG_VERSION").to_string(),
                 ),
                 Message::UpdateResultReceived,
-            ),
-        ])
+            ));
+        }
+        Task::batch(tasks)
     }
 
     pub fn save_config(&self) {
@@ -824,7 +831,18 @@ impl App {
             }
             Message::HideWelcome => {
                 self.show_welcome = false;
-                self.config.first_run_complete = true;
+                if self.welcome_persist {
+                    self.config.first_run_complete = true;
+                }
+                self.save_config();
+                Task::none()
+            }
+            Message::ToggleWelcomePersist(val) => {
+                self.welcome_persist = val;
+                Task::none()
+            }
+            Message::ToggleUpdateDisabled(val) => {
+                self.config.update_check_enabled = !val;
                 self.save_config();
                 Task::none()
             }
@@ -1519,7 +1537,7 @@ pub fn run_app(config: Config) -> iced::Result {
     iced::application(
         move || {
             let cfg = (*boot_config_for_boot).clone();
-            (App::new(cfg), App::startup_task())
+            (App::new(cfg.clone()), App::startup_task(&cfg))
         },
         App::update,
         App::view,

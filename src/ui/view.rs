@@ -1,6 +1,6 @@
 use iced::widget::{
-    Column, Container, Row, Scrollable, Space, button, column, container, image, mouse_area,
-    pane_grid, progress_bar, rule, row, stack, text_input, tooltip,
+    checkbox, Column, Container, Row, Scrollable, Space, button, column, container, image,
+    mouse_area, pane_grid, progress_bar, rule, row, stack, text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_fonts::lucide;
@@ -704,8 +704,14 @@ fn build_welcome(app: &App) -> Option<Element<'_, Message>> {
         "Welcome",
         column![
             fonts::display("Welcome to IMGEditor v2!"),
-            fonts::body("Open or create an archive to get started."),
-            fonts::body("Supported formats: GTA III, VC, San Andreas, Bully SE."),
+            fonts::body("A GTA archive editor for III, VC, San Andreas, Bully SE."),
+            Space::new().height(Length::Fixed(8.0)),
+            checkbox(app.welcome_persist)
+                .label("Don't show this message again")
+                .on_toggle(Message::ToggleWelcomePersist),
+            checkbox(!app.config.update_check_enabled)
+                .label("Disable update checking")
+                .on_toggle(Message::ToggleUpdateDisabled),
             Space::new().height(Length::Fixed(8.0)),
             button(fonts::strong("Get started"))
                 .on_press(Message::HideWelcome)
