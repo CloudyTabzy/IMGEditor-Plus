@@ -129,12 +129,31 @@ impl Editor {
             }
 
             if shift {
-                // Select the full range from anchor to clicked.
+                // Compute the range in DISPLAY-ROW space (positions
+                // within selected_indices), then select the mapped
+                // entry indices. This avoids grabbing entries from
+                // unrelated types that happen to sit between anchor
+                // and clicked in the raw entries array.
                 let a = anchor.unwrap_or(clicked);
-                let lo = a.min(clicked);
-                let hi = a.max(clicked);
-                for e in archive.entries[lo..=hi].iter_mut() {
-                    e.selected = true;
+                // Collect target entry indices first to satisfy the
+                // borrow checker (immutable borrow of selected_indices
+                // + mutable borrow of entries).
+                let targets: Vec<usize> = {
+                    let a_pos = archive.selected_indices.iter().position(|&i| i == a);
+                    let c_pos = archive.selected_indices.iter().position(|&i| i == clicked);
+                    match (a_pos, c_pos) {
+                        (Some(ap), Some(cp)) => {
+                            let lo = ap.min(cp);
+                            let hi = ap.max(cp);
+                            archive.selected_indices[lo..=hi].to_vec()
+                        }
+                        _ => vec![clicked],
+                    }
+                };
+                for &ei in &targets {
+                    if let Some(e) = archive.entries.get_mut(ei) {
+                        e.selected = true;
+                    }
                 }
             } else if !ctrl {
                 for e in &mut archive.entries {
