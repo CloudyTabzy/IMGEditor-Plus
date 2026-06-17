@@ -1,5 +1,30 @@
+# Rust build artifacts
 /target/
+
+# Distribution
 /dist/
 /Dist/
+
+# Rust backups
 *.rs.bk
+
+# Code search index
 .codesearch.db/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS junk
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temp files
+*.tmp
+*.log
