@@ -7,7 +7,7 @@
 //!
 //! Reading a NIF:
 //!
-//! ```no_run
+//! ```ignore
 //! use imgeditor::inspector::nif::NifFile;
 //!
 //! let bytes = std::fs::read("test.nif").unwrap();

@@ -17,6 +17,14 @@ path = "src/main.rs"
 name = "imgeditor"
 path = "src/main.rs"
 
+[[example]]
+name = "benchmark_export"
+required-features = ["bench"]
+
+[[example]]
+name = "benchmark_stress"
+required-features = ["bench"]
+
 [dependencies]
 anyhow = "1.0"
 chrono = "0.4"

@@ -2,8 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use imgeditor::archive::ArchiveInfo;
-use imgeditor::parser::{ImgParser, ImgVersion, PcV1Parser};
-use rayon::prelude::*;
+use imgeditor::tasks::{ExportMode, ExportTask};
 
 fn run_export(img_path: &Path, out_dir: &Path) -> (u64, u64, u64) {
     let _ = std::fs::remove_dir_all(out_dir);
@@ -13,19 +12,10 @@ fn run_export(img_path: &Path, out_dir: &Path) -> (u64, u64, u64) {
     let archive = ArchiveInfo::open(img_path).expect("failed to open archive");
     let open_elapsed = open_start.elapsed().as_millis() as u64;
 
-    let entries: Vec<_> = archive.entries.clone();
-    let version = archive.version;
-
     let export_start = Instant::now();
-    entries.par_iter().for_each(|entry| {
-        let output_path = out_dir.join(&entry.file_name);
-        match version {
-            ImgVersion::One => PcV1Parser
-                .export_entry(&archive, entry, &output_path)
-                .expect("export failed"),
-            _ => panic!("unsupported benchmark format"),
-        }
-    });
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let task = ExportTask::new(archive, out_dir.to_path_buf(), ExportMode::All);
+    rt.block_on(task.run()).expect("export failed");
     let export_elapsed = export_start.elapsed().as_millis() as u64;
 
     let total_elapsed = open_elapsed + export_elapsed;

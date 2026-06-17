@@ -29,7 +29,7 @@ use crate::ui::theme::resolve_theme;
 use crate::updater::{UpdateResult, UpdateState, check_updates_future};
 
 const REPO_URL: &str = "https://github.com/CloudyTabzy/IMGEditor-rs";
-const UPDATER_REPO: &str = "CloudyTabzy/IMGEditor-rs";
+const UPDATER_REPO: &str = "CloudyTabzy/IMGEditor-Plus";
 
 pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
 pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
