@@ -15,7 +15,7 @@ use crate::config::{Config, ThemeMode};
 use crate::editor::Editor;
 use crate::inspector::viewer3d::{self, ViewerEvent};
 use crate::parser::{
-    EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
+    DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
 };
 use crate::tasks::{ExportMode, ExportTask, SaveTask};
 use crate::ui::dialogs::{self, SaveArchiveChoice};
@@ -123,6 +123,15 @@ pub enum Message {
     },
 
     FilesDropped(PathBuf),
+
+    TxdDecodeRequested,
+    TxdDecoded {
+        index: usize,
+        result: Result<Vec<DecodedTexture>, String>,
+    },
+    TxdSelectTexture(usize),
+    TxdExportTextures,
+    TxdExportFolderResult(Option<PathBuf>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +141,7 @@ pub enum EntryAction {
     Delete,
     Export,
     Render,
+    ViewTextures,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +166,8 @@ pub struct App {
     pub panes: pane_grid::State<Pane>,
     pub context_menu: Option<(usize, usize)>,
     pub inspected_entry: Option<(usize, EntryInspection)>,
+    /// Index into the decoded TXD textures currently being viewed.
+    pub txd_selected_texture: usize,
     pub scroll_y: f32,
     pub search_pending: Option<String>,
     pub autoscroll: Option<AutoScroll>,
@@ -192,6 +204,7 @@ impl App {
             panes,
             context_menu: None,
             inspected_entry: None,
+            txd_selected_texture: 0,
             scroll_y: 0.0,
             search_pending: None,
             autoscroll: None,
@@ -713,6 +726,9 @@ impl App {
                     self.last_export_selected_only = true;
                     dialogs::save_folder().map(Message::ExportFolderResult)
                 }
+                EntryAction::ViewTextures => {
+                    Task::done(Message::TxdDecodeRequested)
+                }
                 EntryAction::Render => {
                     let Some(archive_index) = self.editor.selected_archive() else {
                         return Task::none();
@@ -946,7 +962,158 @@ impl App {
                 }
                 Task::none()
             }
+
+            Message::TxdDecodeRequested => {
+                let Some(entry_index) = self.editor.selected_entry() else {
+                    return Task::none();
+                };
+                // Cache miss or first request: decode in the background.
+                self.txd_selected_texture = 0;
+                self.decode_txd(entry_index)
+            }
+
+            Message::TxdDecoded { index, result } => {
+                match result {
+                    Ok(textures) => {
+                        if let Some(archive) = self.editor.selected_archive_mut() {
+                            let count = textures.len();
+                            archive.txd_cache.insert(index, textures);
+                            archive.add_log(format!("Decoded {count} TXD texture(s)"));
+                            self.toast = Some(format!("Decoded {count} texture(s)"));
+                        }
+                    }
+                    Err(err) => {
+                        self.toast = Some(err);
+                    }
+                }
+                Task::none()
+            }
+
+            Message::TxdSelectTexture(index) => {
+                self.txd_selected_texture = index;
+                Task::none()
+            }
+
+            Message::TxdExportTextures => {
+                dialogs::save_folder().map(Message::TxdExportFolderResult)
+            }
+
+            Message::TxdExportFolderResult(Some(folder)) => {
+                let Some(archive_index) = self.editor.selected_archive() else {
+                    return Task::none();
+                };
+                let Some(entry_index) = self.editor.selected_entry() else {
+                    return Task::none();
+                };
+                let textures = self
+                    .editor
+                    .archives()
+                    .get(archive_index)
+                    .and_then(|a| a.txd_cache.get(&entry_index))
+                    .cloned();
+                let Some(textures) = textures else {
+                    self.toast = Some("No decoded textures to export.".into());
+                    return Task::none();
+                };
+
+                let folder = folder.clone();
+                let count = textures.len();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || -> Result<(), String> {
+                            for tex in &textures {
+                                let safe_name: String = tex
+                                    .name
+                                    .chars()
+                                    .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                                    .collect();
+                                let path = folder.join(format!("{}.tga", safe_name));
+                                let mut tga = Vec::with_capacity(18 + tex.rgba.len());
+                                tga.push(0);
+                                tga.push(0);
+                                tga.push(2);
+                                tga.extend_from_slice(&[0, 0, 0, 0, 0]);
+                                tga.extend_from_slice(&[0, 0]);
+                                tga.extend_from_slice(&[0, 0]);
+                                tga.extend_from_slice(&(tex.width as u16).to_le_bytes());
+                                tga.extend_from_slice(&(tex.height as u16).to_le_bytes());
+                                tga.push(32);
+                                tga.push(0x20);
+                                for chunk in tex.rgba.chunks_exact(4) {
+                                    tga.push(chunk[2]);
+                                    tga.push(chunk[1]);
+                                    tga.push(chunk[0]);
+                                    tga.push(chunk[3]);
+                                }
+                                std::fs::write(&path, tga)
+                                    .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+                            }
+                            Ok(())
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(format!("task panicked: {e}")))
+                    },
+                    move |result| {
+                        if result.is_ok() {
+                            let _ = format!("Exported {count} texture(s)");
+                        }
+                        Message::Noop
+                    },
+                )
+            }
+
+            Message::TxdExportFolderResult(None) => Task::none(),
         }
+    }
+
+    fn decode_txd(&self, entry_index: usize) -> Task<Message> {
+        let Some(archive_index) = self.editor.selected_archive() else {
+            return Task::none();
+        };
+        let (entry_clone, archive_path) = {
+            let Some(archive) = self.editor.archives().get(archive_index) else {
+                return Task::none();
+            };
+            let Some(entry) = archive.entries.get(entry_index) else {
+                return Task::none();
+            };
+            (entry.clone(), archive.path.clone())
+        };
+
+        Task::perform(
+            async move {
+                let result = tokio::task::spawn_blocking(move || -> Result<Vec<DecodedTexture>, String> {
+                    let data = crate::parser::read_entry_data_from_source(
+                        &entry_clone,
+                        archive_path.as_deref(),
+                    ).map_err(|e| format!("Failed to read entry: {e}"))?;
+                    let txd = crate::parser::txd::parse_txd(&data)
+                        .map_err(|e| format!("TXD parse failed: {e}"))?;
+
+                    let mut decoded = Vec::new();
+                    for tex in &txd.textures {
+                        let rgba = tex.decode_rgba().map_err(|e| format!("Texture decode failed: {e}"))?;
+                        decoded.push(DecodedTexture {
+                            name: tex.diffuse_name.clone(),
+                            width: tex.width,
+                            height: tex.height,
+                            rgba,
+                            has_alpha: tex.has_alpha != 0 || tex.raster_format != 0x200,
+                            format_name: tex.format_name().to_string(),
+                            mipmap_count: tex.num_mipmaps as u32,
+                        });
+                    }
+                    Ok(decoded)
+                })
+                .await;
+
+                result.unwrap_or_else(|e| Err(format!("task panicked: {e}")))
+            },
+            move |result| Message::TxdDecoded {
+                index: entry_index,
+                result,
+            },
+        )
     }
 
     fn start_export(&mut self, mode: ExportMode) -> Task<Message> {

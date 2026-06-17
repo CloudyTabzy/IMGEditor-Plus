@@ -6,7 +6,7 @@ use compact_str::CompactString;
 use memmap2::Mmap;
 use smallvec::SmallVec;
 
-use crate::parser::{EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, encode_entry_name};
+use crate::parser::{DecodedTexture, EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, encode_entry_name};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportStatus {
@@ -175,6 +175,8 @@ pub struct ArchiveInfo {
     pub last_export_folder: Option<PathBuf>,
     pub sort: SortState,
     pub inspection_cache: std::collections::HashMap<usize, EntryInspection>,
+    /// Cached decoded TXD textures per entry index.
+    pub txd_cache: std::collections::HashMap<usize, Vec<DecodedTexture>>,
     pub row_cache: Vec<RowDisplay>,
 }
 
@@ -199,6 +201,7 @@ impl ArchiveInfo {
             last_export_folder: None,
             sort: SortState::default(),
             inspection_cache: std::collections::HashMap::new(),
+            txd_cache: std::collections::HashMap::new(),
             row_cache: Vec::new(),
         };
 
@@ -233,6 +236,7 @@ impl ArchiveInfo {
             last_export_folder: None,
             sort: SortState::default(),
             inspection_cache: std::collections::HashMap::new(),
+            txd_cache: std::collections::HashMap::new(),
             row_cache: Vec::new(),
         };
 

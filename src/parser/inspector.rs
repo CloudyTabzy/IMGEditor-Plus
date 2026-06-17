@@ -16,6 +16,8 @@ pub struct EntryInspection {
     pub source: CompactString,
     pub summary: Vec<(String, String)>,
     pub preview_hex: Option<String>,
+    /// TXD metadata: list of (texture_name, format_name, width, height) strings.
+    pub txd_textures: Vec<String>,
 }
 
 pub fn inspect_entry(archive: &ArchiveInfo, entry: &EntryInfo) -> EntryInspection {
@@ -68,7 +70,11 @@ pub fn inspect_entry_standalone(
         .to_ascii_lowercase();
 
     match ext.as_str() {
-        "dff" | "txd" | "anm" | "ifp" => {
+        "txd" => {
+            inspect_renderware(&header, &mut inspection);
+            inspect_txd(&header, &mut inspection);
+        }
+        "dff" | "anm" | "ifp" => {
             inspect_renderware(&header, &mut inspection);
         }
         "col" => {
@@ -175,6 +181,37 @@ fn inspect_text(header: &[u8], inspection: &mut EntryInspection) {
         inspection.summary.push(("Format".to_string(), "GTA item placement".to_string()));
     } else if inspection.file_name.as_str().to_ascii_lowercase().ends_with(".ide") {
         inspection.summary.push(("Format".to_string(), "GTA item definition".to_string()));
+    }
+}
+
+fn inspect_txd(header: &[u8], inspection: &mut EntryInspection) {
+    if header.len() < 12 {
+        return;
+    }
+    // Try to parse the TXD to extract texture metadata.
+    match crate::parser::txd::parse_txd(header) {
+        Ok(txd) => {
+            let count = txd.textures.len();
+            inspection
+                .summary
+                .push(("Textures".to_string(), format!("{} texture(s)", count)));
+            inspection.txd_textures = txd
+                .textures
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{} ({}: {}×{})",
+                        t.diffuse_name,
+                        t.format_name(),
+                        t.width,
+                        t.height
+                    )
+                })
+                .collect();
+        }
+        Err(_) => {
+            // Failed to parse header-only TXD — may need full data.
+        }
     }
 }
 

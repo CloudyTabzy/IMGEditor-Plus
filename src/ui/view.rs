@@ -1,5 +1,5 @@
 use iced::widget::{
-    Column, Container, Row, Scrollable, Space, button, column, container, mouse_area,
+    Column, Container, Row, Scrollable, Space, button, column, container, image, mouse_area,
     pane_grid, progress_bar, rule, row, stack, text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length};
@@ -298,6 +298,76 @@ impl App {
                 ]);
                 col = col.push(Self::build_inspection_panel(inspection));
                 col = col.push(rule::horizontal(1));
+
+                // TXD texture preview (if decoded).
+                let is_txd = inspection
+                    .file_name
+                    .as_str()
+                    .to_ascii_lowercase()
+                    .ends_with(".txd");
+                if is_txd {
+                    let textures = archive.txd_cache.get(index);
+                    if let Some(textures) = textures {
+                        if !textures.is_empty() {
+                            let tex_idx = self.txd_selected_texture.min(textures.len() - 1);
+                            let tex = &textures[tex_idx];
+
+                            col = col.push(
+                                button(fonts::body(format!(
+                                    "Export textures ({})",
+                                    textures.len()
+                                )))
+                                .on_press(Message::TxdExportTextures),
+                            );
+
+                            // Texture selector row (prev / next).
+                            if textures.len() > 1 {
+                                let mut sel_row = Row::new().spacing(4);
+                                sel_row = sel_row.push(fonts::caption("Texture:"));
+                                for (i, _) in textures.iter().enumerate() {
+                                    let label = if i == tex_idx {
+                                        format!("● {}", i + 1)
+                                    } else {
+                                        format!("○ {}", i + 1)
+                                    };
+                                    sel_row = sel_row.push(
+                                        button(fonts::caption(label))
+                                            .on_press(Message::TxdSelectTexture(i))
+                                            .style(button::text),
+                                    );
+                                }
+                                col = col.push(sel_row);
+                            }
+
+                            col = col.push(label_value_owned("Name", tex.name.clone()));
+                            col = col.push(label_value_owned(
+                                "Format",
+                                format!("{} ({}×{})", tex.format_name, tex.width, tex.height),
+                            ));
+                            col = col.push(label_value_owned(
+                                "Alpha",
+                                if tex.has_alpha { "Yes" } else { "No" }.to_string(),
+                            ));
+
+                            // Texture image preview.
+                            let handle = image::Handle::from_rgba(
+                                tex.width,
+                                tex.height,
+                                tex.rgba.clone(),
+                            );
+                            let preview = image::Viewer::new(handle)
+                                .width(Length::Fill)
+                                .height(Length::Fixed(200.0));
+                            col = col.push(preview);
+                        }
+                    } else {
+                        // TXD not yet decoded — offer a decode button.
+                        col = col.push(
+                            button(fonts::body("Decode textures"))
+                                .on_press(Message::TxdDecodeRequested),
+                        );
+                    }
+                }
             }
         }
 
@@ -681,6 +751,13 @@ fn build_context_menu(
     if entry.file_name.to_lowercase().ends_with(".nif") {
         items.push(
             context_button("Render", Message::EntryContextAction(EntryAction::Render)).into(),
+        );
+    }
+
+    if entry.file_name.to_lowercase().ends_with(".txd") {
+        items.push(
+            context_button("View textures",
+                Message::EntryContextAction(EntryAction::ViewTextures)).into(),
         );
     }
 

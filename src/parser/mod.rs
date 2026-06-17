@@ -6,17 +6,20 @@ use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 
+pub mod inspector;
 pub mod iparser;
 pub mod pc_v1;
 pub mod pc_v2;
+pub mod texture_decoder;
+pub mod txd;
 pub mod unknown;
-pub mod inspector;
 
+pub use inspector::{EntryInspection, inspect_entry_cached, inspect_entry_standalone};
 pub use iparser::ImgParser;
 pub use pc_v1::PcV1Parser;
 pub use pc_v2::PcV2Parser;
+pub use texture_decoder::DecodedTexture;
 pub use unknown::UnknownParser;
-pub use inspector::{EntryInspection, inspect_entry_cached, inspect_entry_standalone};
 
 pub const SECTOR_SIZE: u64 = 2048;
 pub const ENTRY_SIZE: usize = 32;
