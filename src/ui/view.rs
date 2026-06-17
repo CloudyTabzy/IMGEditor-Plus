@@ -252,10 +252,13 @@ impl App {
         let version_text = version_label(archive.version);
         let total = archive.entries.len();
         let visible = archive.selected_indices.len();
-        let progress = archive.progress.percentage();
+        let raw_progress = archive.progress.percentage();
         let in_use = archive.progress.in_use();
+        // Use the smoothly animated progress value.
+        let progress = self.animator.get_or(crate::ui::app::ANIM_PROGRESS, raw_progress);
+        let display_progress = if in_use { progress } else { raw_progress };
         let (progress_label, percent_text) = if in_use {
-            ("Progress", format!("{:.0}%", progress * 100.0))
+            ("Progress", format!("{:.0}%", display_progress * 100.0))
         } else {
             match archive.export_status {
                 ExportStatus::Ready => ("Progress", "Ready to export".to_string()),
@@ -269,7 +272,7 @@ impl App {
             label_value("Entries", format!("{total} (visible: {visible})")),
             rule::horizontal(1),
             label_value(progress_label, percent_text),
-            progress_bar(0.0..=1.0, progress),
+            progress_bar(0.0..=1.0, display_progress),
         ]
         .spacing(6)
         .padding(8)
@@ -460,14 +463,19 @@ impl App {
 
     pub(crate) fn build_status_bar(&self) -> Element<'_, Message> {
         let design = self.design();
-        let has_toast = self.toast.is_some();
         let status_text = self.toast.clone().unwrap_or_else(|| {
             format!("{} v{}", crate::ui::theme::APP_NAME, env!("CARGO_PKG_VERSION"))
         });
-        let bg = if has_toast {
-            design.success_gradient().0
-        } else {
-            design.surface_subtle()
+        // Animate a smooth transition between the normal surface color
+        // and a success-green tint when a toast is active.
+        let normal_bg = design.surface_subtle();
+        let toast_bg = design.success_gradient().0;
+        let mix = self.animator.get(crate::ui::app::ANIM_TOAST_OPACITY).clamp(0.0, 1.0);
+        let bg = Color {
+            r: normal_bg.r + (toast_bg.r - normal_bg.r) * mix,
+            g: normal_bg.g + (toast_bg.g - normal_bg.g) * mix,
+            b: normal_bg.b + (toast_bg.b - normal_bg.b) * mix,
+            a: 1.0,
         };
         let bar = Container::new(
             Row::new()

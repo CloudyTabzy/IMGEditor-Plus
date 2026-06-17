@@ -1,6 +1,8 @@
+pub mod animator;
 pub mod app;
 pub mod design;
 pub mod dialogs;
+pub mod easing;
 pub mod fonts;
 pub mod keymap;
 pub mod theme;

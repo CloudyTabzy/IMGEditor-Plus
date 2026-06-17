@@ -19,6 +19,7 @@ use crate::parser::{
     DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
 };
 use crate::tasks::{ExportMode, ExportTask, SaveTask};
+use crate::ui::animator::Animator;
 use crate::ui::dialogs::{self, SaveArchiveChoice};
 use crate::ui::fonts;
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
@@ -27,6 +28,9 @@ use crate::updater::{UpdateResult, UpdateState, check_updates_future};
 
 const REPO_URL: &str = "https://github.com/CloudyTabzy/IMGEditor-rs";
 const UPDATER_REPO: &str = "CloudyTabzy/IMGEditor-rs";
+
+pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
+pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
 
 pub const ABOUT_TEXT: &str = concat!(
     "Grinch_'s IMG Editor v",
@@ -95,6 +99,7 @@ pub enum Message {
     EntryRightClicked(usize),
     EntryContextAction(EntryAction),
     HideContextMenu,
+    AnimationTick(std::time::Instant),
     AutoScrollStarted,
     AutoScrollStartedAtRow(usize),
     AutoScrollMoved(Point),
@@ -174,6 +179,8 @@ pub struct App {
     pub autoscroll: Option<AutoScroll>,
     pub entry_table_id: iced::widget::Id,
     viewer_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>>,
+    pub animator: Animator,
+    prev_tick: Option<std::time::Instant>,
 }
 
 impl Default for App {
@@ -211,6 +218,8 @@ impl App {
             autoscroll: None,
             entry_table_id: iced::widget::Id::unique(),
             viewer_rxs: Vec::new(),
+            animator: Animator::new(),
+            prev_tick: None,
         }
     }
 
@@ -861,6 +870,51 @@ impl App {
             }
             Message::TickProgress => {
                 self.poll_viewer_rxs();
+                // Animate the progress bar smoothly towards the current value.
+                if let Some(archive_idx) = self.editor.selected_archive() {
+                    let current_progress = self.editor.archives()[archive_idx].progress.percentage();
+                    let visual = self.animator.get(ANIM_PROGRESS);
+                    if (visual - current_progress).abs() > 0.005 {
+                        self.animator.animate_from_current(
+                            ANIM_PROGRESS,
+                            current_progress,
+                            Duration::from_millis(200),
+                            crate::ui::easing::Easing::CubicOut,
+                        );
+                    }
+                }
+                // Animate toast color: pulse to success-green when visible.
+                if self.toast.is_some() {
+                    let current_opacity = self.animator.get(ANIM_TOAST_OPACITY);
+                    if current_opacity < 0.99 {
+                        self.animator.animate_from_current(
+                            ANIM_TOAST_OPACITY,
+                            1.0,
+                            Duration::from_millis(300),
+                            crate::ui::easing::Easing::CubicOut,
+                        );
+                    }
+                } else {
+                    let current_opacity = self.animator.get(ANIM_TOAST_OPACITY);
+                    if current_opacity > 0.01 {
+                        self.animator.animate_from_current(
+                            ANIM_TOAST_OPACITY,
+                            0.0,
+                            Duration::from_millis(200),
+                            crate::ui::easing::Easing::CubicOut,
+                        );
+                    }
+                }
+                // Reap finished animations to keep the animator lean.
+                self.animator.reap_finished();
+                Task::none()
+            }
+            Message::AnimationTick(now) => {
+                if let Some(prev) = self.prev_tick {
+                    let dt = now.duration_since(prev);
+                    self.animator.update(dt);
+                }
+                self.prev_tick = Some(now);
                 Task::none()
             }
             Message::PaneResized(event) => {
@@ -1184,6 +1238,8 @@ impl App {
 
         let tick = iced::time::every(Duration::from_millis(250)).map(|_| Message::TickProgress);
 
+        let anim_tick = iced::time::every(Duration::from_millis(16)).map(Message::AnimationTick);
+
         let debounce = iced::time::every(Duration::from_millis(150)).map(|_| Message::DebounceTick);
 
         let window = iced::window::events().map(|(_id, event)| match event {
@@ -1208,7 +1264,7 @@ impl App {
             Subscription::none()
         };
 
-        Subscription::batch([key, tick, debounce, window, autoscroll])
+        Subscription::batch([key, tick, anim_tick, debounce, window, autoscroll])
     }
 }
 
