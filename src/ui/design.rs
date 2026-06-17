@@ -139,13 +139,9 @@ impl Design {
 
     /// Two-stop gradient for the menubar / toolbar background.
     pub fn menubar_gradient(&self) -> (Color, Color) {
-        let a = if self.is_dark {
-            to_iced(self.palette().neutral.get(Shade::S800))
-        } else {
-            to_iced(self.palette().neutral.get(Shade::S50))
-        };
+        let a = to_iced(self.palette().neutral.get(Shade::S50));
         let b = if self.is_dark {
-            to_iced(self.palette().neutral.get(Shade::S700))
+            to_iced(self.palette().neutral.get(Shade::S100))
         } else {
             to_iced(self.palette().neutral.get(Shade::S100))
         };
