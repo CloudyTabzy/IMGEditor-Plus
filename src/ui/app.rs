@@ -759,6 +759,9 @@ impl App {
                     if name.to_lowercase().ends_with(".dff") {
                         let rx = viewer3d::spawn_dff_render_window(data, name.clone());
                         self.viewer_rxs.push(rx);
+                    } else if name.to_lowercase().ends_with(".col") {
+                        let rx = viewer3d::spawn_col_render_window(data, name.clone());
+                        self.viewer_rxs.push(rx);
                     } else {
                         let game_root = archive_path.as_ref().and_then(|p| {
                             p.parent().and_then(|stream| stream.parent())

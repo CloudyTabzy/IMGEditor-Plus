@@ -83,6 +83,7 @@ pub fn inspect_entry_standalone(
         }
         "col" => {
             inspect_collision(&header, &mut inspection);
+            inspect_col_mesh(&header, &mut inspection);
         }
         "nif" => {
             inspect_nif(&header, &mut inspection);
@@ -244,6 +245,43 @@ fn inspect_txd(header: &[u8], inspection: &mut EntryInspection) {
         Err(_) => {
             // Failed to parse header-only TXD — may need full data.
         }
+    }
+}
+
+fn inspect_col_mesh(header: &[u8], inspection: &mut EntryInspection) {
+    // Quick header-only parse to extract counts.
+    match crate::parser::col::parse_col(header) {
+        Ok(col) => {
+            let total_verts: usize = col.entries.iter().map(|e| e.vertices.len()).sum();
+            let total_faces: usize = col.entries.iter().map(|e| e.indices.len() / 3).sum();
+            let total_spheres: u32 = col.entries.iter().map(|e| e.num_spheres).sum();
+            let total_boxes: u32 = col.entries.iter().map(|e| e.num_boxes).sum();
+            let has_shadow = col.entries.iter().any(|e| e.has_shadow);
+
+            inspection
+                .summary
+                .push(("Entries".to_string(), format!("{}", col.entries.len())));
+            inspection
+                .summary
+                .push(("Mesh vertices".to_string(), format!("{total_verts}")));
+            inspection
+                .summary
+                .push(("Mesh faces".to_string(), format!("{total_faces}")));
+            if total_spheres > 0 {
+                inspection
+                    .summary
+                    .push(("Spheres".to_string(), format!("{total_spheres}")));
+            }
+            if total_boxes > 0 {
+                inspection
+                    .summary
+                    .push(("Boxes".to_string(), format!("{total_boxes}")));
+            }
+            if has_shadow {
+                inspection.summary.push(("Shadow mesh".to_string(), "Yes".to_string()));
+            }
+        }
+        Err(_) => {}
     }
 }
 

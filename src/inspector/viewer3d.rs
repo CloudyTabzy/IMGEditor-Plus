@@ -11,6 +11,7 @@ use crate::inspector::nif::{
     self, BlockPayload, NifFile, NiTriShapeDataPayload, NiTriStripsDataPayload,
 };
 use crate::inspector::texture::{IdeMap, resolve_textures_for_nif};
+use crate::parser::col::ColFile;
 use crate::parser::dff::DffMesh;
 
 #[derive(Debug, Clone)]
@@ -413,6 +414,116 @@ fn write_ply_from_meshes(
             }
         }
         base += mesh.positions.len() as u32;
+    }
+
+    Ok(())
+}
+
+// ---- COL render window ------------------------------------------------
+
+pub fn spawn_col_render_window(
+    col_data: Vec<u8>,
+    name: String,
+) -> mpsc::UnboundedReceiver<ViewerEvent> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    thread::Builder::new()
+        .name(format!("col-viewer-{name}"))
+        .spawn(move || {
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                export_col_viewer(col_data, name, tx.clone());
+            }));
+            if let Err(err) = result {
+                let msg = match err.downcast_ref::<&str>() {
+                    Some(s) => s.to_string(),
+                    None => match err.downcast_ref::<String>() {
+                        Some(s) => s.clone(),
+                        None => "unknown panic".to_string(),
+                    },
+                };
+                eprintln!("[IMGEditor] COL viewer panicked: {msg}");
+                let _ = tx.send(ViewerEvent::Failed {
+                    reason: format!("viewer panicked: {msg}"),
+                });
+            }
+        })
+        .expect("failed to spawn COL viewer thread");
+    rx
+}
+
+fn export_col_viewer(
+    col_data: Vec<u8>,
+    name: String,
+    tx: mpsc::UnboundedSender<ViewerEvent>,
+) {
+    let col = match crate::parser::col::parse_col(&col_data) {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("COL parse failed: {e}");
+            eprintln!("[IMGEditor] viewer: {msg}");
+            let _ = tx.send(ViewerEvent::Failed { reason: msg });
+            return;
+        }
+    };
+
+    let temp_dir = std::env::temp_dir().join("IMGEditor").join("preview");
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let stem = name.rsplit('.').next().unwrap_or(&name);
+    let ply_path = temp_dir.join(format!("{stem}.ply"));
+
+    match write_ply_from_col(&ply_path, &col) {
+        Ok(()) => {
+            eprintln!(
+                "[IMGEditor] viewer: wrote COL PLY to {ply_path:?} ({} entries)",
+                col.entries.len()
+            );
+            let _ = tx.send(ViewerEvent::Opened { name });
+            open_file_detached(&ply_path);
+        }
+        Err(e) => {
+            let msg = format!("Failed to write COL PLY: {e}");
+            eprintln!("[IMGEditor] viewer: {msg}");
+            let _ = tx.send(ViewerEvent::Failed { reason: msg });
+        }
+    }
+}
+
+fn write_ply_from_col(path: &Path, col: &ColFile) -> std::io::Result<()> {
+    let total_verts: usize = col.entries.iter().map(|e| e.vertices.len()).sum();
+    let total_faces: usize = col.entries.iter().map(|e| e.indices.len() / 3).sum();
+
+    if total_verts == 0 || total_faces == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "COL file has no geometry",
+        ));
+    }
+
+    let mut f = fs::File::create(path)?;
+    writeln!(f, "ply")?;
+    writeln!(f, "format ascii 1.0")?;
+    writeln!(f, "element vertex {total_verts}")?;
+    writeln!(f, "property float x")?;
+    writeln!(f, "property float y")?;
+    writeln!(f, "property float z")?;
+    writeln!(f, "element face {total_faces}")?;
+    writeln!(f, "property list uchar int vertex_indices")?;
+    writeln!(f, "end_header")?;
+
+    for entry in &col.entries {
+        for p in &entry.vertices {
+            writeln!(f, "{} {} {}", p[0], p[1], p[2])?;
+        }
+    }
+
+    let mut base: u32 = 0;
+    for entry in &col.entries {
+        for chunk in entry.indices.chunks(3) {
+            if chunk.len() == 3 {
+                writeln!(f, "3 {} {} {}", base + chunk[0], base + chunk[1], base + chunk[2])?;
+            }
+        }
+        base += entry.vertices.len() as u32;
     }
 
     Ok(())
