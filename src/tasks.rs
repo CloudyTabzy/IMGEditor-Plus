@@ -1,6 +1,6 @@
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use compact_str::CompactString;
@@ -195,12 +195,14 @@ fn export_entries_batched(
         .collect()
 }
 
+const OUTPUT_BUF_SIZE: usize = 1024 * 1024;
+
 fn export_entry_buffered(
     version: ImgVersion,
     entry: &EntryInfo,
     archive_path: Option<&std::path::Path>,
     reader: Option<&mut BufReader<File>>,
-    folder: &std::path::Path,
+    folder: &Path,
 ) -> anyhow::Result<()> {
     let output_path = unique_output_path(&folder.join(&entry.file_name));
 
@@ -223,20 +225,27 @@ fn export_entry_buffered(
     let size = u64::from(entry.sector) * SECTOR_SIZE;
     let offset = u64::from(entry.offset) * SECTOR_SIZE;
 
-    let data = if let Some(r) = reader {
+    if let Some(r) = reader {
         let mut buf = vec![0u8; size as usize];
         r.seek(SeekFrom::Start(offset))?;
         r.read_exact(&mut buf)?;
-        buf
+        write_output_buffered(&output_path, &buf)?;
     } else {
         let mut file = File::open(path)?;
         file.seek(SeekFrom::Start(offset))?;
         let mut buf = vec![0u8; size as usize];
         file.read_exact(&mut buf)?;
-        buf
-    };
+        write_output_buffered(&output_path, &buf)?;
+    }
 
-    std::fs::write(&output_path, data)?;
+    Ok(())
+}
+
+fn write_output_buffered(path: &Path, data: &[u8]) -> anyhow::Result<()> {
+    let file = File::create(path)?;
+    let mut writer = BufWriter::with_capacity(OUTPUT_BUF_SIZE, file);
+    writer.write_all(data)?;
+    writer.flush()?;
     Ok(())
 }
 
