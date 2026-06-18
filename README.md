@@ -170,6 +170,21 @@ The `dist\` folder then contains the portable `.exe` plus file-association notes
 
 ---
 
+## 🗺️ Roadmap
+
+### Cross-platform ports
+The codebase is architected so the core parsers and archive logic are platform-agnostic. A future release will add:
+
+- **macOS** — gate the Windows console-hide and `.ico` resource logic, use `dirs` for config paths, and package as an `.app` bundle.
+- **Linux** — same core work plus `.desktop` entry and AppImage/flatpak packaging.
+
+The main UI layer uses Iced, which is cross-platform by design, so the desktop porting effort is mostly packaging and platform-specific window integration.
+
+### Platform-specific note on GTA support
+Version 3.x is developed and tested primarily against **Bully Scholarship Edition** archives. IMG v1/v2 parsing works for GTA III, Vice City, and San Andreas, but Bully-specific formats (NIF model inspection, TXD variants, etc.) receive priority. Broader GTA workflow polish — importing, exporting, and format edge cases — is planned for future v4 releases or will be addressed earlier if there is community demand.
+
+---
+
 ## ⌨️ Keyboard shortcuts
 
 | Shortcut | Action |
