@@ -21,8 +21,8 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 | 🎨 **ImGui theming limitations** | Iced 0.14 reactive UI with a full design token system |
 
 \* *A headless export benchmark on a 12,000-entry Bully `World.img` showed the optimized Rust export was roughly **1.06–1.07x** the C++ parser's throughput on the test machine when using the `Fast` engine (per-entry source open, matching the C++ benchmark). The default `Parallel` engine is also slightly faster (~1.06x) while keeping the UI responsive and supporting cancellation. See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) and [docs/export-optimization-lessons.md](docs/export-optimization-lessons.md) for the full analysis.*
+\* *The Rust port is not a magical order-of-magnitude speedup. The workload is Windows I/O-bound, and the C++ parser was already close to the practical warm-cache ceiling. Rust's reimplementation wins on throughput only modestly; its larger advantages are **safety, responsiveness, cancellation, and maintainability**. See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) for the honest breakdown.*
 \* *See [docs/cpp-codebase-analysis.md](docs/cpp-codebase-analysis.md) for a source-level review of the original C++ codebase. The null-pointer and UI-blocking issues are real, but the analysis shows they are more nuanced than the one-line summary suggests (e.g. save/export were already threaded in C++; the main remaining UI blockers were Open and Import).*
-
 **Result**: a portable, single-binary editor that _won't_ segfault on a 10,000-entry archive.
 
 ---
@@ -35,10 +35,30 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Create / Open / Save / Save As** with version selection
 - ✅ **Import files** — single, multiple, or replace mode
 - ✅ **Export all or selected entries** — async with progress bar + cancel
+- ✅ **Two export engines** — `Parallel` (default, responsive) or `Fast` (C++-like throughput); toggle via the "Fast export" checkbox in the info panel
 - ✅ **Memory-mapped reads** — instant open on large archives
 - ✅ **Multiple archive tabs** with dirty-file indicator
 - ✅ **Drag-and-drop** file import from Explorer
 
+---
+
+## 🐇 Fast Export Mode
+
+By default, exports use the **`Parallel`** engine: chunk entries across Rayon
+workers with per-worker `BufReader`s so the GUI stays responsive and you can
+cancel mid-export.
+
+If you prefer maximum raw throughput on Windows, enable **`Fast export`** in the
+info panel. This engine mirrors the original C++ benchmark behavior: it opens
+the source archive once per entry and writes each output file with a 1 MiB
+buffer. On our warm-cache benchmark this was **~6.7 % faster than the C++
+baseline**.
+
+The setting is persisted to `settings.ini` as `fast_export`.
+
+See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) for the full
+head-to-head numbers and [docs/export-optimization-lessons.md](docs/export-optimization-lessons.md)
+for the engineering story behind the two engines.
 ### 🔍 Entry Table
 - ✅ **Virtualised scrolling** — smooth even at 10,000+ entries
 - ✅ **Real-time search filter** with debounced input (150ms)
