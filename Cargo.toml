@@ -29,6 +29,7 @@ required-features = ["bench"]
 anyhow = "1.0"
 chrono = "0.4"
 compact_str = "0.8"
+crossbeam = "0.8"
 dark-light = "2"
 iced = { version = "0.14", features = ["tokio", "lazy", "advanced", "highlighter", "image", "svg"] }
 iced_aw = { version = "0.14.1", features = ["menu", "tabs", "context_menu", "card"] }
