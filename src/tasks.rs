@@ -15,6 +15,16 @@ pub enum ExportMode {
     Selected,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportEngine {
+    /// Chunked parallel export with Rayon + per-worker BufReader.
+    /// Default. Good UI responsiveness; throughput within noise of C++.
+    Parallel,
+    /// Single-threaded sequential export mirroring the original C++ behavior.
+    /// Minimizes thread coordination overhead on I/O-bound systems.
+    Fast,
+}
+
 #[derive(Debug)]
 pub struct SaveTask {
     pub archive: ArchiveInfo,
@@ -72,6 +82,7 @@ pub struct ExportTask {
     pub archive: ArchiveInfo,
     pub folder: PathBuf,
     pub mode: ExportMode,
+    pub engine: ExportEngine,
     pub progress: ProgressInfo,
 }
 
@@ -82,8 +93,14 @@ impl ExportTask {
             archive,
             folder,
             mode,
+            engine: ExportEngine::Parallel,
             progress,
         }
+    }
+
+    pub fn engine(mut self, engine: ExportEngine) -> Self {
+        self.engine = engine;
+        self
     }
 
     pub async fn run(self) -> anyhow::Result<(usize, Vec<String>)> {
@@ -91,6 +108,7 @@ impl ExportTask {
             archive,
             folder,
             mode,
+            engine: _,
             progress,
         } = self;
 
@@ -108,6 +126,15 @@ impl ExportTask {
 
         let results: Vec<(CompactString, anyhow::Result<()>)> = if total == 0 {
             Vec::new()
+        } else if self.engine == ExportEngine::Fast {
+            export_entries_sequential(
+                &entries,
+                &archive,
+                &folder,
+                &progress,
+                total,
+                &completed,
+            )
         } else {
             export_entries_batched(
                 &entries,
@@ -134,6 +161,46 @@ impl ExportTask {
             .collect();
         Ok((count, exported_names))
     }
+}
+
+fn export_entries_sequential(
+    entries: &[EntryInfo],
+    archive: &ArchiveInfo,
+    folder: &std::path::Path,
+    progress: &ProgressInfo,
+    total: usize,
+    completed: &AtomicUsize,
+) -> Vec<(CompactString, anyhow::Result<()>)> {
+    let source_path = archive.path.clone();
+    let mut reader = source_path
+        .as_ref()
+        .map(|path| BufReader::with_capacity(4 * 1024 * 1024, File::open(path).unwrap()));
+
+    let mut results = Vec::with_capacity(entries.len());
+    for (idx, entry) in entries.iter().enumerate() {
+        if progress.is_cancelled() {
+            results.push((
+                entry.file_name.clone(),
+                Err(anyhow::anyhow!("Export cancelled")),
+            ));
+            continue;
+        }
+
+        let result = export_entry_buffered(
+            archive.version,
+            entry,
+            source_path.as_deref(),
+            reader.as_mut(),
+            folder,
+        );
+
+        if (idx + 1) % 64 == 0 || idx + 1 == total {
+            progress.set_percentage((idx + 1) as f32 / total as f32);
+        }
+        completed.fetch_add(1, Ordering::Relaxed);
+        results.push((entry.file_name.clone(), result));
+    }
+    results
 }
 
 fn export_entries_batched(

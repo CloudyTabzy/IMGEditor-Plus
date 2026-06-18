@@ -19,7 +19,7 @@ use crate::inspector::viewer3d::{self, ViewerEvent};
 use crate::parser::{
     DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
 };
-use crate::tasks::{ExportMode, ExportTask, SaveTask};
+use crate::tasks::{ExportEngine, ExportMode, ExportTask, SaveTask};
 use crate::ui::animator::Animator;
 use crate::ui::design::Design;
 use crate::ui::dialogs::{self, SaveArchiveChoice};
@@ -84,6 +84,7 @@ pub enum Message {
         index: usize,
         result: Result<(usize, Vec<String>), String>,
     },
+    FastExportToggled(bool),
 
     SelectAll,
     InvertSelection,
@@ -179,6 +180,7 @@ pub struct App {
     pub update_check_manual: bool,
     pub toast: Option<String>,
     pub last_export_selected_only: bool,
+    pub fast_export: bool,
     pub panes: pane_grid::State<Pane>,
     pub context_menu: Option<(usize, usize)>,
     pub inspected_entry: Option<(usize, EntryInspection)>,
@@ -205,6 +207,7 @@ impl Default for App {
 impl App {
     pub fn new(config: Config) -> Self {
         let show_welcome = !config.first_run_complete;
+        let fast_export = config.fast_export;
         let (panes, pane) = pane_grid::State::new(Pane::Table);
         let mut panes = panes;
         panes.split(pane_grid::Axis::Vertical, pane, Pane::Info);
@@ -223,6 +226,7 @@ impl App {
             update_check_manual: false,
             toast: None,
             last_export_selected_only: false,
+            fast_export,
             panes,
             context_menu: None,
             inspected_entry: None,
@@ -561,13 +565,25 @@ impl App {
                 if let Some(archive) = self.editor.selected_archive_mut() {
                     archive.last_export_folder = Some(folder.clone());
                 }
-                let task = ExportTask::new(archive, folder, mode);
+                let task = ExportTask::new(archive, folder, mode)
+                    .engine(if self.fast_export {
+                        ExportEngine::Fast
+                    } else {
+                        ExportEngine::Parallel
+                    });
                 Task::perform(
                     async move { task.run().await.map_err(|e| e.to_string()) },
                     move |result| Message::ExportCompleted { index, result },
                 )
             }
             Message::ExportFolderResult(None) => Task::none(),
+
+            Message::FastExportToggled(enabled) => {
+                self.fast_export = enabled;
+                self.config.fast_export = enabled;
+                self.save_config();
+                Task::none()
+            }
 
             Message::ExportCompleted { index, result } => {
                 if let Some(archive) = self.editor.archives_mut().get_mut(index) {

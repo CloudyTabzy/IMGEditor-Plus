@@ -291,6 +291,12 @@ impl App {
             }
         }
 
+        col = col.push(
+            checkbox(self.fast_export)
+                .label("Fast export (C++ speed)")
+                .on_toggle(Message::FastExportToggled),
+        );
+
         col = col.push(rule::horizontal(1));
 
         if let Some((index, inspection)) = self.inspected_entry.as_ref() {

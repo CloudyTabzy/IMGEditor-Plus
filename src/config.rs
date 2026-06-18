@@ -67,6 +67,7 @@ pub struct Config {
     pub last_export_folder: Option<PathBuf>,
     pub last_open_folder: Option<PathBuf>,
     pub update_check_enabled: bool,
+    pub fast_export: bool,
 }
 
 impl Default for Config {
@@ -78,6 +79,7 @@ impl Default for Config {
             last_export_folder: None,
             last_open_folder: None,
             update_check_enabled: true,
+            fast_export: false,
         }
     }
 }
@@ -136,6 +138,9 @@ impl Config {
                 "update_check_enabled" => {
                     config.update_check_enabled = value.eq_ignore_ascii_case("true");
                 }
+                "fast_export" => {
+                    config.fast_export = value.eq_ignore_ascii_case("true");
+                }
                 _ => {}
             }
         }
@@ -190,6 +195,11 @@ impl Config {
             } else {
                 "false"
             }
+        )?;
+        writeln!(
+            file,
+            "fast_export={}",
+            if self.fast_export { "true" } else { "false" }
         )?;
         Ok(())
     }
@@ -247,6 +257,7 @@ mod tests {
             last_export_folder: Some(PathBuf::from("C:/out")),
             last_open_folder: Some(PathBuf::from("C:/in")),
             update_check_enabled: false,
+            fast_export: true,
         };
         original.save_to_path(&path).unwrap();
 
@@ -259,6 +270,7 @@ mod tests {
         assert_eq!(loaded.last_export_folder, Some(PathBuf::from("C:/out")));
         assert_eq!(loaded.last_open_folder, Some(PathBuf::from("C:/in")));
         assert!(!loaded.update_check_enabled);
+        assert!(loaded.fast_export);
     }
 
     #[test]
