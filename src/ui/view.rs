@@ -12,6 +12,19 @@ use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
 use crate::ui::fonts;
 use crate::ui::widgets as w;
 
+fn logo_element() -> Element<'static, Message> {
+    let handle =
+        image::Handle::from_bytes(include_bytes!("../../fonts/logo/IMGEditorLogo.png").to_vec());
+    container(
+        image(handle)
+            .height(Length::Fixed(96.0))
+            .content_fit(iced::ContentFit::Contain),
+    )
+    .width(Length::Fill)
+    .align_x(Alignment::Center)
+    .into()
+}
+
 /// Height (px) of a single entry row. Must stay in sync with the `height(Length::Fixed(ROW_HEIGHT))`
 /// applied in `build_entry_row`; virtualization math depends on it.
 const ROW_HEIGHT: f32 = 32.0;
@@ -688,6 +701,8 @@ fn build_about(app: &App) -> Option<Element<'_, Message>> {
     Some(modal_box(
         "About",
         column![
+            logo_element(),
+            Space::new().height(Length::Fixed(8.0)),
             fonts::body(ABOUT_TEXT),
             Space::new().height(Length::Fixed(8.0)),
             row![
@@ -709,7 +724,13 @@ fn build_welcome(app: &App) -> Option<Element<'_, Message>> {
     Some(modal_box(
         "Welcome",
         column![
-            fonts::display("Welcome to IMGEditor v2!"),
+            logo_element(),
+            Space::new().height(Length::Fixed(8.0)),
+            fonts::display(format!(
+                "Welcome to {} v{}",
+                crate::ui::theme::APP_NAME,
+                env!("CARGO_PKG_VERSION")
+            )),
             fonts::body("A GTA archive editor for III, VC, San Andreas, Bully SE."),
             Space::new().height(Length::Fixed(8.0)),
             checkbox(app.welcome_persist)
