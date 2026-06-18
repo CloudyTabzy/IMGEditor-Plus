@@ -183,6 +183,13 @@ The main UI layer uses Iced, which is cross-platform by design, so the desktop p
 ### Platform-specific note on GTA support
 Version 3.x is developed and tested primarily against **Bully Scholarship Edition** archives. IMG v1/v2 parsing works for GTA III, Vice City, and San Andreas, but Bully-specific formats (NIF model inspection, TXD variants, etc.) receive priority. Broader GTA workflow polish — importing, exporting, and format edge cases — is planned for future v4 releases or will be addressed earlier if there is community demand.
 
+### Unicode and non-ASCII language support
+Core archive parsing stores entry names as UTF-8, so non-ASCII characters inside archives round-trip correctly. However, full support for languages like Russian (Cyrillic) is not yet guaranteed:
+
+- Some UI paths and logs still fall back to lossy conversion (`to_string_lossy`), which can mangle Cyrillic file paths.
+- Embedded fonts cover Latin well, but Cyrillic glyph coverage depends on the active font.
+- A future release will audit all path/string display code, ensure proper `OsStr` handling, and verify Cyrillic (and other scripts) render correctly end-to-end.
+
 ---
 
 ## ⌨️ Keyboard shortcuts
