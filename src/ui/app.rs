@@ -1466,7 +1466,6 @@ impl App {
 
         let option_items: Vec<Item<'_, Message, iced::Theme, iced::Renderer>> = ThemeMode::ALL
             .iter()
-            .filter(|mode| !matches!(mode, ThemeMode::System))
             .map(|mode| {
                 let label = if *mode == self.config.theme {
                     format!("● {}", mode.as_str())
