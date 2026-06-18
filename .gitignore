@@ -30,5 +30,4 @@ $RECYCLE.BIN/
 *.log
 
 # Benchmark harnesses (kept locally for research, not published)
-/examples/benchmark_export.rs
-/examples/benchmark_stress.rs
+/examples/benchmark_*.rs

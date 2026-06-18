@@ -20,8 +20,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 | 🐌 **Slow exports on large archives** * | Chunked parallel export + per-worker `BufReader` reads; UI stays responsive and raw throughput is modestly faster than the reference C++ parser on our benchmark * |
 | 🎨 **ImGui theming limitations** | Iced 0.14 reactive UI with a full design token system |
 
-\* *A headless export benchmark on a 12,000-entry Bully `World.img` showed the optimized Rust export was roughly **1.06–1.09x** the C++ parser's throughput on the test machine — a modest win because the reference C++ parser itself is naïve (single-threaded, opens the source file once per entry). A faster I/O redesign is in progress; see [benchmark-results/io-optimization-proposal-2026-06-18.md](../benchmark-results/io-optimization-proposal-2026-06-18.md).*
-
+\* *A headless export benchmark on a 12,000-entry Bully `World.img` showed the optimized Rust export was roughly **1.06–1.07x** the C++ parser's throughput on the test machine when using the `Fast` engine (per-entry source open, matching the C++ benchmark). The default `Parallel` engine is also slightly faster (~1.06x) while keeping the UI responsive and supporting cancellation. See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) and [docs/export-optimization-lessons.md](docs/export-optimization-lessons.md) for the full analysis.*
 \* *See [docs/cpp-codebase-analysis.md](docs/cpp-codebase-analysis.md) for a source-level review of the original C++ codebase. The null-pointer and UI-blocking issues are real, but the analysis shows they are more nuanced than the one-line summary suggests (e.g. save/export were already threaded in C++; the main remaining UI blockers were Open and Import).*
 
 **Result**: a portable, single-binary editor that _won't_ segfault on a 10,000-entry archive.

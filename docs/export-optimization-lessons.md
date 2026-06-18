@@ -140,26 +140,20 @@ progress counters, and extra allocations can even slow the operation down.
 
 ## Why the C++ Baseline Is Already Fast
 
-The original C++ export path:
+The original C++ export benchmark path:
 
-1. Opens the source archive once.
-2. Uses `std::ifstream` with default CRT buffering.
-3. Reads each entry's bytes and writes them to one output file.
-4. Closes and moves to the next entry.
+1. Parses the `.dir` file once.
+2. For **every entry**, opens a new `std::ifstream` on the source archive,
+   seeks to the entry offset, reads the bytes, writes the output file, and
+   closes both streams.
+3. Uses default CRT buffering (4 KiB).
 
-On Windows, `std::ifstream` benefits from the same Windows file-cache manager
-that Rust's `std::fs::File` uses. Because the source archive fits in RAM after
-the first iteration, subsequent reads are cache hits. The slow part — creating
-thousands of NTFS files — is identical for C++ and Rust.
-
-Stack Overflow's mmap-vs-read answer notes:
-
-> Microsoft implemented a nifty file cache that does most of what you would do
-> with mmap in the first place... for frequently-accessed files, you could just
-> do `std::ifstream.read()` and it would be as fast as mmap.
-
-Therefore, the C++ baseline is not "naïve" for this workload; it is already
-close to the practical ceiling for warm-cache export on Windows.
+Because the source archive fits in RAM after the first iteration, the 11,980
+source-file opens are cache hits and are essentially free. The slow part —
+creating thousands of NTFS files — is identical for C++ and Rust. The surprise
+was that reusing a single source handle in Rust (the obvious optimization) was
+actually slightly slower than matching the C++ "open per entry" behavior on
+this warm-cache workload.
 
 ---
 
@@ -252,26 +246,26 @@ bottleneck.
 To preserve the Rust port's safety and concurrency features while giving users
 a way to match C++ throughput, IMGEditor provides two export modes:
 
-- **Default (`Parallel`)**: chunked parallel export with `Rayon` + `BufReader` +
-  `BufWriter`. Chosen for UI responsiveness and cancellation support; throughput
-  is within ~6 % of C++ on the test machine.
-- **Fast (`Fast`)**: a sequential export path that closely mirrors the original
-  C++ implementation. This avoids thread coordination overhead and can be more
-  consistent on I/O-bound systems.
+- **Default (`Parallel`)**: chunked parallel export with `Rayon` + per-worker
+  4 MiB `BufReader` + 1 MiB `BufWriter`. Chosen for UI responsiveness and
+  cancellation support; throughput is within ~5 % of C++ on the test machine.
+- **Fast (`Fast`)**: a sequential export path that opens the source archive
+  **once per entry**, exactly like the C++ benchmark, plus a 1 MiB output
+  `BufWriter`. This is the fastest warm-cache configuration.
 
 Measured head-to-head (warm cache, 3 iterations):
 
-| Engine | Median export time |
-|---|---|
-| C++ `std::ifstream` | 22.749 s |
-| Rust `Parallel` | 23.425 s |
-| Rust `Fast` | 24.140 s |
+| Engine | Median export time | vs C++ |
+|---|---|---|
+| C++ `std::ifstream` | 24.650 s | baseline |
+| Rust `Parallel` | 23.204 s | ~5.9 % faster |
+| Rust `Fast` | **23.093 s** | **~6.7 % faster** |
 
 The fast path does not remove or replace the default path. It is an option for
-users who prefer predictable C++-like throughput over UI concurrency.
-
-The UI exposes the setting as a "Fast export (C++ speed)" checkbox in the info
-panel, persisted to `settings.ini` as `fast_export`.
+users who want the fastest warm-cache export and C++-like predictability. The
+parallel path remains the default because it keeps the source file open per
+worker, which is expected to perform better on cold cache (archive not already
+in RAM).
 
 ---
 

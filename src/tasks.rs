@@ -172,9 +172,6 @@ fn export_entries_sequential(
     completed: &AtomicUsize,
 ) -> Vec<(CompactString, anyhow::Result<()>)> {
     let source_path = archive.path.clone();
-    let mut reader = source_path
-        .as_ref()
-        .map(|path| BufReader::with_capacity(4 * 1024 * 1024, File::open(path).unwrap()));
 
     let mut results = Vec::with_capacity(entries.len());
     for (idx, entry) in entries.iter().enumerate() {
@@ -190,7 +187,7 @@ fn export_entries_sequential(
             archive.version,
             entry,
             source_path.as_deref(),
-            reader.as_mut(),
+            None,
             folder,
         );
 

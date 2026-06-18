@@ -18,6 +18,10 @@ name = "imgeditor"
 path = "src/main.rs"
 
 [[example]]
+name = "benchmark_cancel_latency"
+required-features = ["bench"]
+
+[[example]]
 name = "benchmark_export"
 required-features = ["bench"]
 
