@@ -12,28 +12,16 @@ use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
 use crate::ui::fonts;
 use crate::ui::widgets as w;
 
-fn drag_drop_element() -> Element<'static, Message> {
-    let handle =
-        image::Handle::from_bytes(include_bytes!("../../asset/logo/icons8-drag-and-drop-96.png").to_vec());
-    container(
-        image(handle)
-            .height(Length::Fixed(64.0))
-            .content_fit(iced::ContentFit::Contain),
-    )
-    .width(Length::Fill)
-    .align_x(Alignment::Center)
-    .into()
-}
-
 fn logo_element() -> Element<'static, Message> {
     let handle =
         image::Handle::from_bytes(include_bytes!("../../asset/logo/IMGEditorLogo.png").to_vec());
     container(
         image(handle)
+            .width(Length::Fixed(96.0))
             .height(Length::Fixed(96.0))
             .content_fit(iced::ContentFit::Contain),
     )
-    .width(Length::Fill)
+    .width(Length::Shrink)
     .align_x(Alignment::Center)
     .into()
 }
@@ -780,27 +768,25 @@ fn build_unsupported(app: &App) -> Option<Element<'_, Message>> {
 
 fn build_update_status(app: &App) -> Option<Element<'_, Message>> {
     let msg = app.show_update_status.clone()?;
-    let is_available = matches!(app.update_state, crate::updater::UpdateState::Available { .. });
-    let mut content = column![
-        fonts::body(msg),
-        Space::new().height(Length::Fixed(8.0)),
-    ];
-    if is_available {
-        content = content.push(
+    Some(modal_box(
+        "Update check",
+        column![
+            fonts::body(msg),
+            Space::new().height(Length::Fixed(8.0)),
             checkbox(app.config.update_notify_disabled)
                 .label("Do not show this message again")
                 .on_toggle(Message::ToggleUpdateNotifyDisabled),
-        );
-        content = content.push(Space::new().height(Length::Fixed(8.0)));
-    }
-    content = content.push(row![
-        button(fonts::body("Open releases"))
-            .on_press(Message::VisitRepository)
-            .style(button::primary),
-        Space::new().width(Length::Fixed(8.0)),
-        button(fonts::body("Close")).on_press(Message::HideUpdateStatus),
-    ]);
-    Some(modal_box("Update check", content.spacing(6)))
+            Space::new().height(Length::Fixed(8.0)),
+            row![
+                button(fonts::body("Open releases"))
+                    .on_press(Message::VisitRepository)
+                    .style(button::primary),
+                Space::new().width(Length::Fixed(8.0)),
+                button(fonts::body("Close")).on_press(Message::HideUpdateStatus),
+            ]
+        ]
+        .spacing(6),
+    ))
 }
 
 fn modal_box<'a>(
@@ -811,7 +797,8 @@ fn modal_box<'a>(
     let content = column![fonts::display(title), content]
         .spacing(8)
         .padding(16)
-        .max_width(480);
+        .max_width(480)
+        .width(Length::Shrink);
     // Build a floating card with the design-system colors.
     // We use static defaults here because modal_box is called from a
     // non-App context (Element builder). The design system colors tied

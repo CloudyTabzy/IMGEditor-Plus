@@ -902,23 +902,28 @@ impl App {
             Message::UpdateResultReceived(result) => {
                 let was_manual = self.update_check_manual;
                 self.update_check_manual = false;
+                let suppressed = !was_manual && self.config.update_notify_disabled;
                 match result {
                     UpdateResult::Available { version, url } => {
                         self.update_state = UpdateState::Available {
                             version: version.clone(),
                             url,
                         };
-                        if !self.config.update_notify_disabled || was_manual {
+                        if !suppressed {
                             self.show_update_status = Some(format!("Update available: {version}"));
                         }
                     }
                     UpdateResult::UpToDate => {
                         self.update_state = UpdateState::UpToDate;
-                        self.show_update_status = Some("You are using the latest version.".into());
+                        if !suppressed {
+                            self.show_update_status = Some("You are using the latest version.".into());
+                        }
                     }
                     UpdateResult::Error(err) => {
                         self.update_state = UpdateState::Error(err.clone());
-                        self.show_update_status = Some(format!("Update check failed: {err}"));
+                        if !suppressed {
+                            self.show_update_status = Some(format!("Update check failed: {err}"));
+                        }
                     }
                 }
                 Task::none()
