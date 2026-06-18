@@ -129,6 +129,7 @@ pub enum Message {
     UpdateResultReceived(UpdateResult),
 
     SetTheme(ThemeMode),
+    ToastTimeout,
     TickProgress,
     PaneResized(pane_grid::ResizeEvent),
     OpenLastExportFolder,
@@ -197,6 +198,7 @@ pub struct App {
     prev_tick: Option<std::time::Instant>,
     toast_pulses_remaining: u32,
     toast_pulse_target: f32,
+    toast_start: Option<std::time::Instant>,
 }
 
 impl Default for App {
@@ -242,6 +244,7 @@ impl App {
             prev_tick: None,
             toast_pulses_remaining: 0,
             toast_pulse_target: 0.0,
+            toast_start: None,
         }
     }
 
@@ -934,6 +937,10 @@ impl App {
                 self.save_config();
                 Task::none()
             }
+            Message::ToastTimeout => {
+                self.toast = None;
+                Task::none()
+            }
             Message::TickProgress => {
                 self.poll_viewer_rxs();
                 // Animate the progress bar smoothly towards the current value.
@@ -1014,6 +1021,23 @@ impl App {
                     self.animator.update(dt);
                 }
                 self.prev_tick = Some(now);
+
+                // Auto-dismiss toasts after 2.5 seconds so the green status pulse
+                // does not appear to stay on indefinitely.
+                if self.toast.is_some() {
+                    match self.toast_start {
+                        None => self.toast_start = Some(now),
+                        Some(start) => {
+                            if now.duration_since(start) >= Duration::from_millis(2500) {
+                                self.toast = None;
+                                self.toast_start = None;
+                            }
+                        }
+                    }
+                } else {
+                    self.toast_start = None;
+                }
+
                 Task::none()
             }
             Message::PaneResized(event) => {
