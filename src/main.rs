@@ -52,6 +52,9 @@ pub mod utils;
 mod utils;
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(all(windows, not(feature = "bench")))]
+    hide_console_window();
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         match args[1].as_str() {
@@ -70,4 +73,21 @@ fn main() -> anyhow::Result<()> {
     let config = config::Config::load();
     crate::ui::run_app(config).map_err(|err| anyhow::anyhow!("{err}"))?;
     Ok(())
+}
+
+#[cfg(all(windows, not(feature = "bench")))]
+fn hide_console_window() {
+    use std::ptr;
+
+    unsafe extern "system" {
+        fn GetConsoleWindow() -> *mut std::ffi::c_void;
+        fn FreeConsole() -> i32;
+    }
+
+    unsafe {
+        let window = GetConsoleWindow();
+        if window != ptr::null_mut() {
+            FreeConsole();
+        }
+    }
 }

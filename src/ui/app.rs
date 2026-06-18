@@ -28,7 +28,7 @@ use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
 use crate::ui::theme::resolve_theme;
 use crate::updater::{UpdateResult, UpdateState, check_updates_future};
 
-const REPO_URL: &str = "https://github.com/CloudyTabzy/IMGEditor-rs";
+const REPO_URL: &str = "https://github.com/CloudyTabzy/IMGEditor-Plus";
 const UPDATER_REPO: &str = "CloudyTabzy/IMGEditor-Plus";
 
 pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
@@ -119,6 +119,7 @@ pub enum Message {
     HideWelcome,
     ToggleWelcomePersist(bool),
     ToggleUpdateDisabled(bool),
+    ToggleUpdateNotifyDisabled(bool),
     ShowUnsupported(PathBuf),
     HideUnsupported,
     VisitRepository,
@@ -250,12 +251,15 @@ impl App {
 
     /// The design-token system for the current theme.
     pub fn design(&self) -> Design {
+        let tokens = if matches!(self.config.theme, ThemeMode::DarkEverforest) {
+            crate::ui::tokens::ThemeTokens::everforest()
+        } else if self.theme().extended_palette().is_dark {
+            crate::ui::tokens::ThemeTokens::dark()
+        } else {
+            crate::ui::tokens::ThemeTokens::light()
+        };
         Design::from_tokens(
-            crate::ui::tokens::ThemeTokens::from(if self.theme().extended_palette().is_dark {
-                crate::ui::tokens::ThemeTokens::dark()
-            } else {
-                crate::ui::tokens::ThemeTokens::light()
-            }),
+            tokens,
             self.theme().extended_palette().is_dark,
         )
     }
@@ -866,6 +870,11 @@ impl App {
                 self.save_config();
                 Task::none()
             }
+            Message::ToggleUpdateNotifyDisabled(val) => {
+                self.config.update_notify_disabled = val;
+                self.save_config();
+                Task::none()
+            }
             Message::ShowUnsupported(path) => {
                 self.show_unsupported = Some(path);
                 Task::none()
@@ -891,6 +900,7 @@ impl App {
                 Task::perform(check_updates_future(repo, current), Message::UpdateResultReceived)
             }
             Message::UpdateResultReceived(result) => {
+                let was_manual = self.update_check_manual;
                 self.update_check_manual = false;
                 match result {
                     UpdateResult::Available { version, url } => {
@@ -898,7 +908,9 @@ impl App {
                             version: version.clone(),
                             url,
                         };
-                        self.show_update_status = Some(format!("Update available: {version}"));
+                        if !self.config.update_notify_disabled || was_manual {
+                            self.show_update_status = Some(format!("Update available: {version}"));
+                        }
                     }
                     UpdateResult::UpToDate => {
                         self.update_state = UpdateState::UpToDate;
@@ -1109,13 +1121,23 @@ impl App {
             }
 
             Message::FilesDropped(path) => {
-                if self.editor.selected_archive().is_some() {
+                if path.extension().is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("img")
+                }) {
+                    if let Err(err) = self.editor.open_archive(&path) {
+                        if matches!(err, crate::editor::OpenArchiveError::UnsupportedFormat) {
+                            self.show_unsupported = Some(path);
+                        } else {
+                            self.toast = Some(format!("Failed to open archive: {err}"));
+                        }
+                    }
+                } else if self.editor.selected_archive().is_some() {
                     self.toast = Some(format!("Imported {} dropped files.", 1));
                     if let Some((_index, _archive)) = self.editor.clone_selected_archive() {
                         self.editor.append_import(_index, vec![path], false);
                     }
                 } else {
-                    self.toast = Some("Open an archive first to drop files into it.".into());
+                    self.toast = Some("Open an archive first to drop non-IMG files into it.".into());
                 }
                 Task::none()
             }
@@ -1573,11 +1595,23 @@ pub fn run_app(config: Config) -> iced::Result {
         ],
         ..iced::Settings::default()
     })
+    .window(iced::window::Settings {
+        icon: window_icon(),
+        ..iced::window::Settings::default()
+    })
     .default_font(crate::ui::fonts::INTER)
     .window_size(size)
     .resizable(true)
     .centered()
     .run()
+}
+
+fn window_icon() -> Option<iced::window::Icon> {
+    let bytes = include_bytes!("../../asset/logo/IMGEditorLogo.png");
+    let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png).ok()?;
+    let image = image.to_rgba8();
+    let (width, height) = image.dimensions();
+    iced::window::icon::from_rgba(image.into_raw(), width, height).ok()
 }
 
 #[allow(dead_code)]

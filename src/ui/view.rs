@@ -12,9 +12,22 @@ use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
 use crate::ui::fonts;
 use crate::ui::widgets as w;
 
+fn drag_drop_element() -> Element<'static, Message> {
+    let handle =
+        image::Handle::from_bytes(include_bytes!("../../asset/logo/icons8-drag-and-drop-96.png").to_vec());
+    container(
+        image(handle)
+            .height(Length::Fixed(64.0))
+            .content_fit(iced::ContentFit::Contain),
+    )
+    .width(Length::Fill)
+    .align_x(Alignment::Center)
+    .into()
+}
+
 fn logo_element() -> Element<'static, Message> {
     let handle =
-        image::Handle::from_bytes(include_bytes!("../../fonts/logo/IMGEditorLogo.png").to_vec());
+        image::Handle::from_bytes(include_bytes!("../../asset/logo/IMGEditorLogo.png").to_vec());
     container(
         image(handle)
             .height(Length::Fixed(96.0))
@@ -636,6 +649,8 @@ pub fn build(app: &App) -> Element<'_, Message> {
             column![
                 Space::new().height(Length::Fill),
                 fonts::display("Open or create an archive to get started."),
+                Space::new().height(Length::Fixed(8.0)),
+                fonts::caption("Or drag and drop an .img file here to open it."),
                 Space::new().height(Length::Fill),
             ]
             .align_x(Alignment::Center),
@@ -765,21 +780,27 @@ fn build_unsupported(app: &App) -> Option<Element<'_, Message>> {
 
 fn build_update_status(app: &App) -> Option<Element<'_, Message>> {
     let msg = app.show_update_status.clone()?;
-    Some(modal_box(
-        "Update check",
-        column![
-            fonts::body(msg),
-            Space::new().height(Length::Fixed(8.0)),
-            row![
-                button(fonts::body("Open releases"))
-                    .on_press(Message::VisitRepository)
-                    .style(button::primary),
-                Space::new().width(Length::Fixed(8.0)),
-                button(fonts::body("Close")).on_press(Message::HideUpdateStatus),
-            ]
-        ]
-        .spacing(6),
-    ))
+    let is_available = matches!(app.update_state, crate::updater::UpdateState::Available { .. });
+    let mut content = column![
+        fonts::body(msg),
+        Space::new().height(Length::Fixed(8.0)),
+    ];
+    if is_available {
+        content = content.push(
+            checkbox(app.config.update_notify_disabled)
+                .label("Do not show this message again")
+                .on_toggle(Message::ToggleUpdateNotifyDisabled),
+        );
+        content = content.push(Space::new().height(Length::Fixed(8.0)));
+    }
+    content = content.push(row![
+        button(fonts::body("Open releases"))
+            .on_press(Message::VisitRepository)
+            .style(button::primary),
+        Space::new().width(Length::Fixed(8.0)),
+        button(fonts::body("Close")).on_press(Message::HideUpdateStatus),
+    ]);
+    Some(modal_box("Update check", content.spacing(6)))
 }
 
 fn modal_box<'a>(

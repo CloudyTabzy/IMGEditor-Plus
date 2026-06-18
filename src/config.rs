@@ -11,6 +11,7 @@ pub enum ThemeMode {
     DarkCatppuccin,
     DarkTokyoNight,
     DarkGruvbox,
+    DarkEverforest,
 }
 
 impl ThemeMode {
@@ -21,6 +22,7 @@ impl ThemeMode {
             ThemeMode::DarkCatppuccin => "Catppuccin Mocha",
             ThemeMode::DarkTokyoNight => "Tokyo Night",
             ThemeMode::DarkGruvbox => "Gruvbox",
+            ThemeMode::DarkEverforest => "Everforest",
         }
     }
 
@@ -28,12 +30,13 @@ impl ThemeMode {
         !matches!(self, ThemeMode::Light)
     }
 
-    pub const ALL: [ThemeMode; 5] = [
+    pub const ALL: [ThemeMode; 6] = [
         ThemeMode::System,
         ThemeMode::Light,
         ThemeMode::DarkCatppuccin,
         ThemeMode::DarkTokyoNight,
         ThemeMode::DarkGruvbox,
+        ThemeMode::DarkEverforest,
     ];
 }
 
@@ -47,6 +50,7 @@ impl FromStr for ThemeMode {
             "Catppuccin Mocha" | "Catppuccin" => Ok(ThemeMode::DarkCatppuccin),
             "Tokyo Night" | "TokyoNight" => Ok(ThemeMode::DarkTokyoNight),
             "Gruvbox" => Ok(ThemeMode::DarkGruvbox),
+            "Everforest" => Ok(ThemeMode::DarkEverforest),
             _ => Err(()),
         }
     }
@@ -67,6 +71,7 @@ pub struct Config {
     pub last_export_folder: Option<PathBuf>,
     pub last_open_folder: Option<PathBuf>,
     pub update_check_enabled: bool,
+    pub update_notify_disabled: bool,
     pub fast_export: bool,
 }
 
@@ -79,6 +84,7 @@ impl Default for Config {
             last_export_folder: None,
             last_open_folder: None,
             update_check_enabled: true,
+            update_notify_disabled: false,
             fast_export: false,
         }
     }
@@ -138,6 +144,9 @@ impl Config {
                 "update_check_enabled" => {
                     config.update_check_enabled = value.eq_ignore_ascii_case("true");
                 }
+                "update_notify_disabled" => {
+                    config.update_notify_disabled = value.eq_ignore_ascii_case("true");
+                }
                 "fast_export" => {
                     config.fast_export = value.eq_ignore_ascii_case("true");
                 }
@@ -191,6 +200,15 @@ impl Config {
             file,
             "update_check_enabled={}",
             if self.update_check_enabled {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
+        writeln!(
+            file,
+            "update_notify_disabled={}",
+            if self.update_notify_disabled {
                 "true"
             } else {
                 "false"
@@ -257,6 +275,7 @@ mod tests {
             last_export_folder: Some(PathBuf::from("C:/out")),
             last_open_folder: Some(PathBuf::from("C:/in")),
             update_check_enabled: false,
+            update_notify_disabled: true,
             fast_export: true,
         };
         original.save_to_path(&path).unwrap();

@@ -1,6 +1,6 @@
 [package]
 name = "imgeditor"
-version = "3.2.0"
+version = "3.3.0"
 edition = "2024"
 rust-version = "1.96"
 
@@ -38,6 +38,7 @@ dark-light = "2"
 iced = { version = "0.14", features = ["tokio", "lazy", "advanced", "highlighter", "image", "svg"] }
 iced_aw = { version = "0.14.1", features = ["menu", "tabs", "context_menu", "card"] }
 iced_fonts = { version = "0.3.0", features = ["lucide"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 memmap2 = "0.9"
 rayon = "1.10"
 serde_json = "1"
@@ -55,6 +56,9 @@ rfd = { version = "0.15", default-features = false, features = ["tokio", "common
 
 [dev-dependencies]
 tempfile = "3"
+
+[build-dependencies]
+embed-resource = "2"
 
 [profile.release]
 lto = "thin"

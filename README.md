@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v3.2
+# 🎮 IMG Editor Plus v3.3
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -38,7 +38,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Two export engines** — `Parallel` (default, responsive) or `Fast` (C++-like throughput); toggle via the "Fast export" checkbox in the info panel
 - ✅ **Memory-mapped reads** — instant open on large archives
 - ✅ **Multiple archive tabs** with dirty-file indicator
-- ✅ **Drag-and-drop** file import from Explorer
+- ✅ **Drag-and-drop** — open `.img` archives or import files from Explorer
 
 ---
 

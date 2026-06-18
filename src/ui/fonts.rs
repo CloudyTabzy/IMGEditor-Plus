@@ -1,10 +1,10 @@
 use iced::font::{Family, Weight};
 use iced::widget::Text;
 
-pub const INTER_FONT_BYTES: &[u8] =
-    include_bytes!("../../fonts/inter/Inter-VariableFont_opsz,wght.ttf");
+pub const INTER_FONT_BYTES: &[u8] = include_bytes!("../../asset/inter/Inter-VariableFont_opsz,wght.ttf");
+
 pub const BRICOLAGE_DISPLAY_FONT_BYTES: &[u8] =
-    include_bytes!("../../fonts/Bricolage_Grotesque/static/BricolageGrotesque-ExtraBold.ttf");
+    include_bytes!("../../asset/Bricolage_Grotesque/static/BricolageGrotesque-ExtraBold.ttf");
 
 pub const INTER: iced::Font = iced::Font {
     family: Family::Name("Inter"),

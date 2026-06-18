@@ -113,4 +113,11 @@ mod tests {
         assert!(parse_version("0.10.0").unwrap() > parse_version("0.9.0").unwrap());
         assert!(parse_version("1.2.10").unwrap() > parse_version("1.2.2").unwrap());
     }
+
+    #[test]
+    fn same_version_is_up_to_date() {
+        let current = parse_version("3.3.0").unwrap();
+        let latest = parse_version("v3.3.0").unwrap();
+        assert!(!(latest > current));
+    }
 }

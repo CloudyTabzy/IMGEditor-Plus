@@ -4,6 +4,19 @@ use crate::config::ThemeMode;
 
 pub const APP_NAME: &str = "IMG Editor Plus";
 
+const EVERFOREST_PALETTE: iced::theme::Palette = iced::theme::Palette {
+    background: iced::color!(0x2D353B),
+    text: iced::color!(0xD3C6AA),
+    primary: iced::color!(0xA7C080),
+    success: iced::color!(0x83C092),
+    warning: iced::color!(0xDBBC7F),
+    danger: iced::color!(0xE67E80),
+};
+
+pub fn everforest_theme() -> Theme {
+    Theme::custom("Everforest", EVERFOREST_PALETTE)
+}
+
 /// Resolve the runtime [`Theme`] from the user-configured [`ThemeMode`],
 /// falling back to system preference when `ThemeMode::System` is selected.
 ///
@@ -21,6 +34,7 @@ pub fn resolve_theme(mode: ThemeMode) -> Theme {
         ThemeMode::DarkCatppuccin => Theme::CatppuccinMocha,
         ThemeMode::DarkTokyoNight => Theme::TokyoNight,
         ThemeMode::DarkGruvbox => Theme::GruvboxDark,
+        ThemeMode::DarkEverforest => everforest_theme(),
     }
 }
 
@@ -40,5 +54,9 @@ mod tests {
             Theme::TokyoNight
         ));
         assert!(matches!(resolve_theme(ThemeMode::DarkGruvbox), Theme::GruvboxDark));
+        assert!(matches!(
+            resolve_theme(ThemeMode::DarkEverforest),
+            Theme::Custom(_)
+        ));
     }
 }
