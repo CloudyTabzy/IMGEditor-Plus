@@ -117,7 +117,7 @@ The built-in dark mode for late-night archive work.
 *Deep greys with subtle contrast and a calm purple primary — easy on the eyes in low light.*
 
 ### Catppuccin Mocha
-A cozy, pastel-rich dark theme with soft pinks and blues.
+A cozy, pastel-rich dark theme with soft purples and blues.
 
 ![Catppuccin Mocha theme](asset/themes-images/Catppuccin_Mocha.png)
 *Warm, muted colors that feel like your favorite coffee shop playlist.*
