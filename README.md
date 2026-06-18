@@ -87,13 +87,60 @@ for the engineering story behind the two engines.
 - ✅ **Copy entry details** to clipboard
 
 ### 🏗️ Design & UX
-- ✅ **5 theme modes** — System, Light, Catppuccin Mocha, Tokyo Night, Gruvbox Dark
+- ✅ **6 theme modes** — System, Light, Catppuccin Mocha, Tokyo Night, Gruvbox Dark, **Everforest**
 - ✅ **Design token system** — Tailwind-inspired color/spacing/radius/elevation scales, vendored in-tree
 - ✅ **Smooth animation engine** — 26 easing curves, animated progress bar, animated status-bar pulse
 - ✅ **Inter + Bricolage + Lucide icon fonts** — clean, modern typography
 - ✅ **Resizable master/detail panes** — drag the splitter
 - ✅ **Editable keyboard shortcuts** — see table below
 - ✅ **DPI-aware** window sizing
+
+---
+
+## 🎨 Themes
+
+Pick your vibe from the **View → Theme** menu. Every theme is wired into a shared design-token system so buttons, tables, modals, and accents stay consistent.
+
+<details>
+<summary>Click to preview all themes</summary>
+
+### Default Light
+A clean, neutral workspace that keeps the focus on your archive contents.
+
+![Default Light theme](asset/themes-images/Default_Light.png)
+*Bright surfaces, crisp text, and a friendly blue accent — perfect for daytime editing.*
+
+### Default Dark
+The built-in dark mode for late-night archive work.
+
+![Default Dark theme](asset/themes-images/Default_Dark.png)
+*Deep greys with subtle contrast and a calm blue primary — easy on the eyes in low light.*
+
+### Catppuccin Mocha
+A cozy, pastel-rich dark theme with soft pinks and blues.
+
+![Catppuccin Mocha theme](asset/themes-images/Catppuccin_Mocha.png)
+*Warm, muted colors that feel like your favorite coffee shop playlist.*
+
+### Tokyo Night
+A sleek, neon-tinged dark theme inspired by the city after dark.
+
+![Tokyo Night theme](asset/themes-images/Tokyo_Night.png)
+*Cool purples and electric cyans for a modern, developer-centric look.*
+
+### Gruvbox Dark
+A retro, low-contrast dark theme with earthy tones.
+
+![Gruvbox Dark theme](asset/themes-images/Gruvbox.png)
+*Vintage amber and olive greens that hark back to classic terminal palettes.*
+
+### Everforest 🌲
+A comfortable green-based dark theme designed to be warm and soft.
+
+![Everforest theme](asset/themes-images/Everforest.png)
+*Muted sage greens and creamy text — the newest addition for users who want a natural, forest-inspired workspace.*
+
+</details>
 
 ### ⚙️ Configuration
 - ✅ **`settings.ini`** — persists theme, window geometry, last-used folders, update preferences
