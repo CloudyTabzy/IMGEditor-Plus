@@ -114,7 +114,7 @@ A clean, neutral workspace that keeps the focus on your archive contents.
 The built-in dark mode for late-night archive work.
 
 ![Default Dark theme](asset/themes-images/Default_Dark.png)
-*Deep greys with subtle contrast and a calm blue primary — easy on the eyes in low light.*
+*Deep greys with subtle contrast and a calm purple primary — easy on the eyes in low light.*
 
 ### Catppuccin Mocha
 A cozy, pastel-rich dark theme with soft pinks and blues.

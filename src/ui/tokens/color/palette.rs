@@ -67,11 +67,11 @@ impl Default for SemanticColors {
 
 fn default_primary() -> ColorScale {
     ColorScale::new(
-        Color::from_hex(0xEFF6FF), Color::from_hex(0xDBEAFE),
-        Color::from_hex(0xBFDBFE), Color::from_hex(0x93C5FD),
-        Color::from_hex(0x60A5FA), Color::from_hex(0x3B82F6),
-        Color::from_hex(0x2563EB), Color::from_hex(0x1D4ED8),
-        Color::from_hex(0x1E40AF), Color::from_hex(0x1E3A8A),
+        Color::from_hex(0xE8FBFC), Color::from_hex(0xC2F5F8),
+        Color::from_hex(0x9BEDF4), Color::from_hex(0x55E2E9),
+        Color::from_hex(0x2FD4E0), Color::from_hex(0x1CBAC7),
+        Color::from_hex(0x1399A8), Color::from_hex(0x107A88),
+        Color::from_hex(0x0F5E6B), Color::from_hex(0x0D4D59),
     )
 }
 

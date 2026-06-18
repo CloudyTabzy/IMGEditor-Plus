@@ -24,12 +24,7 @@ pub fn everforest_theme() -> Theme {
 /// reuse the same probe the framework uses internally to stay consistent.
 pub fn resolve_theme(mode: ThemeMode) -> Theme {
     match mode {
-        ThemeMode::System => {
-            match dark_light::detect() {
-                Ok(dark_light::Mode::Dark) => Theme::Dark,
-                _ => Theme::Light,
-            }
-        }
+        ThemeMode::System => Theme::Dark,
         ThemeMode::Light => Theme::Light,
         ThemeMode::DarkCatppuccin => Theme::CatppuccinMocha,
         ThemeMode::DarkTokyoNight => Theme::TokyoNight,

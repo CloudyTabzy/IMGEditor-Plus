@@ -3,9 +3,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
-    #[default]
     System,
     Light,
     DarkCatppuccin,
@@ -14,10 +13,16 @@ pub enum ThemeMode {
     DarkEverforest,
 }
 
+impl Default for ThemeMode {
+    fn default() -> Self {
+        ThemeMode::System
+    }
+}
+
 impl ThemeMode {
     pub const fn as_str(&self) -> &'static str {
         match self {
-            ThemeMode::System => "System",
+            ThemeMode::System => "Dark",
             ThemeMode::Light => "Light",
             ThemeMode::DarkCatppuccin => "Catppuccin Mocha",
             ThemeMode::DarkTokyoNight => "Tokyo Night",
@@ -45,6 +50,7 @@ impl FromStr for ThemeMode {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim() {
+            "Dark" => Ok(ThemeMode::System),
             "System" => Ok(ThemeMode::System),
             "Light" => Ok(ThemeMode::Light),
             "Catppuccin Mocha" | "Catppuccin" => Ok(ThemeMode::DarkCatppuccin),

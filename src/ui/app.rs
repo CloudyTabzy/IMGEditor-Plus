@@ -1466,6 +1466,7 @@ impl App {
 
         let option_items: Vec<Item<'_, Message, iced::Theme, iced::Renderer>> = ThemeMode::ALL
             .iter()
+            .filter(|mode| !matches!(mode, ThemeMode::System))
             .map(|mode| {
                 let label = if *mode == self.config.theme {
                     format!("● {}", mode.as_str())
@@ -1505,7 +1506,7 @@ impl App {
             Item::with_menu(menu_label("File"), file_menu),
             Item::with_menu(menu_label("Edit"), edit_menu),
             Item::with_menu(menu_label("Selection"), selection_menu),
-            Item::with_menu(menu_label("Option"), option_menu),
+            Item::with_menu(menu_label("Themes"), option_menu),
             Item::with_menu(menu_label("Help"), help_menu),
         ]);
 
