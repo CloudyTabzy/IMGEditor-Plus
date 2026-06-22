@@ -453,3 +453,74 @@ fn extract_dds_from_nipixeldata(pd: &NiPixelDataPayload) -> Option<Vec<u8>> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dxt_chain_size_known_formats() {
+        let (size, mips) = dxt_chain_size(512, 512, b"DXT1");
+        assert_eq!(size, 174_776);
+        assert_eq!(mips, 10);
+
+        let (size, _) = dxt_chain_size(256, 256, b"DXT1");
+        assert_eq!(size, 43_704);
+
+        let (size, _) = dxt_chain_size(256, 256, b"DXT5");
+        assert_eq!(size, 87_408);
+
+        let (size, _) = dxt_chain_size(128, 128, b"DXT1");
+        assert_eq!(size, 10_936);
+
+        let (size, _) = dxt_chain_size(64, 64, b"DXT1");
+        assert_eq!(size, 2_744);
+
+        let (size, _) = dxt_chain_size(64, 64, b"DXT5");
+        assert_eq!(size, 5_488);
+
+        let (size, _) = dxt_chain_size(32, 32, b"DXT1");
+        assert_eq!(size, 696);
+
+        let (size, _) = dxt_chain_size(256, 64, b"DXT1");
+        assert_eq!(size, 10_952);
+    }
+
+    #[test]
+    fn nipixeldata_32x32_dxt1_round_trip() {
+        let raw = vec![0u8; 843];
+        let pd = NiPixelDataPayload {
+            pixel_format: 4,
+            num_faces: 1,
+            num_mipmaps: 6,
+            bytes_per_pixel: 4,
+            num_pixels: 1024,
+            raw_pixels: raw,
+        };
+        let out = extract_dds_from_nipixeldata(&pd).expect("32x32 DXT1 should match");
+        // TGA header (18) + 32*32*4 RGBA pixels
+        assert_eq!(out.len(), 18 + 32 * 32 * 4);
+        // First 12 bytes of TGA header
+        assert_eq!(&out[0..3], &[0, 0, 2]);
+        // Width/height LE at offset 12
+        assert_eq!(u16::from_le_bytes([out[12], out[13]]), 32);
+        assert_eq!(u16::from_le_bytes([out[14], out[15]]), 32);
+    }
+
+    #[test]
+    fn nipixeldata_512x512_dxt1_round_trip() {
+        let raw = vec![0u8; 174_971];
+        let pd = NiPixelDataPayload {
+            pixel_format: 4,
+            num_faces: 1,
+            num_mipmaps: 10,
+            bytes_per_pixel: 4,
+            num_pixels: 262_144,
+            raw_pixels: raw,
+        };
+        let out = extract_dds_from_nipixeldata(&pd).expect("512x512 DXT1 should match");
+        assert_eq!(out.len(), 18 + 512 * 512 * 4);
+        assert_eq!(u16::from_le_bytes([out[12], out[13]]), 512);
+        assert_eq!(u16::from_le_bytes([out[14], out[15]]), 512);
+    }
+}
