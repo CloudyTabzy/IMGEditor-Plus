@@ -658,10 +658,23 @@ fn extract_dds_from_nipixeldata(pd: &NiPixelDataPayload) -> Option<Vec<u8>> {
     // window is the only thing that makes this work for the simple
     // 9/12 case and is known to fail for `Player_03_d`, `_n`, `_s`
     // in Bully's PLAYER.nft.
+    //
+    // The candidate list covers all the (w, h) pairs seen in Bully's
+    // 4469 NFT files plus the common sizes. Keep this list ordered
+    // largest-first to make the (chain + hdr_sz) arithmetic unique.
     let block_size = raw.len() as u32;
-    let candidates: [(u32, u32); 9] = [
-        (512, 512), (256, 256), (128, 128), (64, 64),
-        (32, 32), (16, 16), (256, 128), (128, 256), (256, 64),
+    let candidates: [(u32, u32); 34] = [
+        (1024, 1024), (1024, 512), (512, 1024),
+        (1024, 256), (256, 1024), (1024, 128), (128, 1024),
+        (512, 512), (512, 256), (256, 512),
+        (512, 128), (128, 512),
+        (256, 256), (256, 128), (128, 256),
+        (256, 64), (64, 256),
+        (256, 32), (32, 256),
+        (128, 128), (128, 64), (64, 128),
+        (128, 32), (32, 128), (128, 16), (16, 128),
+        (64, 64), (64, 32), (32, 64), (64, 16), (16, 64),
+        (32, 32), (16, 16), (8, 8),
     ];
     let four_dxt1 = b"DXT1";
     let four_dxt5 = b"DXT5";
@@ -731,7 +744,18 @@ mod tests {
 
     #[test]
     fn nipixeldata_32x32_dxt1_round_trip() {
-        let raw = vec![0u8; 843];
+        // 32×32 DXT1 = 696 bytes chain, 6 mipmaps. Total raw =
+        // 75 + 12*6 = 147 byte header + 696 = 843 bytes.
+        let mips = [
+            (32, 32, 0),
+            (16, 16, 512),
+            (8, 8, 640),
+            (4, 4, 672),
+            (2, 2, 680),
+            (1, 1, 688),
+        ];
+        let dxt_data = vec![0u8; 696];
+        let raw = build_test_nipixeldata(4, &mips, &dxt_data);
         let pd = NiPixelDataPayload {
             pixel_format: 4,
             num_faces: 1,
@@ -752,7 +776,23 @@ mod tests {
 
     #[test]
     fn nipixeldata_512x512_dxt1_round_trip() {
-        let raw = vec![0u8; 174_971];
+        // 512×512 DXT1 = 174,776 bytes chain, 10 mipmaps. Total
+        // raw = 75 + 12*10 = 195 byte header + 174,776 = 174,971
+        // bytes.
+        let mips = [
+            (512, 512, 0),
+            (256, 256, 131_072),
+            (128, 128, 163_840),
+            (64, 64, 172_032),
+            (32, 32, 174_080),
+            (16, 16, 174_592),
+            (8, 8, 174_720),
+            (4, 4, 174_752),
+            (2, 2, 174_760),
+            (1, 1, 174_768),
+        ];
+        let dxt_data = vec![0u8; 174_776];
+        let raw = build_test_nipixeldata(4, &mips, &dxt_data);
         let pd = NiPixelDataPayload {
             pixel_format: 4,
             num_faces: 1,
