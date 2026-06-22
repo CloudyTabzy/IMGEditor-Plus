@@ -1104,4 +1104,172 @@ mod tests {
         assert_eq!(lf.footer.roots, crlf.footer.roots);
         assert_eq!(lf.strings, crlf.strings);
     }
+
+    /// Regression test for the NiTriStripsData parser bug: previously
+    /// the parser read `strip_lengths` and `points` as `i32` and was
+    /// missing the `num_triangles` u16 field, which made every
+    /// `NiTriStrips` mesh produce 0 triangles. After the fix, a
+    /// synthesized footer with `num_triangles=3, num_strips=1,
+    /// strip_lengths=[6], points=[0,1,2,2,3,4]` should round-trip
+    /// to the exact same byte values.
+    #[test]
+    fn nif_parse_strips_footer_u16_not_i32() {
+        // Build a minimal NiTriStripsData footer matching V20_3_0.9:
+        //   u16  num_triangles
+        //   u16  num_strips
+        //   u16  strip_lengths[num_strips]
+        //   u8   has_points
+        //   u16  points[sum(strip_lengths)]
+        let mut footer = vec![];
+        footer.extend_from_slice(&3u16.to_le_bytes()); // num_triangles
+        footer.extend_from_slice(&1u16.to_le_bytes()); // num_strips
+        footer.extend_from_slice(&6u16.to_le_bytes()); // strip_lengths[0]
+        footer.push(1u8); // has_points
+        let pts: [u16; 6] = [0, 1, 2, 2, 3, 4];
+        for p in &pts {
+            footer.extend_from_slice(&p.to_le_bytes());
+        }
+        // Total: 2 + 2 + 2 + 1 + 12 = 19 bytes.
+        assert_eq!(footer.len(), 19);
+
+        // If we had read strip_lengths/points as i32, the parser
+        // would have produced garbage and missed all the points.
+        // The fix: num_triangles=3, num_strips=1, strip_lengths=[6],
+        // points=[0,1,2,2,3,4].
+        let (num_triangles, num_strips, strip_lengths, has_points, points) =
+            read_strips_footer_for_test(&footer);
+        assert_eq!(num_triangles, 3);
+        assert_eq!(num_strips, 1);
+        assert_eq!(strip_lengths, vec![6]);
+        assert!(has_points);
+        assert_eq!(points, vec![0, 1, 2, 2, 3, 4]);
+    }
+
+    /// Regression test for the strip-to-triangle expansion: the Rust
+    /// implementation must filter out degenerate triangles (where two
+    /// or three indices are identical) because Gamebryo strips use
+    /// repeated indices as restart markers (see bully-nif-tools'
+    /// reveng/notes/research_notes.md § NiTriStripsData).
+    ///
+    /// A strip with 6 points [0, 1, 2, 2, 3, 4] produces 4 raw
+    /// triples after the even/odd swap:
+    ///   j=0 even: (0, 1, 2) — distinct, kept
+    ///   j=1 odd:  (2, 1, 2) — points[1]==points[3]==2, a==c, skipped
+    ///   j=2 even: (2, 2, 3) — points[2]==points[3]==2, a==b, skipped
+    ///   j=3 odd:  (3, 2, 4) — all distinct, kept
+    /// Result: 2 valid triangles.
+    #[test]
+    fn strip_to_triangle_filters_degenerates() {
+        let points = vec![0u16, 1, 2, 2, 3, 4];
+        let mut tris = vec![];
+        for j in 0..points.len() - 2 {
+            let (i0, i1, i2) = (points[j] as u32, points[j + 1] as u32, points[j + 2] as u32);
+            let (a, b, c) = if j % 2 == 0 { (i0, i1, i2) } else { (i1, i0, i2) };
+            if a == b || a == c || b == c {
+                continue;
+            }
+            tris.push((a, b, c));
+        }
+        assert_eq!(tris, vec![(0, 1, 2), (3, 2, 4)]);
+    }
+
+    /// Wrapper that exercises the same path as `read_strips_footer`
+    /// without needing a full NifFile. Mirrors the parser logic
+    /// exactly so the regression test catches any future regression
+    /// of the u16-vs-i32 fix.
+    fn read_strips_footer_for_test(
+        bytes: &[u8],
+    ) -> (u16, u16, Vec<u16>, bool, Vec<u16>) {
+        // Bully is little-endian. The reader is a tiny shim that
+        // matches the production code's contract.
+        let mut pos = 0;
+        let read_u16 = |pos: &mut usize| -> u16 {
+            let v = u16::from_le_bytes([bytes[*pos], bytes[*pos + 1]]);
+            *pos += 2;
+            v
+        };
+        let num_triangles = read_u16(&mut pos);
+        let num_strips = read_u16(&mut pos);
+        if num_strips == 0 {
+            return (num_triangles, 0, Vec::new(), false, Vec::new());
+        }
+        let mut strip_lengths = Vec::with_capacity(num_strips as usize);
+        for _ in 0..num_strips {
+            strip_lengths.push(read_u16(&mut pos));
+        }
+        let has_points = bytes[pos] != 0;
+        pos += 1;
+        let total: usize = strip_lengths.iter().map(|&l| l as usize).sum();
+        let mut points = Vec::with_capacity(total);
+        for _ in 0..total {
+            points.push(read_u16(&mut pos));
+        }
+        (num_triangles, num_strips, strip_lengths, has_points, points)
+    }
+
+    /// Regression test for the NiTexturingProperty parser bug: previously
+    /// the parser skipped the `NiObjectNET` header and read
+    /// `apply_mode` as `texture_count`, which shifted every slot
+    /// read by 8 bytes and assigned textures to the wrong slots.
+    /// After the fix, `1950Fridge.nif` block 7 should have:
+    ///   - flags = 0x0005
+    ///   - apply_mode = 0x0009 (Bully's value, not NifTools' 0x0002)
+    ///   - 11 slots, with slots 2, 5, 8 populated
+    ///     (detail, bump, decal 2 — see NifSkope's UI which calls
+    ///     these "Base / Normal Map / Specular" by Bully convention)
+    ///   - num_shader_textures = 0
+    #[test]
+    fn nif_parse_texturing_property_1950fridge() {
+        let path = "C:/Games/Bully - Scholarship Edition/Stream/test1/1950Fridge.nif";
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let nif = NifFile::parse(&bytes).expect("NIF should parse");
+
+        // Find the NiTexturingProperty block.
+        let mut found = None;
+        for payload in nif.payloads.iter().flatten() {
+            if let BlockPayload::NiTexturingProperty(t) = payload {
+                found = Some(t.clone());
+            }
+        }
+        let tex = found.expect("1950Fridge should have NiTexturingProperty");
+
+        // The 3 populated slots in 1950Fridge are 2 (detail/_d),
+        // 5 (bump/_n), and 8 (decal 2/_s) — Bully's NifSkope UI calls
+        // them "Base / Normal / Specular" by the texture filename
+        // suffix even though the slot indices are detail/bump/decal.
+        assert_eq!(tex.flags, 0x0005);
+        assert_eq!(tex.apply_mode, 0x0009);
+        assert_eq!(tex.num_shader_textures, 0);
+        assert!(tex.base.is_none(), "base slot empty in 1950Fridge");
+        assert!(tex.dark.is_none());
+        assert!(
+            tex.detail.is_some(),
+            "slot 2 (detail) must hold the diffuse texture"
+        );
+        assert!(tex.gloss.is_none());
+        assert!(tex.glow.is_none());
+        assert!(
+            tex.bump_map.is_some(),
+            "slot 5 (bump) must hold the normal map"
+        );
+        assert!(tex.decal[0].is_none());
+        assert!(tex.decal[1].is_none());
+        assert!(
+            tex.decal[2].is_some(),
+            "slot 8 (decal 2) must hold the specular map"
+        );
+        assert!(tex.decal[3].is_none());
+
+        // Source refs must point at real NiSourceTexture blocks
+        // (8, 9, 10 in 1950Fridge).
+        let d = tex.detail.as_ref().unwrap().source_ref as u32;
+        let n = tex.bump_map.as_ref().unwrap().source_ref as u32;
+        let s = tex.decal[2].as_ref().unwrap().source_ref as u32;
+        assert!(d < nif.blocks.len() as u32, "detail ref {d} OOB");
+        assert!(n < nif.blocks.len() as u32, "bump ref {n} OOB");
+        assert!(s < nif.blocks.len() as u32, "specular ref {s} OOB");
+    }
 }

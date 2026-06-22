@@ -202,34 +202,22 @@ fn write_obj_with_texture(
         writeln!(f, "mtllib {stem}.mtl")?;
         writeln!(f, "o {stem}")?;
 
-        // We must re-index: OBJ vertex indices are 1-based per-group and
-        // the v/vt/vn arrays must be parallel (same length).
-        // Build interleaved vertex data.
         let has_uv = !mesh.uvs.is_empty();
         let has_normals = !mesh.normals.is_empty();
 
-        for i in 0..mesh.positions.len() {
-            let p = &mesh.positions[i];
-            write!(f, "v {} {} {}", p[0], p[1], p[2])?;
-            if has_uv && i < mesh.uvs.len() {
-                let uv = &mesh.uvs[i];
-                write!(f, " {} {}", uv[0], uv[1])?;
-            }
-            if has_normals && i < mesh.normals.len() {
-                let n = &mesh.normals[i];
-                write!(f, " {} {} {}", n[0], n[1], n[2])?;
-            }
-            writeln!(f)?;
+        // Position records (v).
+        for p in &mesh.positions {
+            writeln!(f, "v {} {} {}", p[0], p[1], p[2])?;
         }
 
-        // UV-only vertex data for OBJ vt records.
+        // UV records (vt) — must be 1-indexed in face lines.
         if has_uv {
             for uv in &mesh.uvs {
                 writeln!(f, "vt {} {}", uv[0], uv[1])?;
             }
         }
 
-        // Normal-only vertex data for OBJ vn records.
+        // Normal records (vn) — must be 1-indexed in face lines.
         if has_normals {
             for n in &mesh.normals {
                 writeln!(f, "vn {} {} {}", n[0], n[1], n[2])?;
@@ -239,7 +227,9 @@ fn write_obj_with_texture(
         writeln!(f, "usemtl material_0")?;
         writeln!(f, "s off")?;
 
-        // OBJ uses 1-based indices.
+        // OBJ uses 1-based indices into v / vt / vn separately. The
+        // vertex i holds position v[i+1], and optionally vt[i+1] and
+        // vn[i+1] when those arrays are populated.
         for tri in mesh.indices.chunks(3) {
             let i0 = tri[0] + 1;
             let i1 = tri[1] + 1;
@@ -941,15 +931,21 @@ fn append_mesh(
                 let i0 = strips.points[offset + j] as u32;
                 let i1 = strips.points[offset + j + 1] as u32;
                 let i2 = strips.points[offset + j + 2] as u32;
-                if j % 2 == 0 {
-                    indices.push(*base_vertex + i0);
-                    indices.push(*base_vertex + i1);
-                    indices.push(*base_vertex + i2);
+                let (a, b, c) = if j % 2 == 0 {
+                    (i0, i1, i2)
                 } else {
-                    indices.push(*base_vertex + i1);
-                    indices.push(*base_vertex + i0);
-                    indices.push(*base_vertex + i2);
+                    (i1, i0, i2)
+                };
+                // Strips use repeated indices as restart markers;
+                // any triangle with duplicate indices is degenerate
+                // and not part of the mesh (see bully-nif-tools'
+                // reveng/notes/research_notes.md § NiTriStripsData).
+                if a == b || a == c || b == c {
+                    continue;
                 }
+                indices.push(*base_vertex + a);
+                indices.push(*base_vertex + b);
+                indices.push(*base_vertex + c);
             }
             offset += len;
         }

@@ -374,7 +374,7 @@ pub struct TexDesc {
 #[derive(Debug, Clone, Default)]
 pub struct NiTexturingPropertyData {
     pub flags: u16,
-    pub texture_count: u32,
+    pub apply_mode: u16,
     pub base: Option<TexDesc>,
     pub dark: Option<TexDesc>,
     pub detail: Option<TexDesc>,
@@ -382,6 +382,7 @@ pub struct NiTexturingPropertyData {
     pub glow: Option<TexDesc>,
     pub bump_map: Option<TexDesc>,
     pub decal: [Option<TexDesc>; 4],
+    pub num_shader_textures: u32,
 }
 
 /// A single triangle index triple.
@@ -425,6 +426,7 @@ pub struct NiTriShapeDataPayload {
 #[derive(Debug, Clone, Default)]
 pub struct NiTriStripsDataPayload {
     pub base: NiTriShapeDataPayload,
+    pub num_triangles: u16,
     pub num_strips: u16,
     pub strip_lengths: Vec<u16>,
     pub has_points: bool,
@@ -594,6 +596,20 @@ impl<'a> Reader<'a> {
         let mut out = Vec::with_capacity(len);
         for _ in 0..len {
             out.push(self.read_i32(what)?);
+        }
+        Ok(out)
+    }
+
+    /// Read an array of `u16` values. Used by `NiTriStripsData` for the
+    /// `strip_lengths[]` and `points[]` arrays.
+    pub(crate) fn read_u16_array(
+        &mut self,
+        len: usize,
+        what: &'static str,
+    ) -> NifResult<Vec<u16>> {
+        let mut out = Vec::with_capacity(len);
+        for _ in 0..len {
+            out.push(self.read_u16(what)?);
         }
         Ok(out)
     }
@@ -785,9 +801,11 @@ fn parse_block(type_name: &str, raw: &[u8], endian: Endian) -> NifResult<BlockPa
         "NiTriShapeData" => BlockPayload::NiTriShapeData(read_ni_tri_shape_data(&mut r)?),
         "NiTriStripsData" => {
             let base = read_ni_tri_shape_data(&mut r)?;
-            let (num_strips, strip_lengths, has_points, points) = read_strips_footer(&mut r);
+            let (num_triangles, num_strips, strip_lengths, has_points, points) =
+                read_strips_footer(&mut r);
             BlockPayload::NiTriStripsData(NiTriStripsDataPayload {
                 base,
+                num_triangles,
                 num_strips,
                 strip_lengths,
                 has_points,
@@ -1095,18 +1113,27 @@ fn read_tex_desc(r: &mut Reader<'_>) -> NifResult<TexDesc> {
 }
 
 fn read_ni_texturing_property(r: &mut Reader<'_>) -> NifResult<NiTexturingPropertyData> {
+    // NiObjectNET header (name + extra_data list + controller).
+    let _name_idx = r.read_ni_fixed_string_index("name")?;
+    let num_extra = r.read_u32("num_extra_data")? as usize;
+    for _ in 0..num_extra {
+        let _ = r.read_i32("extra_data")?;
+    }
+    let _ = r.read_i32("controller")?;
+
     let flags = r.read_u16("flags")?;
-    let texture_count = r.read_u32("texture_count")?;
+    let apply_mode = r.read_u16("apply_mode")?;
     let mut out = NiTexturingPropertyData {
         flags,
-        texture_count,
+        apply_mode,
         ..Default::default()
     };
 
-    // Bully on-disk layout: 11 (has + TexDesc) pairs read in fixed
-    // order regardless of `texture_count`:
+    // Bully on-disk layout (verified against 1950Fridge.nif, 1_02Gate.nif):
+    // 11 (has + TexDesc) pairs read in fixed order regardless of any
+    //   count field (there is none in this version):
     //   0 Base, 1 Dark, 2 Detail, 3 Gloss, 4 Glow, 5 Bump,
-    //   6 Decal 0, 7 Decal 1, 8 Decal 2, 9 Decal 3.
+    //   6 Decal 0, 7 Decal 1, 8 Decal 2, 9 Decal 3, 10 (reserved).
     // A `has` byte of 0 skips the corresponding `TexDesc` body.
     let mut slots = [const { None }; 11];
     for slot in slots.iter_mut() {
@@ -1124,8 +1151,7 @@ fn read_ni_texturing_property(r: &mut Reader<'_>) -> NifResult<NiTexturingProper
     out.bump_map = slots[5].take();
     out.decal = [slots[6].take(), slots[7].take(), slots[8].take(), slots[9].take()];
 
-    let num_shader = r.read_u32("num_shader_textures")?;
-    let _ = num_shader;
+    out.num_shader_textures = r.read_u32("num_shader_textures")?;
     Ok(out)
 }
 
@@ -1260,43 +1286,45 @@ fn string_from(strings: &[String], index: u32) -> Option<String> {
     }
 }
 
-/// Read the footer of a NiTriStripsData block (num_strips, strip_lengths,
-/// has_points, points), tolerating truncation at every step.
-fn read_strips_footer(r: &mut Reader<'_>) -> (u16, Vec<u16>, bool, Vec<u16>) {
-    if r.remaining() < 2 {
-        return (0, Vec::new(), false, Vec::new());
+/// Read the footer of a NiTriStripsData block (num_triangles, num_strips,
+/// strip_lengths, has_points, points), tolerating truncation at every step.
+///
+/// Layout per niftools V20_3_0.9:
+///   u16  num_triangles
+///   u16  num_strips
+///   u16  strip_lengths[num_strips]
+///   u8   has_points
+///   u16  points[sum(strip_lengths)]
+fn read_strips_footer(
+    r: &mut Reader<'_>,
+) -> (u16, u16, Vec<u16>, bool, Vec<u16>) {
+    if r.remaining() < 4 {
+        return (0, 0, Vec::new(), false, Vec::new());
     }
+    let num_triangles = r.read_u16("num_triangles").unwrap_or(0);
     let num_strips = r.read_u16("num_strips").unwrap_or(0);
     if num_strips == 0 {
         let has_points = r.remaining() >= 1 && r.read_bool("has_points").unwrap_or(false);
-        return (0, Vec::new(), has_points, Vec::new());
+        return (num_triangles, 0, Vec::new(), has_points, Vec::new());
     }
-    // strip_lengths are stored as i32 in the file (4 bytes each)
-    let needed = num_strips as usize * 4;
+    let needed = num_strips as usize * 2;
     let strip_lengths = if r.remaining() >= needed {
-        r.read_i32_array(num_strips as usize, "strip_length")
+        r.read_u16_array(num_strips as usize, "strip_length")
             .unwrap_or_default()
-            .into_iter()
-            .map(|v| v as u16)
-            .collect()
     } else {
         Vec::new()
     };
     let has_points = r.remaining() >= 1 && r.read_bool("has_points").unwrap_or(false);
     let points = if has_points {
         let total: usize = strip_lengths.iter().map(|&l| l as usize).sum();
-        let needed = total * 4;
+        let needed = total * 2;
         if r.remaining() >= needed {
-            r.read_i32_array(total, "point")
-                .unwrap_or_default()
-                .into_iter()
-                .map(|v| v as u16)
-                .collect()
+            r.read_u16_array(total, "point").unwrap_or_default()
         } else {
             Vec::new()
         }
     } else {
         Vec::new()
     };
-    (num_strips, strip_lengths, has_points, points)
+    (num_triangles, num_strips, strip_lengths, has_points, points)
 }
