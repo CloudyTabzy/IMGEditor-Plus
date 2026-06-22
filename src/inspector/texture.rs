@@ -420,9 +420,9 @@ fn extract_dds_from_nipixeldata(pd: &NiPixelDataPayload) -> Option<Vec<u8>> {
     let raw = &pd.raw_pixels;
     let block_size = raw.len() as u32;
 
-    let candidates: [(u32, u32); 7] = [
-        (256, 256), (128, 128), (64, 64), (256, 128),
-        (128, 256), (256, 64), (512, 512),
+    let candidates: [(u32, u32); 9] = [
+        (512, 512), (256, 256), (128, 128), (64, 64),
+        (32, 32), (16, 16), (256, 128), (128, 256), (256, 64),
     ];
     let four_dxt1 = b"DXT1";
     let four_dxt5 = b"DXT5";
