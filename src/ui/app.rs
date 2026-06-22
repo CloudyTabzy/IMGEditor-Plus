@@ -90,7 +90,8 @@ pub enum Message {
     InvertSelection,
     DeleteSelected,
     StartRename,
-    CommitRename(String),
+    RenameInputChanged(String),
+    CommitRename,
     CancelRename,
     CancelActive,
 
@@ -194,7 +195,10 @@ pub struct App {
     /// Index into the decoded TXD textures currently being viewed.
     pub txd_selected_texture: usize,
     pub scroll_y: f32,
-    pub search_pending: Option<String>,
+    /// True when the search text has changed but the filtered list has not
+    /// been updated yet. The filter is applied on a debounce tick so typing
+    /// stays responsive even with large archives.
+    pub filter_pending: bool,
     pub autoscroll: Option<AutoScroll>,
     pub modifiers: Modifiers,
     pub entry_table_id: iced::widget::Id,
@@ -240,7 +244,7 @@ impl App {
             inspected_entry: None,
             txd_selected_texture: 0,
             scroll_y: 0.0,
-            search_pending: None,
+            filter_pending: false,
             autoscroll: None,
             modifiers: Modifiers::default(),
             entry_table_id: iced::widget::Id::unique(),
@@ -660,7 +664,12 @@ impl App {
                 }
                 Task::none()
             }
-            Message::CommitRename(new_name) => {
+            Message::RenameInputChanged(value) => {
+                self.rename_buffer = value;
+                Task::none()
+            }
+            Message::CommitRename => {
+                let new_name = self.rename_buffer.clone();
                 self.editor.rename_selected(&new_name);
                 self.rename_buffer.clear();
                 Task::none()
@@ -684,15 +693,19 @@ impl App {
             }
 
             Message::SearchChanged(value) => {
-                self.search_pending = Some(value);
+                // Update the bound search text immediately so the text_input
+                // widget stays in sync with the user's keystrokes. The
+                // expensive filter rebuild is deferred to DebounceTick.
+                if value != self.search {
+                    self.search = value;
+                    self.filter_pending = true;
+                }
                 Task::none()
             }
             Message::DebounceTick => {
-                if let Some(query) = self.search_pending.take() {
-                    if query != self.search {
-                        self.search = query;
-                        return self.run_refresh_filter();
-                    }
+                if self.filter_pending {
+                    self.filter_pending = false;
+                    return self.run_refresh_filter();
                 }
                 Task::none()
             }
@@ -1754,3 +1767,58 @@ fn window_icon() -> Option<iced::window::Icon> {
 
 #[allow(dead_code)]
 fn _force_space_use(_: Space) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_app() -> App {
+        App::new(Config::default())
+    }
+
+    #[test]
+    fn search_changed_updates_text_immediately() {
+        let mut app = test_app();
+        let _ = app.update(Message::SearchChanged("player".to_string()));
+        assert_eq!(app.search, "player");
+        assert!(app.filter_pending);
+    }
+
+    #[test]
+    fn search_changed_no_op_for_same_value() {
+        let mut app = test_app();
+        app.search = "player".to_string();
+        app.filter_pending = false;
+        let _ = app.update(Message::SearchChanged("player".to_string()));
+        assert!(!app.filter_pending);
+    }
+
+    #[test]
+    fn debounce_tick_applies_pending_filter() {
+        let mut app = test_app();
+        app.editor.new_archive();
+        app.search = "player".to_string();
+        app.filter_pending = true;
+
+        let _ = app.update(Message::DebounceTick);
+
+        assert!(!app.filter_pending);
+    }
+
+    #[test]
+    fn rename_input_updates_buffer_without_committing() {
+        let mut app = test_app();
+        let _ = app.update(Message::RenameInputChanged("player".to_string()));
+        assert_eq!(app.rename_buffer, "player");
+    }
+
+    #[test]
+    fn commit_rename_uses_buffer_and_clears_it() {
+        let mut app = test_app();
+        app.rename_buffer = "renamed".to_string();
+
+        let _ = app.update(Message::CommitRename);
+
+        assert!(app.rename_buffer.is_empty());
+    }
+}

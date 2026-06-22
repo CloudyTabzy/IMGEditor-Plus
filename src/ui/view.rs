@@ -197,8 +197,8 @@ impl App {
 
         let name_widget: Element<'_, Message> = if is_renaming {
             text_input("", &self.rename_buffer)
-                .on_input(Message::CommitRename)
-                .on_submit(Message::CommitRename(self.rename_buffer.clone()))
+                .on_input(Message::RenameInputChanged)
+                .on_submit(Message::CommitRename)
                 .width(Length::FillPortion(6))
                 .into()
         } else {
