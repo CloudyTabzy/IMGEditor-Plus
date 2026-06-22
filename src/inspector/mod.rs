@@ -18,4 +18,5 @@
 
 pub mod nif;
 pub mod texture;
+pub mod texture_export;
 pub mod viewer3d;

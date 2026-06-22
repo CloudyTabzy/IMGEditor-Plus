@@ -150,6 +150,10 @@ pub enum Message {
     TxdSelectTexture(usize),
     TxdExportTextures,
     TxdExportFolderResult(Option<PathBuf>),
+
+    ExportEmbeddedTexturesRequest { entry_index: usize, nif_basename: String },
+    ExportEmbeddedTexturesFolderResult { entry_index: usize, nif_basename: String, folder: Option<PathBuf> },
+    ExportEmbeddedTexturesCompleted { entry_index: usize, nif_basename: String, result: Result<crate::inspector::texture_export::ExportReport, String> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +164,7 @@ pub enum EntryAction {
     Export,
     Render,
     ViewTextures,
+    ExportEmbeddedTextures,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -796,6 +801,40 @@ impl App {
                 EntryAction::ViewTextures => {
                     Task::done(Message::TxdDecodeRequested)
                 }
+                EntryAction::ExportEmbeddedTextures => {
+                    let Some(archive_index) = self.editor.selected_archive() else {
+                        return Task::none();
+                    };
+                    let Some(entry_index) = self.editor.selected_entry() else {
+                        return Task::none();
+                    };
+                    let (nif_basename, archive_path) = {
+                        let Some(archive) = self.editor.archives().get(archive_index) else {
+                            return Task::none();
+                        };
+                        let Some(entry) = archive.entries.get(entry_index) else {
+                            return Task::none();
+                        };
+                        let stem = std::path::Path::new(&entry.file_name)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.to_string());
+                        let stem = match stem {
+                            Some(s) => s,
+                            None => {
+                                self.toast =
+                                    Some(format!("Cannot determine basename of {}", entry.file_name));
+                                return Task::none();
+                            }
+                        };
+                        (stem, archive.path.clone())
+                    };
+                    let _ = archive_path;
+                    Task::done(Message::ExportEmbeddedTexturesRequest {
+                        entry_index,
+                        nif_basename,
+                    })
+                }
                 EntryAction::Render => {
                     let Some(archive_index) = self.editor.selected_archive() else {
                         return Task::none();
@@ -1271,6 +1310,76 @@ impl App {
             }
 
             Message::TxdExportFolderResult(None) => Task::none(),
+
+            Message::ExportEmbeddedTexturesRequest { entry_index, nif_basename } => {
+                let _ = entry_index;
+                self.toast = Some(format!("Pick a folder to export embedded textures from {nif_basename}"));
+                let nb = nif_basename.clone();
+                dialogs::save_folder().map(move |folder| {
+                    Message::ExportEmbeddedTexturesFolderResult {
+                        entry_index,
+                        nif_basename: nb.clone(),
+                        folder,
+                    }
+                })
+            }
+            Message::ExportEmbeddedTexturesFolderResult { entry_index, nif_basename, folder: Some(folder) } => {
+                let archive_path = self
+                    .editor
+                    .selected_archive()
+                    .and_then(|i| self.editor.archives().get(i))
+                    .and_then(|a| a.path.clone());
+                let game_root = archive_path
+                    .as_deref()
+                    .and_then(|p| p.parent().and_then(|stream| stream.parent()))
+                    .map(|p| p.to_path_buf());
+                let Some(game_root) = game_root else {
+                    self.toast = Some("Could not determine game root from archive path".to_string());
+                    return Task::none();
+                };
+                let nb_for_callback = nif_basename.clone();
+                Task::perform(
+                    async move {
+                        let ide_map = crate::inspector::texture::IdeMap::build(&game_root);
+                        tokio::task::spawn_blocking(move || {
+                            crate::inspector::texture_export::export_embedded_textures(
+                                &nif_basename,
+                                &ide_map,
+                                &folder,
+                            )
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(format!("export task panicked: {e}")))
+                    },
+                    move |result| Message::ExportEmbeddedTexturesCompleted {
+                        entry_index,
+                        nif_basename: nb_for_callback.clone(),
+                        result,
+                    },
+                )
+            }
+            Message::ExportEmbeddedTexturesFolderResult { folder: None, .. } => Task::none(),
+            Message::ExportEmbeddedTexturesCompleted { entry_index, nif_basename, result } => {
+                let _ = entry_index;
+                let now = chrono::Local::now().format("%H:%M:%S");
+                let archive_index = self.editor.selected_archive().unwrap_or(0);
+                if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
+                    match &result {
+                        Ok(report) => {
+                            let line = format!("[{}] {}: {}", now, nif_basename, report.summary());
+                            archive.recent_exports.push(line.clone());
+                            archive.add_log(line);
+                            self.toast = Some(report.summary());
+                        }
+                        Err(err) => {
+                            let line = format!("[{}] {} export failed: {err}", now, nif_basename);
+                            archive.add_log(line.clone());
+                            self.toast = Some(line);
+                        }
+                    }
+                }
+                Task::none()
+            }
         }
     }
 
