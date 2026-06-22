@@ -120,6 +120,8 @@ pub struct EntryInfo {
     pub offset: u32,
     pub sector: u32,
     pub file_name: CompactString,
+    /// Lowercase version of `file_name` for fast case-insensitive filtering.
+    pub file_name_lower: CompactString,
     pub file_name_raw: [u8; MAX_ENTRY_NAME_BYTES],
     pub file_type: CompactString,
     pub source_path: Option<PathBuf>,
@@ -130,7 +132,8 @@ pub struct EntryInfo {
 
 impl EntryInfo {
     pub fn new(file_name: impl Into<CompactString>) -> Self {
-        let file_name = file_name.into();
+        let file_name: CompactString = file_name.into();
+        let file_name_lower = CompactString::new(file_name.to_lowercase());
         let file_name_raw = encode_entry_name(&file_name);
         let file_type = infer_file_type(&file_name);
 
@@ -138,6 +141,7 @@ impl EntryInfo {
             offset: 0,
             sector: 0,
             file_name,
+            file_name_lower,
             file_name_raw,
             file_type,
             source_path: None,
@@ -263,7 +267,7 @@ impl ArchiveInfo {
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.file_name.to_lowercase().contains(&filter))
+            .filter(|(_, e)| e.file_name_lower.contains(&filter))
             .collect();
 
         let unique_types = self.unique_file_types();
@@ -434,6 +438,12 @@ mod tests {
         assert_eq!(entry.file_name, "test.dff");
         assert_eq!(entry.file_type, "Model");
         assert_eq!(&entry.file_name_raw[..8], b"test.dff");
+    }
+
+    #[test]
+    fn entry_info_caches_lowercase_name() {
+        let entry = EntryInfo::new("MiXeD.DfF");
+        assert_eq!(entry.file_name_lower, "mixed.dff");
     }
 
     #[test]

@@ -1509,7 +1509,14 @@ impl App {
 
         let tick = iced::time::every(Duration::from_millis(250)).map(|_| Message::TickProgress);
 
-        let anim_tick = iced::time::every(Duration::from_millis(16)).map(Message::AnimationTick);
+        // Only run the animation ticker when something needs it. A constant
+        // 60 Hz update forces a full view rebuild every frame, which makes
+        // scrolling and typing feel sluggish on large archives.
+        let anim_tick = if self.animator.running_count() > 0 || self.toast.is_some() {
+            iced::time::every(Duration::from_millis(16)).map(Message::AnimationTick)
+        } else {
+            Subscription::none()
+        };
 
         let debounce = iced::time::every(Duration::from_millis(150)).map(|_| Message::DebounceTick);
 

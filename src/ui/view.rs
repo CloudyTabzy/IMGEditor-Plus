@@ -170,30 +170,39 @@ impl App {
             .into()
     }
 
-    fn build_entry_row(
-        &self,
+    fn build_entry_row<'a>(
+        &'a self,
         display_row: usize,
-        entry: &crate::archive::EntryInfo,
-        row_display: Option<&RowDisplay>,
-    ) -> Element<'_, Message> {
+        entry: &'a crate::archive::EntryInfo,
+        row_display: Option<&'a RowDisplay>,
+    ) -> Element<'a, Message> {
+        use std::borrow::Cow;
+
         let is_renaming = entry.rename;
         let is_selected = entry.selected;
 
-        let (file_name, file_type, size_kb) = match row_display {
-            Some(rd) => (rd.name.clone(), rd.file_type.clone(), rd.size_kb.clone()),
-            None => {
-                let name = if is_selected {
-                    format!("✓ {}", entry.file_name)
-                } else {
-                    entry.file_name.to_string()
-                };
-                (
-                    name,
-                    entry.file_type.to_string(),
-                    format!("{} KB", entry.sector * 2),
-                )
-            }
-        };
+        // Borrow cached display strings when available to avoid cloning a
+        // full String for every visible row on every frame.
+        let (file_name, file_type, size_kb): (Cow<'_, str>, Cow<'_, str>, Cow<'_, str>) =
+            match row_display {
+                Some(rd) => (
+                    Cow::Borrowed(&rd.name),
+                    Cow::Borrowed(&rd.file_type),
+                    Cow::Borrowed(&rd.size_kb),
+                ),
+                None => {
+                    let name = if is_selected {
+                        format!("✓ {}", entry.file_name)
+                    } else {
+                        entry.file_name.to_string()
+                    };
+                    (
+                        Cow::Owned(name),
+                        Cow::Owned(entry.file_type.to_string()),
+                        Cow::Owned(format!("{} KB", entry.sector * 2)),
+                    )
+                }
+            };
 
         let name_widget: Element<'_, Message> = if is_renaming {
             text_input("", &self.rename_buffer)

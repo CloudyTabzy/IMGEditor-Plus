@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use iced::font::{Family, Weight};
 use iced::widget::Text;
 
@@ -48,30 +50,30 @@ pub const BRICOLAGE_DISPLAY: iced::Font = iced::Font {
     style: iced::font::Style::Normal,
 };
 
-pub fn display<'a>(label: impl Into<String>) -> Text<'a> {
+pub fn display<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
     text(label.into(), 18.0, BRICOLAGE_DISPLAY)
 }
 
-pub fn header<'a>(label: impl Into<String>) -> Text<'a> {
+pub fn header<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
     text(label.into(), 14.0, INTER_SEMIBOLD)
 }
 
-pub fn strong<'a>(label: impl Into<String>) -> Text<'a> {
+pub fn strong<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
     text(label.into(), 14.0, INTER_BOLD)
 }
 
-pub fn body<'a>(label: impl Into<String>) -> Text<'a> {
+pub fn body<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
     text(label.into(), 14.0, INTER)
 }
 
-pub fn caption<'a>(label: impl Into<String>) -> Text<'a> {
+pub fn caption<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
     text(label.into(), 12.0, INTER)
 }
 
-pub fn body_monospace<'a>(label: impl Into<String>) -> Text<'a> {
+pub fn body_monospace<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
     text(label.into(), 13.0, iced::Font::MONOSPACE)
 }
 
-fn text<'a>(label: String, size: f32, font: iced::Font) -> Text<'a> {
+fn text<'a>(label: Cow<'a, str>, size: f32, font: iced::Font) -> Text<'a> {
     iced::widget::text(label).size(size).font(font)
 }
