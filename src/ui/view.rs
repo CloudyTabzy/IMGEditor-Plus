@@ -853,7 +853,16 @@ fn build_context_menu(
         );
     }
 
-    if lower.ends_with(".nif") || lower.ends_with(".nft") {
+    if lower.ends_with(".nif") {
+        // A NIF's textures live in its companion NFT; the action
+        // resolves the basename and exports the NFT's contents.
+        items.push(
+            context_button("Export companion NFT textures",
+                Message::EntryContextAction(EntryAction::ExportEmbeddedTextures)).into(),
+        );
+    } else if lower.ends_with(".nft") {
+        // An NFT is itself a texture library; the action walks its
+        // NiPixelData blocks directly.
         items.push(
             context_button("Export Embedded Textures",
                 Message::EntryContextAction(EntryAction::ExportEmbeddedTextures)).into(),
