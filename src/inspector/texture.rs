@@ -1072,4 +1072,36 @@ mod tests {
             assert_eq!(out[pixels_offset + i * 4 + 3], 255, "alpha should be opaque");
         }
     }
+
+    /// Bully ships at least 4 NFT files with CR LF line endings in
+    /// the version header instead of the canonical LF (e.g.
+    /// `Stream\Test\Barr01_Switch.nft`). The parser must accept them
+    /// without modification, since the version u32 is read from
+    /// `newline_pos + 1` and the CR is just skipped. This test loads
+    /// a real Bully NFT, makes an in-memory copy with the LF in the
+    /// header swapped for CR LF, and parses both — the two NifFiles
+    /// must have identical block counts and string tables.
+    #[test]
+    fn nft_parse_accepts_crlf_header() {
+        let lf_path =
+            "C:/Games/Bully - Scholarship Edition/Stream/Test/EXTwinradar029.nft";
+        let lf_bytes = match std::fs::read(lf_path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let lf = NifFile::parse(&lf_bytes).expect("LF NFT should parse");
+
+        let newline = lf_bytes
+            .iter()
+            .position(|&b| b == 0x0A)
+            .expect("LF NFT must contain a 0x0A in its header");
+        let mut crlf_bytes = lf_bytes.clone();
+        crlf_bytes.insert(newline, 0x0D);
+        let crlf = NifFile::parse(&crlf_bytes)
+            .expect("CRLF NFT should parse identically to LF NFT");
+
+        assert_eq!(lf.blocks.len(), crlf.blocks.len());
+        assert_eq!(lf.footer.roots, crlf.footer.roots);
+        assert_eq!(lf.strings, crlf.strings);
+    }
 }
