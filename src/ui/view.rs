@@ -855,7 +855,7 @@ fn build_context_menu(
 
     if lower.ends_with(".nif") || lower.ends_with(".nft") {
         items.push(
-            context_button("Export embedded textures",
+            context_button("Export Embedded Textures",
                 Message::EntryContextAction(EntryAction::ExportEmbeddedTextures)).into(),
         );
     }

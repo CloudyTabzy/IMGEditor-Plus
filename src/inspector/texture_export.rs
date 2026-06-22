@@ -41,7 +41,26 @@ impl ExportReport {
     }
 }
 
-fn output_extension(source_path: &str) -> String {
+fn output_extension(source_path: &str, pixel_data: &[u8]) -> String {
+    // Sniff the content first. NFT catalogs often contain DDS-compressed
+    // pixels even when the source path ends in `.tga` (the artist's
+    // export path reflects the intended output format, not the on-disk
+    // payload). Photoshop refuses to open a DDS file with a `.tga`
+    // extension, so always trust the magic bytes.
+    if pixel_data.len() >= 4 && &pixel_data[0..4] == b"DDS " {
+        return ".dds".to_string();
+    }
+    // TGA header layout: byte 0 = ID length, byte 1 = color map type,
+    // byte 2 = image type (1=cmap, 2=rgb, 3=gray, 9-11=RLE). Any of
+    // those count as a recognizable TGA.
+    if pixel_data.len() >= 3 {
+        let image_type = pixel_data[2];
+        if matches!(image_type, 1 | 2 | 3 | 9 | 10 | 11) {
+            return ".tga".to_string();
+        }
+    }
+    // Fall back to the source-path extension when content is unrecognised
+    // (e.g. embedded TGA that starts with the ID-length field).
     let lower = source_path.to_lowercase();
     for ext in &[".tga", ".dds", ".png", ".bmp", ".jpg", ".jpeg"] {
         if lower.ends_with(ext) {
@@ -59,11 +78,16 @@ fn output_filename(key: &str, entry: &TextureEntry) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or(key)
         .to_string();
-    if Path::new(&basename).extension().is_some() {
-        basename
-    } else {
-        format!("{}{}", basename, output_extension(&entry.source_path))
-    }
+    let stem = Path::new(&basename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&basename)
+        .to_string();
+    let ext = match entry.pixel_data.as_deref() {
+        Some(bytes) => output_extension(&entry.source_path, bytes),
+        None => output_extension(&entry.source_path, &[]),
+    };
+    format!("{stem}{ext}")
 }
 
 fn write_entry(dest_dir: &Path, name: &str, entry: &TextureEntry) -> io::Result<()> {
@@ -139,18 +163,35 @@ mod tests {
 
     #[test]
     fn output_extension_known_types() {
-        assert_eq!(output_extension("X:\\Path\\foo.tga"), ".tga");
-        assert_eq!(output_extension("X:\\Path\\FOO.DDS"), ".DDS");
-        assert_eq!(output_extension("X:\\Path\\bar.png"), ".png");
-        assert_eq!(output_extension("X:\\Path\\baz.bmp"), ".bmp");
-        assert_eq!(output_extension("X:\\Path\\noext"), ".bin");
-        assert_eq!(output_extension(""), ".bin");
+        // TGA magic (image type 2 = uncompressed RGB) is detected.
+        let mut tga = vec![0u8, 0, 2];
+        tga.extend_from_slice(&[0u8; 30]);
+        assert_eq!(output_extension("X:\\Path\\foo.tga", &tga), ".tga");
+        // DDS magic overrides a `.tga` source path.
+        assert_eq!(output_extension("X:\\Path\\foo.tga", b"DDS ...."), ".dds");
+        // No content -> fall back to the source-path extension.
+        assert_eq!(output_extension("X:\\Path\\FOO.DDS", &[]), ".DDS");
+        assert_eq!(output_extension("X:\\Path\\bar.png", &[]), ".png");
+        assert_eq!(output_extension("X:\\Path\\baz.bmp", &[]), ".bmp");
+        assert_eq!(output_extension("X:\\Path\\noext", &[]), ".bin");
+        assert_eq!(output_extension("", &[]), ".bin");
     }
 
     #[test]
     fn output_filename_prefers_source_basename() {
         let e = entry("Z:\\Exp\\Textures\\PO00_guts_d.tga", Some(vec![0u8; 4]));
         assert_eq!(output_filename("po00_guts_d", &e), "PO00_guts_d.tga");
+    }
+
+    #[test]
+    fn output_filename_sniffs_dds_under_tga_extension() {
+        // NFT source path says `.tga` but the embedded payload is DDS.
+        // We must write the file with a `.dds` extension so Photoshop
+        // can open it.
+        let mut dds = b"DDS ".to_vec();
+        dds.extend_from_slice(&[0u8; 124]);
+        let e = entry("Z:\\Exp\\Textures\\Player_03_n.tga", Some(dds));
+        assert_eq!(output_filename("player_03_n", &e), "Player_03_n.dds");
     }
 
     #[test]
