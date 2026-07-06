@@ -317,7 +317,7 @@ pub fn default_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 
 pub struct ScenePipelines {
     pub lit: wgpu::RenderPipeline,
-    pub wireframe: wgpu::RenderPipeline,
+    pub wireframe: Option<wgpu::RenderPipeline>,
     pub camera_layout: wgpu::BindGroupLayout,
     pub texture_layout: wgpu::BindGroupLayout,
     pub camera_buffer: wgpu::Buffer,
@@ -385,14 +385,25 @@ impl ScenePipelines {
             "imgeditor-scene3d/lit_pipeline",
         );
 
-        let wireframe = build_pipeline(
-            device,
-            &wire_module,
-            &pipeline_layout,
-            target_format,
-            wgpu::PolygonMode::Line,
-            "imgeditor-scene3d/wireframe_pipeline",
-        );
+        // Wireframe rendering requires `Features::POLYGON_MODE_LINE`,
+        // which `iced_wgpu`'s default feature set does not enable on every
+        // backend (it depends on the adapter and runtime configuration).
+        // We probe the device and skip building the wireframe pipeline if
+        // the feature is unavailable; the render path then falls back to
+        // the lit pipeline whenever the WIREFRAME flag is set, so the UI
+        // stays usable even when this build can't do lines.
+        let wireframe = if device.features().contains(wgpu::Features::POLYGON_MODE_LINE) {
+            Some(build_pipeline(
+                device,
+                &wire_module,
+                &pipeline_layout,
+                target_format,
+                wgpu::PolygonMode::Line,
+                "imgeditor-scene3d/wireframe_pipeline",
+            ))
+        } else {
+            None
+        };
 
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("imgeditor-scene3d/camera_ubo"),

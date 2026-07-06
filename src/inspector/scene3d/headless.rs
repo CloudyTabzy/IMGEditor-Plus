@@ -174,10 +174,12 @@ pub fn render_frame(
             occlusion_query_set: None,
         });
 
-        pass.set_pipeline(if flags.contains(RenderFlags::WIREFRAME) {
-            &pipelines.wireframe
-        } else {
-            &pipelines.lit
+        pass.set_pipeline(match (
+            flags.contains(RenderFlags::WIREFRAME),
+            pipelines.wireframe.as_ref(),
+        ) {
+            (true, Some(wf)) => wf,
+            _ => &pipelines.lit,
         });
         pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
 

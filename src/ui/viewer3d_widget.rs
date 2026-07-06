@@ -506,10 +506,11 @@ impl ScenePipeline {
             occlusion_query_set: None,
         });
         let _ = clip_bounds;
-        pass.set_pipeline(if flags.contains(RenderFlags::WIREFRAME) {
-            &self.render_pipelines.wireframe
-        } else {
-            &self.render_pipelines.lit
+        let use_wireframe = flags.contains(RenderFlags::WIREFRAME)
+            && self.render_pipelines.wireframe.is_some();
+        pass.set_pipeline(match (use_wireframe, self.render_pipelines.wireframe.as_ref()) {
+            (true, Some(wf)) => wf,
+            _ => &self.render_pipelines.lit,
         });
         pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
 

@@ -270,6 +270,11 @@ impl App {
         let model_tab = self.build_model_tab();
         let texture_tab = self.build_texture_tab();
 
+        let bold_text = iced::Font {
+            family: iced::font::Family::default(),
+            weight: iced::font::Weight::Bold,
+            ..iced::Font::default()
+        };
         let tabs: Element<'_, Message> = iced_aw::widget::tabs::Tabs::new(
             Message::Viewer3dSelectTab,
         )
@@ -289,6 +294,9 @@ impl App {
             texture_tab,
         )
         .set_active_tab(&self.selected_inspector_tab)
+        .tab_bar_height(Length::Fixed(32.0))
+        .text_size(13.0)
+        .text_font(bold_text)
         .height(Length::Fill)
         .width(width)
         .into();

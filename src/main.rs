@@ -52,6 +52,8 @@ pub mod utils;
 mod utils;
 
 fn main() -> anyhow::Result<()> {
+    install_panic_hook();
+
     #[cfg(all(windows, not(feature = "bench")))]
     hide_console_window();
 
@@ -63,6 +65,8 @@ fn main() -> anyhow::Result<()> {
                 println!("Usage: imgeditor [OPTIONS]");
                 println!();
                 println!("Options:");
+
+
                 println!("  -h, --help    Print help");
                 return Ok(());
             }
@@ -90,4 +94,32 @@ fn hide_console_window() {
             FreeConsole();
         }
     }
+}
+
+/// Capture every panic to `imgeditor-panic.log` next to the executable so
+/// the next "the GUI silently disappeared" bug actually leaves a breadcrumb.
+/// Falls back to the temp dir if the executable path can't be resolved.
+fn install_panic_hook() {
+    let log_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::env::temp_dir())
+        .join("imgeditor-panic.log");
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .and_then(|mut f| {
+                use std::io::Write;
+                let payload = format!(
+                    "[panic at {}] {info}\nBacktrace:\n{}\n",
+                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                    std::backtrace::Backtrace::capture(),
+                );
+                f.write_all(payload.as_bytes())
+            });
+        previous(info);
+    }));
 }
