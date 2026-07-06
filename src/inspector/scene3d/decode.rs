@@ -57,8 +57,8 @@ where
     Ok(Scene {
         meshes,
         aabb: scene_aabb,
-        ambient: [0.22, 0.22, 0.24],
-        key_light: [0.45, 0.75, 0.45],
+        ambient: [0.42, 0.44, 0.48],
+        key_light: [0.65, 0.85, 0.55],
         base_orientation,
     })
 }

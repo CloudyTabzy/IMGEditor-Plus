@@ -34,6 +34,7 @@ use crate::inspector::scene3d::mesh::{SceneMesh, SceneTexture, VERTEX_STRIDE};
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct CameraUniform {
     pub view_proj: [[f32; 4]; 4],
+    pub inverse_view_proj: [[f32; 4]; 4],
     pub key_light: [f32; 4],
     pub ambient: [f32; 4],
     pub flags: u32,
@@ -42,8 +43,13 @@ pub struct CameraUniform {
 
 impl CameraUniform {
     pub fn from_camera(camera: &OrbitCamera, key_light: [f32; 3], ambient: [f32; 3]) -> Self {
+        let view = camera.view();
+        let proj = camera.projection();
+        let view_proj = proj * view;
+        let inverse_view_proj = view_proj.inverse();
         Self {
-            view_proj: camera.view_proj().to_cols_array_2d(),
+            view_proj: view_proj.to_cols_array_2d(),
+            inverse_view_proj: inverse_view_proj.to_cols_array_2d(),
             key_light: [key_light[0], key_light[1], key_light[2], 0.0],
             ambient: [ambient[0], ambient[1], ambient[2], 0.0],
             flags: 0,
@@ -55,6 +61,8 @@ impl CameraUniform {
 pub const LIT_WGSL: &str = include_str!("shaders/lit.wgsl");
 pub const WIREFRAME_WGSL: &str = include_str!("shaders/wireframe.wgsl");
 pub const COMPOSITOR_WGSL: &str = include_str!("shaders/compositor.wgsl");
+pub const GRID_WGSL: &str = include_str!("shaders/grid.wgsl");
+pub const GIZMO_WGSL: &str = include_str!("shaders/gizmo.wgsl");
 
 pub fn lit_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -74,6 +82,20 @@ pub fn compositor_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("imgeditor-scene3d/compositor"),
         source: wgpu::ShaderSource::Wgsl(COMPOSITOR_WGSL.into()),
+    })
+}
+
+pub fn grid_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("imgeditor-scene3d/grid"),
+        source: wgpu::ShaderSource::Wgsl(GRID_WGSL.into()),
+    })
+}
+
+pub fn gizmo_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("imgeditor-scene3d/gizmo"),
+        source: wgpu::ShaderSource::Wgsl(GIZMO_WGSL.into()),
     })
 }
 
@@ -334,6 +356,8 @@ pub fn default_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 pub struct ScenePipelines {
     pub lit: wgpu::RenderPipeline,
     pub wireframe: Option<wgpu::RenderPipeline>,
+    pub grid: wgpu::RenderPipeline,
+    pub gizmo: wgpu::RenderPipeline,
     pub compositor: wgpu::RenderPipeline,
     pub camera_layout: wgpu::BindGroupLayout,
     pub texture_layout: wgpu::BindGroupLayout,
@@ -362,6 +386,8 @@ impl ScenePipelines {
         let lit_module = lit_shader_module(device);
         let wire_module = wireframe_shader_module(device);
         let compositor_module = compositor_shader_module(device);
+        let grid_module = grid_shader_module(device);
+        let gizmo_module = gizmo_shader_module(device);
 
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("imgeditor-scene3d/camera_layout"),
@@ -371,7 +397,7 @@ impl ScenePipelines {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(128),
+                    min_binding_size: wgpu::BufferSize::new(256),
                 },
                 count: None,
             }],
@@ -496,7 +522,7 @@ impl ScenePipelines {
 
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("imgeditor-scene3d/camera_ubo"),
-            size: 128,
+            size: 256,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -526,9 +552,93 @@ impl ScenePipelines {
         let quad_vertex_buffer = build_quad_vertex_buffer(device);
         let quad_index_buffer = build_quad_index_buffer(device);
 
+        let grid = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("imgeditor-scene3d/grid_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &grid_module,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[vertex_buffer_layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &grid_module,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: scene_color_format(),
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format(),
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        let gizmo = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("imgeditor-scene3d/gizmo_pipeline"),
+            layout: Some(&compositor_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &gizmo_module,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[vertex_buffer_layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &gizmo_module,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: scene_color_format(),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             lit,
             wireframe,
+            grid,
+            gizmo,
             compositor,
             camera_layout,
             texture_layout,
@@ -555,7 +665,12 @@ impl ScenePipelines {
     ) {
         let mut uniform = CameraUniform::from_camera(camera, key_light, ambient);
         uniform.flags = flags.bits();
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        // Pad to 256 bytes so the UBO write always satisfies the WGSL
+        // struct-size minimum (the Rust struct is currently 180 B; the
+        // shader rounds up to 192 B, and we leave 64 B of headroom).
+        let mut bytes = bytemuck::bytes_of(&uniform).to_vec();
+        bytes.resize(256, 0);
+        queue.write_buffer(&self.camera_buffer, 0, &bytes);
     }
 
     pub fn ensure_scene_color(
@@ -623,7 +738,7 @@ fn build_lit_pipeline(
             topology: wgpu::PrimitiveTopology::TriangleList,
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
+            cull_mode: None,
             unclipped_depth: false,
             polygon_mode,
             conservative: false,
@@ -705,7 +820,7 @@ mod tests {
     #[test]
     fn camera_uniform_is_pod_and_aligned() {
         let size = std::mem::size_of::<CameraUniform>();
-        assert!(size <= 128, "size {size} exceeded padded 128 budget");
+        assert!(size <= 256, "size {size} exceeded padded 256 budget");
         let mut u = CameraUniform::from_camera(
             &OrbitCamera::new(crate::inspector::scene3d::camera::Viewport {
                 width: 800,

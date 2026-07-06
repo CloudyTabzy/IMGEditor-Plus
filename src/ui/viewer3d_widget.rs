@@ -501,6 +501,11 @@ impl ScenePipeline {
 
     /// Render the 3D model into the offscreen color target + depth target.
     /// Called from `Primitive::render`; opens its own render pass.
+    /// Sequence:
+    ///   1. clear color to the F3D-style dark backdrop
+    ///   2. draw the procedural infinity grid (writes color + depth)
+    ///   3. draw the model meshes (lit shader, depth-tested)
+    ///   4. draw the XYZ axis gizmo in the bottom-right (overlay, no depth)
     pub fn render_to_offscreen(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -524,9 +529,9 @@ impl ScenePipeline {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.07,
-                        g: 0.08,
-                        b: 0.10,
+                        r: 0.06,
+                        g: 0.07,
+                        b: 0.09,
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
@@ -543,6 +548,23 @@ impl ScenePipeline {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+
+        // 2. procedural grid floor — fills the cleared color with grid
+        // lines and writes depth for the floor plane so the model
+        // sorts correctly against it.
+        pass.set_pipeline(&self.render_pipelines.grid);
+        pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
+        pass.set_vertex_buffer(
+            0,
+            self.render_pipelines.quad_vertex_buffer.slice(..),
+        );
+        pass.set_index_buffer(
+            self.render_pipelines.quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
+        pass.draw_indexed(0..6, 0, 0..1);
+
+        // 3. the model
         let use_wireframe = flags.contains(RenderFlags::WIREFRAME)
             && self.render_pipelines.wireframe.is_some();
         pass.set_pipeline(match (use_wireframe, self.render_pipelines.wireframe.as_ref()) {
@@ -561,6 +583,18 @@ impl ScenePipeline {
             pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
         }
+
+        // 4. the XYZ axis gizmo in the bottom-right of the pane.
+        pass.set_pipeline(&self.render_pipelines.gizmo);
+        pass.set_vertex_buffer(
+            0,
+            self.render_pipelines.quad_vertex_buffer.slice(..),
+        );
+        pass.set_index_buffer(
+            self.render_pipelines.quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
+        pass.draw_indexed(0..6, 0, 0..1);
     }
 
     /// Composite the offscreen color texture into the existing render pass

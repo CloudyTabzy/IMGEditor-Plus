@@ -30,9 +30,9 @@ impl Scene {
         Self {
             meshes: Vec::new(),
             aabb: Aabb::default(),
-            ambient: [0.20, 0.20, 0.22],
+            ambient: [0.42, 0.44, 0.48],
             // Default key light: high-front-right (camera frame).
-            key_light: normalize3([0.5, 0.8, 0.4]),
+            key_light: normalize3([0.65, 0.85, 0.55]),
             base_orientation,
         }
     }

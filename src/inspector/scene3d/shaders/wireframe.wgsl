@@ -1,5 +1,6 @@
 struct CameraUniform {
     view_proj: mat4x4<f32>,
+    inverse_view_proj: mat4x4<f32>,
     key_light: vec4<f32>,
     ambient: vec4<f32>,
     flags: u32,
