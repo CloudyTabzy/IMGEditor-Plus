@@ -8,7 +8,7 @@ use iced_fonts::lucide;
 use crate::archive::{ExportStatus, RowDisplay, SortColumn, SortDirection};
 
 use crate::parser::{EntryInspection, ImgVersion};
-use crate::ui::app::{App, EntryAction, Message, Pane, ABOUT_TEXT};
+use crate::ui::app::{App, EntryAction, InspectorTab, Message, Pane, ABOUT_TEXT};
 use crate::ui::fonts;
 use crate::ui::widgets as w;
 
@@ -264,12 +264,45 @@ impl App {
     }
 
     pub(crate) fn build_info_panel(&self) -> Element<'_, Message> {
+        let width = Length::Fixed(300.0);
+
+        let export_tab = self.build_export_tab();
+        let model_tab = self.build_model_tab();
+        let texture_tab = self.build_texture_tab();
+
+        let tabs: Element<'_, Message> = iced_aw::widget::tabs::Tabs::new(
+            Message::Viewer3dSelectTab,
+        )
+        .push(
+            InspectorTab::Export,
+            iced_aw::TabLabel::Text("Export".to_string()),
+            export_tab,
+        )
+        .push(
+            InspectorTab::Model3D,
+            iced_aw::TabLabel::Text("3D view".to_string()),
+            model_tab,
+        )
+        .push(
+            InspectorTab::Texture,
+            iced_aw::TabLabel::Text("Texture".to_string()),
+            texture_tab,
+        )
+        .set_active_tab(&self.selected_inspector_tab)
+        .height(Length::Fill)
+        .width(width)
+        .into();
+
+        tabs
+    }
+
+    fn build_export_tab(&self) -> Element<'_, Message> {
         let Some(archive) = self
             .editor
             .archives()
             .get(self.editor.selected_archive().unwrap_or(0))
         else {
-            return Space::new().width(Length::Fixed(0.0)).into();
+            return Space::new().width(Length::Fill).height(Length::Fill).into();
         };
 
         let version_text = version_label(archive.version);
@@ -277,7 +310,6 @@ impl App {
         let visible = archive.selected_indices.len();
         let raw_progress = archive.progress.percentage();
         let in_use = archive.progress.in_use();
-        // Use the smoothly animated progress value.
         let progress = self.animator.get_or(crate::ui::app::ANIM_PROGRESS, raw_progress);
         let display_progress = if in_use { progress } else { raw_progress };
         let (progress_label, percent_text) = if in_use {
@@ -299,7 +331,7 @@ impl App {
         ]
         .spacing(6)
         .padding(8)
-        .width(Length::Fixed(280.0));
+        .width(Length::Fill);
 
         if in_use {
             col = col.push(button(fonts::body("Cancel")).on_press(Message::CancelActive));
@@ -331,76 +363,6 @@ impl App {
                 ]);
                 col = col.push(Self::build_inspection_panel(inspection));
                 col = col.push(rule::horizontal(1));
-
-                // TXD texture preview (if decoded).
-                let is_txd = inspection
-                    .file_name
-                    .as_str()
-                    .to_ascii_lowercase()
-                    .ends_with(".txd");
-                if is_txd {
-                    let textures = archive.txd_cache.get(index);
-                    if let Some(textures) = textures {
-                        if !textures.is_empty() {
-                            let tex_idx = self.txd_selected_texture.min(textures.len() - 1);
-                            let tex = &textures[tex_idx];
-
-                            col = col.push(
-                                button(fonts::body(format!(
-                                    "Export textures ({})",
-                                    textures.len()
-                                )))
-                                .on_press(Message::TxdExportTextures),
-                            );
-
-                            // Texture selector row (prev / next).
-                            if textures.len() > 1 {
-                                let mut sel_row = Row::new().spacing(4);
-                                sel_row = sel_row.push(fonts::caption("Texture:"));
-                                for (i, _) in textures.iter().enumerate() {
-                                    let label = if i == tex_idx {
-                                        format!("● {}", i + 1)
-                                    } else {
-                                        format!("○ {}", i + 1)
-                                    };
-                                    sel_row = sel_row.push(
-                                        button(fonts::caption(label))
-                                            .on_press(Message::TxdSelectTexture(i))
-                                            .style(button::text),
-                                    );
-                                }
-                                col = col.push(sel_row);
-                            }
-
-                            col = col.push(label_value_owned("Name", tex.name.clone()));
-                            col = col.push(label_value_owned(
-                                "Format",
-                                format!("{} ({}×{})", tex.format_name, tex.width, tex.height),
-                            ));
-                            col = col.push(label_value_owned(
-                                "Alpha",
-                                if tex.has_alpha { "Yes" } else { "No" }.to_string(),
-                            ));
-
-                            // Texture image preview.
-                            let handle = image::Handle::from_rgba(
-                                tex.width,
-                                tex.height,
-                                tex.rgba.clone(),
-                            );
-                            let preview = image::Viewer::new(handle)
-                                .width(Length::Fill)
-                                .height(Length::Fixed(200.0));
-                            col = col.push(preview);
-                        }
-                    } else {
-                        // TXD not yet decoded — offer a decode button.
-                        col = col.push(
-                            button(fonts::body("Decode textures"))
-                                .on_press(Message::TxdDecodeRequested),
-                        );
-                    }
-                }
             }
         }
 
@@ -414,7 +376,6 @@ impl App {
         let log_widget = Column::with_children(
             logs.into_iter().map(|m| fonts::caption(m).into()),
         );
-
         col = col.push(log_widget);
 
         if !archive.recent_exports.is_empty() {
@@ -428,9 +389,234 @@ impl App {
         }
 
         Scrollable::new(col)
-            .width(Length::Fixed(280.0))
+            .width(Length::Fill)
             .height(Length::Fill)
             .into()
+    }
+
+    fn build_model_tab(&self) -> Element<'_, Message> {
+        let Some(archive) = self
+            .editor
+            .archives()
+            .get(self.editor.selected_archive().unwrap_or(0))
+        else {
+            return container(fonts::caption("No archive open."))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into();
+        };
+        let entry_lower = archive
+            .entries
+            .get(self.editor.selected_entry().unwrap_or(0))
+            .map(|e| e.file_name.to_ascii_lowercase())
+            .unwrap_or_default();
+        let is_nif = entry_lower.ends_with(".nif");
+        let has_scene = self
+            .viewer3d_handle
+            .with(|inner| inner.scene.is_some());
+
+        let toolbar = self.build_viewer3d_toolbar(is_nif);
+        let stats = self.build_viewer3d_stats();
+
+        let body: Element<'_, Message> = if has_scene || is_nif {
+            let widget = crate::ui::viewer3d_widget::Scene3dWidget::new(
+                self.viewer3d_handle.clone(),
+            );
+            widget.into()
+        } else {
+            container(fonts::caption(format!(
+                "The in-app viewer renders .nif entries. {} isn't a NIF — use the right-click menu to open it in an external viewer.",
+                entry_lower
+            )))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .into()
+        };
+
+        let prompt: Element<'_, Message> = if !has_scene && is_nif {
+            button(fonts::body("Render NIF"))
+                .on_press(Message::EntryContextAction(EntryAction::Render))
+                .into()
+        } else if !has_scene {
+            fonts::caption("Select a .nif entry, then right-click → Open in 3D viewer.").into()
+        } else {
+            Space::new().height(Length::Fixed(0.0)).into()
+        };
+
+        let mut col = column![toolbar]
+            .spacing(4)
+            .padding(4)
+            .width(Length::Fill)
+            .height(Length::Fill);
+        col = col.push(body);
+        col = col.push(stats);
+        col = col.push(prompt);
+        col.into()
+    }
+
+    fn build_viewer3d_stats(&self) -> Element<'_, Message> {
+        let (triangles, vertices, textures, has_scene, gpu) = self
+            .viewer3d_handle
+            .with(|i| {
+                (
+                    i.scene.as_ref().map(|s| s.total_triangles()).unwrap_or(0),
+                    i.scene.as_ref().map(|s| s.total_vertices()).unwrap_or(0),
+                    i.scene.as_ref().map(|s| s.textured_mesh_count()).unwrap_or(0),
+                    i.scene.is_some(),
+                    i.camera.viewport,
+                )
+            });
+        let line = if has_scene {
+            format!(
+                "{} vertices   {} triangles   {} textures   {}×{}",
+                vertices,
+                triangles,
+                textures,
+                gpu.width.max(1),
+                gpu.height.max(1)
+            )
+        } else {
+            "No scene loaded".to_string()
+        };
+        container(fonts::caption(line))
+            .width(Length::Fill)
+            .height(Length::Fixed(20.0))
+            .align_x(Alignment::Center)
+            .padding(2)
+            .into()
+    }
+    fn build_texture_tab(&self) -> Element<'_, Message> {
+        let Some(archive) = self
+            .editor
+            .archives()
+            .get(self.editor.selected_archive().unwrap_or(0))
+        else {
+            return container(fonts::caption("No archive open."))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into();
+        };
+        let entry_index = self.editor.selected_entry().unwrap_or(0);
+        let Some(entry) = archive.entries.get(entry_index) else {
+            return container(fonts::caption("Select a .txd entry to preview textures."))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into();
+        };
+        let is_txd = entry.file_name.to_ascii_lowercase().ends_with(".txd");
+        if !is_txd {
+            return container(fonts::caption(format!(
+                "{} is not a .txd file. Texture preview is available for .txd entries only.",
+                entry.file_name
+            )))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .into();
+        }
+        let textures = archive.txd_cache.get(&entry_index);
+        let Some(textures) = textures else {
+            return column![
+                fonts::caption(format!("TXD {}.txd not yet decoded.", entry.file_name)),
+                button(fonts::body("Decode textures")).on_press(Message::TxdDecodeRequested),
+            ]
+            .spacing(4)
+            .align_x(Alignment::Center)
+            .padding(8)
+            .into();
+        };
+        if textures.is_empty() {
+            return container(fonts::caption("No textures in TXD."))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into();
+        }
+        let tex_idx = self.txd_selected_texture.min(textures.len() - 1);
+        let tex = &textures[tex_idx];
+        let mut col = Column::new().spacing(6)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(8);
+        col = col.push(
+            button(fonts::body(format!(
+                "Export textures ({})",
+                textures.len()
+            )))
+            .on_press(Message::TxdExportTextures),
+        );
+        if textures.len() > 1 {
+            let mut sel_row = Row::new().spacing(4);
+            sel_row = sel_row.push(fonts::caption("Texture:"));
+            for (i, _) in textures.iter().enumerate() {
+                let label = if i == tex_idx {
+                    format!("● {}", i + 1)
+                } else {
+                    format!("○ {}", i + 1)
+                };
+                sel_row = sel_row.push(
+                    button(fonts::caption(label))
+                        .on_press(Message::TxdSelectTexture(i))
+                        .style(button::text),
+                );
+            }
+            col = col.push(sel_row);
+        }
+        col = col.push(label_value_owned("Name", tex.name.clone()));
+        col = col.push(label_value_owned(
+            "Format",
+            format!("{} ({}×{})", tex.format_name, tex.width, tex.height),
+        ));
+        col = col.push(label_value_owned(
+            "Alpha",
+            if tex.has_alpha { "Yes" } else { "No" }.to_string(),
+        ));
+        let handle = image::Handle::from_rgba(tex.width, tex.height, tex.rgba.clone());
+        let preview = image::Viewer::new(handle)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .content_fit(iced::ContentFit::Contain);
+        col = col.push(preview);
+        col.into()
+    }
+
+    fn build_viewer3d_toolbar(&self, is_nif: bool) -> Element<'_, Message> {
+        if !is_nif {
+            return Space::new().height(Length::Fixed(28.0)).into();
+        }
+        let _ = self;
+        let button_height = Length::Fixed(28.0);
+        let mut row = Row::new().spacing(4).padding(2);
+        row = row.push(fonts::caption("3D:"));
+        row = row.push(
+            tooltip(
+                button(fonts::caption("Reset view"))
+                    .on_press(Message::Viewer3dReset)
+                    .height(button_height),
+                fonts::caption("Re-fit the camera to the model. Shortcut: R"),
+                tooltip::Position::Bottom,
+            ),
+        );
+        row = row.push(
+            tooltip(
+                button(fonts::caption("Clear"))
+                    .on_press(Message::Viewer3dClear)
+                    .height(button_height),
+                fonts::caption("Drop the loaded scene"),
+                tooltip::Position::Bottom,
+            ),
+        );
+        row.into()
     }
 
     fn build_inspection_panel(inspection: &EntryInspection) -> Element<'_, Message> {
@@ -849,9 +1035,28 @@ fn build_context_menu(
     ];
 
     let lower = entry.file_name.to_lowercase();
-    if lower.ends_with(".nif") || lower.ends_with(".dff") || lower.ends_with(".col") {
+    if lower.ends_with(".nif") {
         items.push(
-            context_button("Render", Message::EntryContextAction(EntryAction::Render)).into(),
+            context_button(
+                "Open in 3D viewer",
+                Message::EntryContextAction(EntryAction::Render),
+            )
+            .into(),
+        );
+        items.push(
+            context_button(
+                "Open in external viewer",
+                Message::EntryContextAction(EntryAction::RenderExternal),
+            )
+            .into(),
+        );
+    } else if lower.ends_with(".dff") || lower.ends_with(".col") {
+        items.push(
+            context_button(
+                "Open in external viewer",
+                Message::EntryContextAction(EntryAction::RenderExternal),
+            )
+            .into(),
         );
     }
 

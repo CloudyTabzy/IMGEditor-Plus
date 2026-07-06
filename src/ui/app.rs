@@ -155,6 +155,19 @@ pub enum Message {
     ExportEmbeddedTexturesRequest { entry_index: usize, nif_basename: String },
     ExportEmbeddedTexturesFolderResult { entry_index: usize, nif_basename: String, folder: Option<PathBuf> },
     ExportEmbeddedTexturesCompleted { entry_index: usize, nif_basename: String, result: Result<crate::inspector::texture_export::ExportReport, String> },
+
+    Viewer3dRequestLoad { archive_index: usize, entry_index: usize },
+    Viewer3dLoadCompleted { archive_index: usize, entry_index: usize, result: Result<crate::inspector::scene3d::Scene, String> },
+    Viewer3dSelectTab(InspectorTab),
+    Viewer3dClear,
+    Viewer3dReset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InspectorTab {
+    Export,
+    Model3D,
+    Texture,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,6 +177,7 @@ pub enum EntryAction {
     Delete,
     Export,
     Render,
+    RenderExternal,
     ViewTextures,
     ExportEmbeddedTextures,
 }
@@ -195,6 +209,8 @@ pub struct App {
     /// Index into the decoded TXD textures currently being viewed.
     pub txd_selected_texture: usize,
     pub scroll_y: f32,
+    pub selected_inspector_tab: InspectorTab,
+    pub viewer3d_handle: std::sync::Arc<crate::ui::viewer3d_widget::SceneHandle>,
     /// True when the search text has changed but the filtered list has not
     /// been updated yet. The filter is applied on a debounce tick so typing
     /// stays responsive even with large archives.
@@ -254,6 +270,10 @@ impl App {
             toast_pulses_remaining: 0,
             toast_pulse_target: 0.0,
             toast_start: None,
+            selected_inspector_tab: InspectorTab::Export,
+            viewer3d_handle: std::sync::Arc::new(
+                crate::ui::viewer3d_widget::SceneHandle::new(),
+            ),
         }
     }
 
@@ -855,6 +875,36 @@ impl App {
                     let Some(entry_index) = self.editor.selected_entry() else {
                         return Task::none();
                     };
+                    let lower = {
+                        let Some(archive) = self.editor.archives().get(archive_index) else {
+                            return Task::none();
+                        };
+                        let Some(entry) = archive.entries.get(entry_index) else {
+                            return Task::none();
+                        };
+                        entry.file_name.to_lowercase()
+                    };
+                    if !lower.ends_with(".nif") {
+                        self.toast = Some(format!(
+                            "In-app 3D viewer only supports .nif ({}). Use 'Open in external viewer' for other formats.",
+                            lower
+                        ));
+                        return Task::none();
+                    }
+                    self.selected_inspector_tab = InspectorTab::Model3D;
+                    self.viewer3d_handle.clear();
+                    Task::done(Message::Viewer3dRequestLoad {
+                        archive_index,
+                        entry_index,
+                    })
+                }
+                EntryAction::RenderExternal => {
+                    let Some(archive_index) = self.editor.selected_archive() else {
+                        return Task::none();
+                    };
+                    let Some(entry_index) = self.editor.selected_entry() else {
+                        return Task::none();
+                    };
                     let (entry_clone, archive_path, name) = {
                         let Some(archive) = self.editor.archives().get(archive_index) else {
                             return Task::none();
@@ -890,7 +940,7 @@ impl App {
                     }
 
                     if let Some(archive) = self.editor.selected_archive_mut() {
-                        archive.add_log(format!("Opening 3D viewer for {name}"));
+                        archive.add_log(format!("Opening external 3D viewer for {name}"));
                     }
                     Task::none()
                 }
@@ -1391,6 +1441,78 @@ impl App {
                         }
                     }
                 }
+                Task::none()
+            }
+            Message::Viewer3dRequestLoad {
+                archive_index,
+                entry_index,
+            } => {
+                let (entry_clone, archive_path) = {
+                    let Some(archive) = self.editor.archives().get(archive_index) else {
+                        return Task::none();
+                    };
+                    let Some(entry) = archive.entries.get(entry_index) else {
+                        return Task::none();
+                    };
+                    (entry.clone(), archive.path.clone())
+                };
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            let bytes = crate::parser::read_entry_data_from_source(
+                                &entry_clone,
+                                archive_path.as_deref(),
+                            )
+                            .map_err(|e| format!("I/O: {e}"))?;
+                            let base = crate::inspector::scene3d::camera::BaseOrientation::Zup;
+                            let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
+                                &bytes,
+                                base,
+                                |_| None,
+                            )
+                            .map_err(|e| format!("scene: {e:?}"))?;
+                            Ok::<_, String>(scene)
+                        })
+                        .await
+                        .map_err(|e| format!("join: {e}"))?
+                    },
+                    move |result| Message::Viewer3dLoadCompleted {
+                        archive_index,
+                        entry_index,
+                        result,
+                    },
+                )
+            }
+            Message::Viewer3dLoadCompleted {
+                archive_index,
+                entry_index,
+                result,
+            } => {
+                let _ = (archive_index, entry_index);
+                match result {
+                    Ok(scene) => {
+                        self.viewer3d_handle.set_scene(scene);
+                        self.selected_inspector_tab = InspectorTab::Model3D;
+                        if let Some(archive) = self.editor.selected_archive_mut() {
+                            archive.add_log("In-app 3D viewer ready".to_string());
+                        }
+                    }
+                    Err(e) => {
+                        self.toast = Some(format!("3D load failed: {e}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::Viewer3dSelectTab(tab) => {
+                self.selected_inspector_tab = tab;
+                Task::none()
+            }
+            Message::Viewer3dClear => {
+                self.viewer3d_handle.clear();
+                Task::none()
+            }
+            Message::Viewer3dReset => {
+                self.viewer3d_handle.reset_camera();
                 Task::none()
             }
         }

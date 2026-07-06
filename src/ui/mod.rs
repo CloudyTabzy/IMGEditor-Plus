@@ -7,6 +7,7 @@ pub mod fonts;
 pub mod keymap;
 pub mod theme;
 pub mod tokens;
+pub mod viewer3d_widget;
 pub mod view;
 pub mod widgets;
 
