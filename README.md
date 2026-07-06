@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v3.3
+# 🎮 IMG Editor Plus v3.4
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -39,6 +39,15 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Memory-mapped reads** — instant open on large archives
 - ✅ **Multiple archive tabs** with dirty-file indicator
 - ✅ **Drag-and-drop** — open `.img` archives or import files from Explorer
+
+### 🎨 Embedded 3D Model Viewer (v3.4)
+- ✅ **In-app wgpu renderer** — same wgpu device Iced uses, no second window or thread battle
+- ✅ **Tab split in the right pane** — `Model 3D` (new) | `Texture` (TXD preview)
+- ✅ **Orbit / pan / zoom camera** — LMB drag, MMB drag, Shift+LMB drag, wheel
+- ✅ **Lit + wireframe pipelines** — single WGSL shader, `W` cycles wireframe (toolbar)
+- ✅ **Textured paths** — DXT1/DXT5 diffuse decoded on `spawn_blocking` so the UI thread stays responsive
+- ✅ **External PLY viewer fallback** — right-click `Open in external viewer` for non-NIF formats (DFF / COL) and any user preference
+- ✅ **Configurable base orientation** — Y-up default, `B` cycles to Z-up / X-up. Persists in `settings.ini`.
 
 ---
 
