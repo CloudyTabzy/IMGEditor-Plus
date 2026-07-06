@@ -457,4 +457,206 @@ mod tests {
             meta.len()
         );
     }
+
+    #[test]
+    fn full_pipeline_with_grid_and_gizmo() {
+        // Smoke-renders the full GUI pipeline (clear + grid + lit +
+        // gizmo) using a real NIF. Output to
+        // target/scene3d-full-pipeline.png so the rendering can be
+        // eyeballed without launching the GUI. Skips silently when
+        // the Bully fixture is not on the dev machine.
+        let path = std::path::Path::new(
+            "C:/Games/Bully - Scholarship Edition/Stream/test1/1950Fridge.nif",
+        );
+        let Ok(bytes) = std::fs::read(path) else { return };
+        let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
+            &bytes,
+            crate::inspector::scene3d::camera::BaseOrientation::Zup,
+            |_| None,
+        )
+        .expect("scene decoded");
+
+        let width = 800u32;
+        let height = 600u32;
+        let renderer = HeadlessRenderer::new().expect("renderer");
+        let device = &renderer.device;
+        let queue = &renderer.queue;
+        let pipelines = &renderer.pipelines;
+
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u32;
+        let unpadded_bpr = width * 4;
+        let padded_bpr = (unpadded_bpr + align - 1) / align * align;
+        let readback_size = (padded_bpr as u64) * (height as u64);
+
+        let color_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("imgeditor-scene3d-full/color"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let color_view = color_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let (_depth_tex, depth_view) =
+            crate::inspector::scene3d::pipeline::create_depth_texture(device, width, height, 1);
+
+        let read_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("imgeditor-scene3d-full/readback"),
+            size: readback_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut camera = OrbitCamera::new(crate::inspector::scene3d::camera::Viewport {
+            width,
+            height,
+        });
+        camera.reset_to_aabb(&scene.aabb);
+        pipelines.update_camera(
+            queue,
+            &camera,
+            scene.key_light,
+            scene.ambient,
+            RenderFlags::empty(),
+        );
+
+        let mesh_gpus: Vec<_> = scene
+            .meshes
+            .iter()
+            .map(|m| {
+                let gpu = GpuMesh::from_scene_mesh(device, queue, m);
+                let tex = m.diffuse.as_ref().map(|t| {
+                    GpuTexture::from_scene_texture(device, queue, t, &pipelines.texture_layout)
+                });
+                (gpu, tex)
+            })
+            .collect();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("imgeditor-scene3d-full/encoder"),
+        });
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("imgeditor-scene3d-full/pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.06,
+                            g: 0.07,
+                            b: 0.09,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            pass.set_pipeline(&pipelines.grid);
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                pipelines.quad_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..6, 0, 0..1);
+
+            pass.set_pipeline(&pipelines.lit);
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+
+            for (gpu_mesh, tex) in &mesh_gpus {
+                let bg: &wgpu::BindGroup = match tex {
+                    Some(t) => &t.bind_group,
+                    None => &pipelines.default_diffuse.bind_group,
+                };
+                pass.set_bind_group(1, bg, &[]);
+                pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(
+                    gpu_mesh.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+            }
+
+            pass.set_pipeline(&pipelines.gizmo);
+            pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                pipelines.quad_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..6, 0, 0..1);
+        }
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &color_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &read_buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bpr),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let submit = queue.submit(std::iter::once(encoder.finish()));
+        let slice = read_buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let poll_index = submit.clone();
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: Some(poll_index),
+            timeout: None,
+        });
+        let mapped = slice.get_mapped_range();
+        let raw: Vec<u8> = mapped.to_vec();
+        drop(mapped);
+        read_buf.unmap();
+        let mut rgba = Vec::with_capacity((width as usize) * (height as usize) * 4);
+        for row in 0..height as usize {
+            let start = row * padded_bpr as usize;
+            rgba.extend_from_slice(&raw[start..start + unpadded_bpr as usize]);
+        }
+        let frame = RenderedFrame {
+            width,
+            height,
+            rgba,
+            submit_info: submit,
+        };
+        let out = std::path::Path::new("target").join("scene3d-full-pipeline.png");
+        if let Some(parent) = out.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        write_png(&frame, &out).expect("png write");
+        let meta = std::fs::metadata(&out).expect("file exists");
+        assert!(meta.len() > 200, "PNG suspiciously small: {} bytes", meta.len());
+    }
 }
