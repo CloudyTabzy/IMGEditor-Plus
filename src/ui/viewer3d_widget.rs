@@ -528,6 +528,15 @@ impl ScenePipeline {
         ) else {
             return;
         };
+        log::trace!(
+            target: "imgeditor.scene3d",
+            "render_to_offscreen: {w}x{h}, mesh_count={mc}, textured_count={tc}, flags={flags:?}",
+            w = self.width,
+            h = self.height,
+            mc = self.mesh_cache.len(),
+            tc = self.mesh_cache.iter().filter(|(_, t)| t.is_some()).count(),
+            flags = flags
+        );
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("imgeditor-scene3d/render_offscreen"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {

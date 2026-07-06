@@ -460,11 +460,18 @@ impl ScenePipelines {
                 push_constant_ranges: &[],
             });
 
+        // The lit, wireframe, grid, and gizmo pipelines all render
+        // into the OFFSCREEN target (scene_color_format), not the
+        // surface. The compositor pipeline is the only one that
+        // targets the Iced surface directly. Passing the surface
+        // format to the scene-rendering pipelines caused a Vulkan
+        // validation panic when the offscreen render pass's Rgba8UnormSrgb
+        // attachment didn't match the pipeline's Bgra8Unorm expectations.
         let lit = build_lit_pipeline(
             device,
             &lit_module,
             &pipeline_layout,
-            target_format,
+            scene_color_format(),
             wgpu::PolygonMode::Fill,
             "imgeditor-scene3d/lit_pipeline",
         );
@@ -474,7 +481,7 @@ impl ScenePipelines {
                 device,
                 &wire_module,
                 &pipeline_layout,
-                target_format,
+                scene_color_format(),
                 wgpu::PolygonMode::Line,
                 "imgeditor-scene3d/wireframe_pipeline",
             ))

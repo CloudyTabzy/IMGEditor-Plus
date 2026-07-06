@@ -11,6 +11,7 @@ use iced_fonts::LUCIDE_FONT_BYTES;
 use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn, SortDirection};
+use crate::dev_logger;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{Config, ThemeMode};
@@ -869,6 +870,7 @@ impl App {
                     })
                 }
                 EntryAction::Render => {
+                    dev_logger::breadcrumb("user: open in 3D viewer (in-app)");
                     let Some(archive_index) = self.editor.selected_archive() else {
                         return Task::none();
                     };
@@ -899,6 +901,7 @@ impl App {
                     })
                 }
                 EntryAction::RenderExternal => {
+                    dev_logger::breadcrumb("user: open in external viewer (PLY)");
                     let Some(archive_index) = self.editor.selected_archive() else {
                         return Task::none();
                     };
@@ -1489,18 +1492,24 @@ impl App {
                 result,
             } => {
                 let _ = (archive_index, entry_index);
-                match result {
-                    Ok(scene) => {
-                        self.viewer3d_handle.set_scene(scene);
-                        self.selected_inspector_tab = InspectorTab::Model3D;
-                        if let Some(archive) = self.editor.selected_archive_mut() {
-                            archive.add_log("In-app 3D viewer ready".to_string());
+                    match result {
+                        Ok(scene) => {
+                            dev_logger::breadcrumb(&format!(
+                                "3D load ok: {} verts, {} tris",
+                                scene.total_vertices(),
+                                scene.total_triangles()
+                            ));
+                            self.viewer3d_handle.set_scene(scene);
+                            self.selected_inspector_tab = InspectorTab::Model3D;
+                            if let Some(archive) = self.editor.selected_archive_mut() {
+                                archive.add_log("In-app 3D viewer ready".to_string());
+                            }
+                        }
+                        Err(e) => {
+                            dev_logger::breadcrumb(&format!("3D load failed: {e}"));
+                            self.toast = Some(format!("3D load failed: {e}"));
                         }
                     }
-                    Err(e) => {
-                        self.toast = Some(format!("3D load failed: {e}"));
-                    }
-                }
                 Task::none()
             }
             Message::Viewer3dSelectTab(tab) => {

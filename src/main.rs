@@ -6,6 +6,8 @@ pub mod archive;
 #[cfg(not(feature = "bench"))]
 mod archive;
 
+pub mod dev_logger;
+
 #[cfg(feature = "bench")]
 pub mod config;
 #[cfg(not(feature = "bench"))]
@@ -52,6 +54,7 @@ pub mod utils;
 mod utils;
 
 fn main() -> anyhow::Result<()> {
+    dev_logger::init_dev_log();
     install_panic_hook();
 
     #[cfg(all(windows, not(feature = "bench")))]
@@ -107,26 +110,11 @@ fn install_panic_hook() {
     // thread at startup before any other thread is spawned.
     #[allow(unused_unsafe)]
     let _ = unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
-    let log_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::env::temp_dir())
-        .join("imgeditor-panic.log");
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .and_then(|mut f| {
-                use std::io::Write;
-                let payload = format!(
-                    "[panic at {}] {info}\nBacktrace:\n{}\n",
-                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
-                    std::backtrace::Backtrace::capture(),
-                );
-                f.write_all(payload.as_bytes())
-            });
+        // Re-route the panic through dev_logger's structured report so
+        // version + backtrace + breadcrumbs all land in one place.
+        let _ = dev_logger::write_crash_report(info);
         previous(info);
     }));
 }

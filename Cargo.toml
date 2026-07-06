@@ -52,6 +52,7 @@ rfd = { version = "0.15", default-features = false, features = ["tokio", "common
 bytemuck = { version = "1", features = ["derive"] }
 bitflags = "2"
 iced_widget = { version = "0.14", features = ["wgpu", "canvas"] }
+log = "0.4"
 pollster = "0.4"
 wgpu = { version = "27", default-features = false, features = ["wgsl", "vulkan"] }
 

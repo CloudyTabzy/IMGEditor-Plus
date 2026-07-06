@@ -2185,6 +2185,7 @@ dependencies = [
  "iced_fonts",
  "iced_widget",
  "image",
+ "log",
  "memmap2",
  "pollster",
  "rayon",
