@@ -1,6 +1,6 @@
 [package]
 name = "imgeditor"
-version = "3.3.1"
+version = "3.4.0"
 edition = "2024"
 rust-version = "1.96"
 
@@ -35,6 +35,7 @@ chrono = "0.4"
 compact_str = "0.8"
 crossbeam = "0.8"
 dark-light = "2"
+glam = { version = "0.29", features = ["bytemuck"] }
 iced = { version = "0.14", features = ["tokio", "lazy", "advanced", "highlighter", "image", "svg"] }
 iced_aw = { version = "0.14.1", features = ["menu", "tabs", "context_menu", "card"] }
 iced_fonts = { version = "0.3.0", features = ["lucide"] }
@@ -48,6 +49,11 @@ tokio = { version = "1.40", features = ["rt-multi-thread", "fs", "macros", "sync
 ureq = "2"
 webbrowser = "1"
 rfd = { version = "0.15", default-features = false, features = ["tokio", "common-controls-v6"], optional = true }
+bytemuck = { version = "1", features = ["derive"] }
+bitflags = "2"
+iced_widget = { version = "0.14", features = ["wgpu", "canvas"] }
+pollster = "0.4"
+wgpu = { version = "27", default-features = false, features = ["wgsl", "vulkan"] }
 
 # NIF inspector (v3.0). The 3D viewer writes geometry to a temporary PLY file
 # and opens it with the system default handler, avoiding the need for an

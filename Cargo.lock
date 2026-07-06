@@ -1569,6 +1569,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "151665d9be52f9bb40fc7966565d39666f2d1e69233571b71b87791c7e0528b3"
 
 [[package]]
+name = "glam"
+version = "0.29.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8babf46d4c1c9d92deac9f7be466f76dfc4482b6452fc5024b5e8daf6ffeb3ee"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "gloo-timers"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1807,7 +1816,7 @@ checksum = "91ab1937d699403e7e69252ae743a902bcee9f4ab2052cc4c9a46fcf34729d85"
 dependencies = [
  "bitflags 2.13.0",
  "bytes",
- "glam",
+ "glam 0.25.0",
  "lilt",
  "log",
  "num-traits",
@@ -1962,7 +1971,7 @@ dependencies = [
  "bytemuck",
  "cryoglyph",
  "futures",
- "glam",
+ "glam 0.25.0",
  "guillotiere",
  "iced_debug",
  "iced_graphics",
@@ -2160,19 +2169,24 @@ checksum = "edcd27d72f2f071c64249075f42e205ff93c9a4c5f6c6da53e79ed9f9832c285"
 
 [[package]]
 name = "imgeditor"
-version = "3.3.1"
+version = "3.4.0"
 dependencies = [
  "anyhow",
+ "bitflags 2.13.0",
+ "bytemuck",
  "chrono",
  "compact_str",
  "crossbeam",
  "dark-light",
  "embed-resource",
+ "glam 0.29.3",
  "iced",
  "iced_aw",
  "iced_fonts",
+ "iced_widget",
  "image",
  "memmap2",
+ "pollster",
  "rayon",
  "rfd",
  "serde_json",
@@ -2182,6 +2196,7 @@ dependencies = [
  "tokio",
  "ureq",
  "webbrowser",
+ "wgpu",
 ]
 
 [[package]]
@@ -3431,6 +3446,12 @@ dependencies = [
  "rustix 1.1.4",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
 name = "portable-atomic"

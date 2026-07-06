@@ -754,14 +754,16 @@ fn extract_texture_from_nft(path: &Path) -> Option<Vec<u8>> {
 
 // ---- Mesh collection -------------------------------------------------
 
-struct MeshData {
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    uvs: Vec<[f32; 2]>,
-    indices: Vec<u32>,
+/// Geometry extracted from a NIF in a flat, GPU-uploadable form. Used by
+/// the PLY writer and reused by the embedded 3D viewer (`scene3d::decode`).
+pub(crate) struct MeshData {
+    pub(crate) positions: Vec<[f32; 3]>,
+    pub(crate) normals: Vec<[f32; 3]>,
+    pub(crate) uvs: Vec<[f32; 2]>,
+    pub(crate) indices: Vec<u32>,
 }
 
-fn collect_mesh(nif: &NifFile) -> Option<MeshData> {
+pub(crate) fn collect_mesh(nif: &NifFile) -> Option<MeshData> {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
@@ -863,10 +865,10 @@ fn collect_mesh(nif: &NifFile) -> Option<MeshData> {
     }
 }
 
-struct ShapeTransform {
-    rotation: [[f32; 3]; 3],
-    translation: nif::Vector3,
-    scale: f32,
+pub(crate) struct ShapeTransform {
+    pub(crate) rotation: [[f32; 3]; 3],
+    pub(crate) translation: nif::Vector3,
+    pub(crate) scale: f32,
 }
 
 fn append_mesh(
