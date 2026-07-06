@@ -392,32 +392,39 @@ impl primitive::Primitive for ScenePrimitive {
 
     fn draw(
         &self,
-        pipeline: &Self::Pipeline,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        _pipeline: &Self::Pipeline,
+        _render_pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
-        // Composite the offscreen scene texture into the existing
-        // compositor render pass. The compositor's viewport + scissor
-        // are already configured for the widget bounds, so the quad is
-        // automatically clipped to the pane rectangle and the UI behind
-        // it stays untouched.
-        pipeline.composite(render_pass);
-        true
+        // Force Iced to route us through `render` instead — that's
+        // where we have an encoder and can issue the offscreen render
+        // pass. `draw` only gives us the compositor's ongoing render
+        // pass, which has no depth attachment and so cannot rasterize
+        // the lit 3D model.
+        false
     }
 
     fn render(
         &self,
         pipeline: &Self::Pipeline,
         encoder: &mut wgpu::CommandEncoder,
-        _target: &wgpu::TextureView,
-        _clip_bounds: &Rectangle<u32>,
+        target: &wgpu::TextureView,
+        clip_bounds: &Rectangle<u32>,
     ) {
         let (scene, camera, flags) = self.handle.with(|i| {
             (i.scene.clone(), i.camera.clone(), i.flags)
         });
         let Some(scene) = scene else { return };
+        // First pass: render the model into the offscreen color target.
         pipeline.render_to_offscreen(encoder, &scene, &camera, flags);
+        // Second pass: composite the offscreen color into the frame.
+        // Iced's compositor ended its main pass before calling us, so
+        // `target` is the frame texture view we should bind. We open a
+        // fresh pass with `LoadOp::Load` so everything Iced already drew
+        // (text, icons, the tab bar) is preserved underneath.
+        pipeline.composite_to_frame(encoder, target, clip_bounds);
     }
 }
+
 
 pub struct ScenePipeline {
     pub render_pipelines: ScenePipelines,
@@ -604,6 +611,65 @@ impl ScenePipeline {
         let Some(bg) = self.render_pipelines.compositor_bind_group.as_ref() else {
             return;
         };
+        pass.set_pipeline(&self.render_pipelines.compositor);
+        pass.set_bind_group(0, bg, &[]);
+        pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
+        pass.set_index_buffer(
+            self.render_pipelines.quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
+        pass.draw_indexed(0..6, 0, 0..1);
+    }
+
+    /// Composite the offscreen color into the frame texture by opening a
+    /// fresh render pass via the supplied encoder. Used by `render`
+    /// after `render_to_offscreen` because Iced's compositor only calls
+    /// `render` when `draw` returned `false` (which is our only path to
+    /// reach the encoder with the frame texture view still available).
+    pub fn composite_to_frame(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        clip_bounds: &Rectangle<u32>,
+    ) {
+        let Some(bg) = self.render_pipelines.compositor_bind_group.as_ref() else {
+            return;
+        };
+        if clip_bounds.width == 0 || clip_bounds.height == 0 {
+            return;
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("imgeditor-scene3d/composite"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        // Iced's compositor already configured the viewport+scissor for
+        // the widget bounds. We re-set the scissor to the clip bounds we
+        // were handed, so the composite quad is clipped to the pane.
+        pass.set_viewport(
+            clip_bounds.x as f32,
+            clip_bounds.y as f32,
+            clip_bounds.width as f32,
+            clip_bounds.height as f32,
+            0.0,
+            1.0,
+        );
+        pass.set_scissor_rect(
+            clip_bounds.x,
+            clip_bounds.y,
+            clip_bounds.width,
+            clip_bounds.height,
+        );
         pass.set_pipeline(&self.render_pipelines.compositor);
         pass.set_bind_group(0, bg, &[]);
         pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
