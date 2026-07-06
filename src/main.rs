@@ -100,6 +100,13 @@ fn hide_console_window() {
 /// the next "the GUI silently disappeared" bug actually leaves a breadcrumb.
 /// Falls back to the temp dir if the executable path can't be resolved.
 fn install_panic_hook() {
+    // Force a backtrace even when the binary is launched without
+    // RUST_BACKTRACE=1 (the user-facing default), so the panic log
+    // captures frame-by-frame information. `set_var` is unsafe in
+    // recent Rust because env reads can race; safe inside a single
+    // thread at startup before any other thread is spawned.
+    #[allow(unused_unsafe)]
+    let _ = unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
     let log_path = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))

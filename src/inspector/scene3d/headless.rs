@@ -445,8 +445,7 @@ mod tests {
             RenderFlags::empty(),
         )
         .expect("frame");
-        let out = std::path::Path::new("target")
-            .join("scene3d-bully-1950fridge.png");
+        let out = std::path::Path::new("target").join("scene3d-bully-1950fridge.png");
         if let Some(parent) = out.parent() {
             let _ = std::fs::create_dir_all(parent);
         }

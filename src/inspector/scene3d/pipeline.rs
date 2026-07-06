@@ -552,9 +552,25 @@ impl ScenePipelines {
         let quad_vertex_buffer = build_quad_vertex_buffer(device);
         let quad_index_buffer = build_quad_index_buffer(device);
 
+        // The grid and gizmo shaders don't sample a texture, so they use
+        // a dedicated layout with only the camera bind group (or none
+        // at all). Sharing the model pipeline's 2-bind-group layout here
+        // would trip Vulkan's "BindGroup to be set at index 1" check
+        // because the grid shader has no group(1) binding.
+        let grid_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("imgeditor-scene3d/grid_layout"),
+            bind_group_layouts: &[&camera_layout],
+            push_constant_ranges: &[],
+        });
+        let gizmo_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("imgeditor-scene3d/gizmo_layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+
         let grid = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("imgeditor-scene3d/grid_pipeline"),
-            layout: Some(&pipeline_layout),
+            layout: Some(&grid_layout),
             vertex: wgpu::VertexState {
                 module: &grid_module,
                 entry_point: Some("vs_main"),
@@ -598,7 +614,7 @@ impl ScenePipelines {
 
         let gizmo = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("imgeditor-scene3d/gizmo_pipeline"),
-            layout: Some(&compositor_pipeline_layout),
+            layout: Some(&gizmo_layout),
             vertex: wgpu::VertexState {
                 module: &gizmo_module,
                 entry_point: Some("vs_main"),
