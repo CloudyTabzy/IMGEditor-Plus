@@ -647,7 +647,21 @@ impl ScenePipelines {
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: None,
+            // The gizmo is drawn inside the offscreen render pass, which
+            // carries a depth-stencil attachment (Depth32Float). Vulkan
+            // requires every pipeline used in such a pass to declare a
+            // matching depth_stencil state, even if the pipeline never
+            // reads or writes depth. We declare Depth32Float with
+            // `Always` compare + write-disabled so the gizmo draws
+            // unconditionally but never disturbs the floor/model depth
+            // values written earlier in the same pass.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format(),
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
