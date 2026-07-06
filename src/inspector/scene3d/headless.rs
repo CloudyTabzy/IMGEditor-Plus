@@ -21,7 +21,7 @@ pub struct HeadlessRenderer {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    pub pipelines: std::sync::Arc<ScenePipelines>,
+    pub pipelines: ScenePipelines,
     pub color_format: wgpu::TextureFormat,
 }
 
@@ -79,121 +79,143 @@ pub struct RenderedFrame {
     pub submit_info: wgpu::SubmissionIndex,
 }
 
-pub fn render_frame(
-    renderer: &HeadlessRenderer,
-    scene: &Scene,
-    camera: &OrbitCamera,
-    width: u32,
-    height: u32,
-    flags: RenderFlags,
-) -> Result<RenderedFrame, String> {
-    let device = &renderer.device;
-    let queue = &renderer.queue;
-    let pipelines = &renderer.pipelines;
-    let color_format = renderer.color_format;
+    pub fn render_frame(
+        renderer: &HeadlessRenderer,
+        scene: &Scene,
+        camera: &OrbitCamera,
+        width: u32,
+        height: u32,
+        flags: RenderFlags,
+    ) -> Result<RenderedFrame, String> {
+        let device = &renderer.device;
+        let queue = &renderer.queue;
+        let pipelines = &renderer.pipelines;
+        let color_format = renderer.color_format;
 
-    if width == 0 || height == 0 {
-        return Err("zero-area render".into());
-    }
+        if width == 0 || height == 0 {
+            return Err("zero-area render".into());
+        }
 
-    let color_tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("imgeditor-scene3d-headless/color"),
-        size: wgpu::Extent3d {
+        let color_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("imgeditor-scene3d-headless/color"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: color_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let color_view = color_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let (_depth_tex, depth_view) = pipeline::create_depth_texture(device, width, height, 1);
+
+        let read_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("imgeditor-scene3d-headless/readback"),
+            size: (width as u64) * (height as u64) * 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut frustum_cam = camera.clone();
+        frustum_cam.set_viewport(Viewport { width, height });
+
+        renderer.pipelines.update_camera(
+            queue,
+            &frustum_cam,
+            scene.key_light,
+            scene.ambient,
+            flags,
+        );
+
+        let mut mesh_gpus = Vec::with_capacity(scene.meshes.len());
+        for mesh in &scene.meshes {
+            let gpu = GpuMesh::from_scene_mesh(device, queue, mesh);
+            let tex = mesh
+                .diffuse
+                .as_ref()
+                .map(|t| GpuTexture::from_scene_texture(device, queue, t, &pipelines.texture_layout));
+            mesh_gpus.push((gpu, tex));
+        }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("imgeditor-scene3d-headless/encoder"),
+        });
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("imgeditor-scene3d-headless/pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.06,
+                            g: 0.07,
+                            b: 0.09,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            pass.set_pipeline(match (
+                flags.contains(RenderFlags::WIREFRAME),
+                pipelines.wireframe.as_ref(),
+            ) {
+                (true, Some(wf)) => wf,
+                _ => &pipelines.lit,
+            });
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+
+            for (gpu_mesh, tex) in &mesh_gpus {
+                let bg: &wgpu::BindGroup = match tex {
+                    Some(t) => &t.bind_group,
+                    None => &pipelines.default_diffuse.bind_group,
+                };
+                pass.set_bind_group(1, bg, &[]);
+                pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+            }
+        }
+
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &color_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &read_buf,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
             width,
             height,
             depth_or_array_layers: 1,
         },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: color_format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let color_view = color_tex.create_view(&wgpu::TextureViewDescriptor::default());
-    let (_depth_tex, depth_view) = pipeline::create_depth_texture(device, width, height, 1);
-
-    let read_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("imgeditor-scene3d-headless/readback"),
-        size: (width as u64) * (height as u64) * 4,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    let mut frustum_cam = camera.clone();
-    frustum_cam.set_viewport(Viewport { width, height });
-
-    renderer.pipelines.update_camera(
-        queue,
-        &frustum_cam,
-        scene.key_light,
-        scene.ambient,
-        flags,
     );
-
-    let mut mesh_gpus = Vec::with_capacity(scene.meshes.len());
-    for mesh in &scene.meshes {
-        let gpu = GpuMesh::from_scene_mesh(device, queue, mesh);
-        let tex = mesh
-            .diffuse
-            .as_ref()
-            .map(|t| GpuTexture::from_scene_texture(device, queue, t, &pipelines.texture_layout));
-        mesh_gpus.push((gpu, tex));
-    }
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("imgeditor-scene3d-headless/encoder"),
-    });
-
-    {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("imgeditor-scene3d-headless/pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &color_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.06,
-                        g: 0.07,
-                        b: 0.09,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-
-        pass.set_pipeline(match (
-            flags.contains(RenderFlags::WIREFRAME),
-            pipelines.wireframe.as_ref(),
-        ) {
-            (true, Some(wf)) => wf,
-            _ => &pipelines.lit,
-        });
-        pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
-
-        for (gpu_mesh, tex) in &mesh_gpus {
-            let bg: &wgpu::BindGroup = match tex {
-                Some(t) => &t.bind_group,
-                None => &pipelines.default_diffuse.bind_group,
-            };
-            pass.set_bind_group(1, bg, &[]);
-            pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-            pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
-        }
-    }
 
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {

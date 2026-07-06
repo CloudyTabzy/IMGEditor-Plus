@@ -467,25 +467,24 @@ impl App {
     }
 
     fn build_viewer3d_stats(&self) -> Element<'_, Message> {
-        let (triangles, vertices, textures, has_scene, gpu) = self
+        let (triangles, vertices, textures, has_scene, w, h) = self
             .viewer3d_handle
             .with(|i| {
+                let w = i.camera.viewport.width.max(1);
+                let h = i.camera.viewport.height.max(1);
                 (
                     i.scene.as_ref().map(|s| s.total_triangles()).unwrap_or(0),
                     i.scene.as_ref().map(|s| s.total_vertices()).unwrap_or(0),
                     i.scene.as_ref().map(|s| s.textured_mesh_count()).unwrap_or(0),
                     i.scene.is_some(),
-                    i.camera.viewport,
+                    w,
+                    h,
                 )
             });
         let line = if has_scene {
             format!(
                 "{} vertices   {} triangles   {} textures   {}×{}",
-                vertices,
-                triangles,
-                textures,
-                gpu.width.max(1),
-                gpu.height.max(1)
+                vertices, triangles, textures, w, h
             )
         } else {
             "No scene loaded".to_string()

@@ -1,23 +1,29 @@
 //! GPU side of the embedded 3D viewer.
 //!
-//! Two render pipelines are built once per device and reused:
+//! Two render pipelines plus a composite step keep the in-pane model
+//! from wiping the surrounding Iced UI:
 //!
 //! - **Lit** — vertex + fragment WGSL, full Lambert + ambient, optional
 //!   diffuse texture selected at draw time by a flag in the camera UBO.
-//! - **Wireframe** — same vertex stage, line-list rasteriser,
-//!   solid-colour fragment.
+//!   Renders to a private `scene_color_target`, never to the surface.
+//!   Has a real depth attachment so triangle ordering is correct.
+//! - **Wireframe** — same vertex stage, line-list rasteriser, no depth.
+//! - **Compositor** — a separate pipeline with no depth and a one-line
+//!   fragment shader that samples the `scene_color_target`. The widget
+//!   uses this in `Primitive::draw` to blit the offscreen texture into
+//!   Iced's main render pass under the compositor's scissor, so the
+//!   3D model stays inside its pane rectangle and the rest of the GUI
+//!   remains untouched.
 //!
 //! One 1×1 white "default diffuse" texture is allocated so untextured
-//! meshes can use the same bind group layout as textured meshes; the
-//! lit fragment shader multiplies by `flags & 1` to select between the
-//! two.
+//! meshes can use the same bind-group layout as textured meshes.
 //!
-//! The CPU `Scene` and the GPU `SceneGpu` are decoupled on purpose:
-//! CPU data lives in the widget `State`, GPU resources are owned here
-//! and rebuilt only when the scene changes or the viewport resizes.
+//! The CPU [`Scene`] and the GPU [`ScenePipeline`] are decoupled on
+//! purpose: CPU data lives in the widget `State`, GPU resources are
+//! owned here and rebuilt only when the scene changes or the viewport
+//! resizes.
 
 use std::num::NonZeroU32;
-use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 
@@ -48,6 +54,7 @@ impl CameraUniform {
 
 pub const LIT_WGSL: &str = include_str!("shaders/lit.wgsl");
 pub const WIREFRAME_WGSL: &str = include_str!("shaders/wireframe.wgsl");
+pub const COMPOSITOR_WGSL: &str = include_str!("shaders/compositor.wgsl");
 
 pub fn lit_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -63,8 +70,19 @@ pub fn wireframe_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
     })
 }
 
+pub fn compositor_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("imgeditor-scene3d/compositor"),
+        source: wgpu::ShaderSource::Wgsl(COMPOSITOR_WGSL.into()),
+    })
+}
+
 pub fn depth_format() -> wgpu::TextureFormat {
     wgpu::TextureFormat::Depth32Float
+}
+
+pub fn scene_color_format() -> wgpu::TextureFormat {
+    wgpu::TextureFormat::Rgba8UnormSrgb
 }
 
 pub fn create_depth_texture(
@@ -91,25 +109,23 @@ pub fn create_depth_texture(
     (tex, view)
 }
 
-pub fn create_msaa_texture(
+fn create_scene_color_texture(
     device: &wgpu::Device,
     width: u32,
     height: u32,
-    format: wgpu::TextureFormat,
-    sample_count: u32,
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("imgeditor-scene3d/msaa"),
+        label: Some("imgeditor-scene3d/scene_color"),
         size: wgpu::Extent3d {
             width: width.max(1),
             height: height.max(1),
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count,
+        sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: scene_color_format(),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -318,11 +334,23 @@ pub fn default_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 pub struct ScenePipelines {
     pub lit: wgpu::RenderPipeline,
     pub wireframe: Option<wgpu::RenderPipeline>,
+    pub compositor: wgpu::RenderPipeline,
     pub camera_layout: wgpu::BindGroupLayout,
     pub texture_layout: wgpu::BindGroupLayout,
+    pub compositor_layout: wgpu::BindGroupLayout,
+    pub compositor_sampler: wgpu::Sampler,
     pub camera_buffer: wgpu::Buffer,
     pub camera_bind_group: wgpu::BindGroup,
     pub default_diffuse: GpuTexture,
+    /// Offscreen render target + view + bind-group, populated lazily and
+    /// recreated on viewport resize.
+    pub scene_color_tex: Option<wgpu::Texture>,
+    pub scene_color_view: Option<wgpu::TextureView>,
+    pub compositor_bind_group: Option<wgpu::BindGroup>,
+    /// Fullscreen-triangle vertex/index buffers reused every frame to
+    /// blit the offscreen scene texture into the compositor's render pass.
+    pub quad_vertex_buffer: wgpu::Buffer,
+    pub quad_index_buffer: wgpu::Buffer,
 }
 
 impl ScenePipelines {
@@ -330,9 +358,10 @@ impl ScenePipelines {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
-    ) -> Arc<Self> {
+    ) -> Self {
         let lit_module = lit_shader_module(device);
         let wire_module = wireframe_shader_module(device);
+        let compositor_module = compositor_shader_module(device);
 
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("imgeditor-scene3d/camera_layout"),
@@ -376,7 +405,36 @@ impl ScenePipelines {
             push_constant_ranges: &[],
         });
 
-        let lit = build_pipeline(
+        let compositor_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("imgeditor-scene3d/compositor_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let compositor_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("imgeditor-scene3d/compositor_pipeline_layout"),
+                bind_group_layouts: &[&compositor_layout],
+                push_constant_ranges: &[],
+            });
+
+        let lit = build_lit_pipeline(
             device,
             &lit_module,
             &pipeline_layout,
@@ -385,15 +443,8 @@ impl ScenePipelines {
             "imgeditor-scene3d/lit_pipeline",
         );
 
-        // Wireframe rendering requires `Features::POLYGON_MODE_LINE`,
-        // which `iced_wgpu`'s default feature set does not enable on every
-        // backend (it depends on the adapter and runtime configuration).
-        // We probe the device and skip building the wireframe pipeline if
-        // the feature is unavailable; the render path then falls back to
-        // the lit pipeline whenever the WIREFRAME flag is set, so the UI
-        // stays usable even when this build can't do lines.
         let wireframe = if device.features().contains(wgpu::Features::POLYGON_MODE_LINE) {
-            Some(build_pipeline(
+            Some(build_lit_pipeline(
                 device,
                 &wire_module,
                 &pipeline_layout,
@@ -404,6 +455,44 @@ impl ScenePipelines {
         } else {
             None
         };
+
+        let compositor = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("imgeditor-scene3d/compositor_pipeline"),
+            layout: Some(&compositor_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &compositor_module,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[vertex_buffer_layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &compositor_module,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
 
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("imgeditor-scene3d/camera_ubo"),
@@ -423,15 +512,37 @@ impl ScenePipelines {
 
         let default_diffuse = GpuTexture::default_white(device, queue, &texture_layout);
 
-        Arc::new(Self {
+        let compositor_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("imgeditor-scene3d/compositor_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let quad_vertex_buffer = build_quad_vertex_buffer(device);
+        let quad_index_buffer = build_quad_index_buffer(device);
+
+        Self {
             lit,
             wireframe,
+            compositor,
             camera_layout,
             texture_layout,
+            compositor_layout,
+            compositor_sampler,
             camera_buffer,
             camera_bind_group,
             default_diffuse,
-        })
+            scene_color_tex: None,
+            scene_color_view: None,
+            compositor_bind_group: None,
+            quad_vertex_buffer,
+            quad_index_buffer,
+        }
     }
 
     pub fn update_camera(
@@ -446,9 +557,42 @@ impl ScenePipelines {
         uniform.flags = flags.bits();
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
+
+    pub fn ensure_scene_color(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) {
+        if self.scene_color_view.is_some()
+            && let Some(tex) = self.scene_color_tex.as_ref()
+            && tex.width() == width
+            && tex.height() == height
+        {
+            return;
+        }
+        let (tex, view) = create_scene_color_texture(device, width, height);
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("imgeditor-scene3d/compositor_bind_group"),
+            layout: &self.compositor_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.compositor_sampler),
+                },
+            ],
+        });
+        self.scene_color_tex = Some(tex);
+        self.scene_color_view = Some(view);
+        self.compositor_bind_group = Some(bind_group);
+    }
 }
 
-fn build_pipeline(
+fn build_lit_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
@@ -498,6 +642,50 @@ fn build_pipeline(
         },
         multiview: None,
         cache: None,
+    })
+}
+
+/// Two-triangle fullscreen quad in clip space ([-1, 1] x [-1, 1]).
+/// UV (0, 0) is the top-left of the texture, (1, 1) is the bottom-right;
+/// the compositor WGSL flips V explicitly so the texture appears upright.
+fn build_quad_vertex_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    use wgpu::util::DeviceExt;
+    let verts = [
+        crate::inspector::scene3d::mesh::Vertex {
+            position: [-1.0, -1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.0, 1.0],
+        },
+        crate::inspector::scene3d::mesh::Vertex {
+            position: [-1.0, 1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.0, 0.0],
+        },
+        crate::inspector::scene3d::mesh::Vertex {
+            position: [1.0, -1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [1.0, 1.0],
+        },
+        crate::inspector::scene3d::mesh::Vertex {
+            position: [1.0, 1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [1.0, 0.0],
+        },
+    ];
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("imgeditor-scene3d/quad_vertex"),
+        contents: bytemuck::cast_slice(&verts),
+        usage: wgpu::BufferUsages::VERTEX,
+    })
+}
+
+fn build_quad_index_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    use wgpu::util::DeviceExt;
+    let indices: [u32; 6] = [0, 1, 2, 1, 3, 2];
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("imgeditor-scene3d/quad_index"),
+        contents: bytemuck::cast_slice(&indices),
+        usage: wgpu::BufferUsages::INDEX,
     })
 }
 

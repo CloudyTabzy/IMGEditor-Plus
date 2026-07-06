@@ -370,41 +370,65 @@ impl primitive::Primitive for ScenePrimitive {
         _bounds: &Rectangle,
         viewport: &graphics::Viewport,
     ) {
-        let inner = self.handle.with(|i| (i.scene.clone(), i.camera.clone(), i.flags));
-        let Some(scene) = inner.0 else { return };
         let width = viewport.physical_width();
         let height = viewport.physical_height();
+        pipeline.record_last_viewport(width, height);
+        let (Some(scene), cam_updated) = self.handle.with_mut(|inner| {
+            if inner.scene.is_none() {
+                return (None, false);
+            }
+            inner.camera.set_viewport(crate::inspector::scene3d::camera::Viewport {
+                width,
+                height,
+            });
+            (inner.scene.clone(), true)
+        }) else { return };
+        let _ = cam_updated;
         pipeline.ensure_size(device, width, height);
-        pipeline.upload_if_changed(device, queue, &scene, &inner.1, inner.2);
+        pipeline.ensure_offscreen(device, width, height);
+        let (camera, flags) = self.handle.with(|i| (i.camera.clone(), i.flags));
+        pipeline.upload_if_changed(device, queue, &scene, &camera, flags);
     }
 
     fn draw(
         &self,
-        _pipeline: &Self::Pipeline,
-        _render_pass: &mut wgpu::RenderPass<'_>,
+        pipeline: &Self::Pipeline,
+        render_pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
-        false
+        // Composite the offscreen scene texture into the existing
+        // compositor render pass. The compositor's viewport + scissor
+        // are already configured for the widget bounds, so the quad is
+        // automatically clipped to the pane rectangle and the UI behind
+        // it stays untouched.
+        pipeline.composite(render_pass);
+        true
     }
 
     fn render(
         &self,
         pipeline: &Self::Pipeline,
         encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        clip_bounds: &Rectangle<u32>,
+        _target: &wgpu::TextureView,
+        _clip_bounds: &Rectangle<u32>,
     ) {
-        let Some(scene) = self.handle.with(|i| i.scene.clone()) else { return };
-        let (camera, flags) = self.handle.with(|i| (i.camera.clone(), i.flags));
-        pipeline.render(encoder, target, clip_bounds, &scene, &camera, flags);
+        let (scene, camera, flags) = self.handle.with(|i| {
+            (i.scene.clone(), i.camera.clone(), i.flags)
+        });
+        let Some(scene) = scene else { return };
+        pipeline.render_to_offscreen(encoder, &scene, &camera, flags);
     }
 }
 
 pub struct ScenePipeline {
-    pub render_pipelines: std::sync::Arc<ScenePipelines>,
+    pub render_pipelines: ScenePipelines,
     pub depth_tex: Option<wgpu::Texture>,
     pub depth_view: Option<wgpu::TextureView>,
     pub width: u32,
     pub height: u32,
+    /// Cached from the most recent `prepare` call so `render` can build a
+    /// frustum camera with the same viewport. Public, mutated via
+    /// `set_last_viewport`.
+    pub last_viewport: (u32, u32),
     pub cached_scene_ptr: usize,
     pub cached_signature: u64,
     pub cached_flags_bits: u32,
@@ -421,6 +445,15 @@ impl ScenePipeline {
         self.depth_view = Some(view);
         self.width = width;
         self.height = height;
+    }
+
+    fn ensure_offscreen(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        self.render_pipelines
+            .ensure_scene_color(device, width, height);
+    }
+
+    fn record_last_viewport(&mut self, width: u32, height: u32) {
+        self.last_viewport = (width.max(1), height.max(1));
     }
 
     fn upload_if_changed(
@@ -466,22 +499,27 @@ impl ScenePipeline {
         );
     }
 
-    pub fn render(
+    /// Render the 3D model into the offscreen color target + depth target.
+    /// Called from `Primitive::render`; opens its own render pass.
+    pub fn render_to_offscreen(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        clip_bounds: &Rectangle<u32>,
         scene: &Scene,
         camera: &OrbitCamera,
         flags: RenderFlags,
     ) {
         let _ = scene;
         let _ = camera;
-        let Some(depth_view) = self.depth_view.as_ref() else { return };
+        let (Some(depth_view), Some(scene_color_view)) = (
+            self.depth_view.as_ref(),
+            self.render_pipelines.scene_color_view.as_ref(),
+        ) else {
+            return;
+        };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("imgeditor-scene3d/render"),
+            label: Some("imgeditor-scene3d/render_offscreen"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
+                view: scene_color_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -505,7 +543,6 @@ impl ScenePipeline {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        let _ = clip_bounds;
         let use_wireframe = flags.contains(RenderFlags::WIREFRAME)
             && self.render_pipelines.wireframe.is_some();
         pass.set_pipeline(match (use_wireframe, self.render_pipelines.wireframe.as_ref()) {
@@ -525,6 +562,23 @@ impl ScenePipeline {
             pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
         }
     }
+
+    /// Composite the offscreen color texture into the existing render pass
+    /// that Iced's compositor is running. Called from `Primitive::draw`
+    /// after Iced has set the viewport + scissor for the widget.
+    pub fn composite(&self, pass: &mut wgpu::RenderPass<'_>) {
+        let Some(bg) = self.render_pipelines.compositor_bind_group.as_ref() else {
+            return;
+        };
+        pass.set_pipeline(&self.render_pipelines.compositor);
+        pass.set_bind_group(0, bg, &[]);
+        pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
+        pass.set_index_buffer(
+            self.render_pipelines.quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
+        pass.draw_indexed(0..6, 0, 0..1);
+    }
 }
 
 impl PrimitivePipeline for ScenePipeline {
@@ -536,6 +590,7 @@ impl PrimitivePipeline for ScenePipeline {
             depth_view: None,
             width: 0,
             height: 0,
+            last_viewport: (1, 1),
             cached_scene_ptr: 0,
             cached_signature: 0,
             cached_flags_bits: 0,
