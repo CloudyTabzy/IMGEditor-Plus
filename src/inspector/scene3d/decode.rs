@@ -20,9 +20,9 @@ use thiserror::Error;
 
 use crate::inspector::nif::NifFile;
 use crate::inspector::scene3d::camera::BaseOrientation;
-use crate::inspector::scene3d::mesh::{Aabb, SceneMesh, Vertex};
+use crate::inspector::scene3d::mesh::{Aabb, SceneMesh, SceneTexture, Vertex};
 use crate::inspector::scene3d::scene::Scene;
-use crate::inspector::viewer3d::{collect_mesh, MeshData};
+use crate::inspector::viewer3d::{collect_mesh, find_diffuse_texture, MeshData};
 
 #[derive(Debug, Error)]
 pub enum DecodeError {
@@ -50,7 +50,9 @@ where
     // upstream `collect_mesh` flattens them into one big mesh. We keep
     // that for MVP — splitting would mean rebuilding the `Scene` graph
     // and is deferred to Phase 17.4.
-    let mesh = mesh_from_data(&raw, base_orientation, texture_resolver);
+    let diffuse_name = find_diffuse_texture(nif);
+    let diffuse = diffuse_name.as_deref().and_then(texture_resolver);
+    let mesh = mesh_from_data(&raw, base_orientation, diffuse);
     let scene_aabb = mesh.aabb;
     meshes.push(mesh);
 
@@ -79,14 +81,11 @@ where
     build_scene_from_nif(&nif, base_orientation, texture_resolver)
 }
 
-fn mesh_from_data<F>(
+fn mesh_from_data(
     data: &MeshData,
     base_orientation: BaseOrientation,
-    texture_resolver: F,
-) -> SceneMesh
-where
-    F: Fn(&str) -> Option<crate::inspector::scene3d::mesh::SceneTexture>,
-{
+    diffuse: Option<SceneTexture>,
+) -> SceneMesh {
     let n_verts = data.positions.len();
     let mut vertices: Vec<Vertex> = Vec::with_capacity(n_verts);
     let mut min = [f32::INFINITY; 3];
@@ -155,15 +154,11 @@ where
         Aabb { min, max }
     };
 
-    // No diffuse lookup at MVP; the closure exists for Phase 17.3 to
-    // plug in the NFT path without re-shaping the public API.
-    let _ = texture_resolver;
-
     SceneMesh {
         name: String::from("mesh"),
         vertices,
         indices,
-        diffuse: None,
+        diffuse,
         aabb,
     }
 }

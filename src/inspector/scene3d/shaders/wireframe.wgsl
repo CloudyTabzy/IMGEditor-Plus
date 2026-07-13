@@ -3,8 +3,9 @@ struct CameraUniform {
     inverse_view_proj: mat4x4<f32>,
     key_light: vec4<f32>,
     ambient: vec4<f32>,
+    eye_pos: vec4<f32>,
     flags: u32,
-    pad: vec4<u32>,
+    pad: vec3<u32>,
 }
 
 struct VertexIn {

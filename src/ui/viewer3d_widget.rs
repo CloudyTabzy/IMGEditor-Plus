@@ -43,6 +43,7 @@ use iced_widget::renderer::wgpu::primitive::{self, Pipeline as PrimitivePipeline
 use crate::inspector::scene3d::camera::OrbitCamera;
 use crate::inspector::scene3d::pipeline::{
     GpuMesh, GpuTexture, RenderFlags, ScenePipelines, create_depth_texture,
+    effective_texture_flag,
 };
 use crate::inspector::scene3d::scene::Scene;
 
@@ -92,6 +93,24 @@ impl SceneHandle {
         } else {
             inner.camera = OrbitCamera::default();
         }
+        inner.dirty = true;
+    }
+
+    pub fn toggle_wireframe(&self) {
+        let mut inner = self.inner.lock().expect("scene handle mutex");
+        inner.flags ^= crate::inspector::scene3d::pipeline::RenderFlags::WIREFRAME;
+        inner.dirty = true;
+    }
+
+    pub fn toggle_cull_back(&self) {
+        let mut inner = self.inner.lock().expect("scene handle mutex");
+        inner.flags ^= crate::inspector::scene3d::pipeline::RenderFlags::CULL_BACK;
+        inner.dirty = true;
+    }
+
+    pub fn toggle_textured(&self) {
+        let mut inner = self.inner.lock().expect("scene handle mutex");
+        inner.flags ^= crate::inspector::scene3d::pipeline::RenderFlags::HAS_TEXTURE;
         inner.dirty = true;
     }
 
@@ -473,22 +492,23 @@ impl ScenePipeline {
     ) {
         let signature = scene_signature(scene);
         let scene_ptr = scene as *const Scene as usize;
+        let eff_flags = effective_texture_flag(scene, flags);
         if scene_ptr == self.cached_scene_ptr
             && signature == self.cached_signature
-            && flags.bits() == self.cached_flags_bits
+            && eff_flags.bits() == self.cached_flags_bits
         {
             self.render_pipelines.update_camera(
                 queue,
                 camera,
                 scene.key_light,
                 scene.ambient,
-                flags,
+                eff_flags,
             );
             return;
         }
         self.cached_scene_ptr = scene_ptr;
         self.cached_signature = signature;
-        self.cached_flags_bits = flags.bits();
+        self.cached_flags_bits = eff_flags.bits();
         self.mesh_cache.clear();
         for mesh in &scene.meshes {
             let gpu = GpuMesh::from_scene_mesh(device, queue, mesh);
@@ -502,7 +522,7 @@ impl ScenePipeline {
             camera,
             scene.key_light,
             scene.ambient,
-            flags,
+            eff_flags,
         );
     }
 
@@ -528,6 +548,7 @@ impl ScenePipeline {
         ) else {
             return;
         };
+        let flags = effective_texture_flag(scene, flags);
         log::trace!(
             target: "imgeditor.scene3d",
             "render_to_offscreen: {w}x{h}, mesh_count={mc}, textured_count={tc}, flags={flags:?}",
@@ -583,9 +604,14 @@ impl ScenePipeline {
         // 3. the model
         let use_wireframe = flags.contains(RenderFlags::WIREFRAME)
             && self.render_pipelines.wireframe.is_some();
+        let lit_pipeline = if flags.contains(RenderFlags::CULL_BACK) {
+            &self.render_pipelines.lit_cull_back
+        } else {
+            &self.render_pipelines.lit
+        };
         pass.set_pipeline(match (use_wireframe, self.render_pipelines.wireframe.as_ref()) {
             (true, Some(wf)) => wf,
-            _ => &self.render_pipelines.lit,
+            _ => lit_pipeline,
         });
         pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
 

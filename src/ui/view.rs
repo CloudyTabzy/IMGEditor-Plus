@@ -7,6 +7,8 @@ use iced_fonts::lucide;
 
 use crate::archive::{ExportStatus, SortColumn, SortDirection};
 
+use crate::inspector::scene3d::camera::BaseOrientation;
+use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::ui::app::{App, EntryAction, InspectorTab, Message, Pane, ABOUT_TEXT};
 use crate::ui::fonts;
@@ -444,11 +446,16 @@ impl App {
     }
 
     fn build_viewer3d_stats(&self) -> Element<'_, Message> {
-        let (triangles, vertices, textures, has_scene, w, h) = self
+        let (triangles, vertices, textures, has_scene, w, h, orientation) = self
             .viewer3d_handle
             .with(|i| {
                 let w = i.camera.viewport.width.max(1);
                 let h = i.camera.viewport.height.max(1);
+                let orient = i
+                    .scene
+                    .as_ref()
+                    .map(|s| s.base_orientation)
+                    .unwrap_or(BaseOrientation::Yup);
                 (
                     i.scene.as_ref().map(|s| s.total_triangles()).unwrap_or(0),
                     i.scene.as_ref().map(|s| s.total_vertices()).unwrap_or(0),
@@ -456,12 +463,18 @@ impl App {
                     i.scene.is_some(),
                     w,
                     h,
+                    orient,
                 )
             });
+        let orient_label = match orientation {
+            BaseOrientation::Yup => "Y-up",
+            BaseOrientation::Zup => "Z-up",
+            BaseOrientation::Xup => "X-up",
+        };
         let line = if has_scene {
             format!(
-                "{} vertices   {} triangles   {} textures   {}×{}",
-                vertices, triangles, textures, w, h
+                "{} vertices   {} triangles   {} textures   {}×{}   {}",
+                vertices, triangles, textures, w, h, orient_label
             )
         } else {
             "No scene loaded".to_string()
@@ -584,7 +597,7 @@ impl App {
         if !is_nif {
             return Space::new().height(Length::Fixed(28.0)).into();
         }
-        let _ = self;
+        let flags = self.viewer3d_handle.with(|i| i.flags);
         let button_height = Length::Fixed(28.0);
         let mut row = Row::new().spacing(4).padding(2);
         row = row.push(fonts::caption("3D:"));
@@ -605,6 +618,21 @@ impl App {
                 fonts::caption("Drop the loaded scene"),
                 tooltip::Position::Bottom,
             ),
+        );
+        row = row.push(
+            checkbox(flags.contains(RenderFlags::WIREFRAME))
+                .label("Wireframe")
+                .on_toggle(|_| Message::Viewer3dToggleWireframe),
+        );
+        row = row.push(
+            checkbox(flags.contains(RenderFlags::CULL_BACK))
+                .label("Cull backfaces")
+                .on_toggle(|_| Message::Viewer3dToggleCullBackfaces),
+        );
+        row = row.push(
+            checkbox(flags.contains(RenderFlags::HAS_TEXTURE))
+                .label("Textured")
+                .on_toggle(|_| Message::Viewer3dToggleTextured),
         );
         row.into()
     }

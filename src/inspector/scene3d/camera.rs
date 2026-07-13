@@ -172,18 +172,29 @@ impl OrbitCamera {
     /// Set `target` to the AABB centre, `distance` to fit the bounding
     /// sphere inside the vertical FOV with a small margin.
     pub fn reset_to_aabb(&mut self, aabb: &Aabb) {
-        self.target = aabb.center();
+        let center = aabb.center();
+        self.target = if center.iter().all(|v| v.is_finite()) {
+            center
+        } else {
+            [0.0, 0.0, 0.0]
+        };
         let r = aabb.bounding_radius();
+        let r = if r.is_finite() && r >= 0.0 { r } else { 1.0 };
         // For a vertical FOV `θ`, the smallest distance that fits a
         // sphere of radius `r` vertically is `r / sin(θ / 2)`.
         // We add a 1.2× margin so the model doesn't touch the edges.
         let half_fov = (self.fov_y_deg * 0.5).to_radians();
-        let d = if half_fov > 0.001 {
-            (r / half_fov.sin()) * 1.2
+        let sin = half_fov.sin();
+        let d = if sin > 0.001 && sin.is_finite() {
+            (r / sin) * 1.2
         } else {
             r.max(1.0) * 4.0
         };
-        self.distance = d.max(self.near * 2.0 + 0.1);
+        self.distance = if d.is_finite() {
+            d.max(self.near * 2.0 + 0.1)
+        } else {
+            10.0
+        };
         self.yaw = 0.0;
         self.pitch = 0.3;
     }
@@ -354,5 +365,28 @@ mod tests {
             height: 0,
         });
         assert!(cam.projection().abs_diff_eq(Mat4::IDENTITY, 1e-6));
+    }
+
+    #[test]
+    fn reset_to_aabb_handles_nan_and_infinite_bounds() {
+        let mut cam = OrbitCamera::new(Viewport {
+            width: 800,
+            height: 600,
+        });
+        cam.reset_to_aabb(&Aabb {
+            min: [f32::NAN, f32::NAN, f32::NAN],
+            max: [f32::NAN, f32::NAN, f32::NAN],
+        });
+        assert!(cam.target.iter().all(|v| v.is_finite()));
+        assert!(cam.distance.is_finite());
+        assert!(cam.distance > 0.0);
+
+        cam.reset_to_aabb(&Aabb {
+            min: [f32::INFINITY, f32::INFINITY, f32::INFINITY],
+            max: [f32::INFINITY, f32::INFINITY, f32::INFINITY],
+        });
+        assert!(cam.target.iter().all(|v| v.is_finite()));
+        assert!(cam.distance.is_finite());
+        assert!(cam.distance > 0.0);
     }
 }

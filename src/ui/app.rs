@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{Config, ThemeMode};
 use crate::editor::Editor;
+use crate::inspector::scene3d::mesh::SceneTexture;
 use crate::inspector::viewer3d::{self, ViewerEvent};
 use crate::parser::{
     DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
@@ -162,6 +163,9 @@ pub enum Message {
     Viewer3dSelectTab(InspectorTab),
     Viewer3dClear,
     Viewer3dReset,
+    Viewer3dToggleWireframe,
+    Viewer3dToggleCullBackfaces,
+    Viewer3dToggleTextured,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1452,6 +1456,11 @@ impl App {
                     };
                     (entry.clone(), archive.path.clone())
                 };
+                let nif_basename = std::path::Path::new(&entry_clone.file_name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| entry_clone.file_name.to_string());
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
@@ -1460,11 +1469,32 @@ impl App {
                                 archive_path.as_deref(),
                             )
                             .map_err(|e| format!("I/O: {e}"))?;
+                            let game_root = archive_path
+                                .as_deref()
+                                .and_then(|p| p.parent().and_then(|stream| stream.parent()))
+                                .map(|p| p.to_path_buf());
+                            let ide_map = game_root
+                                .as_ref()
+                                .map(|root| crate::inspector::texture::IdeMap::build(root));
+                            let nft_catalog = ide_map
+                                .as_ref()
+                                .and_then(|map| {
+                                    crate::inspector::texture::resolve_textures_for_nif(
+                                        &nif_basename,
+                                        map,
+                                    )
+                                });
+                            let resolver = move |name: &str| {
+                                nft_catalog
+                                    .as_ref()
+                                    .and_then(|cat| cat.get_pixels(name))
+                                    .and_then(SceneTexture::from_tga)
+                            };
                             let base = crate::inspector::scene3d::camera::BaseOrientation::Zup;
                             let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
                                 &bytes,
                                 base,
-                                |_| None,
+                                resolver,
                             )
                             .map_err(|e| format!("scene: {e:?}"))?;
                             Ok::<_, String>(scene)
@@ -1515,6 +1545,18 @@ impl App {
             }
             Message::Viewer3dReset => {
                 self.viewer3d_handle.reset_camera();
+                Task::none()
+            }
+            Message::Viewer3dToggleWireframe => {
+                self.viewer3d_handle.toggle_wireframe();
+                Task::none()
+            }
+            Message::Viewer3dToggleCullBackfaces => {
+                self.viewer3d_handle.toggle_cull_back();
+                Task::none()
+            }
+            Message::Viewer3dToggleTextured => {
+                self.viewer3d_handle.toggle_textured();
                 Task::none()
             }
         }

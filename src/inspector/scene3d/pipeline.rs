@@ -29,6 +29,7 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::inspector::scene3d::camera::OrbitCamera;
 use crate::inspector::scene3d::mesh::{SceneMesh, SceneTexture, VERTEX_STRIDE};
+use crate::inspector::scene3d::scene::Scene;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
@@ -37,8 +38,9 @@ pub struct CameraUniform {
     pub inverse_view_proj: [[f32; 4]; 4],
     pub key_light: [f32; 4],
     pub ambient: [f32; 4],
+    pub eye_pos: [f32; 4],
     pub flags: u32,
-    pub _pad: [u32; 4],
+    pub _pad: [u32; 3],
 }
 
 impl CameraUniform {
@@ -47,13 +49,15 @@ impl CameraUniform {
         let proj = camera.projection();
         let view_proj = proj * view;
         let inverse_view_proj = view_proj.inverse();
+        let eye = camera.eye();
         Self {
             view_proj: view_proj.to_cols_array_2d(),
             inverse_view_proj: inverse_view_proj.to_cols_array_2d(),
             key_light: [key_light[0], key_light[1], key_light[2], 0.0],
             ambient: [ambient[0], ambient[1], ambient[2], 0.0],
+            eye_pos: [eye[0], eye[1], eye[2], 0.0],
             flags: 0,
-            _pad: [0; 4],
+            _pad: [0; 3],
         }
     }
 }
@@ -355,6 +359,7 @@ pub fn default_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 
 pub struct ScenePipelines {
     pub lit: wgpu::RenderPipeline,
+    pub lit_cull_back: wgpu::RenderPipeline,
     pub wireframe: Option<wgpu::RenderPipeline>,
     pub grid: wgpu::RenderPipeline,
     pub gizmo: wgpu::RenderPipeline,
@@ -473,7 +478,17 @@ impl ScenePipelines {
             &pipeline_layout,
             scene_color_format(),
             wgpu::PolygonMode::Fill,
+            None,
             "imgeditor-scene3d/lit_pipeline",
+        );
+        let lit_cull_back = build_lit_pipeline(
+            device,
+            &lit_module,
+            &pipeline_layout,
+            scene_color_format(),
+            wgpu::PolygonMode::Fill,
+            Some(wgpu::Face::Back),
+            "imgeditor-scene3d/lit_cull_back_pipeline",
         );
 
         let wireframe = if device.features().contains(wgpu::Features::POLYGON_MODE_LINE) {
@@ -483,6 +498,7 @@ impl ScenePipelines {
                 &pipeline_layout,
                 scene_color_format(),
                 wgpu::PolygonMode::Line,
+                None,
                 "imgeditor-scene3d/wireframe_pipeline",
             ))
         } else {
@@ -673,6 +689,7 @@ impl ScenePipelines {
 
         Self {
             lit,
+            lit_cull_back,
             wireframe,
             grid,
             gizmo,
@@ -750,6 +767,7 @@ fn build_lit_pipeline(
     layout: &wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
     polygon_mode: wgpu::PolygonMode,
+    cull_mode: Option<wgpu::Face>,
     label: &str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -775,7 +793,7 @@ fn build_lit_pipeline(
             topology: wgpu::PrimitiveTopology::TriangleList,
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
+            cull_mode,
             unclipped_depth: false,
             polygon_mode,
             conservative: false,
@@ -848,6 +866,20 @@ bitflags::bitflags! {
         const WIREFRAME         = 1 << 1;
         const CULL_BACK         = 1 << 2;
     }
+}
+
+/// Compute the render flags that should actually be uploaded to the GPU.
+///
+/// The `HAS_TEXTURE` bit is cleared when the scene has no textured meshes
+/// or when the user has disabled texturing. This keeps the shader from
+/// sampling a default-white texture and makes the flag state deterministic
+/// regardless of how the UI toggles are wired.
+pub fn effective_texture_flag(scene: &Scene, flags: RenderFlags) -> RenderFlags {
+    let mut eff = flags;
+    if scene.textured_mesh_count() == 0 || !flags.contains(RenderFlags::HAS_TEXTURE) {
+        eff.remove(RenderFlags::HAS_TEXTURE);
+    }
+    eff
 }
 
 #[cfg(test)]

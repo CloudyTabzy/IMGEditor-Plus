@@ -539,7 +539,7 @@ fn open_file_detached(path: &Path) {
 /// Falls back to the first orphan NiSourceTexture block when no property has
 /// a populated base slot (common in Bully NIFs that store textures outside
 /// the property block).
-fn find_diffuse_texture(nif: &NifFile) -> Option<String> {
+pub(crate) fn find_diffuse_texture(nif: &NifFile) -> Option<String> {
     // First pass: look through NiTexturingProperty blocks for a populated base.
     for payload in nif.payloads.iter().flatten() {
         if let BlockPayload::NiTexturingProperty(tp) = payload {
