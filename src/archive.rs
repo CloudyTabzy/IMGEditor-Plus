@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -103,6 +104,9 @@ pub struct SortState {
     pub column: SortColumn,
     pub direction: SortDirection,
     pub type_index: usize,
+    /// Cached header text for the Type column. Recomputed only when the sort
+    /// state or the underlying file-type set changes.
+    pub type_header_label: String,
 }
 
 impl Default for SortState {
@@ -111,6 +115,7 @@ impl Default for SortState {
             column: SortColumn::Name,
             direction: SortDirection::Ascending,
             type_index: 0,
+            type_header_label: "Type".to_string(),
         }
     }
 }
@@ -153,13 +158,6 @@ impl EntryInfo {
 }
 
 #[derive(Debug, Clone)]
-pub struct RowDisplay {
-    pub name: String,
-    pub file_type: String,
-    pub size_kb: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct ArchiveInfo {
     pub path: Option<PathBuf>,
     pub file_name: String,
@@ -181,7 +179,16 @@ pub struct ArchiveInfo {
     pub inspection_cache: std::collections::HashMap<usize, EntryInspection>,
     /// Cached decoded TXD textures per entry index.
     pub txd_cache: std::collections::HashMap<usize, Vec<DecodedTexture>>,
-    pub row_cache: Vec<RowDisplay>,
+    /// Cache for `unique_file_types()` invalidated whenever entries are added,
+    /// removed, or renamed.
+    cached_file_types: Option<Vec<CompactString>>,
+    /// Reverse lookup from entry index to its position in `selected_indices`.
+    /// Rebuilt by `update_selected_list` so shift+click and similar operations
+    /// avoid linear scans of the filtered list.
+    selected_lookup: HashMap<usize, usize>,
+    /// Index of the entry currently in rename mode. Tracking this directly
+    /// avoids scanning every entry to clear the rename flag on each click.
+    pub rename_index: Option<usize>,
 }
 
 impl ArchiveInfo {
@@ -206,7 +213,9 @@ impl ArchiveInfo {
             sort: SortState::default(),
             inspection_cache: std::collections::HashMap::new(),
             txd_cache: std::collections::HashMap::new(),
-            row_cache: Vec::new(),
+            cached_file_types: None,
+            selected_lookup: HashMap::new(),
+            rename_index: None,
         };
 
         archive.add_log("Created archive".to_string());
@@ -241,7 +250,9 @@ impl ArchiveInfo {
             sort: SortState::default(),
             inspection_cache: std::collections::HashMap::new(),
             txd_cache: std::collections::HashMap::new(),
-            row_cache: Vec::new(),
+            cached_file_types: None,
+            selected_lookup: HashMap::new(),
+            rename_index: None,
         };
 
         match version {
@@ -262,6 +273,12 @@ impl ArchiveInfo {
     pub fn update_selected_list(&mut self, filter: &str) {
         let filter = filter.to_lowercase();
         self.selected_indices.clear();
+        self.selected_lookup.clear();
+
+        // Eagerly clone the cached file-type list. `unique_file_types` needs
+        // `&mut self` to populate the cache, so it must happen before we hold
+        // any borrowed `EntryInfo` references from `self.entries`.
+        let unique_types = self.unique_file_types().to_vec();
 
         let mut matches: Vec<(usize, &EntryInfo)> = self
             .entries
@@ -269,8 +286,6 @@ impl ArchiveInfo {
             .enumerate()
             .filter(|(_, e)| e.file_name_lower.contains(&filter))
             .collect();
-
-        let unique_types = self.unique_file_types();
 
         matches.sort_by(|(_, a), (_, b)| match self.sort.column {
             SortColumn::Name => {
@@ -306,12 +321,22 @@ impl ArchiveInfo {
             }
         });
 
-        for (index, _) in matches {
-            self.selected_indices.push(index);
+        for (display_row, (entry_index, _)) in matches.into_iter().enumerate() {
+            self.selected_lookup.insert(entry_index, display_row);
+            self.selected_indices.push(entry_index);
         }
 
+        self.sort.type_header_label = if self.sort.column == SortColumn::Type {
+            let primary = unique_types
+                .get(self.sort.type_index % unique_types.len().max(1))
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            format!("Type ↑ {}", primary)
+        } else {
+            "Type".to_string()
+        };
+
         self.refresh_export_status();
-        self.rebuild_row_cache();
     }
 
     pub fn refresh_export_status(&mut self) {
@@ -349,30 +374,50 @@ impl ArchiveInfo {
         }
     }
 
-    pub fn rebuild_row_cache(&mut self) {
-        self.row_cache.clear();
-        for &index in &self.selected_indices {
-            if let Some(entry) = self.entries.get(index) {
-                let name = if entry.selected {
-                    format!("✓ {}", entry.file_name)
-                } else {
-                    entry.file_name.to_string()
-                };
-                self.row_cache.push(RowDisplay {
-                    name,
-                    file_type: entry.file_type.to_string(),
-                    size_kb: format!("{} KB", entry.sector * 2),
-                });
+    /// Returns the sorted, deduplicated list of file types in this archive.
+    /// The result is cached and only recomputed when the cache is invalidated
+    /// by entry mutations.
+    pub(crate) fn unique_file_types(&mut self) -> &[CompactString] {
+        if self.cached_file_types.is_none() {
+            let mut types: Vec<CompactString> =
+                self.entries.iter().map(|e| e.file_type.clone()).collect();
+            types.sort();
+            types.dedup();
+            self.cached_file_types = Some(types);
+        }
+        self.cached_file_types.as_deref().unwrap_or_default()
+    }
+
+    /// Invalidates caches that depend on the entry list or entry metadata.
+    /// Call this after add/remove/rename/import operations.
+    pub fn invalidate_entry_caches(&mut self) {
+        self.cached_file_types = None;
+    }
+
+    /// O(1) lookup from entry index to its display row in the current filter/sort.
+    /// Returns `None` if the entry is not currently visible.
+    pub fn display_row_of(&self, entry_index: usize) -> Option<usize> {
+        self.selected_lookup.get(&entry_index).copied()
+    }
+
+    /// Clears the rename state for the single entry that was in rename mode,
+    /// if any. This avoids scanning the entire entry list on every click.
+    pub fn clear_rename(&mut self) {
+        if let Some(index) = self.rename_index.take() {
+            if let Some(entry) = self.entries.get_mut(index) {
+                entry.rename = false;
             }
         }
     }
 
-    pub(crate) fn unique_file_types(&self) -> Vec<CompactString> {
-        let mut types: Vec<CompactString> =
-            self.entries.iter().map(|e| e.file_type.clone()).collect();
-        types.sort();
-        types.dedup();
-        types
+    /// Sets the given entry as the active rename target, clearing any previous
+    /// rename target first.
+    pub fn set_rename(&mut self, index: usize) {
+        self.clear_rename();
+        if let Some(entry) = self.entries.get_mut(index) {
+            entry.rename = true;
+            self.rename_index = Some(index);
+        }
     }
 }
 
@@ -458,6 +503,51 @@ mod tests {
 
         archive.update_selected_list("txd");
         assert_eq!(archive.selected_indices.as_slice(), &[1]);
+    }
+
+    #[test]
+    fn archive_selected_lookup_maps_entry_to_display_row() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("zzz.dff"));
+        archive.entries.push(EntryInfo::new("aaa.txd"));
+        archive.entries.push(EntryInfo::new("bbb.dff"));
+
+        archive.update_selected_list("");
+        assert_eq!(archive.display_row_of(0), Some(2));
+        assert_eq!(archive.display_row_of(1), Some(0));
+        assert_eq!(archive.display_row_of(2), Some(1));
+        assert_eq!(archive.display_row_of(99), None);
+    }
+
+    #[test]
+    fn archive_rename_tracking_targets_single_entry() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("a.dff"));
+        archive.entries.push(EntryInfo::new("b.txd"));
+
+        archive.set_rename(1);
+        assert!(archive.entries[1].rename);
+        assert!(!archive.entries[0].rename);
+        assert_eq!(archive.rename_index, Some(1));
+
+        archive.clear_rename();
+        assert!(!archive.entries[1].rename);
+        assert_eq!(archive.rename_index, None);
+    }
+
+    #[test]
+    fn archive_file_type_cache_invalidated_on_entry_change() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("a.dff"));
+        archive.entries.push(EntryInfo::new("b.txd"));
+
+        let first = archive.unique_file_types().to_vec();
+        assert_eq!(first, vec!["Model", "Texture"]);
+
+        archive.invalidate_entry_caches();
+        archive.entries.push(EntryInfo::new("c.col"));
+        let second = archive.unique_file_types().to_vec();
+        assert_eq!(second, vec!["Collision", "Model", "Texture"]);
     }
 
     #[test]

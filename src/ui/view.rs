@@ -5,7 +5,7 @@ use iced::widget::{
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_fonts::lucide;
 
-use crate::archive::{ExportStatus, RowDisplay, SortColumn, SortDirection};
+use crate::archive::{ExportStatus, SortColumn, SortDirection};
 
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::ui::app::{App, EntryAction, InspectorTab, Message, Pane, ABOUT_TEXT};
@@ -46,16 +46,7 @@ impl App {
         };
 
         let name_label = sort_label("Name", archive.sort.column == SortColumn::Name, archive.sort.direction);
-        let type_label = if archive.sort.column == SortColumn::Type {
-            let unique_types = archive.unique_file_types();
-            let primary = unique_types
-                .get(archive.sort.type_index % unique_types.len().max(1))
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            format!("Type ↑ {}", primary)
-        } else {
-            "Type".to_string()
-        };
+        let type_label = archive.sort.type_header_label.clone();
         let size_label = sort_label("Size", archive.sort.column == SortColumn::Size, archive.sort.direction);
 
         let headers = row![
@@ -119,8 +110,7 @@ impl App {
             let Some(entry) = archive.entries.get(entry_index) else {
                 continue;
             };
-            let row_display = archive.row_cache.get(display_row);
-            content = content.push(self.build_entry_row(display_row, entry, row_display));
+            content = content.push(self.build_entry_row(display_row, entry));
         }
 
         if bottom_pad_rows > 0 {
@@ -130,7 +120,7 @@ impl App {
         let content = content.height(Length::Fixed(total_height));
 
         let scrollable = Scrollable::new(content)
-            .id(self.entry_table_id.clone())
+            .id(iced::widget::Id::new("entry_table"))
             .height(Length::Fill)
             .direction(iced::widget::scrollable::Direction::Vertical(
                 iced::widget::scrollable::Scrollbar::new().scroller_width(16.0),
@@ -174,35 +164,22 @@ impl App {
         &'a self,
         display_row: usize,
         entry: &'a crate::archive::EntryInfo,
-        row_display: Option<&'a RowDisplay>,
     ) -> Element<'a, Message> {
         use std::borrow::Cow;
 
         let is_renaming = entry.rename;
         let is_selected = entry.selected;
 
-        // Borrow cached display strings when available to avoid cloning a
-        // full String for every visible row on every frame.
-        let (file_name, file_type, size_kb): (Cow<'_, str>, Cow<'_, str>, Cow<'_, str>) =
-            match row_display {
-                Some(rd) => (
-                    Cow::Borrowed(&rd.name),
-                    Cow::Borrowed(&rd.file_type),
-                    Cow::Borrowed(&rd.size_kb),
-                ),
-                None => {
-                    let name = if is_selected {
-                        format!("✓ {}", entry.file_name)
-                    } else {
-                        entry.file_name.to_string()
-                    };
-                    (
-                        Cow::Owned(name),
-                        Cow::Owned(entry.file_type.to_string()),
-                        Cow::Owned(format!("{} KB", entry.sector * 2)),
-                    )
-                }
-            };
+        // Render display strings on demand for the visible row only. Pre-caching
+        // these for every filtered entry caused thousands of allocations each
+        // time the filter or selection changed.
+        let file_name: Cow<'_, str> = if is_selected {
+            Cow::Owned(format!("✓ {}", entry.file_name))
+        } else {
+            Cow::Borrowed(entry.file_name.as_str())
+        };
+        let file_type = Cow::Borrowed(entry.file_type.as_str());
+        let size_kb = Cow::Owned(format!("{} KB", entry.sector * 2));
 
         let name_widget: Element<'_, Message> = if is_renaming {
             text_input("", &self.rename_buffer)

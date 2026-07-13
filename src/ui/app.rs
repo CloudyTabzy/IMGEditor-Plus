@@ -218,7 +218,6 @@ pub struct App {
     pub filter_pending: bool,
     pub autoscroll: Option<AutoScroll>,
     pub modifiers: Modifiers,
-    pub entry_table_id: iced::widget::Id,
     viewer_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>>,
     pub animator: Animator,
     prev_tick: Option<std::time::Instant>,
@@ -264,7 +263,6 @@ impl App {
             filter_pending: false,
             autoscroll: None,
             modifiers: Modifiers::default(),
-            entry_table_id: iced::widget::Id::unique(),
             viewer_rxs: Vec::new(),
             animator: Animator::new(),
             prev_tick: None,
@@ -678,9 +676,7 @@ impl App {
                         }
                     }
                     if let Some(archive) = self.editor.selected_archive_mut() {
-                        if let Some(entry) = archive.entries.get_mut(index) {
-                            entry.rename = true;
-                        }
+                        archive.set_rename(index);
                     }
                 }
                 Task::none()
@@ -697,9 +693,7 @@ impl App {
             }
             Message::CancelRename => {
                 if let Some(archive) = self.editor.selected_archive_mut() {
-                    for entry in &mut archive.entries {
-                        entry.rename = false;
-                    }
+                    archive.clear_rename();
                 }
                 self.rename_buffer.clear();
                 Task::none()
@@ -784,11 +778,10 @@ impl App {
                     self.editor.set_selected_entry(Some(entry_index));
                     self.editor.select_entry(entry_index, false, false);
                     if let Some(archive) = self.editor.selected_archive_mut() {
-                        if let Some(entry) = archive.entries.get_mut(entry_index) {
-                            entry.rename = true;
+                        archive.set_rename(entry_index);
+                        if let Some(entry) = archive.entries.get(entry_index) {
                             self.rename_buffer = entry.file_name.to_string();
                         }
-                        archive.rebuild_row_cache();
                     }
                     self.refresh_inspection()
                 } else {
@@ -1194,7 +1187,7 @@ impl App {
                 const SENSITIVITY: f32 = 2.5;
                 let new_y = (state.initial_scroll_y + delta_y * SENSITIVITY).max(0.0);
                 iced::advanced::widget::operate(scroll_to(
-                    self.entry_table_id.clone(),
+                    iced::widget::Id::new("entry_table"),
                     AbsoluteOffset { x: None, y: Some(new_y) },
                 ))
             }
@@ -1214,7 +1207,7 @@ impl App {
             }
             Message::SortBy(column) => {
                 if let Some(archive) = self.editor.selected_archive_mut() {
-                    let unique_types = archive.unique_file_types();
+                    let unique_types = archive.unique_file_types().to_vec();
                     match column {
                         SortColumn::Name => {
                             if archive.sort.column == SortColumn::Name {

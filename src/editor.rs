@@ -124,9 +124,7 @@ impl Editor {
                 return;
             };
 
-            for entry in &mut archive.entries {
-                entry.rename = false;
-            }
+            archive.clear_rename();
 
             if shift {
                 // Compute the range in DISPLAY-ROW space (positions
@@ -135,12 +133,11 @@ impl Editor {
                 // unrelated types that happen to sit between anchor
                 // and clicked in the raw entries array.
                 let a = anchor.unwrap_or(clicked);
-                // Collect target entry indices first to satisfy the
-                // borrow checker (immutable borrow of selected_indices
-                // + mutable borrow of entries).
+                // The reverse lookup lets us find display positions in O(1)
+                // instead of scanning the filtered list.
                 let targets: Vec<usize> = {
-                    let a_pos = archive.selected_indices.iter().position(|&i| i == a);
-                    let c_pos = archive.selected_indices.iter().position(|&i| i == clicked);
+                    let a_pos = archive.display_row_of(a);
+                    let c_pos = archive.display_row_of(clicked);
                     match (a_pos, c_pos) {
                         (Some(ap), Some(cp)) => {
                             let lo = ap.min(cp);
@@ -167,7 +164,6 @@ impl Editor {
             }
 
             archive.refresh_export_status();
-            archive.rebuild_row_cache();
         } // archive borrow drops here
 
         self.selected_entry = Some(clicked);
@@ -175,27 +171,28 @@ impl Editor {
 
     pub fn select_all(&mut self, selected: bool) {
         if let Some(archive) = self.selected_archive_mut() {
+            archive.clear_rename();
             for entry in &mut archive.entries {
                 entry.selected = selected;
             }
             archive.refresh_export_status();
-            archive.rebuild_row_cache();
         }
     }
 
     pub fn invert_selection(&mut self) {
         if let Some(archive) = self.selected_archive_mut() {
+            archive.clear_rename();
             for entry in &mut archive.entries {
                 entry.selected = !entry.selected;
             }
             archive.refresh_export_status();
-            archive.rebuild_row_cache();
         }
     }
 
     pub fn delete_selected(&mut self) {
         if let Some(archive) = self.selected_archive_mut() {
             archive.entries.retain(|entry| !entry.selected);
+            archive.invalidate_entry_caches();
             archive.update_selected_list("");
             archive.dirty = true;
             self.selected_entry = None;
@@ -214,13 +211,12 @@ impl Editor {
                     updated.imported = entry.imported;
                     updated.selected = entry.selected;
                     *entry = updated;
+                    archive.invalidate_entry_caches();
                     archive.dirty = true;
                     archive.update_selected_list("");
                 }
             }
-            for entry in &mut archive.entries {
-                entry.rename = false;
-            }
+            archive.clear_rename();
         }
     }
 
@@ -238,6 +234,7 @@ impl Editor {
 
         if count > 0 {
             archive.dirty = true;
+            archive.invalidate_entry_caches();
         }
         archive.add_log(format!("Imported {count} entries"));
         archive.update_search = true;
@@ -280,6 +277,7 @@ impl Editor {
             }
             if count > 0 {
                 archive.dirty = true;
+                archive.invalidate_entry_caches();
             }
             archive.add_log(format!("Imported {count} entries"));
             archive.update_search = true;
