@@ -499,6 +499,10 @@ pub struct DecodedTexture {
     pub has_alpha: bool,
     pub format_name: String,
     pub mipmap_count: u32,
+    /// Lazily-built Iced image handle. `OnceLock` gives thread-safe one-time
+    /// initialization without locking on reads, and keeps `DecodedTexture`
+    /// `Send + Sync` for the parallel export path.
+    pub handle: std::sync::OnceLock<iced::widget::image::Handle>,
 }
 
 /// Decode raster data to RGBA given the TXD raster format.

@@ -1555,6 +1555,7 @@ impl App {
                             has_alpha: tex.has_alpha != 0 || tex.raster_format != 0x200,
                             format_name: tex.format_name().to_string(),
                             mipmap_count: tex.num_mipmaps as u32,
+                            handle: std::sync::OnceLock::new(),
                         });
                     }
                     Ok(decoded)

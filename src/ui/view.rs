@@ -565,7 +565,13 @@ impl App {
             "Alpha",
             if tex.has_alpha { "Yes" } else { "No" }.to_string(),
         ));
-        let handle = image::Handle::from_rgba(tex.width, tex.height, tex.rgba.clone());
+        // Lazily build the Iced image handle once per texture and cache it on
+        // the decoded texture. This avoids cloning the full RGBA buffer on every
+        // frame while the texture tab is open.
+        let handle = tex
+            .handle
+            .get_or_init(|| image::Handle::from_rgba(tex.width, tex.height, tex.rgba.clone()))
+            .clone();
         let preview = image::Viewer::new(handle)
             .width(Length::Fill)
             .height(Length::Fill)
