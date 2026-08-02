@@ -40,7 +40,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Multiple archive tabs** with dirty-file indicator
 - ✅ **Drag-and-drop** — open `.img` archives or import files from Explorer
 
-### 🎨 Embedded 3D Model Viewer (v3.4)
+### 🎨 Embedded 3D Model Viewer (v3.4+)
 - ✅ **In-app wgpu renderer** — same wgpu device Iced uses, no second window or thread battle
 - ✅ **Tab split in the right pane** — `Model 3D` (new) | `Texture` (TXD preview)
 - ✅ **Orbit / pan / zoom camera** — LMB drag, MMB drag, Shift+LMB drag, wheel
@@ -48,6 +48,13 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Textured paths** — DXT1/DXT5 diffuse decoded on `spawn_blocking` so the UI thread stays responsive
 - ✅ **External PLY viewer fallback** — right-click `Open in external viewer` for non-NIF formats (DFF / COL) and any user preference
 - ✅ **Configurable base orientation** — Y-up default, `B` cycles to Z-up / X-up. Persists in `settings.ini`.
+
+**v3.5 viewer polish:**
+- ✅ **Blender-style orbit** — mouse-right moves the view left (matching Blender's turntable feel)
+- ✅ **Rotating view-axis gizmo** — the small XYZ widget in the corner tracks the camera as it orbits
+- ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
+- ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
+- ✅ **153 tests passing** — covers parser, save, inspector, scene3d mesh/camera/decode/pipeline, headless wgpu against a real Bully fixture
 
 ---
 

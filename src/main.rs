@@ -1,3 +1,5 @@
+// TODO(narrow): replace this crate-wide allow with per-item `#[allow(dead_code)]` once
+// the bench-gated modules are wired so the compiler can see every call path. See TODO §6.
 #![allow(dead_code)]
 #![cfg_attr(not(feature = "bench"), windows_subsystem = "windows")]
 
