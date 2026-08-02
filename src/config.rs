@@ -3,20 +3,15 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ThemeMode {
+    #[default]
     System,
     Light,
     DarkCatppuccin,
     DarkTokyoNight,
     DarkGruvbox,
     DarkEverforest,
-}
-
-impl Default for ThemeMode {
-    fn default() -> Self {
-        ThemeMode::System
-    }
 }
 
 impl ThemeMode {

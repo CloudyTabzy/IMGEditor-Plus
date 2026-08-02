@@ -4,11 +4,16 @@
 //! elastic, bounce, and back variants. Each function takes a normalised
 //! time `t` in [0,1] and returns a normalised value in [0,1].
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum Easing {
     Linear,
-    QuadIn, QuadOut, QuadInOut,
-    CubicIn, CubicOut, CubicInOut,
+    QuadIn,
+    QuadOut,
+    QuadInOut,
+    #[default]
+    CubicIn,
+    CubicOut,
+    CubicInOut,
     QuartIn, QuartOut, QuartInOut,
     QuintIn, QuintOut, QuintInOut,
     SineIn, SineOut, SineInOut,
@@ -132,9 +137,7 @@ impl Easing {
     }
 }
 
-impl Default for Easing {
-    fn default() -> Self { Self::CubicOut }
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -164,7 +167,10 @@ mod tests {
         assert!((e.apply(1.0) - 1.0).abs() < 1e-4);
         // Elastic should briefly exceed 1.0
         let mid = e.apply(0.7);
-        assert!(mid > 1.0 || mid < 0.0, "elastic should overshoot: got {mid}");
+        assert!(
+            !(0.0..=1.0).contains(&mid),
+            "elastic should overshoot: got {mid}"
+        );
     }
 
     #[test]

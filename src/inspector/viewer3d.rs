@@ -542,32 +542,28 @@ fn open_file_detached(path: &Path) {
 pub(crate) fn find_diffuse_texture(nif: &NifFile) -> Option<String> {
     // First pass: look through NiTexturingProperty blocks for a populated base.
     for payload in nif.payloads.iter().flatten() {
-        if let BlockPayload::NiTexturingProperty(tp) = payload {
-            if let Some(ref base) = tp.base {
-                if base.source_ref >= 0 {
-                    let tex_idx = base.source_ref as usize;
-                    if let Some(Some(BlockPayload::NiSourceTexture(tex))) =
-                        nif.payloads.get(tex_idx)
-                    {
-                        if let Some(ref name) = tex.file_name {
-                            if !name.is_empty() {
-                                return Some(name.clone());
-                            }
-                        }
-                    }
-                }
+        if let BlockPayload::NiTexturingProperty(tp) = payload
+            && let Some(ref base) = tp.base
+            && base.source_ref >= 0
+        {
+            let tex_idx = base.source_ref as usize;
+            if let Some(Some(BlockPayload::NiSourceTexture(tex))) =
+                nif.payloads.get(tex_idx)
+                && let Some(ref name) = tex.file_name
+                && !name.is_empty()
+            {
+                return Some(name.clone());
             }
         }
     }
     // Second pass: orphan NiSourceTexture blocks (no property references
     // them but they carry a file name — Bully often stores textures this way).
     for payload in nif.payloads.iter().flatten() {
-        if let BlockPayload::NiSourceTexture(tex) = payload {
-            if let Some(ref name) = tex.file_name {
-                if !name.is_empty() {
-                    return Some(name.clone());
-                }
-            }
+        if let BlockPayload::NiSourceTexture(tex) = payload
+            && let Some(ref name) = tex.file_name
+            && !name.is_empty()
+        {
+            return Some(name.clone());
         }
     }
     None
@@ -599,15 +595,15 @@ fn locate_texture_data(
     candidates.push(Path::new(&format!("{name_no_ext}.nft")).to_path_buf());
     if let Some(root) = search_root {
         candidates.push(root.join(name));
-        candidates.push(root.join(&format!("{name_no_ext}.nft")));
+        candidates.push(root.join(format!("{name_no_ext}.nft")));
         candidates.push(root.join("textures").join(name));
-        candidates.push(root.join("textures").join(&format!("{name_no_ext}.nft")));
+        candidates.push(root.join("textures").join(format!("{name_no_ext}.nft")));
         if let Some(parent) = root.parent() {
             candidates.push(parent.join("textures").join(name));
-            candidates.push(parent.join("textures").join(&format!("{name_no_ext}.nft")));
+            candidates.push(parent.join("textures").join(format!("{name_no_ext}.nft")));
             if let Some(gp) = parent.parent() {
                 candidates.push(gp.join("textures").join(name));
-                candidates.push(gp.join("textures").join(&format!("{name_no_ext}.nft")));
+                candidates.push(gp.join("textures").join(format!("{name_no_ext}.nft")));
             }
         }
     }
@@ -620,16 +616,16 @@ fn locate_texture_data(
             let subdir = root.join(sub);
             if subdir.exists() {
                 candidates.push(subdir.join(name));
-                candidates.push(subdir.join(&format!("{name_no_ext}.nft")));
+                candidates.push(subdir.join(format!("{name_no_ext}.nft")));
             }
         }
         // Also check TXD subdirectories
         let txd = root.parent().map(|p| p.join("TXD"));
-        if let Some(ref txd) = txd {
-            if txd.exists() {
-                candidates.push(txd.join(name));
-                candidates.push(txd.join(&format!("{name_no_ext}.nft")));
-            }
+        if let Some(ref txd) = txd
+            && txd.exists()
+        {
+            candidates.push(txd.join(name));
+            candidates.push(txd.join(format!("{name_no_ext}.nft")));
         }
     }
 
@@ -694,7 +690,7 @@ fn extract_texture_from_nft(path: &Path) -> Option<Vec<u8>> {
         //   direct_render (u8, 1)
         //   persist_render_data (u8, 1)
         //   --- embedded pixel data follows ---
-        let skip = 4 + 4 + 0 + 4 + 1 + 4 + 4 + 4 + 4 + 1 + 1 + 1;
+        let skip = 4 + 4 + 4 + 1 + 4 + 4 + 4 + 4 + 1 + 1 + 1;
         // After the header fields, the remaining bytes should be the pixel data.
         // The first 4 bytes might be pixel data size (u32), followed by raw RGBA.
         if skip >= raw.len() {
@@ -763,12 +759,40 @@ pub(crate) struct MeshData {
     pub(crate) indices: Vec<u32>,
 }
 
+/// Accumulates geometry across multiple `append_mesh` calls so the
+/// function can take a single `&mut` accumulator instead of a long
+/// list of independent `&mut Vec<...>` references.
+struct MeshAccumulator {
+    positions: Vec<[f32; 3]>,
+    indices: Vec<u32>,
+    normals: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
+    base_vertex: u32,
+}
+
+impl MeshAccumulator {
+    fn new() -> Self {
+        Self {
+            positions: Vec::new(),
+            indices: Vec::new(),
+            normals: Vec::new(),
+            uvs: Vec::new(),
+            base_vertex: 0,
+        }
+    }
+
+    fn into_mesh_data(self) -> MeshData {
+        MeshData {
+            positions: self.positions,
+            normals: self.normals,
+            uvs: self.uvs,
+            indices: self.indices,
+        }
+    }
+}
+
 pub(crate) fn collect_mesh(nif: &NifFile) -> Option<MeshData> {
-    let mut positions: Vec<[f32; 3]> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-    let mut normals: Vec<[f32; 3]> = Vec::new();
-    let mut uvs: Vec<[f32; 2]> = Vec::new();
-    let mut base_vertex: u32 = 0;
+    let mut acc = MeshAccumulator::new();
 
     for (block_idx, _block) in nif.blocks.iter().enumerate() {
         let Some(ref payload) = nif.payloads[block_idx] else {
@@ -826,42 +850,19 @@ pub(crate) fn collect_mesh(nif: &NifFile) -> Option<MeshData> {
 
         match data_payload {
             BlockPayload::NiTriShapeData(data) => {
-                append_mesh(
-                    data,
-                    None,
-                    &shape_xform,
-                    &mut positions,
-                    &mut indices,
-                    &mut normals,
-                    &mut uvs,
-                    &mut base_vertex,
-                );
+                append_mesh(data, None, &shape_xform, &mut acc);
             }
             BlockPayload::NiTriStripsData(data) => {
-                append_mesh(
-                    &data.base,
-                    Some(data),
-                    &shape_xform,
-                    &mut positions,
-                    &mut indices,
-                    &mut normals,
-                    &mut uvs,
-                    &mut base_vertex,
-                );
+                append_mesh(&data.base, Some(data), &shape_xform, &mut acc);
             }
             _ => {}
         }
     }
 
-    if positions.is_empty() {
+    if acc.positions.is_empty() {
         None
     } else {
-        Some(MeshData {
-            positions,
-            normals,
-            uvs,
-            indices,
-        })
+        Some(acc.into_mesh_data())
     }
 }
 
@@ -875,11 +876,7 @@ fn append_mesh(
     data: &NiTriShapeDataPayload,
     strips: Option<&NiTriStripsDataPayload>,
     xform: &ShapeTransform,
-    positions: &mut Vec<[f32; 3]>,
-    indices: &mut Vec<u32>,
-    normals: &mut Vec<[f32; 3]>,
-    uvs: &mut Vec<[f32; 2]>,
-    base_vertex: &mut u32,
+    acc: &mut MeshAccumulator,
 ) {
     if data.vertices.is_empty() {
         return;
@@ -891,7 +888,7 @@ fn append_mesh(
         let sx = v.x * xform.scale;
         let sy = v.y * xform.scale;
         let sz = v.z * xform.scale;
-        positions.push([
+        acc.positions.push([
             rot[0][0] * sx + rot[1][0] * sy + rot[2][0] * sz + xform.translation.x,
             rot[0][1] * sx + rot[1][1] * sy + rot[2][1] * sz + xform.translation.y,
             rot[0][2] * sx + rot[1][2] * sy + rot[2][2] * sz + xform.translation.z,
@@ -903,7 +900,7 @@ fn append_mesh(
             let nx = rot[0][0] * n.x + rot[1][0] * n.y + rot[2][0] * n.z;
             let ny = rot[0][1] * n.x + rot[1][1] * n.y + rot[2][1] * n.z;
             let nz = rot[0][2] * n.x + rot[1][2] * n.y + rot[2][2] * n.z;
-            normals.push([nx, ny, nz]);
+            acc.normals.push([nx, ny, nz]);
         }
     }
 
@@ -911,15 +908,16 @@ fn append_mesh(
         let uv_count = data.num_vertices as usize;
         for i in 0..uv_count {
             let uv = data.uvs[i];
-            uvs.push([uv.u, uv.v]);
+            acc.uvs.push([uv.u, uv.v]);
         }
     }
 
+    let base_vertex = acc.base_vertex;
     if !data.triangles.is_empty() {
         for tri in &data.triangles {
-            indices.push(*base_vertex + tri.v0 as u32);
-            indices.push(*base_vertex + tri.v1 as u32);
-            indices.push(*base_vertex + tri.v2 as u32);
+            acc.indices.push(base_vertex + tri.v0 as u32);
+            acc.indices.push(base_vertex + tri.v1 as u32);
+            acc.indices.push(base_vertex + tri.v2 as u32);
         }
     } else if let Some(strips) = strips {
         let mut offset = 0usize;
@@ -945,13 +943,13 @@ fn append_mesh(
                 if a == b || a == c || b == c {
                     continue;
                 }
-                indices.push(*base_vertex + a);
-                indices.push(*base_vertex + b);
-                indices.push(*base_vertex + c);
+                acc.indices.push(base_vertex + a);
+                acc.indices.push(base_vertex + b);
+                acc.indices.push(base_vertex + c);
             }
             offset += len;
         }
     }
 
-    *base_vertex += data.vertices.len() as u32;
+    acc.base_vertex += data.vertices.len() as u32;
 }

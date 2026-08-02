@@ -160,3 +160,115 @@ The fixture PNG (`target/scene3d-bully-1950fridge.png`) renders the actual 1950s
 - DXT decode is CPU-bound, runs on `tokio::task::spawn_blocking` so the Iced thread doesn't stall.
 - Skeleton toggle (`X`) is a no-op stub in v3.4; warn in the toolbar tooltip rather than the UI freezing.
 - Camera orbit angles are NOT persisted per-entry. We re-fit on every selection.
+
+## 5. Known issues to fix in v3.4.1 (deferred from v3.4.0)
+
+Tracked separately because they are **bugs** (not backlog features). Release notes for v3.4.0 already call these out as known issues.
+
+### 5.1 Black 3D viewport in GUI (headless test passes)
+
+**Symptom:** clicking the "3D view" tab on a Bully NIF entry produces a black pane except for the small axis gizmo in the bottom-right corner. Stats line correctly shows `392 vertices 359 triangles 0 textures 1100×720`, the dev log confirms all four pipelines execute every frame (grid → lit 1077 verts → gizmo → compositor), and no wgpu validation errors fire.
+
+**Workaround:** use the external viewer button (PLY spawn).
+
+**Diagnostic commands (in order):**
+
+1. Add a one-line log in `ScenePipelines::new` (pipeline.rs:386):
+   ```rust
+   log::info!(target: "imgeditor.scene3d", "ScenePipelines::new: target_format = {target_format:?}");
+   ```
+   Confirm whether Iced is handing us `Bgra8UnormSrgb` (what the headless test uses) or something else. If different, the compositor pipeline's color target format is wrong for the Iced surface.
+
+2. If format is correct, the next suspect is the compositor sampling interaction with `clip_bounds` viewport. The headless test puts the composite pass at `(0, 0, w, h)`; the GUI uses `Rect { x: 554, y: 224, w: 542, h: 440 }`. The compositor vertex shader writes `clip_position = vec4(position, 1.0)` with position in `[-1, 1]`, no UV remap. UVs `(0, 0)` → `(1, 1)` map directly to `scene_color_target` texels. If the aspect ratio or scissor math is off, the compositor samples outside the populated region (where `scene_color_target` was cleared but the grid/lit didn't write). The gizmo still renders correctly because it uses its own NDC box `(0.78, -0.78) ± 0.15` regardless of widget bounds.
+
+3. If neither diagnosis pinpoints it, add a debug-only PNG dump of `scene_color_target` to `target/debug/scene_color_gui_<n>.png` for the first 3 frames, triggered from `Primitive::render` after `render_to_offscreen`. Compare against `target/scene3d-two-pass-gui.png` from the headless test (they should be byte-identical for the same input).
+
+**Files involved:**
+- `src/inspector/scene3d/shaders/compositor.wgsl`
+- `src/ui/viewer3d_widget.rs` (`render_to_offscreen`, `composite_to_frame`, `Primitive::render`)
+- `src/inspector/scene3d/pipeline.rs` (`ScenePipelines::new`, `target_format` plumbing)
+
+### 5.2 Mouse / wheel / keyboard input not verified
+
+The `Scene3dWidget::update` handler looks correct (mouse drag → `camera.orbit`, shift+drag → `camera.pan`, wheel → `camera.dolly`, `Modifier::Shift` is tracked). However, this was never confirmed end-to-end in the GUI. The headless test exercises the GPU path but not the input path. Needs:
+
+1. Launch the GUI, click into the 3D view pane.
+2. Confirm cursor changes to `Interaction::Grab` on hover and `Grabbing` while dragging.
+3. Drag — camera should orbit. Scroll wheel — camera should dolly. Shift+drag — camera should pan.
+4. Keyboard shortcuts from `keymap.rs` (`R`/`W`/`T`/`C`/`B`/`V`/`X`/`H`) are deferred per the original TODO but should at minimum not cause focus stealing from the table search input.
+
+If dragging doesn't change the camera, add `dev_logger::breadcrumb` calls at the top of `Scene3dWidget::update` and inside `handle_event` to see whether the Iced event loop is delivering events to the widget at all.
+
+**Files involved:**
+- `src/ui/viewer3d_widget.rs` (lines 162-222, 253-319)
+- `src/ui/keymap.rs`
+
+### 5.3 `default_white` write_texture violates `COPY_BYTES_PER_ROW_ALIGNMENT`
+
+`pipeline.rs:284` (in `GpuTexture::default_white`):
+```rust
+wgpu::TexelCopyBufferLayout {
+    offset: 0,
+    bytes_per_row: Some(4),     // <-- not a multiple of 256
+    rows_per_image: Some(1),
+},
+```
+
+This is a latent bug. `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT` is 256. The 1×1 white texture is the only case where the actual row size is 4 bytes, so it would round up to 256. Currently masked because `has_texture` (`flags & 1`) is normally false, so no copy is issued for the default texture. If anyone enables `HAS_TEXTURE` for an untextured mesh (or future code paths auto-fall-back), the GPU may reject the copy or silently corrupt memory.
+
+Fix:
+```rust
+bytes_per_row: Some(256),  // padded; actual row is 4 bytes
+```
+
+**Files involved:**
+- `src/inspector/scene3d/pipeline.rs:284-321` (`GpuTexture::default_white`)
+
+### 5.4 `CameraUniform` struct padding mismatch (Rust 180 B vs WGSL 192 B)
+
+The Rust struct is 180 bytes, the WGSL `CameraUniform` rounds up to 192 bytes (roundUp(16) on the largest member boundary). This produces a 12-byte gap at offsets 164–176 between Rust and WGSL. Currently masked by `update_camera` writing `bytes.resize(256, 0)` — the WGSL reads from offsets the Rust struct never touches, so the gap is whatever was in the buffer (always zero from `resize`).
+
+The bug is that `bytemuck::bytes_of(&uniform)` on the Rust side yields 180 B and `from_bytes` round-trips it cleanly, but the WGSL's `inverse_view_proj` at offset 64 (16 mat4) is then followed by `key_light` at offset 128, `ambient` at offset 144, `eye_pos` at offset 160, `flags` at offset 176, `pad` at offset 180 — but the Rust struct's `_pad: [u32; 3]` is only 12 B, and then the layout ends. `bytemuck` won't add trailing padding for `repr(C)`.
+
+Either:
+- Add explicit `_wgsl_pad: [u32; 3]` (12 B) to the Rust struct and verify it aligns to 192 B, **or**
+- Drop the `_pad: [u32; 3]` in the WGSL shader and rely on the WGSL spec's round-up-to-16 rule (which it already does, so this would actually be cleaner).
+
+Verify with `cargo test --lib camera_uniform_is_pod_and_aligned` (pipeline.rs:889) — it currently asserts `size <= 256` but doesn't catch the mismatch.
+
+**Files involved:**
+- `src/inspector/scene3d/pipeline.rs:34-44` (Rust `CameraUniform`)
+- `src/inspector/scene3d/shaders/lit.wgsl:1-9` and `grid.wgsl:1-8` (WGSL `CameraUniform`)
+
+### 5.5 `#![allow(dead_code)]` still on the crate root
+
+`src/main.rs:1`. Should be removed or narrowed once Phase 17 is fully wired. The original concern (Phase 17 modules being temporarily unused) is no longer accurate — every `scene3d/*` module is reachable. Narrowing should be done by `#[allow(dead_code)]` on the specific items the compiler actually flags, not as a crate-wide attribute.
+
+**Files involved:**
+- `src/main.rs:1`
+
+### 5.6 `package-release.ps1` doesn't pass `RUSTFLAGS="-C codegen-units=16"`
+
+v3.4.0 release build hit `STATUS_STACK_BUFFER_OVERRUN` (0xc0000409) in `harfrust` and `regex-automata` on Rust 1.96. Worked around for v3.4.0 by manually setting `$env:RUSTFLAGS` and then packaging by hand. The script should default to `codegen-units=16` (or higher) so the next release doesn't time out.
+
+Suggested patch:
+```powershell
+$env:RUSTFLAGS = ($env:RUSTFLAGS ?? "") + " -C codegen-units=16"
+& cargo build --release
+```
+
+**Files involved:**
+- `package-release.ps1:13` (the `cargo build --release` line)
+
+### 5.7 No `rust-toolchain.toml` pinning the build
+
+The stack-overrun in §5.6 is reproducible on Rust 1.96.0-x86_64-pc-windows-msvc. If anyone bumps the toolchain (or `rustup update` runs automatically), the behavior may change. Pinning with a `rust-toolchain.toml` containing:
+```toml
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]
+```
+…makes the build environment deterministic and the §5.6 workaround correct-by-default.
+
+**Files involved:**
+- `rust-toolchain.toml` (new file, repo root inside `IMGEditor-rs/`)

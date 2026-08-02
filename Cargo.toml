@@ -13,10 +13,6 @@ bench = []
 name = "imgeditor"
 path = "src/main.rs"
 
-[[bin]]
-name = "imgeditor"
-path = "src/main.rs"
-
 [[example]]
 name = "benchmark_cancel_latency"
 required-features = ["bench"]
@@ -56,11 +52,6 @@ log = "0.4"
 pollster = "0.4"
 wgpu = { version = "27", default-features = false, features = ["wgsl", "vulkan"] }
 
-# NIF inspector (v3.0). The 3D viewer writes geometry to a temporary PLY file
-# and opens it with the system default handler, avoiding the need for an
-# embedded 3D renderer (OpenGL/winit threading is incompatible with Iced's
-# winit on the main thread). See `src/inspector/viewer3d.rs`.
-
 [dev-dependencies]
 tempfile = "3"
 
@@ -69,7 +60,7 @@ embed-resource = "2"
 
 [profile.release]
 lto = "thin"
-codegen-units = 1
+codegen-units = 16
 opt-level = 3
 panic = "abort"
 strip = "symbols"

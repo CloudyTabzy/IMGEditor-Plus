@@ -91,11 +91,7 @@ impl Design {
 
     /// Primary text color.
     pub fn text(&self) -> Color {
-        if self.is_dark {
-            to_iced(self.palette().neutral.get(Shade::S900))
-        } else {
-            to_iced(self.palette().neutral.get(Shade::S900))
-        }
+        to_iced(self.palette().neutral.get(Shade::S900))
     }
 
     /// Muted text.
@@ -130,8 +126,7 @@ impl Design {
 
     /// Hover overlay (sits on top of any surface).
     pub fn hover_overlay(&self) -> Color {
-        let shade = if self.is_dark { Shade::S900 } else { Shade::S900 };
-        let accent = self.palette().neutral.get(shade);
+        let accent = self.palette().neutral.get(Shade::S900);
         to_iced(accent.fade(0.06))
     }
 
@@ -140,11 +135,7 @@ impl Design {
     /// Two-stop gradient for the menubar / toolbar background.
     pub fn menubar_gradient(&self) -> (Color, Color) {
         let a = to_iced(self.palette().neutral.get(Shade::S50));
-        let b = if self.is_dark {
-            to_iced(self.palette().neutral.get(Shade::S100))
-        } else {
-            to_iced(self.palette().neutral.get(Shade::S100))
-        };
+        let b = to_iced(self.palette().neutral.get(Shade::S100));
         (a, b)
     }
 

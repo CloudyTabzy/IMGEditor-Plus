@@ -279,8 +279,8 @@ mod tests {
         tga[14..16].copy_from_slice(&2u16.to_le_bytes());
         tga[16] = 32;
         tga[17] = 0x20; // top-left origin
-        for i in 18..34 {
-            tga[i] = 0xFF;
+        for byte in &mut tga[18..34] {
+            *byte = 0xFF;
         }
         let tex = SceneTexture::from_tga(&tga).unwrap();
         assert_eq!(tex.width, 2);

@@ -123,30 +123,32 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                             }
 
                             // Read UV sets.
-                            if num_uv_sets > 0 {
-                                if data_pos + 4 <= g_end {
-                                    let stored_uv_sets = u32::from_le_bytes([
-                                        bytes[data_pos], bytes[data_pos + 1],
-                                        bytes[data_pos + 2], bytes[data_pos + 3],
-                                    ]) as usize;
-                                    data_pos += 4;
-                                    let actual_sets = stored_uv_sets.min(num_uv_sets);
-                                    for _s in 0..actual_sets {
-                                        for _v in 0..geom.num_verts as usize {
-                                            if data_pos + 8 <= g_end {
-                                                let u = f32::from_le_bytes([
-                                                    bytes[data_pos], bytes[data_pos + 1],
-                                                    bytes[data_pos + 2], bytes[data_pos + 3],
-                                                ]);
-                                                let v = f32::from_le_bytes([
-                                                    bytes[data_pos + 4], bytes[data_pos + 5],
-                                                    bytes[data_pos + 6], bytes[data_pos + 7],
-                                                ]);
-                                                data_pos += 8;
-                                                // Only store the first UV set.
-                                                if _s == 0 {
-                                                    geom.uvs.push([u, v]);
-                                                }
+                            if num_uv_sets > 0
+                                && data_pos + 4 <= g_end
+                            {
+                                let stored_uv_sets = u32::from_le_bytes([
+                                    bytes[data_pos],
+                                    bytes[data_pos + 1],
+                                    bytes[data_pos + 2],
+                                    bytes[data_pos + 3],
+                                ]) as usize;
+                                data_pos += 4;
+                                let actual_sets = stored_uv_sets.min(num_uv_sets);
+                                for _s in 0..actual_sets {
+                                    for _v in 0..geom.num_verts as usize {
+                                        if data_pos + 8 <= g_end {
+                                            let u = f32::from_le_bytes([
+                                                bytes[data_pos], bytes[data_pos + 1],
+                                                bytes[data_pos + 2], bytes[data_pos + 3],
+                                            ]);
+                                            let v = f32::from_le_bytes([
+                                                bytes[data_pos + 4], bytes[data_pos + 5],
+                                                bytes[data_pos + 6], bytes[data_pos + 7],
+                                            ]);
+                                            data_pos += 8;
+                                            // Only store the first UV set.
+                                            if _s == 0 {
+                                                geom.uvs.push([u, v]);
                                             }
                                         }
                                     }

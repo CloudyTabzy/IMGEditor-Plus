@@ -92,15 +92,14 @@ impl IdeMap {
                 if let Some(found) = Self::find_file_recursive(&path, target) {
                     return Some(found);
                 }
-            } else if path.is_file() {
-                if path
+            } else if path.is_file()
+                && path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .map(|n| n.to_lowercase() == *target)
                     .unwrap_or(false)
-                {
-                    return Some(path);
-                }
+            {
+                return Some(path);
             }
         }
         None
@@ -109,10 +108,10 @@ impl IdeMap {
     /// Resolve the NFT path for a NIF, using IDE mapping + same-basename fallback.
     pub fn resolve_nft_path(&self, nif_basename: &str) -> Option<PathBuf> {
         // 1. IDE mapping
-        if let Some(txd) = self.nft_name_for(nif_basename) {
-            if let Some(path) = self.locate_nft(txd) {
-                return Some(path);
-            }
+        if let Some(txd) = self.nft_name_for(nif_basename)
+            && let Some(path) = self.locate_nft(txd)
+        {
+            return Some(path);
         }
         // 2. Same-basename fallback: try {nif_basename}.nft
         if let Some(ref root) = self.game_root {
@@ -278,10 +277,10 @@ fn extract_pixels_for_nft(
     tex_block_idx: usize,
 ) -> Option<Vec<u8>> {
     // Check inline pixel data first (NiSourceTexture embedded).
-    if let Some(tga) = extract_embedded_pixels(nft, nft_bytes, tex_block_idx) {
-        if tga.len() > 22 {
-            return Some(tga);
-        }
+    if let Some(tga) = extract_embedded_pixels(nft, nft_bytes, tex_block_idx)
+        && tga.len() > 22
+    {
+        return Some(tga);
     }
     // Fall back to NiPixelData blocks nearby.
     for candidate in tex_block_idx + 1..nft.blocks.len().min(tex_block_idx + 10) {
@@ -301,7 +300,7 @@ fn extract_pixels_for_nft(
 /// Build a 128-byte DDS header for a DXT1/DXT5 texture.
 fn build_dds_header(w: u32, h: u32, fourcc: &[u8; 4], mip_count: u32) -> Vec<u8> {
     let bpb: u32 = if fourcc == b"DXT1" { 8 } else { 16 };
-    let pitch = ((w + 3) / 4).max(1) * ((h + 3) / 4).max(1) * bpb;
+    let pitch = w.div_ceil(4).max(1) * h.div_ceil(4).max(1) * bpb;
     let mut flags = 0x0008_1007u32; // CAPS|HEIGHT|WIDTH|PIXELFORMAT|LINEARSIZE
     if mip_count > 1 { flags |= 0x0002_0000; }
     let mut caps = 0x0000_1000u32; // TEXTURE
@@ -330,7 +329,7 @@ fn dxt_chain_size(w: u32, h: u32, fourcc: &[u8; 4]) -> (u32, u32) {
     let mut tw = w;
     let mut th = h;
     loop {
-        total += ((tw + 3) / 4).max(1) * ((th + 3) / 4).max(1) * bpb;
+        total += tw.div_ceil(4).max(1) * th.div_ceil(4).max(1) * bpb;
         mips += 1;
         if tw == 1 && th == 1 { break; }
         tw = (tw / 2).max(1);
@@ -354,9 +353,9 @@ fn dxt1_block_to_rgba(block: &[u8]) -> [[u8; 4]; 16] {
     let col1 = expand(c1);
     let codes = u32::from_le_bytes([block[4], block[5], block[6], block[7]]);
     let mut out = [[0u8; 4]; 16];
-    for i in 0..16 {
+    for (i, pixel) in out.iter_mut().enumerate() {
         let idx = ((codes >> (i * 2)) & 3) as u8;
-        out[i] = match (c0 > c1, idx) {
+        *pixel = match (c0 > c1, idx) {
             (true, 0) | (false, 0) => col0,
             (true, 1) | (false, 1) => col1,
             (true, 2) => {
@@ -384,8 +383,8 @@ fn dxt1_block_to_rgba(block: &[u8]) -> [[u8; 4]; 16] {
 
 /// Decompress DXT1 data to RGBA TGA bytes.
 fn dxt1_to_tga(data: &[u8], w: u32, h: u32) -> Vec<u8> {
-    let bw = ((w + 3) / 4).max(1) as usize;
-    let bh = ((h + 3) / 4).max(1) as usize;
+    let bw = w.div_ceil(4).max(1) as usize;
+    let bh = h.div_ceil(4).max(1) as usize;
     let mut tga = vec![0u8; 18 + (w * h * 4) as usize];
     tga[2] = 2;
     tga[12..14].copy_from_slice(&(w as u16).to_le_bytes());
@@ -423,6 +422,10 @@ fn dxt5_block_to_rgba(block: &[u8]) -> [[u8; 4]; 16] {
     let mut alphas = [0u8; 8];
     alphas[0] = a0;
     alphas[1] = a1;
+    // The `1 *` coefficients below preserve the parallel structure of
+    // the DXT5 alpha interpolation table; clippy::identity_op is
+    // expected here.
+    #[allow(clippy::identity_op)]
     if a0 > a1 {
         // 8-alpha block: full interpolated ramp.
         alphas[2] = ((6 * a0 as u16 + 1 * a1 as u16 + 3) / 7) as u8;
@@ -483,7 +486,7 @@ fn dxt5_block_to_rgba(block: &[u8]) -> [[u8; 4]; 16] {
         colors.push([0, 0, 0]);
     }
     let mut out = [[0u8; 4]; 16];
-    for i in 0..16 {
+    for (i, pixel) in out.iter_mut().enumerate() {
         let rgb_idx = ((codes >> (i * 2)) & 3) as usize;
         let a_idx = ((alpha_bits >> (i * 3)) & 7) as usize;
         let r = colors[rgb_idx][0];
@@ -495,15 +498,15 @@ fn dxt5_block_to_rgba(block: &[u8]) -> [[u8; 4]; 16] {
         } else {
             alphas[a_idx]
         };
-        out[i] = [r, g, b, a];
+        *pixel = [r, g, b, a];
     }
     out
 }
 
 /// Decompress DXT5 data to RGBA TGA bytes.
 fn dxt5_to_tga(data: &[u8], w: u32, h: u32) -> Vec<u8> {
-    let bw = ((w + 3) / 4).max(1) as usize;
-    let bh = ((h + 3) / 4).max(1) as usize;
+    let bw = w.div_ceil(4).max(1) as usize;
+    let bh = h.div_ceil(4).max(1) as usize;
     let mut tga = vec![0u8; 18 + (w * h * 4) as usize];
     tga[2] = 2;
     tga[12..14].copy_from_slice(&(w as u16).to_le_bytes());
@@ -1160,7 +1163,7 @@ mod tests {
     /// Result: 2 valid triangles.
     #[test]
     fn strip_to_triangle_filters_degenerates() {
-        let points = vec![0u16, 1, 2, 2, 3, 4];
+        let points = [0u16, 1, 2, 2, 3, 4];
         let mut tris = vec![];
         for j in 0..points.len() - 2 {
             let (i0, i1, i2) = (points[j] as u32, points[j + 1] as u32, points[j + 2] as u32);

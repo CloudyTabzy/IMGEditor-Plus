@@ -272,10 +272,10 @@ where
         let mut dirty = false;
         self.handle.with_mut(|inner| {
             if cursor_inside {
-                if let Event::Mouse(MouseEvent::CursorMoved { .. }) = event {
-                    if let Some(p) = cursor.position_in(bounds) {
-                        state.last = Some(p);
-                    }
+                if let Event::Mouse(MouseEvent::CursorMoved { .. }) = event
+                    && let Some(p) = cursor.position_in(bounds)
+                {
+                    state.last = Some(p);
                 }
                 if let Event::Mouse(MouseEvent::ButtonPressed(
                     MouseButton::Left | MouseButton::Middle,
@@ -288,11 +288,10 @@ where
             if let Event::Mouse(MouseEvent::ButtonReleased(
                 MouseButton::Left | MouseButton::Middle,
             )) = event
+                && state.dragging
             {
-                if state.dragging {
-                    state.dragging = false;
-                    dirty = true;
-                }
+                state.dragging = false;
+                dirty = true;
             }
             let mut needs_redraw = handle_event(&mut inner.camera, state, event);
             if !state.dragging {
@@ -765,10 +764,17 @@ fn scene_signature(scene: &Scene) -> u64 {
     sig
 }
 
+#[allow(dead_code)]
+fn _type_asserts() {
+    fn _ensure_send<T: Send>() {}
+    _ensure_send::<SceneHandle>();
+    _ensure_send::<ScenePrimitive>();
+    _ensure_send::<ScenePipeline>();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn handle_creates_with_no_scene() {
         let h = SceneHandle::new();
@@ -843,12 +849,4 @@ mod tests {
         fn assert_send<T: Send>() {}
         assert_send::<SceneHandle>();
     }
-}
-
-#[allow(dead_code)]
-fn _type_asserts() {
-    fn _ensure_send<T: Send>() {}
-    _ensure_send::<SceneHandle>();
-    _ensure_send::<ScenePrimitive>();
-    _ensure_send::<ScenePipeline>();
 }

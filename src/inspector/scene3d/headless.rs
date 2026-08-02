@@ -483,9 +483,9 @@ mod tests {
         let queue = &renderer.queue;
         let pipelines = &renderer.pipelines;
 
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u32;
+        let align: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let unpadded_bpr = width * 4;
-        let padded_bpr = (unpadded_bpr + align - 1) / align * align;
+        let padded_bpr = unpadded_bpr.div_ceil(align) * align;
         let readback_size = (padded_bpr as u64) * (height as u64);
 
         let color_tex = device.create_texture(&wgpu::TextureDescriptor {

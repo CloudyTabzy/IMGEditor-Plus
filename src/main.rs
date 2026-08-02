@@ -84,8 +84,6 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(all(windows, not(feature = "bench")))]
 fn hide_console_window() {
-    use std::ptr;
-
     unsafe extern "system" {
         fn GetConsoleWindow() -> *mut std::ffi::c_void;
         fn FreeConsole() -> i32;
@@ -93,7 +91,7 @@ fn hide_console_window() {
 
     unsafe {
         let window = GetConsoleWindow();
-        if window != ptr::null_mut() {
+        if window.is_null() {
             FreeConsole();
         }
     }
@@ -109,7 +107,9 @@ fn install_panic_hook() {
     // recent Rust because env reads can race; safe inside a single
     // thread at startup before any other thread is spawned.
     #[allow(unused_unsafe)]
-    let _ = unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
+    unsafe {
+        std::env::set_var("RUST_BACKTRACE", "full");
+    }
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // Re-route the panic through dev_logger's structured report so

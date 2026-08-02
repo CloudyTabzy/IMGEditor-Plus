@@ -118,6 +118,6 @@ mod tests {
     fn same_version_is_up_to_date() {
         let current = parse_version("3.3.0").unwrap();
         let latest = parse_version("v3.3.0").unwrap();
-        assert!(!(latest > current));
+        assert!(latest <= current);
     }
 }

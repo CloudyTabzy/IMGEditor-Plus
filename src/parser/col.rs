@@ -171,11 +171,7 @@ pub fn parse_col(bytes: &[u8]) -> Result<ColFile, ColError> {
             bytes[counts_offset + 22], bytes[counts_offset + 23],
         ]);
 
-        let shadow_verts_offset = if version != ColVersion::V1 {
-            counts_offset + 24
-        } else {
-            counts_offset + 24
-        };
+        let shadow_verts_offset = counts_offset + 24;
 
         let shadow_counts_offset = shadow_verts_offset;
         let shadow_num_v = if version != ColVersion::V1 {
@@ -260,11 +256,7 @@ pub fn parse_col(bytes: &[u8]) -> Result<ColFile, ColError> {
         // To determine where faces data lives in the stream, read from the
         // current position after vertex data plus any triangle plane data.
         // After vertices, there may be triangle plane data (4 × f32 per face).
-        let tri_plane_bytes = if version == ColVersion::V1 {
-            num_faces as usize * 16 // 4 × f32
-        } else {
-            num_faces as usize * 16 // 4 × f32
-        };
+        let tri_plane_bytes = num_faces as usize * 16; // 4 × f32
 
         // Faces follow triangle planes. Skip planes.
         if dp + tri_plane_bytes <= entry_end {

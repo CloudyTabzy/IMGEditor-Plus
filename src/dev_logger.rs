@@ -92,10 +92,11 @@ pub fn init_dev_log() {
     if cfg!(debug_assertions) {
         // Force a backtrace even when launched without
         // RUST_BACKTRACE=1. set_var is racy in general, but this runs
-        // at startup before any other thread is spawned.
-        #[allow(unused_unsafe)]
-        let _ = unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
+// at startup before any other thread is spawned.
+    unsafe {
+        std::env::set_var("RUST_BACKTRACE", "full");
     }
+}
 
     log::info!(
         target: "imgeditor",
@@ -111,7 +112,7 @@ fn log_path() -> PathBuf {
     let base = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::env::temp_dir());
+        .unwrap_or_else(std::env::temp_dir);
     let name = if cfg!(debug_assertions) {
         "imgeditor-dev.log"
     } else {
@@ -205,7 +206,7 @@ pub fn write_crash_report(info: &std::panic::PanicInfo<'_>) -> std::io::Result<P
     let path = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::env::temp_dir())
+        .unwrap_or_else(std::env::temp_dir)
         .join("imgeditor-panic.log");
     let mut f = OpenOptions::new().create(true).append(true).open(&path)?;
     writeln!(f, "[panic at {}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"), info)?;

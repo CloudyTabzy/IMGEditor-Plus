@@ -154,6 +154,14 @@ pub struct Footer {
 
 /// Discriminated union of the block payloads we know how to parse.
 /// Add new variants as more block types are implemented.
+///
+/// `NiTriShapeDataPayload` carries several `Vec<Vector3>` fields and is
+/// the largest variant by a wide margin. Boxing it would shrink the
+/// enum's inline footprint but force every match site to deref through
+/// `Box`, and most NIFs only carry a handful of these blocks held
+/// briefly. The current layout keeps the parser hot path flat; see
+/// TODO §5 for the follow-up if real-world profiles ever justify it.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum BlockPayload {
     NiNode(NiNodeData),
@@ -551,9 +559,9 @@ impl<'a> Reader<'a> {
     pub(crate) fn read_matrix33(&mut self, what: &'static str) -> NifResult<Matrix33> {
         // Column-major: m11 m21 m31 m12 m22 m32 m13 m23 m33
         let mut m = [[0.0f32; 3]; 3];
-        for col in 0..3 {
-            for row in 0..3 {
-                m[col][row] = self.read_f32(what)?;
+        for col in m.iter_mut() {
+            for cell in col.iter_mut() {
+                *cell = self.read_f32(what)?;
             }
         }
         Ok(Matrix33 { m })
@@ -976,15 +984,17 @@ fn read_ni_source_texture(r: &mut Reader<'_>) -> NifResult<NiSourceTextureData> 
     }
     let _ = r.read_i32("controller")?;
 
-    let mut tex = NiSourceTextureData::default();
-    tex.use_external = r.read_u8("use_external")?;
-    tex.file_name_index = r.read_ni_fixed_string_index("file_name")?;
-    tex.pixel_layout = r.read_u32("pixel_layout")?;
-    tex.use_mipmaps = r.read_u32("use_mipmaps")?;
-    tex.alpha_format = r.read_u32("alpha_format")?;
-    tex.is_static = r.read_u8("is_static")?;
-    tex.direct_render = r.read_bool("direct_render")?;
-    tex.persist_render_data = r.read_bool("persist_render_data")?;
+    let tex = NiSourceTextureData {
+        use_external: r.read_u8("use_external")?,
+        file_name_index: r.read_ni_fixed_string_index("file_name")?,
+        file_name: None,
+        pixel_layout: r.read_u32("pixel_layout")?,
+        use_mipmaps: r.read_u32("use_mipmaps")?,
+        alpha_format: r.read_u32("alpha_format")?,
+        is_static: r.read_u8("is_static")?,
+        direct_render: r.read_bool("direct_render")?,
+        persist_render_data: r.read_bool("persist_render_data")?,
+    };
     Ok(tex)
 }
 
@@ -997,35 +1007,39 @@ fn read_ni_material_property(r: &mut Reader<'_>) -> NifResult<NiMaterialProperty
     }
     let _ = r.read_i32("controller")?;
 
-    let mut mat = NiMaterialPropertyData::default();
-    mat.name = if name_idx == 0xFFFFFFFF {
+    let name = if name_idx == 0xFFFFFFFF {
         None
     } else {
         Some(format!("__string_idx_{name_idx}"))
     };
-    mat.ambient = [
-        r.read_f32("ambient.r")?,
-        r.read_f32("ambient.g")?,
-        r.read_f32("ambient.b")?,
-    ];
-    mat.diffuse = [
-        r.read_f32("diffuse.r")?,
-        r.read_f32("diffuse.g")?,
-        r.read_f32("diffuse.b")?,
-    ];
-    mat.specular = [
-        r.read_f32("specular.r")?,
-        r.read_f32("specular.g")?,
-        r.read_f32("specular.b")?,
-    ];
-    mat.emissive = [
-        r.read_f32("emissive.r")?,
-        r.read_f32("emissive.g")?,
-        r.read_f32("emissive.b")?,
-    ];
-    mat.glossiness = r.read_f32("glossiness")?;
-    mat.alpha = r.read_f32("alpha")?;
-    mat.emissive_mult = 1.0; // absent for Bully (bsver == 0)
+    let mat = NiMaterialPropertyData {
+        name,
+        ambient: [
+            r.read_f32("ambient.r")?,
+            r.read_f32("ambient.g")?,
+            r.read_f32("ambient.b")?,
+        ],
+        diffuse: [
+            r.read_f32("diffuse.r")?,
+            r.read_f32("diffuse.g")?,
+            r.read_f32("diffuse.b")?,
+        ],
+        specular: [
+            r.read_f32("specular.r")?,
+            r.read_f32("specular.g")?,
+            r.read_f32("specular.b")?,
+        ],
+        emissive: [
+            r.read_f32("emissive.r")?,
+            r.read_f32("emissive.g")?,
+            r.read_f32("emissive.b")?,
+        ],
+        glossiness: r.read_f32("glossiness")?,
+        alpha: r.read_f32("alpha")?,
+        // Bully (bsver == 0) does not emit an emissive multiplier on
+        // disk; the NIF spec default is 1.0.
+        emissive_mult: 1.0,
+    };
     Ok(mat)
 }
 
@@ -1155,6 +1169,11 @@ fn read_ni_texturing_property(r: &mut Reader<'_>) -> NifResult<NiTexturingProper
     Ok(out)
 }
 
+// The NIF tri-shape reader conditionally populates many Vec fields
+// depending on the has_* flags read from the file. The structure reads
+// top-to-bottom mirroring the on-disk format, which is more important
+// than collapsing it into a single struct literal.
+#[allow(clippy::field_reassign_with_default)]
 fn read_ni_tri_shape_data(r: &mut Reader<'_>) -> NifResult<NiTriShapeDataPayload> {
     let mut out = NiTriShapeDataPayload::default();
     out.group_id = r.read_i32("group_id")?;
@@ -1191,7 +1210,7 @@ fn read_ni_tri_shape_data(r: &mut Reader<'_>) -> NifResult<NiTriShapeDataPayload
             .map(|_| r.read_color4("vertex_color"))
             .collect::<NifResult<Vec<_>>>()?;
     }
-    out.num_uv_sets = (out.data_flags & 0x3F) as u16;
+    out.num_uv_sets = out.data_flags & 0x3F;
     let total_uvs = (out.num_uv_sets as usize) * (out.num_vertices as usize);
     if r.remaining() >= total_uvs * 8 {
         out.uvs = (0..total_uvs)

@@ -403,10 +403,10 @@ impl ArchiveInfo {
     /// Clears the rename state for the single entry that was in rename mode,
     /// if any. This avoids scanning the entire entry list on every click.
     pub fn clear_rename(&mut self) {
-        if let Some(index) = self.rename_index.take() {
-            if let Some(entry) = self.entries.get_mut(index) {
-                entry.rename = false;
-            }
+        if let Some(index) = self.rename_index.take()
+            && let Some(entry) = self.entries.get_mut(index)
+        {
+            entry.rename = false;
         }
     }
 

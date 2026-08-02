@@ -99,12 +99,11 @@ impl ImgParser for PcV1Parser {
         let _ = std::fs::remove_file(output_path);
         std::fs::rename(&temp_dir, &dir_path).context("failed to write directory file")?;
 
-        if remove_existing {
-            if let Some(ref src) = source_path {
-                if src != output_path {
-                    let _ = std::fs::remove_file(src);
-                }
-            }
+        if remove_existing
+            && let Some(ref src) = source_path
+            && src != output_path
+        {
+            let _ = std::fs::remove_file(src);
         }
 
         std::fs::rename(&temp_img, output_path).context("failed to write archive file")?;
@@ -153,7 +152,7 @@ impl PcV1Parser {
                 anyhow::bail!("Rebuild cancelled");
             }
 
-            let mut data = read_entry_data_with_source(
+            let data = read_entry_data_with_source(
                 entry,
                 source_path.as_deref(),
                 source_mmap.as_deref(),
@@ -166,7 +165,7 @@ impl PcV1Parser {
             dir_out.write_all(&entry.offset.to_le_bytes())?;
             dir_out.write_all(&entry.sector.to_le_bytes())?;
             dir_out.write_all(&entry.file_name_raw)?;
-            img_out.write_all(&mut data)?;
+            img_out.write_all(&data)?;
 
             offset += size;
             archive

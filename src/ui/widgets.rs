@@ -91,7 +91,7 @@ pub fn card<'a, Message: 'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> Container<'a, Message> {
     let content: Element<'a, Message> = content.into();
-    let elevation = design.tokens.elevation.raised.clone();
+    let elevation = design.tokens.elevation.raised;
     let border = design.iced_border(&elevation);
     let shadow = design.iced_shadow(&elevation);
     let surface = design.surface();
@@ -113,7 +113,7 @@ pub fn floating_card<'a, Message: 'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> Container<'a, Message> {
     let content: Element<'a, Message> = content.into();
-    let elevation = design.tokens.elevation.floating.clone();
+    let elevation = design.tokens.elevation.floating;
     let border = design.iced_border(&elevation);
     let shadow = design.iced_shadow(&elevation);
     let surface = design.surface();
@@ -168,7 +168,7 @@ pub fn snackbar<'a, Message: 'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> Container<'a, Message> {
     let content: Element<'a, Message> = content.into();
-    let elevation = design.tokens.elevation.floating.clone();
+    let elevation = design.tokens.elevation.floating;
     let border = design.iced_border(&elevation);
     let shadow = design.iced_shadow(&elevation);
     let surface = design.surface();

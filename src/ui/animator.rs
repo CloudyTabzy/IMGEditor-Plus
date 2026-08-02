@@ -165,7 +165,7 @@ impl Animator {
 
     /// Check if a specific animation is still running.
     pub fn is_running(&self, id: AnimationId) -> bool {
-        self.animations.get(&id).map_or(false, |a| a.state == State::Running)
+        self.animations.get(&id).is_some_and(|a| a.state == State::Running)
     }
 
     /// Reserve a unique animation ID.

@@ -58,6 +58,13 @@ pub struct AutoScroll {
     pub current: Option<Point>,
 }
 
+/// Application event type. Heterogeneous by design — some variants carry
+/// large payloads (`Viewer3dLoadCompleted::Scene`, `ExportCompleted::Vec<String>`)
+/// while most are unit or single-value. Boxing the large variants would
+/// shrink the inline footprint but force a heap allocation on every
+/// `iced::Task::done(Message::…)`, which is the event-loop hot path.
+/// Tracked in TODO §6.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Message {
     Noop,
@@ -364,15 +371,12 @@ impl App {
             let archive_path = archive.path.clone();
             let mmap = archive.source_mmap.clone();
             let archive_file_name = archive.file_name.clone();
-            match entry {
-                Some(entry) => Some(Miss {
-                    entry,
-                    archive_path,
-                    mmap,
-                    archive_file_name,
-                }),
-                None => None,
-            }
+            entry.map(|entry| Miss {
+                entry,
+                archive_path,
+                mmap,
+                archive_file_name,
+            })
         };
 
         let Some(miss) = miss else {
@@ -674,10 +678,9 @@ impl App {
                         .editor
                         .archives()
                         .get(self.editor.selected_archive().unwrap_or(0))
+                        && let Some(entry) = archive.entries.get(index)
                     {
-                        if let Some(entry) = archive.entries.get(index) {
-                                    self.rename_buffer = entry.file_name.to_string();
-                        }
+                        self.rename_buffer = entry.file_name.to_string();
                     }
                     if let Some(archive) = self.editor.selected_archive_mut() {
                         archive.set_rename(index);
@@ -807,16 +810,14 @@ impl App {
                 self.context_menu = None;
                 match action {
                 EntryAction::CopyName => {
-                    if let Some(archive_index) = self.editor.selected_archive() {
-                        if let Some(entry_index) = self.editor.selected_entry() {
-                            if let Some(archive) = self.editor.archives().get(archive_index) {
-                                if let Some(entry) = archive.entries.get(entry_index) {
-                                    let name = entry.file_name.to_string();
-                                    self.toast = Some(format!("Copied name: {}", name));
-                                    return iced::clipboard::write::<Message>(name);
-                                }
-                            }
-                        }
+                    if let Some(archive_index) = self.editor.selected_archive()
+                        && let Some(entry_index) = self.editor.selected_entry()
+                        && let Some(archive) = self.editor.archives().get(archive_index)
+                        && let Some(entry) = archive.entries.get(entry_index)
+                    {
+                        let name = entry.file_name.to_string();
+                        self.toast = Some(format!("Copied name: {}", name));
+                        return iced::clipboard::write::<Message>(name);
                     }
                     Task::none()
                 }
@@ -1200,12 +1201,11 @@ impl App {
                 Task::none()
             }
             Message::OpenLastExportFolder => {
-                if let Some(index) = self.editor.selected_archive() {
-                    if let Some(archive) = self.editor.archives().get(index) {
-                        if let Some(folder) = archive.last_export_folder.clone() {
-                            open_export_folder(&folder);
-                        }
-                    }
+                if let Some(index) = self.editor.selected_archive()
+                    && let Some(archive) = self.editor.archives().get(index)
+                    && let Some(folder) = archive.last_export_folder.clone()
+                {
+                    open_export_folder(&folder);
                 }
                 Task::none()
             }

@@ -54,9 +54,9 @@ fn dxt1_block(block: &[u8]) -> [[u8; 4]; 16] {
     let codes = u32::from_le_bytes([block[4], block[5], block[6], block[7]]);
 
     let mut out = [[0u8; 4]; 16];
-    for i in 0..16 {
+    for (i, pixel) in out.iter_mut().enumerate() {
         let idx = ((codes >> (i * 2)) & 3) as u8;
-        out[i] = match (c0 > c1, idx) {
+        *pixel = match (c0 > c1, idx) {
             (true, 0) | (false, 0) => col0,
             (true, 1) | (false, 1) => col1,
             (true, 2) => {
@@ -109,6 +109,10 @@ fn dxt5_block(block: &[u8]) -> [[u8; 4]; 16] {
     ]);
 
     let interpolate_alpha = |idx: u8| -> u8 {
+        // The `1 *` and `0 *` coefficients below preserve the parallel
+        // structure of the DXT5 alpha interpolation table; they are
+        // load-bearing for readability even when the math collapses.
+        #[allow(clippy::identity_op, clippy::erasing_op)]
         match idx {
             0 => alpha0,
             1 => alpha1,
@@ -165,9 +169,9 @@ fn dxt5_block(block: &[u8]) -> [[u8; 4]; 16] {
     };
 
     let mut color_out = dxt1_block(&block[8..16]);
-    for i in 0..16 {
+    for (i, pixel) in color_out.iter_mut().enumerate() {
         let alpha_idx = ((alpha_codes >> (i * 3)) & 7) as u8;
-        color_out[i][3] = interpolate_alpha(alpha_idx);
+        pixel[3] = interpolate_alpha(alpha_idx);
     }
     color_out
 }
@@ -175,8 +179,8 @@ fn dxt5_block(block: &[u8]) -> [[u8; 4]; 16] {
 // ---- DXT surface decoders ---------------------------------------------
 
 fn decode_dxt_surface(data: &[u8], w: u32, h: u32, dxt: DxtType) -> Result<Vec<u8>, DecodeError> {
-    let bw = ((w + 3) / 4).max(1) as usize;
-    let bh = ((h + 3) / 4).max(1) as usize;
+    let bw = w.div_ceil(4).max(1) as usize;
+    let bh = h.div_ceil(4).max(1) as usize;
     let block_bytes: usize = match dxt {
         DxtType::Dxt1 => 8,
         DxtType::Dxt3 | DxtType::Dxt5 => 16,
@@ -380,7 +384,7 @@ fn decode_lum8(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
 
 fn decode_pal4(data: &[u8], palette: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
     let pixel_count = (w * h) as usize;
-    let data_needed = (pixel_count + 1) / 2;
+    let data_needed = pixel_count.div_ceil(2);
     if data.len() < data_needed {
         return Err(DecodeError::BufferTooSmall {
             need: data_needed,

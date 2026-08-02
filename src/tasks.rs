@@ -246,7 +246,7 @@ fn export_entries_batched(
                     );
 
                     local_completed += 1;
-                    if local_completed % 64 == 0 || idx + 1 == chunk_len {
+                    if local_completed.is_multiple_of(64) || idx + 1 == chunk_len {
                         let done = completed.fetch_add(local_completed, Ordering::Relaxed) + local_completed;
                         local_completed = 0;
                         progress.set_percentage(done as f32 / total as f32);

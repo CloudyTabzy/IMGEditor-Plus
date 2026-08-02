@@ -93,12 +93,11 @@ impl ImgParser for PcV2Parser {
 
         result?;
 
-        if remove_existing {
-            if let Some(ref src) = source_path {
-                if src != output_path {
-                    let _ = std::fs::remove_file(src);
-                }
-            }
+        if remove_existing
+            && let Some(ref src) = source_path
+            && src != output_path
+        {
+            let _ = std::fs::remove_file(src);
         }
 
         std::fs::rename(&temp_path, output_path).context("failed to write archive file")?;
@@ -150,7 +149,7 @@ impl PcV2Parser {
                 anyhow::bail!("Rebuild cancelled");
             }
 
-            let mut data = read_entry_data_with_source(
+            let data = read_entry_data_with_source(
                 entry,
                 source_path.as_deref(),
                 source_mmap.as_deref(),
@@ -167,7 +166,7 @@ impl PcV2Parser {
             out.write_all(&entry.file_name_raw)?;
 
             out.seek(SeekFrom::Start(data_offset))?;
-            out.write_all(&mut data)?;
+            out.write_all(&data)?;
 
             data_offset += size;
             archive

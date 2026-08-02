@@ -120,6 +120,7 @@ pub struct ColorScale {
 
 impl ColorScale {
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         s50: Color, s100: Color, s200: Color, s300: Color, s400: Color,
         s500: Color, s600: Color, s700: Color, s800: Color, s900: Color,
@@ -153,7 +154,7 @@ impl ColorScale {
     pub const fn dark(&self) -> Color { self.s700 }
 
     #[inline]
-    pub const fn to_array(&self) -> [Color; 10] {
+    pub const fn to_array(self) -> [Color; 10] {
         [self.s50, self.s100, self.s200, self.s300, self.s400,
          self.s500, self.s600, self.s700, self.s800, self.s900]
     }

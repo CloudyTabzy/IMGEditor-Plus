@@ -202,19 +202,19 @@ impl Editor {
     pub fn rename_selected(&mut self, new_name: &str) {
         let selected = self.selected_entry;
         if let Some(archive) = self.selected_archive_mut() {
-            if let Some(index) = selected {
-                if let Some(entry) = archive.entries.get_mut(index) {
-                    let mut updated = EntryInfo::new(new_name);
-                    updated.offset = entry.offset;
-                    updated.sector = entry.sector;
-                    updated.source_path = entry.source_path.clone();
-                    updated.imported = entry.imported;
-                    updated.selected = entry.selected;
-                    *entry = updated;
-                    archive.invalidate_entry_caches();
-                    archive.dirty = true;
-                    archive.update_selected_list("");
-                }
+            if let Some(index) = selected
+                && let Some(entry) = archive.entries.get_mut(index)
+            {
+                let mut updated = EntryInfo::new(new_name);
+                updated.offset = entry.offset;
+                updated.sector = entry.sector;
+                updated.source_path = entry.source_path.clone();
+                updated.imported = entry.imported;
+                updated.selected = entry.selected;
+                *entry = updated;
+                archive.invalidate_entry_caches();
+                archive.dirty = true;
+                archive.update_selected_list("");
             }
             archive.clear_rename();
         }

@@ -360,7 +360,7 @@ fn parse_native_texture(bytes: &[u8]) -> Result<NativeTexture, String> {
             let mh = mip_heights.get(mi).copied().unwrap_or(1) as usize;
 
             let (bpp, row_align) = bpp_and_align(base, raster_type);
-            let row_stride = ((mw * bpp as usize + row_align - 1) / row_align) * row_align;
+            let row_stride = (mw * bpp).div_ceil(row_align) * row_align;
             let mip_byte_size = row_stride * mh;
             let aligned_size = (mip_byte_size + 3) & !3;
 

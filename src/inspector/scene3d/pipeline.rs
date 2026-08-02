@@ -23,8 +23,6 @@
 //! owned here and rebuilt only when the scene changes or the viewport
 //! resizes.
 
-use std::num::NonZeroU32;
-
 use bytemuck::{Pod, Zeroable};
 
 use crate::inspector::scene3d::camera::OrbitCamera;
@@ -915,8 +913,10 @@ mod tests {
     fn render_flags_round_trip() {
         let f = RenderFlags::HAS_TEXTURE | RenderFlags::WIREFRAME;
         assert_eq!(f.bits(), 0b11);
-        let mut u = CameraUniform::default();
-        u.flags = f.bits();
+        let u = CameraUniform {
+            flags: f.bits(),
+            ..Default::default()
+        };
         let bytes = bytemuck::bytes_of(&u).to_vec();
         let back: &CameraUniform = bytemuck::from_bytes(&bytes);
         assert_eq!(back.flags, 0b11);
@@ -929,6 +929,3 @@ mod tests {
         assert_eq!(RenderFlags::CULL_BACK.bits(), 1 << 2);
     }
 }
-
-#[allow(unused_imports)]
-const _NONZERO_PROBE: Option<NonZeroU32> = None;

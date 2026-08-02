@@ -136,10 +136,10 @@ impl App {
         let mut layers: Vec<Element<'_, Message>> = Vec::new();
         layers.push(scrollable.into());
 
-        if let Some((entry_index, display_row)) = self.context_menu {
-            if let Some(overlay) = build_context_menu(archive, entry_index, display_row, scroll_y) {
-                layers.push(overlay);
-            }
+        if let Some((entry_index, display_row)) = self.context_menu
+            && let Some(overlay) = build_context_menu(archive, entry_index, display_row, scroll_y)
+        {
+            layers.push(overlay);
         }
 
         let table_body: Element<'_, Message> = stack(layers).into();
@@ -324,13 +324,13 @@ impl App {
             col = col.push(button(fonts::body("Cancel")).on_press(Message::CancelActive));
         }
 
-        if let Some(_folder) = archive.last_export_folder.as_ref() {
-            if !in_use {
-                col = col.push(
-                    button(fonts::body("Open export folder"))
-                        .on_press(Message::OpenLastExportFolder),
-                );
-            }
+        if let Some(_folder) = archive.last_export_folder.as_ref()
+            && !in_use
+        {
+            col = col.push(
+                button(fonts::body("Open export folder"))
+                    .on_press(Message::OpenLastExportFolder),
+            );
         }
 
         col = col.push(
@@ -341,16 +341,16 @@ impl App {
 
         col = col.push(rule::horizontal(1));
 
-        if let Some((index, inspection)) = self.inspected_entry.as_ref() {
-            if archive.entries.get(*index).is_some() {
-                col = col.push(row![
-                    fonts::header("Selected entry:"),
-                    Space::new().width(Length::Fill),
-                    copy_button("Copy", Message::CopySelectedEntryDetails),
-                ]);
-                col = col.push(Self::build_inspection_panel(inspection));
-                col = col.push(rule::horizontal(1));
-            }
+        if let Some((index, inspection)) = self.inspected_entry.as_ref()
+            && archive.entries.get(*index).is_some()
+        {
+            col = col.push(row![
+                fonts::header("Selected entry:"),
+                Space::new().width(Length::Fill),
+                copy_button("Copy", Message::CopySelectedEntryDetails),
+            ]);
+            col = col.push(Self::build_inspection_panel(inspection));
+            col = col.push(rule::horizontal(1));
         }
 
         col = col.push(row![

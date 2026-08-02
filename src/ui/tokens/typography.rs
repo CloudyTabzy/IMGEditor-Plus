@@ -1,12 +1,13 @@
 //! Typography tokens for text styling.
 
 /// Font weight values following CSS font-weight specification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum FontWeight {
     Thin = 100,
     ExtraLight = 200,
     Light = 300,
+    #[default]
     Regular = 400,
     Medium = 500,
     SemiBold = 600,
@@ -18,10 +19,6 @@ pub enum FontWeight {
 impl FontWeight {
     #[inline]
     pub const fn value(self) -> u16 { self as u16 }
-}
-
-impl Default for FontWeight {
-    fn default() -> Self { Self::Regular }
 }
 
 /// A complete text style definition.
