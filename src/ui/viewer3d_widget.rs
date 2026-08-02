@@ -385,12 +385,23 @@ impl primitive::Primitive for ScenePrimitive {
         pipeline: &mut Self::Pipeline,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        _bounds: &Rectangle,
+        bounds: &Rectangle,
         viewport: &graphics::Viewport,
     ) {
-        let width = viewport.physical_width();
-        let height = viewport.physical_height();
+        // Size the offscreen targets and the camera frustum to the
+        // widget's physical rect, not the whole window — the composite
+        // pass blits the offscreen texture 1:1 into the pane, so the
+        // model is centred and undistorted.
+        let scale = viewport.scale_factor();
+        let width = ((bounds.width * scale).round() as u32).max(1);
+        let height = ((bounds.height * scale).round() as u32).max(1);
         pipeline.record_last_viewport(width, height);
+        pipeline.record_widget_rect(
+            bounds.x * scale,
+            bounds.y * scale,
+            width as f32,
+            height as f32,
+        );
         let (Some(scene), cam_updated) = self.handle.with_mut(|inner| {
             if inner.scene.is_none() {
                 return (None, false);
@@ -454,6 +465,10 @@ pub struct ScenePipeline {
     /// frustum camera with the same viewport. Public, mutated via
     /// `set_last_viewport`.
     pub last_viewport: (u32, u32),
+    /// Physical on-screen rect of the widget `(x, y, w, h)`, recorded in
+    /// `prepare`. The composite pass uses it as its viewport so the blit
+    /// lands exactly over the pane (scissored to `clip_bounds`).
+    pub widget_rect: [f32; 4],
     pub cached_scene_ptr: usize,
     pub cached_signature: u64,
     pub cached_flags_bits: u32,
@@ -479,6 +494,10 @@ impl ScenePipeline {
 
     fn record_last_viewport(&mut self, width: u32, height: u32) {
         self.last_viewport = (width.max(1), height.max(1));
+    }
+
+    fn record_widget_rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        self.widget_rect = [x, y, width.max(1.0), height.max(1.0)];
     }
 
     fn upload_if_changed(
@@ -687,17 +706,13 @@ impl ScenePipeline {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        // Iced's compositor already configured the viewport+scissor for
-        // the widget bounds. We re-set the scissor to the clip bounds we
-        // were handed, so the composite quad is clipped to the pane.
-        pass.set_viewport(
-            clip_bounds.x as f32,
-            clip_bounds.y as f32,
-            clip_bounds.width as f32,
-            clip_bounds.height as f32,
-            0.0,
-            1.0,
-        );
+        // The offscreen texture is sized to the widget, so the blit is
+        // 1:1: place the fullscreen quad over the widget's physical rect
+        // and let the scissor (clip bounds handed to us by Iced, already
+        // snapped to physical pixels) cut it down when the pane is
+        // partially occluded.
+        let [bx, by, bw, bh] = self.widget_rect;
+        pass.set_viewport(bx, by, bw, bh, 0.0, 1.0);
         pass.set_scissor_rect(
             clip_bounds.x,
             clip_bounds.y,
@@ -725,6 +740,7 @@ impl PrimitivePipeline for ScenePipeline {
             width: 0,
             height: 0,
             last_viewport: (1, 1),
+            widget_rect: [0.0, 0.0, 1.0, 1.0],
             cached_scene_ptr: 0,
             cached_signature: 0,
             cached_flags_bits: 0,

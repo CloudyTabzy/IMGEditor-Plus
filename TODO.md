@@ -165,9 +165,17 @@ The fixture PNG (`target/scene3d-bully-1950fridge.png`) renders the actual 1950s
 
 Tracked separately because they are **bugs** (not backlog features). Release notes for v3.4.0 already call these out as known issues.
 
-### 5.1 Black 3D viewport in GUI (headless test passes)
+### 5.1 Black 3D viewport in GUI (headless test passes) — FIXED
 
-**Symptom:** clicking the "3D view" tab on a Bully NIF entry produces a black pane except for the small axis gizmo in the bottom-right corner. Stats line correctly shows `392 vertices 359 triangles 0 textures 1100×720`, the dev log confirms all four pipelines execute every frame (grid → lit 1077 verts → gizmo → compositor), and no wgpu validation errors fire.
+**Root cause:** `OrbitCamera` derived `Default`, which zeroed `fov_y_deg`/`near`/`far`. The GUI builds its camera through `SceneHandleInner::default()` and `reset_to_aabb` never sets those three fields, so the uploaded projection matrix contained inf/NaN. The grid and lit pipelines then drew nothing (grid rays failed the `abs(ray_dir.y)` test and fell back to the background colour), while the gizmo — which uses no camera UBO — still rendered. Headless tests always constructed the camera via `OrbitCamera::new` (fov 45, near 0.1, far 10 000), which is why they passed.
+
+**Fix:**
+- `camera.rs`: manual `impl Default for OrbitCamera` delegating to `OrbitCamera::new(Viewport::default())`, plus a regression test (`default_camera_yields_finite_view_proj_after_aabb_reset`).
+- `viewer3d_widget.rs`: offscreen colour/depth targets and the camera frustum are now sized to the widget's physical rect (was: whole window), and `composite_to_frame` sets its viewport to the widget rect with the scissor on `clip_bounds` — the blit is 1:1 and centred in the pane instead of squashing a window-sized render into it (old diagnosis #2).
+
+**Original diagnostic notes (superseded, kept for history):**
+
+**Symptom (original report):** clicking the "3D view" tab on a Bully NIF entry produces a black pane except for the small axis gizmo in the bottom-right corner. Stats line correctly shows `392 vertices 359 triangles 0 textures 1100×720`, the dev log confirms all four pipelines execute every frame (grid → lit 1077 verts → gizmo → compositor), and no wgpu validation errors fire.
 
 **Workaround:** use the external viewer button (PLY spawn).
 
@@ -272,3 +280,124 @@ components = ["rustfmt", "clippy"]
 
 **Files involved:**
 - `rust-toolchain.toml` (new file, repo root inside `IMGEditor-rs/`)
+
+---
+
+# 6. Code-quality follow-ups (carried over from the v3.4.0 warning-cleanup pass)
+
+The clippy-cleanup commit (`43db780`) suppressed a few warnings with documented
+`#[allow]` attributes because the structural fix was out of scope at the time.
+These are the remaining items that should be revisited when there's a clean
+window for architectural changes.
+
+## 6.1 `package-release.ps1` doesn't pass `RUSTFLAGS="-C codegen-units=16"`
+
+The fix for §5.6 landed in `Cargo.toml` (`[profile.release].codegen-units = 16`),
+but the `package-release.ps1` script still calls plain `cargo build --release`
+and would silently use the workspace default of `1` if someone reverted the
+Cargo.toml change. Hardening the script means future contributors don't have
+to remember the Cargo.toml invariant.
+
+Add to `package-release.ps1` before the `cargo build --release` call:
+```powershell
+$env:RUSTFLAGS = ($env:RUSTFLAGS ?? "") + " -C codegen-units=16"
+```
+
+**Files involved:**
+- `package-release.ps1:13` (the `cargo build --release` line)
+
+## 6.2 `Cargo.toml` duplicate `main.rs` warning
+
+`Cargo.toml` declares both `[lib]` and `[[bin]]` pointing at `src/main.rs`.
+This produces the `file ... found to be present in multiple build targets`
+warning on every `cargo check`. The proper fix is to split:
+- `src/lib.rs` contains all module declarations + the `pub mod` exports
+  (everything currently in `src/main.rs` except `fn main()`).
+- `src/bin/imgeditor.rs` contains `fn main()` + the `hide_console_window`
+  and `install_panic_hook` helpers, with `use imgeditor::...` paths.
+- `Cargo.toml` `[[bin]]` block then points at `src/bin/imgeditor.rs`.
+
+The bench feature already requires `pub mod` exports on every module,
+so the library side is already structured correctly — this is mostly a
+mechanical split.
+
+**Files involved:**
+- `Cargo.toml:13-16` (remove `[[bin]]` block; default `src/bin/imgeditor.rs`
+  discovery will take over)
+- `src/main.rs` → split into `src/lib.rs` + `src/bin/imgeditor.rs`
+
+## 6.3 `BlockPayload` large enum variant (deferred from §5.1)
+
+The `#[allow(clippy::large_enum_variant)]` on `BlockPayload` (nif.rs:158)
+is a temporary workaround. The largest variant is
+`BlockPayload::NiTriShapeDataPayload` (multiple `Vec<Vector3>` fields =
+~150 bytes inline) which inflates every other variant to the same size.
+Boxing the heavy variant would shrink the enum to ~32 bytes (one pointer
+plus the discriminant) at the cost of an extra heap deref per match.
+
+The refactor touches 35 `BlockPayload::` match sites across `nif.rs`,
+`viewer3d.rs`, and `texture.rs`. Most are `BlockPayload::X(data) => ...`
+patterns that become `BlockPayload::X(data) => &data` or
+`&data.field` access. A `Cow`-based or `Arc`-based variant might be
+cleaner than `Box<>` if multiple consumers read the same payload.
+
+**Files involved:**
+- `src/inspector/nif.rs:158` (enum def)
+- `src/inspector/nif.rs` (internal match sites)
+- `src/inspector/viewer3d.rs` (8 match sites)
+- `src/inspector/texture.rs` (4 match sites)
+
+## 6.4 `Message` large enum variant (deferred from §5.1)
+
+The `#[allow(clippy::large_enum_variant)]` on `Message` (app.rs:62) is a
+similar story: the `Viewer3dLoadCompleted` variant carries a full `Scene`
+(Vec<SceneMesh> with Vec<Vertex>, potentially MB-sized for large NIFs) and
+`ExportCompleted` carries a `Vec<String>` of export log lines. Boxing
+these would shrink the enum but force a heap allocation on every
+`iced::Task::done(Message::…)` — the event-loop hot path.
+
+Profile first; if `Message` allocation shows up as a hotspot, then
+box `Viewer3dLoadCompleted` only (the largest by far), keeping `Message`
+small enough to inline in the iced task queue.
+
+**Files involved:**
+- `src/ui/app.rs:62` (enum def)
+
+## 6.5 Input handling verification (deferred from §5.2)
+
+The mouse-drag, scroll-wheel, shift+drag, and key-shortcut paths in
+`Scene3dWidget::update` (viewer3d_widget.rs:253-319) have never been
+verified end-to-end in the GUI. Code review found them correct in
+isolation, but runtime confirmation is needed:
+
+- Drag in the 3D pane → camera should orbit.
+- Scroll wheel → camera should dolly.
+- Shift+drag → camera should pan.
+- Cursor changes to `Grab` on hover, `Grabbing` while dragging.
+- `R` (reset) and `W/T/C/B` (render toggles) only fire when the
+  3D pane is focused; the `keymap.rs` already gates this via
+  `viewer3d_focused`.
+
+If dragging produces no camera change, add
+`dev_logger::breadcrumb("widget update: {event:?}")` calls at the top of
+`Scene3dWidget::update` and inside `handle_event` (lines 162-222) to
+trace whether Iced's event loop is delivering events to the widget.
+
+**Files involved:**
+- `src/ui/viewer3d_widget.rs:253-319` (widget update)
+- `src/ui/viewer3d_widget.rs:162-222` (event handler)
+- `src/ui/keymap.rs` (focus gating)
+
+---
+
+# 7. Verified-fixed in v3.4.0
+
+- §5.1: still open (see #1 above)
+- §5.2: still open (see §6.5)
+- §5.3, §5.4, §5.5: fixed in commit `43db780` ("Clean up clippy warnings,
+  fix release build infra")
+- §5.6, §5.7: see §6.1 and the rust-toolchain entry above; §5.6 was
+  fixed by `Cargo.toml` change in `43db780`, §5.7 still open
+- §5.8 (v3.4.0 release blockers): release-cutover items that landed in
+  `43db780` or earlier commits — codegen-units bump, stale TODO comment
+  removal, all clippy warnings except the Cargo.toml structure issue

@@ -88,7 +88,7 @@ impl Viewport {
 }
 
 /// Orbit camera around a target point on a sphere of `distance` radius.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct OrbitCamera {
     pub target: [f32; 3],
     pub distance: f32,
@@ -100,6 +100,17 @@ pub struct OrbitCamera {
     pub near: f32,
     pub far: f32,
     pub viewport: Viewport,
+}
+
+impl Default for OrbitCamera {
+    /// A derived `Default` would zero `fov_y_deg`/`near`/`far`, and
+    /// `reset_to_aabb` never touches those fields — the projection then
+    /// contains inf/NaN entries and the GPU draws nothing (the black
+    /// viewport seen in the GUI, which builds its camera via `Default`).
+    /// Delegate to `new` so every construction path yields a sane frustum.
+    fn default() -> Self {
+        Self::new(Viewport::default())
+    }
 }
 
 impl OrbitCamera {
@@ -365,6 +376,29 @@ mod tests {
             height: 0,
         });
         assert!(cam.projection().abs_diff_eq(Mat4::IDENTITY, 1e-6));
+    }
+
+    #[test]
+    fn default_camera_yields_finite_view_proj_after_aabb_reset() {
+        // Regression for the black GUI viewport: the widget builds its
+        // camera via `Default` and only calls `reset_to_aabb`, so the
+        // default must carry a usable fov/near/far.
+        let mut cam = OrbitCamera::default();
+        cam.reset_to_aabb(&Aabb {
+            min: [-1.0, -1.0, -1.0],
+            max: [1.0, 1.0, 1.0],
+        });
+        cam.set_viewport(Viewport {
+            width: 800,
+            height: 600,
+        });
+        assert!(cam.near > 0.0 && cam.far > cam.near && cam.fov_y_deg > 0.0);
+        for v in cam.view_proj().to_cols_array() {
+            assert!(v.is_finite(), "view_proj contains non-finite value");
+        }
+        for v in cam.view_proj().inverse().to_cols_array() {
+            assert!(v.is_finite(), "inverse view_proj contains non-finite value");
+        }
     }
 
     #[test]
