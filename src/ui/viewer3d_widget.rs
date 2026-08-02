@@ -272,11 +272,10 @@ where
         let mut dirty = false;
         self.handle.with_mut(|inner| {
             if cursor_inside {
-                if let Event::Mouse(MouseEvent::CursorMoved { .. }) = event
-                    && let Some(p) = cursor.position_in(bounds)
-                {
-                    state.last = Some(p);
-                }
+                // NOTE: do NOT touch `state.last` here. `handle_event`
+                // owns the drag anchor — pre-seeding it with the current
+                // cursor position made every drag delta come out zero,
+                // which is why orbiting never moved the camera.
                 if let Event::Mouse(MouseEvent::ButtonPressed(
                     MouseButton::Left | MouseButton::Middle,
                 )) = event
@@ -864,5 +863,90 @@ mod tests {
     fn scene_handle_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<SceneHandle>();
+    }
+
+    struct MockRenderer;
+
+    impl renderer::Renderer for MockRenderer {
+        fn start_layer(&mut self, _bounds: Rectangle) {}
+        fn end_layer(&mut self) {}
+        fn start_transformation(&mut self, _transformation: iced::Transformation) {}
+        fn end_transformation(&mut self) {}
+        fn fill_quad(&mut self, _quad: renderer::Quad, _background: impl Into<iced::Background>) {}
+        fn reset(&mut self, _new_bounds: Rectangle) {}
+        fn allocate_image(
+            &mut self,
+            _handle: &iced::advanced::image::Handle,
+            _callback: impl FnOnce(
+                    Result<iced::advanced::image::Allocation, iced::advanced::image::Error>,
+                ) + Send
+                + 'static,
+        ) {
+        }
+    }
+
+    impl primitive::Renderer for MockRenderer {
+        fn draw_primitive(&mut self, _bounds: Rectangle, _primitive: impl primitive::Primitive) {}
+    }
+
+    // Regression: `update` used to pre-seed `state.last` with the current
+    // cursor position on every move, zeroing every drag delta so orbit/pan
+    // never moved the camera.
+    #[test]
+    fn left_drag_orbits_camera() {
+        type TestWidget = dyn Widget<(), iced::Theme, MockRenderer>;
+
+        let handle = Arc::new(SceneHandle::new());
+        let mut widget = Scene3dWidget::new(handle.clone());
+        let mut tree = Tree {
+            tag: <Scene3dWidget as Widget<(), iced::Theme, MockRenderer>>::tag(&widget),
+            state: <Scene3dWidget as Widget<(), iced::Theme, MockRenderer>>::state(&widget),
+            children: Vec::new(),
+        };
+        let node = Node::new(Size::new(200.0, 200.0));
+        let viewport = Rectangle::new(Point::ORIGIN, Size::new(200.0, 200.0));
+        let renderer = MockRenderer;
+        let mut clipboard = iced::advanced::clipboard::Null;
+        let mut messages = Vec::<()>::new();
+
+        let mut drive = |widget: &mut Scene3dWidget, event: Event, cursor: Cursor| {
+            TestWidget::update(
+                widget,
+                &mut tree,
+                &event,
+                layout::Layout::new(&node),
+                cursor,
+                &renderer,
+                &mut clipboard,
+                &mut Shell::new(&mut messages),
+                &viewport,
+            );
+        };
+
+        drive(
+            &mut widget,
+            Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left)),
+            Cursor::Available(Point::new(50.0, 50.0)),
+        );
+        drive(
+            &mut widget,
+            Event::Mouse(MouseEvent::CursorMoved {
+                position: Point::new(50.0, 50.0),
+            }),
+            Cursor::Available(Point::new(50.0, 50.0)),
+        );
+        drive(
+            &mut widget,
+            Event::Mouse(MouseEvent::CursorMoved {
+                position: Point::new(80.0, 50.0),
+            }),
+            Cursor::Available(Point::new(80.0, 50.0)),
+        );
+
+        let yaw = handle.with(|i| i.camera.yaw);
+        assert!(
+            yaw.abs() > 1e-4,
+            "expected left-drag to orbit the camera, yaw = {yaw}"
+        );
     }
 }
