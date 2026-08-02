@@ -417,6 +417,45 @@ mod tests {
     }
 
     #[test]
+    fn floor_renders_dimmed_from_below() {
+        // The orbit allows the eye below the floor plane (bottom
+        // view). The ray-cast floor must still render from
+        // underneath — dimmed toward the background — instead of
+        // leaving a black void. The headless target is Rgba8UnormSrgb:
+        // the dimmed minor/major grid lines store as ~(101, 106, 115)
+        // and ~(128, 134, 143).
+        let renderer = HeadlessRenderer::new().expect("renderer");
+        let scene = triangle_scene();
+        let mut cam = OrbitCamera::new(Viewport {
+            width: 256,
+            height: 256,
+        });
+        cam.reset_to_aabb(&scene.aabb);
+        cam.pitch = -1.2; // eye well below the plane, looking up
+        assert!(cam.eye()[1] < 0.0);
+        let f = render_frame(&renderer, &scene, &cam, 256, 256, RenderFlags::empty())
+            .expect("frame");
+        let matches = |i: usize, (r, g, b): (i32, i32, i32)| {
+            (f.rgba[i] as i32 - r).abs() < 8
+                && (f.rgba[i + 1] as i32 - g).abs() < 8
+                && (f.rgba[i + 2] as i32 - b).abs() < 8
+        };
+        let mut grid_pixels = 0usize;
+        for row in 0..128u32 {
+            for col in 0..256u32 {
+                let i = ((row * 256 + col) * 4) as usize;
+                if matches(i, (101, 106, 115)) || matches(i, (128, 134, 143)) {
+                    grid_pixels += 1;
+                }
+            }
+        }
+        assert!(
+            grid_pixels > 200,
+            "floor should render dimmed grid lines from below (found {grid_pixels})"
+        );
+    }
+
+    #[test]
     fn zero_viewport_is_rejected() {
         let renderer = HeadlessRenderer::new().expect("renderer");
         let scene = triangle_scene();

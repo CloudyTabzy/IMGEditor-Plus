@@ -15,9 +15,6 @@ use glam::Mat4;
 
 use crate::inspector::scene3d::mesh::Aabb;
 
-/// Smallest allowed eye height above the world floor plane (Y=0).
-const MIN_EYE_HEIGHT: f32 = 0.05;
-
 /// Base orientation of the source coordinate system. Applied at parse
 /// time so the GPU pipeline never has to branch on this.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -221,7 +218,6 @@ impl OrbitCamera {
     pub fn orbit(&mut self, dx: f32, dy: f32, sensitivity: f32) {
         self.yaw -= dx * sensitivity;
         self.pitch = (self.pitch - dy * sensitivity).clamp(-1.55, 1.55);
-        self.clamp_pitch_to_floor();
     }
 
     /// Pan the target perpendicular to the view direction. `dx` and `dy`
@@ -240,7 +236,6 @@ impl OrbitCamera {
         self.target[0] += (right.x * dx - up.x * dy) * s;
         self.target[1] += (right.y * dx - up.y * dy) * s;
         self.target[2] += (right.z * dx - up.z * dy) * s;
-        self.clamp_pitch_to_floor();
     }
 
     /// Exponential zoom. `factor > 1.0` zooms out, `< 1.0` zooms in.
@@ -249,19 +244,6 @@ impl OrbitCamera {
         self.distance = (self.distance * f)
             .max(self.near * 2.0 + 0.01)
             .min(self.far * 0.5);
-        self.clamp_pitch_to_floor();
-    }
-
-    /// Clamp `pitch` so the eye stays just above the world floor plane
-    /// (Y=0). The grid floor in `grid.wgsl` is ray-cast from the eye,
-    /// so once the eye sinks below the plane the floor is behind every
-    /// ray and vanishes — the "camera sunk into the floor" black view.
-    fn clamp_pitch_to_floor(&mut self) {
-        // eye_y = target[1] + distance * sin(pitch) >= MIN_EYE_HEIGHT
-        let sin_min =
-            ((MIN_EYE_HEIGHT - self.target[1]) / self.distance).clamp(-1.0, 1.0);
-        let pitch_min = sin_min.asin().max(-1.55);
-        self.pitch = self.pitch.max(pitch_min);
     }
 
     pub fn set_viewport(&mut self, viewport: Viewport) {
@@ -365,29 +347,20 @@ mod tests {
     }
 
     #[test]
-    fn orbit_keeps_eye_above_floor() {
-        // Regression for the "camera sinks into the floor" view: the
-        // ray-cast grid floor can only be seen from above Y=0, so
-        // orbiting down must stop before the eye dips under it.
+    fn orbit_reaches_full_pitch_range() {
+        // The orbit is a full turntable: both the top view (pitch →
+        // +1.55) and the bottom view (pitch → −1.55) must stay
+        // reachable. The grid floor handles an eye below the plane by
+        // rendering from underneath (dimmed) instead of restricting
+        // the camera.
         let mut cam = OrbitCamera::new(Viewport {
             width: 800,
             height: 600,
         });
-        cam.reset_to_aabb(&Aabb {
-            min: [-1.0, -1.0, -1.0],
-            max: [1.0, 1.0, 1.0],
-        });
-        cam.orbit(0.0, 10000.0, 1.0); // drag down hard
-        assert!(cam.pitch >= -1.55);
-        assert!(
-            cam.eye()[1] >= MIN_EYE_HEIGHT - 1e-4,
-            "eye sank below the floor: y = {}",
-            cam.eye()[1]
-        );
-        // Zooming in at a low pitch must also lift the eye.
-        cam.pitch = -0.2;
-        cam.dolly(0.5);
-        assert!(cam.eye()[1] >= MIN_EYE_HEIGHT - 1e-4);
+        cam.orbit(0.0, -10000.0, 1.0);
+        assert!(approx_eq(cam.pitch, 1.55));
+        cam.orbit(0.0, 10000.0, 1.0);
+        assert!(approx_eq(cam.pitch, -1.55));
     }
 
     #[test]

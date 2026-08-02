@@ -3,6 +3,7 @@ struct CameraUniform {
     inverse_view_proj: mat4x4<f32>,
     key_light: vec4<f32>,
     ambient: vec4<f32>,
+    eye_pos: vec4<f32>,
     flags: u32,
     pad: vec4<u32>,
 }
@@ -102,6 +103,16 @@ fn fs_main(input: VertexOut) -> FragOut {
                         (1.0 - smoothstep(11.0, 12.0, abs(world_pos.z)));
         color = mix(color, vec3<f32>(0.96, 0.27, 0.27), on_x_axis * fade);
         color = mix(color, vec3<f32>(0.40, 0.85, 0.50), on_z_axis * fade);
+
+        // The orbit is unrestricted, so the eye can drop below the
+        // floor plane. The ray-cast still hits the plane from
+        // underneath (the floor appears "above" the eye, like looking
+        // up at a glass ceiling), which keeps it usable as a guide in
+        // bottom views — dim it so the underside reads as the back
+        // face rather than the main floor.
+        if camera.eye_pos.y < 0.0 {
+            color = mix(bg_color, color, 0.45);
+        }
 
         // Output the correct depth so the model sorts against the
         // floor instead of being clipped by the screen-aligned quad.
