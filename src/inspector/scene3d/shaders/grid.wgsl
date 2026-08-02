@@ -60,42 +60,46 @@ fn fs_main(input: VertexOut) -> FragOut {
     var color = vec3<f32>(0.07, 0.08, 0.10);
     var depth: f32 = 0.0;
     if valid {
-        let cell_size = 1.0;
-        let line_width = 0.018;
-        let line_anti = max(length(vec2<f32>(dpdx(world_pos.x), dpdy(world_pos.x))),
-                           length(vec2<f32>(dpdx(world_pos.z), dpdy(world_pos.z))));
+        // Blender-style grid: measure the distance to the nearest
+        // grid line in *pixel* units via screen-space derivatives, so
+        // lines keep a constant ~1px width with coverage anti-aliasing
+        // at every distance. This kills the moiré and thickness
+        // pumping that fixed world-space widths produce.
+        let minor_uv = vec2<f32>(world_pos.x, world_pos.z); // cell = 1.0
+        let major_uv = minor_uv / 5.0;                      // cell = 5.0
 
-        let grid_uv = vec2<f32>(world_pos.x, world_pos.z) / cell_size;
-        let cell_uv = grid_uv - floor(grid_uv) - vec2<f32>(0.5);
-        let cell_dist = abs(cell_uv);
-        let line_mask = step(cell_dist.x * cell_size, line_width + line_anti) +
-                        step(cell_dist.y * cell_size, line_width + line_anti);
-        let line_strength = clamp(f32(line_mask), 0.0, 1.0);
+        let minor_deriv = max(vec2<f32>(fwidth(minor_uv.x), fwidth(minor_uv.y)), vec2<f32>(1e-6));
+        let major_deriv = max(vec2<f32>(fwidth(major_uv.x), fwidth(major_uv.y)), vec2<f32>(1e-6));
 
-        let major_grid_uv = vec2<f32>(world_pos.x, world_pos.z) / 5.0;
-        let major_uv = major_grid_uv - floor(major_grid_uv) - vec2<f32>(0.5);
-        let major_dist = abs(major_uv);
-        let major_mask = step(major_dist.x * 5.0, 0.04 + line_anti * 5.0) +
-                         step(major_dist.y * 5.0, 0.04 + line_anti * 5.0);
-        let major_strength = clamp(f32(major_mask), 0.0, 1.0);
+        let minor_d = abs(fract(minor_uv - vec2<f32>(0.5)) - vec2<f32>(0.5)) / minor_deriv;
+        let major_d = abs(fract(major_uv - vec2<f32>(0.5)) - vec2<f32>(0.5)) / major_deriv;
+        let minor_line = 1.0 - smoothstep(0.2, 1.0, min(minor_d.x, minor_d.y));
+        let major_line = 1.0 - smoothstep(0.4, 1.5, min(major_d.x, major_d.y));
+
+        // Once a cell shrinks below ~2px the per-pixel line position
+        // becomes noise; fade that level out so the far floor settles
+        // to a flat color instead of shimmering.
+        let minor_fade = 1.0 - smoothstep(0.25, 0.5, max(minor_deriv.x, minor_deriv.y));
+        let major_fade = 1.0 - smoothstep(0.25, 0.5, max(major_deriv.x, major_deriv.y));
 
         let dist = length(vec2<f32>(world_pos.x, world_pos.z));
         let fade = 1.0 - smoothstep(10.0, 80.0, dist);
 
+        let bg_color = vec3<f32>(0.07, 0.08, 0.10);
         let minor_color = vec3<f32>(0.20, 0.23, 0.27);
         let major_color = vec3<f32>(0.42, 0.46, 0.52);
-        color = mix(minor_color, major_color, major_strength);
-        let bg_color = vec3<f32>(0.07, 0.08, 0.10);
-        color = mix(bg_color, color, line_strength * fade);
+        color = mix(bg_color, minor_color, minor_line * minor_fade * fade);
+        color = mix(color, major_color, major_line * major_fade * fade);
 
-        // Origin axes on the floor (world Y=0):
+        // Origin axes on the floor (world Y=0), also pixel-width:
         // - X axis (red) along z=0
         // - Z axis (green) along x=0
-        let axis_size = 0.02;
-        let on_x_axis = step(abs(world_pos.z), axis_size + line_anti) *
-                       step(abs(world_pos.x), 12.0);
-        let on_z_axis = step(abs(world_pos.x), axis_size + line_anti) *
-                       step(abs(world_pos.z), 12.0);
+        let axis_wx = max(fwidth(world_pos.x), 1e-6);
+        let axis_wz = max(fwidth(world_pos.z), 1e-6);
+        let on_x_axis = (1.0 - smoothstep(0.8, 1.8, abs(world_pos.z) / axis_wz)) *
+                        (1.0 - smoothstep(11.0, 12.0, abs(world_pos.x)));
+        let on_z_axis = (1.0 - smoothstep(0.8, 1.8, abs(world_pos.x) / axis_wx)) *
+                        (1.0 - smoothstep(11.0, 12.0, abs(world_pos.z)));
         color = mix(color, vec3<f32>(0.96, 0.27, 0.27), on_x_axis * fade);
         color = mix(color, vec3<f32>(0.40, 0.85, 0.50), on_z_axis * fade);
 
