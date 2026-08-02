@@ -39,6 +39,11 @@ pub struct CameraUniform {
     pub eye_pos: [f32; 4],
     pub flags: u32,
     pub _pad: [u32; 3],
+    /// Rotation+translation that maps world space to view space. The
+    /// gizmo shader uses the 3x3 rotation part to swing its axes with
+    /// the camera; kept at the end so the earlier fields keep their
+    /// offsets for the lit/grid/wireframe structs.
+    pub view: [[f32; 4]; 4],
 }
 
 impl CameraUniform {
@@ -56,6 +61,7 @@ impl CameraUniform {
             eye_pos: [eye[0], eye[1], eye[2], 0.0],
             flags: 0,
             _pad: [0; 3],
+            view: view.to_cols_array_2d(),
         }
     }
 }
@@ -585,7 +591,7 @@ impl ScenePipelines {
         });
         let gizmo_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("imgeditor-scene3d/gizmo_layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&camera_layout],
             push_constant_ranges: &[],
         });
 
@@ -718,8 +724,8 @@ impl ScenePipelines {
         let mut uniform = CameraUniform::from_camera(camera, key_light, ambient);
         uniform.flags = flags.bits();
         // Pad to 256 bytes so the UBO write always satisfies the WGSL
-        // struct-size minimum (the Rust struct is currently 180 B; the
-        // shader rounds up to 192 B, and we leave 64 B of headroom).
+        // struct-size minimum and the buffer's min_binding_size (the
+        // Rust struct is exactly 256 B).
         let mut bytes = bytemuck::bytes_of(&uniform).to_vec();
         bytes.resize(256, 0);
         queue.write_buffer(&self.camera_buffer, 0, &bytes);

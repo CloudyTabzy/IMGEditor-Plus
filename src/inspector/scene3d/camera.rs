@@ -212,9 +212,12 @@ impl OrbitCamera {
 
     /// Apply an orbit delta given in pixels. `sensitivity` is radians per
     /// pixel; defaults to ~0.01 which feels good on a 1080p viewport.
+    /// Blender-style turntable: dragging right swings the viewpoint to
+    /// the left around the model (and dragging down drops it), so the
+    /// model appears to rotate with the cursor.
     pub fn orbit(&mut self, dx: f32, dy: f32, sensitivity: f32) {
-        self.yaw += dx * sensitivity;
-        self.pitch = (self.pitch + dy * sensitivity).clamp(-1.55, 1.55);
+        self.yaw -= dx * sensitivity;
+        self.pitch = (self.pitch - dy * sensitivity).clamp(-1.55, 1.55);
     }
 
     /// Pan the target perpendicular to the view direction. `dx` and `dy`

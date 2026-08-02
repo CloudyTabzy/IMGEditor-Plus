@@ -9,6 +9,23 @@ struct VertexOut {
     @location(0) ndc: vec2<f32>,
 }
 
+// Mirrors the Rust `CameraUniform`; only `view` is read here. The
+// pad fields keep `view` at its Rust offset (192).
+struct CameraUniform {
+    view_proj: mat4x4<f32>,
+    inverse_view_proj: mat4x4<f32>,
+    key_light: vec4<f32>,
+    ambient: vec4<f32>,
+    eye_pos: vec4<f32>,
+    flags: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
+    view: mat4x4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> camera: CameraUniform;
+
 @vertex
 fn vs_main(input: VertexIn) -> VertexOut {
     var out: VertexOut;
@@ -20,6 +37,19 @@ fn vs_main(input: VertexIn) -> VertexOut {
 const GIZMO_SIZE: f32 = 0.30;
 const GIZMO_ORIGIN_X: f32 = 0.78;
 const GIZMO_ORIGIN_Y: f32 = -0.78;
+
+// Distance mask of the segment from the box centre to dir*0.85.
+fn axis_mask(p: vec2<f32>, dir: vec2<f32>, aa: f32) -> f32 {
+    let end = dir * 0.85;
+    let t = clamp(dot(p, end) / max(dot(end, end), 1e-5), 0.0, 1.0);
+    let d = length(p - end * t);
+    return 1.0 - smoothstep(0.015, 0.020 + aa, d);
+}
+
+fn tip_mask(p: vec2<f32>, dir: vec2<f32>, aa: f32) -> f32 {
+    let d = length(p - dir * 0.85);
+    return 1.0 - smoothstep(0.05, 0.06 + aa, d);
+}
 
 @fragment
 fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
@@ -47,10 +77,10 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
     let bg = vec3<f32>(0.10, 0.12, 0.14);
     var color = bg;
 
-    // Box border.
-    let border = max(max(abs(local.x), abs(local.y)) - 0.96, 0.0);
-    if border < aa + 0.02 {
-        let alpha = 1.0 - smoothstep(0.0, aa + 0.02, border);
+    // Box border: a thin ring just inside |local| = 1.
+    let edge = max(abs(local.x), abs(local.y));
+    if edge > 0.96 {
+        let alpha = 1.0 - smoothstep(0.96, 0.96 + aa + 0.02, edge);
         color = mix(color, vec3<f32>(0.55, 0.58, 0.62), alpha);
     }
 
@@ -61,26 +91,33 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
         color = mix(color, vec3<f32>(0.95, 0.96, 0.98), alpha);
     }
 
-    // Three colored axes: X (red), Y (green), Z (blue).
-    let x_pos = local.x + aa;
-    let y_pos = local.y + aa;
-    let x_axis = smoothstep(0.020 + aa, 0.015, abs(y_pos)) *
-               step(0.0, x_pos) * step(x_pos, 0.85);
-    color = mix(color, vec3<f32>(0.96, 0.30, 0.30), x_axis);
+    // Axes track the camera: rotate the world axes by the view
+    // rotation and draw their screen-space projection. In view space
+    // +x is right, +y is up, and +z points toward the viewer; axes
+    // pointing away are dimmed and painted first so nearer axes win.
+    let rot = mat3x3<f32>(camera.view[0].xyz, camera.view[1].xyz, camera.view[2].xyz);
+    var dirs = array<vec3<f32>, 3>(
+        rot * vec3<f32>(1.0, 0.0, 0.0),
+        rot * vec3<f32>(0.0, 1.0, 0.0),
+        rot * vec3<f32>(0.0, 0.0, 1.0),
+    );
+    var cols = array<vec3<f32>, 3>(
+        vec3<f32>(0.96, 0.30, 0.30),
+        vec3<f32>(0.45, 0.85, 0.50),
+        vec3<f32>(0.45, 0.55, 0.95),
+    );
+    var idx = array<i32, 3>(0, 1, 2);
+    if dirs[idx[0]].z > dirs[idx[1]].z { let t0 = idx[0]; idx[0] = idx[1]; idx[1] = t0; }
+    if dirs[idx[1]].z > dirs[idx[2]].z { let t1 = idx[1]; idx[1] = idx[2]; idx[2] = t1; }
+    if dirs[idx[0]].z > dirs[idx[1]].z { let t2 = idx[0]; idx[0] = idx[1]; idx[1] = t2; }
 
-    let y_axis = smoothstep(0.020 + aa, 0.015, abs(x_pos)) *
-               step(0.0, y_pos) * step(y_pos, 0.85);
-    color = mix(color, vec3<f32>(0.45, 0.85, 0.50), y_axis);
-
-    let z_axis = smoothstep(0.020 + aa, 0.015, abs(y_pos)) *
-                step(0.85, x_pos) * step(x_pos, 1.0);
-    color = mix(color, vec3<f32>(0.45, 0.55, 0.95), z_axis);
-
-    // Letter labels in the same colors.
-    let label_size = 0.16;
-    let x_label_pos = vec2<f32>(local.x - 0.86, local.y - 0.10);
-    let y_label_pos = vec2<f32>(local.x + 0.10, local.y + 0.86);
-    let z_label_pos = vec2<f32>(local.x - 0.86, local.y + 0.86);
+    for (var i = 0; i < 3; i = i + 1) {
+        let a = dirs[idx[i]];
+        let dim = select(0.40, 1.0, a.z > 0.0);
+        let c = cols[idx[i]] * dim;
+        color = mix(color, c, axis_mask(local, a.xy, aa));
+        color = mix(color, c, tip_mask(local, a.xy, aa));
+    }
 
     return vec4<f32>(color, 1.0);
 }

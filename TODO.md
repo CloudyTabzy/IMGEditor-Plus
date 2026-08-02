@@ -198,7 +198,7 @@ Tracked separately because they are **bugs** (not backlog features). Release not
 
 ### 5.2 Mouse / wheel / keyboard input not verified
 
-**Status (2026-08-02): orbit drag FIXED.** User testing showed the camera stuck in a fixed view with drags never orbiting. Root cause: `Scene3dWidget::update` pre-seeded `state.last` with the current cursor position on every `CursorMoved` before `handle_event` ran, so every drag delta computed as zero. Fixed by letting `handle_event` own the drag anchor; covered by the `left_drag_orbits_camera` widget test. Left-drag orbit confirmed working in the GUI. Still unverified end-to-end: cursor Grab/Grabbing states, wheel dolly, shift+drag pan, keyboard shortcuts.
+**Status (2026-08-02): orbit drag FIXED.** User testing showed the camera stuck in a fixed view with drags never orbiting. Root cause: `Scene3dWidget::update` pre-seeded `state.last` with the current cursor position on every `CursorMoved` before `handle_event` ran, so every drag delta computed as zero. Fixed by letting `handle_event` own the drag anchor; covered by the `left_drag_orbits_camera` widget test.  Left-drag orbit confirmed working in the GUI. Follow-up (2026-08-02): orbit direction inverted to Blender style (mouse right orbits the view left) in `OrbitCamera::orbit`, and the view gizmo now rotates with the camera — `CameraUniform` carries the `view` matrix, the gizmo pipeline binds the camera UBO, and `gizmo.wgsl` projects the world axes through the view rotation; also fixed the gizmo border shader filling the whole box with the border color. Covered by the `gizmo_axes_follow_camera_orbit` headless test. Still unverified end-to-end: cursor Grab/Grabbing states, wheel dolly, shift+drag pan, keyboard shortcuts.
 
 The `Scene3dWidget::update` handler looks correct (mouse drag → `camera.orbit`, shift+drag → `camera.pan`, wheel → `camera.dolly`, `Modifier::Shift` is tracked). However, this was never confirmed end-to-end in the GUI. The headless test exercises the GPU path but not the input path. Needs:
 
@@ -395,7 +395,7 @@ trace whether Iced's event loop is delivering events to the widget.
 # 7. Verified-fixed in v3.4.0
 
 - §5.1: fixed in commit `1befdcc` ("Fix black 3D viewport in GUI")
-- §5.2: orbit drag fixed (zero-delta anchor bug); remaining input checks deferred to §6.5
+- §5.2: orbit drag fixed (zero-delta anchor bug); orbit inverted to Blender style; view gizmo rotates with camera; remaining input checks deferred to §6.5
 - §5.3, §5.4, §5.5: fixed in commit `43db780` ("Clean up clippy warnings,
   fix release build infra")
 - §5.6, §5.7: see §6.1 and the rust-toolchain entry above; §5.6 was

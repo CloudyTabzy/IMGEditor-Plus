@@ -645,6 +645,7 @@ impl ScenePipeline {
 
         // 4. the XYZ axis gizmo in the bottom-right of the pane.
         pass.set_pipeline(&self.render_pipelines.gizmo);
+        pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
         pass.set_vertex_buffer(
             0,
             self.render_pipelines.quad_vertex_buffer.slice(..),

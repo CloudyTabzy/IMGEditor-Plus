@@ -174,6 +174,15 @@ pub struct RenderedFrame {
                 occlusion_query_set: None,
             });
 
+            pass.set_pipeline(&pipelines.grid);
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                pipelines.quad_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..6, 0, 0..1);
+
             pass.set_pipeline(match (
                 flags.contains(RenderFlags::WIREFRAME),
                 pipelines.wireframe.as_ref(),
@@ -193,6 +202,15 @@ pub struct RenderedFrame {
                 pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
             }
+
+            pass.set_pipeline(&pipelines.gizmo);
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                pipelines.quad_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..6, 0, 0..1);
         }
 
     encoder.copy_texture_to_buffer(
@@ -410,6 +428,84 @@ mod tests {
     }
 
     #[test]
+    fn gizmo_axes_follow_camera_orbit() {
+        // The gizmo box is opaque (alpha = 1 inside), so within its
+        // screen region only gizmo content is visible — the grid and
+        // model behind it are fully covered. Any pixel change there
+        // after orbiting can only come from the axes tracking the
+        // camera's view rotation.
+        let renderer = HeadlessRenderer::new().expect("renderer");
+        let scene = triangle_scene();
+        let mut cam_a = OrbitCamera::new(Viewport {
+            width: 256,
+            height: 256,
+        });
+        cam_a.reset_to_aabb(&scene.aabb);
+        let mut cam_b = cam_a.clone();
+        cam_b.yaw += std::f32::consts::FRAC_PI_2;
+        let fa = render_frame(&renderer, &scene, &cam_a, 256, 256, RenderFlags::empty())
+            .expect("frame a");
+        let fb = render_frame(&renderer, &scene, &cam_b, 256, 256, RenderFlags::empty())
+            .expect("frame b");
+        // Locate the gizmo box by its border ring. The headless target
+        // is Rgba8UnormSrgb, so the shader's linear border (0.55, 0.58,
+        // 0.62) is stored as sRGB bytes ~(196, 200, 206) — distinct
+        // from anything else in the frame. Axis strokes and the box bg
+        // sit inside the ring, so the box region is the bounding rect
+        // of the border pixels.
+        let is_border = |f: &RenderedFrame, i: usize| {
+            (f.rgba[i] as i32 - 196).abs() < 8
+                && (f.rgba[i + 1] as i32 - 200).abs() < 8
+                && (f.rgba[i + 2] as i32 - 206).abs() < 8
+        };
+        let (mut r0, mut r1, mut c0, mut c1) = (u32::MAX, 0u32, u32::MAX, 0u32);
+        for row in 0..256u32 {
+            for col in 0..256u32 {
+                let i = ((row * 256 + col) * 4) as usize;
+                if is_border(&fa, i) {
+                    r0 = r0.min(row);
+                    r1 = r1.max(row);
+                    c0 = c0.min(col);
+                    c1 = c1.max(col);
+                }
+            }
+        }
+        assert!(r0 <= r1, "gizmo box border not found in frame");
+        let mut box_pixels = Vec::new();
+        for row in r0..=r1 {
+            for col in c0..=c1 {
+                box_pixels.push(((row * 256 + col) * 4) as usize);
+            }
+        }
+
+        // Sanity: frame a has saturated axis-colored pixels somewhere
+        // inside the box (proves the axes render at all).
+        let has_axis_color = box_pixels.iter().any(|&i| {
+            let (r, g, b) = (
+                fa.rgba[i] as i32,
+                fa.rgba[i + 1] as i32,
+                fa.rgba[i + 2] as i32,
+            );
+            r.max(g).max(b) - r.min(g).min(b) > 60
+        });
+        assert!(has_axis_color, "no axis-colored pixels inside gizmo box");
+
+        let diffs = box_pixels
+            .iter()
+            .filter(|&&i| {
+                let da = (fa.rgba[i] as i32 - fb.rgba[i] as i32).abs()
+                    + (fa.rgba[i + 1] as i32 - fb.rgba[i + 1] as i32).abs()
+                    + (fa.rgba[i + 2] as i32 - fb.rgba[i + 2] as i32).abs();
+                da > 30
+            })
+            .count();
+        assert!(
+            diffs > 50,
+            "gizmo box should visibly change after orbiting (diffs = {diffs})"
+        );
+    }
+
+    #[test]
     fn bully_fixture_renders_to_png_when_present() {
         // End-to-end smoke: parse a Bully NIF, decode the geometry,
         // upload to GPU, render one frame, write a PNG to the target
@@ -598,6 +694,7 @@ mod tests {
             }
 
             pass.set_pipeline(&pipelines.gizmo);
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
             pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
             pass.set_index_buffer(
                 pipelines.quad_index_buffer.slice(..),
