@@ -200,7 +200,7 @@ pub struct ArchiveInfo {
     /// Reverse lookup from entry index to its position in `selected_indices`.
     /// Rebuilt by `update_selected_list` so shift+click and similar operations
     /// avoid linear scans of the filtered list.
-    selected_lookup: HashMap<usize, usize>,
+    pub(crate) selected_lookup: HashMap<usize, usize>,
     /// Index of the entry currently in rename mode. Tracking this directly
     /// avoids scanning every entry to clear the rename flag on each click.
     pub rename_index: Option<usize>,

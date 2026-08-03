@@ -7,6 +7,7 @@ use memmap2::Mmap;
 use crate::archive::{ArchiveInfo, EntryInfo};
 
 pub mod col;
+pub mod db;
 pub mod dff;
 pub mod inspector;
 pub mod iparser;

@@ -196,6 +196,26 @@ pub enum Message {
     SortSetSlotKey(SortSlotIndex, crate::sort::SortKey),
     SortSetSlotDirection(SortSlotIndex, crate::sort::SortDirection),
     SortSelectPreset(SortPreset),
+
+    // ---- Drag-and-drop between archives ----
+    /// User started dragging selected entries from a source archive
+    /// tab. The App's `drag_state` is updated to remember the source
+    /// archive + the entry indices being moved.
+    ArchiveDragStarted { source: usize },
+    /// Mouse moved while dragging. The optional `over` argument is
+    /// the archive index the cursor is currently over (from
+    /// `on_enter` / `on_exit` events on the tab strip). `None` means
+    /// the cursor is over empty space.
+    ArchiveDragMoved { over: Option<usize> },
+    /// User released the mouse. If `over` is set, the entries are
+    /// moved from the source to that archive; otherwise the drag is
+    /// cancelled. The source is in the App's drag_state, not in the
+    /// message, to avoid passing it through every event.
+    ArchiveDragReleased,
+    /// Cancel the drag in progress (Escape pressed, focus lost,
+    /// window close, etc.). Distinct from "released" because the
+    /// latter implies an explicit drop target.
+    ArchiveDragCancelled,
 }
 
 /// NewType around `usize` that names a slot inside the Sort Manager's
@@ -309,6 +329,13 @@ pub struct App {
     pub sort_draft: Option<crate::sort::SortChain>,
     /// `true` while the Sort Manager modal is visible.
     pub show_sort_manager: bool,
+    /// In-flight drag-and-drop between archive tabs. `None` when no
+    /// drag is in progress. Holds the source archive + the entry
+    /// indices being moved + the currently-hovered target. The
+    /// `Drop` impl on this struct also implements "the drag was
+    /// cancelled" — see the `clear` method — so dropping the
+    /// value without committing cleanly resets the UI.
+    pub drag_state: Option<crate::ui::drag::DragState>,
     pub last_export_selected_only: bool,
     pub fast_export: bool,
     pub panes: pane_grid::State<Pane>,
@@ -352,6 +379,7 @@ impl App {
             config,
             sort_draft: None,
             show_sort_manager: false,
+            drag_state: None,
             last_export_selected_only: false,
             search: String::new(),
             rename_buffer: String::new(),
@@ -1813,7 +1841,140 @@ impl App {
                 }
                 Task::none()
             }
+
+            // ---- Drag-and-drop between archives ----
+            // Rust-flavored approach (vs IMGF's MFC OLE):
+            //   - The whole drag state lives in `App::drag_state` as
+            //     a Copy value, so the borrow checker enforces
+            //     consistent update with no heap pointers.
+            //   - We never copy entry data on press — the source
+            //     archive stays open in the Editor, and the move
+            //     handler reads + re-imports through the standard
+            //     parser pipeline.
+            //   - The release handler either commits (target != source)
+            //     or simply drops the state. No try/finally needed
+            //     for cleanup; `Option::take` is the cleanup.
+            Message::ArchiveDragStarted { source } => {
+                if let Some(archive) = self.editor.archives().get(source) {
+                    let selected: Vec<usize> = archive
+                        .selected_indices
+                        .iter()
+                        .copied()
+                        .filter(|&i| i < archive.entries.len())
+                        .collect();
+                    if !selected.is_empty() {
+                        self.drag_state =
+                            Some(crate::ui::drag::DragState::new(source, &selected));
+                    }
+                }
+                Task::none()
+            }
+            Message::ArchiveDragMoved { over } => {
+                if let Some(state) = self.drag_state.as_mut() {
+                    state.hover_target = over;
+                }
+                Task::none()
+            }
+            Message::ArchiveDragReleased => {
+                // Take the state so cancel-on-anything-else is just
+                // `self.drag_state = None` (no drop glue needed).
+                let Some(state) = self.drag_state.take() else {
+                    return Task::none();
+                };
+                if !state.has_valid_target() {
+                    // Drop on the source or empty space = cancel.
+                    self.toast = Some("Drag cancelled".to_string());
+                    return Task::none();
+                }
+                let Some(target) = state.hover_target else {
+                    return Task::none();
+                };
+                self.move_entries_between_archives(state.source, target, state.indices());
+                Task::none()
+            }
+            Message::ArchiveDragCancelled => {
+                self.drag_state = None;
+                self.toast = Some("Drag cancelled".to_string());
+                Task::none()
+            }
         }
+    }
+
+    /// Move a slice of entries from `source` to `target` archive.
+    /// The entries are cloned (their data + flags) so the move is
+    /// in-memory and reversible; we don't touch the disk. The
+    /// source entries are removed by index, which avoids issues
+    /// with renamed/removed indices after a move.
+    fn move_entries_between_archives(
+        &mut self,
+        source: usize,
+        target: usize,
+        entry_indices: &[usize],
+    ) {
+        // We need to collect the entries first because we'd
+        // otherwise borrow the source archive mutably while also
+        // needing to mutate the target archive. Two-phase move
+        // avoids the borrow conflict.
+        let entries: Vec<crate::archive::EntryInfo> = {
+            let Some(archive) = self.editor.archives().get(source) else {
+                return;
+            };
+            entry_indices
+                .iter()
+                .filter_map(|&i| archive.entries.get(i).cloned())
+                .collect()
+        };
+
+        // Insert into the target archive. If the target already
+        // has an entry with the same name, we rename the moved
+        // copy to avoid silent overwrites. IMGF's drag-and-drop
+        // does the same on conflict — we get it for free here.
+        if let Some(target_archive) = self.editor.archives_mut().get_mut(target) {
+            for mut entry in entries {
+                if target_archive
+                    .entries
+                    .iter()
+                    .any(|e| e.file_name == entry.file_name)
+                {
+                    // Append ".bak" to disambiguate. We could
+                    // prompt the user, but the IMGF behaviour
+                    // is "just do it", so we follow that lead.
+                    entry.file_name = compact_str::CompactString::from(
+                        format!("{}.bak", entry.file_name),
+                    );
+                    entry.file_name_lower = compact_str::CompactString::from(
+                        entry.file_name.to_ascii_lowercase(),
+                    );
+                }
+                target_archive.entries.push(entry);
+            }
+        }
+
+        // Remove from the source. We do this in reverse index order
+        // so earlier removals don't shift the indices of later
+        // removals. This is the standard "delete in reverse" idiom
+        // for indexed removal.
+        if let Some(source_archive) = self.editor.archives_mut().get_mut(source) {
+            let mut indices: Vec<usize> = entry_indices.to_vec();
+            indices.sort_unstable();
+            indices.reverse();
+            indices.retain(|&i| i < source_archive.entries.len());
+            indices.dedup();
+            let mut shift = 0u32;
+            for &i in &indices {
+                let actual = i - shift as usize;
+                source_archive.entries.remove(actual);
+                source_archive.selected_indices.retain(|&mut j| j != i);
+                source_archive.selected_lookup.remove(&i);
+                shift += 1;
+            }
+            source_archive.dirty = true;
+        }
+        self.toast = Some(format!(
+            "Moved {} entries to archive #{}",
+            entry_indices.len(),
+            target + 1
+        ));
     }
 
     fn decode_txd(&self, entry_index: usize) -> Task<Message> {
