@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use compact_str::CompactString;
 use rayon::prelude::*;
 
-use crate::archive::{ArchiveInfo, EntryInfo, ProgressInfo};
+use crate::archive::{ArchiveInfo, EntryInfo, PackStats, ProgressInfo};
 use crate::parser::{ImgParser, ImgVersion, PcV1Parser, PcV2Parser, SECTOR_SIZE, unique_output_path};
 
 #[derive(Debug, Clone, Copy)]
@@ -78,6 +78,48 @@ impl SaveTask {
         }
 
         result.map(|_| archive)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PackOutcome {
+    pub archive: ArchiveInfo,
+    pub stats: PackStats,
+}
+
+#[derive(Debug)]
+pub struct PackTask {
+    pub archive: ArchiveInfo,
+    pub path: PathBuf,
+    pub version: ImgVersion,
+}
+
+impl PackTask {
+    pub fn new(archive: ArchiveInfo, path: PathBuf, version: ImgVersion) -> Self {
+        Self { archive, path, version }
+    }
+
+    pub async fn run(self) -> anyhow::Result<PackOutcome> {
+        self.run_blocking()
+    }
+
+    pub fn run_blocking(self) -> anyhow::Result<PackOutcome> {
+        let estimate = self.archive.pack_stats()?;
+        let entry_count = estimate.entry_count;
+        let original_bytes = estimate.original_bytes;
+
+        let mut archive = SaveTask::new(self.archive, self.path.clone(), self.version)
+            .run_blocking()?;
+        let packed_bytes = std::fs::metadata(&self.path)?.len();
+        let stats = PackStats::from_sizes(entry_count, original_bytes, packed_bytes);
+
+        archive.add_log(format!(
+            "Archive packed: {} entries, {} reclaimed",
+            stats.entry_count,
+            format_bytes(stats.reclaimed_bytes())
+        ));
+
+        Ok(PackOutcome { archive, stats })
     }
 }
 
@@ -325,13 +367,116 @@ fn anyhow_forward<E: std::fmt::Display>(err: E) -> anyhow::Error {
     anyhow::anyhow!("{err}")
 }
 
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Seek, SeekFrom, Write};
+
+    use crate::parser::{encode_entry_name, read_entry_data};
+
+    fn write_entry_record(output: &mut impl Write, offset: u32, sector: u32, name: &str) {
+        output.write_all(&offset.to_le_bytes()).unwrap();
+        output.write_all(&sector.to_le_bytes()).unwrap();
+        output.write_all(&encode_entry_name(name)).unwrap();
+    }
+
+    fn create_fragmented_v1(dir: &Path) -> PathBuf {
+        let img_path = dir.join("fragmented-v1.img");
+        let mut img = File::create(&img_path).unwrap();
+        img.write_all(&vec![b'A'; SECTOR_SIZE as usize]).unwrap();
+        img.seek(SeekFrom::Start(2 * SECTOR_SIZE)).unwrap();
+        img.write_all(&vec![b'B'; SECTOR_SIZE as usize]).unwrap();
+        img.set_len(5 * SECTOR_SIZE).unwrap();
+
+        let dir_path = dir.join("fragmented-v1.dir");
+        let mut directory = File::create(dir_path).unwrap();
+        write_entry_record(&mut directory, 0, 1, "first.dff");
+        write_entry_record(&mut directory, 2, 1, "second.txd");
+        img_path
+    }
+
+    fn create_fragmented_v2(dir: &Path) -> PathBuf {
+        let img_path = dir.join("fragmented-v2.img");
+        let mut img = File::create(&img_path).unwrap();
+        img.write_all(b"VER2").unwrap();
+        img.write_all(&2_u32.to_le_bytes()).unwrap();
+        write_entry_record(&mut img, 1536, 1, "first.dff");
+        write_entry_record(&mut img, 1538, 1, "second.txd");
+        img.seek(SeekFrom::Start(1536 * SECTOR_SIZE)).unwrap();
+        img.write_all(&vec![b'A'; SECTOR_SIZE as usize]).unwrap();
+        img.seek(SeekFrom::Start(1538 * SECTOR_SIZE)).unwrap();
+        img.write_all(&vec![b'B'; SECTOR_SIZE as usize]).unwrap();
+        img.set_len(0x300000 + 4 * SECTOR_SIZE).unwrap();
+        img_path
+    }
 
     #[test]
     fn export_modes_are_distinct() {
         assert!(matches!(ExportMode::All, ExportMode::All));
         assert!(matches!(ExportMode::Selected, ExportMode::Selected));
+    }
+
+    #[test]
+    fn pack_task_compacts_img_v1_holes() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = create_fragmented_v1(dir.path());
+        let output = dir.path().join("packed-v1.img");
+        let archive = ArchiveInfo::open(&source).unwrap();
+
+        let outcome = PackTask::new(archive, output.clone(), ImgVersion::One)
+            .run_blocking()
+            .unwrap();
+
+        assert_eq!(outcome.stats.entry_count, 2);
+        assert_eq!(outcome.stats.original_bytes, 5 * SECTOR_SIZE);
+        assert_eq!(outcome.stats.packed_bytes, 2 * SECTOR_SIZE);
+        assert_eq!(outcome.stats.reclaimed_bytes(), 3 * SECTOR_SIZE);
+        assert_eq!(std::fs::metadata(&output).unwrap().len(), 2 * SECTOR_SIZE);
+
+        let packed = ArchiveInfo::open(&output).unwrap();
+        assert_eq!(packed.entries[0].offset, 0);
+        assert_eq!(packed.entries[1].offset, 1);
+        assert_eq!(read_entry_data(&packed, &packed.entries[0]).unwrap()[0], b'A');
+        assert_eq!(read_entry_data(&packed, &packed.entries[1]).unwrap()[0], b'B');
+    }
+
+    #[test]
+    fn pack_task_compacts_img_v2_holes() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = create_fragmented_v2(dir.path());
+        let output = dir.path().join("packed-v2.img");
+        let archive = ArchiveInfo::open(&source).unwrap();
+
+        let outcome = PackTask::new(archive, output.clone(), ImgVersion::Two)
+            .run_blocking()
+            .unwrap();
+
+        assert_eq!(outcome.stats.entry_count, 2);
+        assert_eq!(outcome.stats.original_bytes, 0x300000 + 4 * SECTOR_SIZE);
+        assert_eq!(outcome.stats.packed_bytes, 0x300000 + 2 * SECTOR_SIZE);
+        assert_eq!(outcome.stats.reclaimed_bytes(), 2 * SECTOR_SIZE);
+        assert_eq!(std::fs::metadata(&output).unwrap().len(), 0x300000 + 2 * SECTOR_SIZE);
+
+        let packed = ArchiveInfo::open(&output).unwrap();
+        assert_eq!(packed.entries[0].offset, 1536);
+        assert_eq!(packed.entries[1].offset, 1537);
+        assert_eq!(read_entry_data(&packed, &packed.entries[0]).unwrap()[0], b'A');
+        assert_eq!(read_entry_data(&packed, &packed.entries[1]).unwrap()[0], b'B');
     }
 }

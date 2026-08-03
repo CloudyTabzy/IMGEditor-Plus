@@ -18,6 +18,10 @@ pub fn save<'a>() -> Text<'a> {
     lucide::save()
 }
 
+pub fn pack<'a>() -> Text<'a> {
+    lucide::archive()
+}
+
 pub fn import<'a>() -> Text<'a> {
     lucide::download()
 }

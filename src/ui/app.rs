@@ -22,7 +22,7 @@ use crate::inspector::viewer3d::{self, ViewerEvent};
 use crate::parser::{
     DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
 };
-use crate::tasks::{ExportEngine, ExportMode, ExportTask, SaveTask};
+use crate::tasks::{ExportEngine, ExportMode, ExportTask, PackOutcome, PackTask, SaveTask};
 use crate::ui::animator::Animator;
 use crate::ui::design::Design;
 use crate::ui::dialogs::{self, SaveArchiveChoice};
@@ -99,6 +99,11 @@ pub enum Message {
     SaveCompleted {
         index: usize,
         result: Result<ArchiveInfo, String>,
+    },
+    PackArchive,
+    PackCompleted {
+        index: usize,
+        result: Result<PackOutcome, String>,
     },
     CloseSelectedArchive,
     CloseArchiveTab(usize),
@@ -686,6 +691,25 @@ impl App {
         )
     }
 
+    fn run_pack(
+        &self,
+        archive: ArchiveInfo,
+        path: PathBuf,
+        version: ImgVersion,
+    ) -> Task<Message> {
+        let index = self.editor.selected_archive().unwrap_or(0);
+        let task = PackTask::new(archive, path, version);
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || task.run_blocking())
+                    .await
+                    .map_err(|e| format!("pack task panicked: {e}"))?
+                    .map_err(|e| e.to_string())
+            },
+            move |result| Message::PackCompleted { index, result },
+        )
+    }
+
     fn handle_shortcut(&mut self, shortcut: Shortcut) -> Task<Message> {
         match shortcut {
             Shortcut::New => Task::done(Message::NewArchive),
@@ -817,6 +841,52 @@ impl App {
                 };
                 Task::none()
             }
+            Message::PackArchive => {
+                self.toast = None;
+                let Some((_index, archive)) = self.editor.clone_selected_archive() else {
+                    self.toast = Some("No archive selected.".into());
+                    return Task::none();
+                };
+                if archive.progress.in_use() {
+                    self.toast = Some("An archive operation is already running.".into());
+                    return Task::none();
+                }
+                let Some(path) = archive.path.clone() else {
+                    self.toast = Some("Save the archive before packing it.".into());
+                    return Task::none();
+                };
+                if !path.exists() {
+                    self.toast = Some("The archive file no longer exists. Use Save as… first.".into());
+                    return Task::none();
+                }
+                let version = archive.version;
+                self.run_pack(archive, path, version)
+            }
+            Message::PackCompleted { index, result } => {
+                match result {
+                    Ok(outcome) => {
+                        let reclaimed = outcome.stats.reclaimed_bytes();
+                        let packed = outcome.stats.packed_bytes;
+                        self.editor.replace_archive(index, outcome.archive);
+                        self.toast = if reclaimed > 0 {
+                            Some(format!(
+                                "Archive packed — reclaimed {} ({} on disk).",
+                                format_byte_count(reclaimed),
+                                format_byte_count(packed)
+                            ))
+                        } else {
+                            Some(format!(
+                                "Archive packed — no space reclaimed ({} on disk).",
+                                format_byte_count(packed)
+                            ))
+                        };
+                    }
+                    Err(err) => {
+                        self.toast = Some(format!("Pack failed: {err}"));
+                    }
+                }
+                Task::none()
+            }
             _ => self.update_tail(message),
         }
     }
@@ -833,7 +903,9 @@ impl App {
             | Message::SaveArchive
             | Message::SaveArchiveAs
             | Message::SaveArchiveAsResult(_)
-            | Message::SaveCompleted { .. } => Task::none(),
+            | Message::SaveCompleted { .. }
+            | Message::PackArchive
+            | Message::PackCompleted { .. } => Task::none(),
 
             Message::CloseSelectedArchive => {
                 self.editor.close_selected_archive();
@@ -2328,6 +2400,10 @@ impl App {
                 Message::SaveArchiveAs,
             )),
             Item::new(menu_button(
+                "Pack archive".to_string(),
+                Message::PackArchive,
+            )),
+            Item::new(menu_button(
                 format!("Close tab ({})", shortcut_display(Shortcut::Close)),
                 Message::CloseSelectedArchive,
             )),
@@ -2467,6 +2543,22 @@ fn menu_button<'a>(label: String, message: Message) -> Element<'a, Message> {
     menu_button_with_icon(label, menu_icon(&message), message)
 }
 
+fn format_byte_count(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
 fn menu_button_with_icon<'a>(
     label: String,
     icon: Element<'a, Message>,
@@ -2502,6 +2594,7 @@ fn menu_icon(message: &Message) -> Element<'static, Message> {
         Message::SaveArchive | Message::SaveArchiveAsResult(_) | Message::SaveArchiveAs => {
             icons::save()
         }
+        Message::PackArchive => icons::pack(),
         Message::CloseSelectedArchive => icons::close(),
         Message::OpenSortManager => icons::sort(),
         Message::ImportFiles => icons::import(),

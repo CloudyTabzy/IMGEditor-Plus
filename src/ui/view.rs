@@ -789,6 +789,11 @@ fn build_toolbar(accent: Color, bg: Color) -> Element<'static, Message> {
             fonts::body("Save"),
             tooltip::Position::Bottom,
         ),
+        tooltip(
+            toolbar_button(icons::pack().size(18).into(), Message::PackArchive),
+            fonts::body("Pack archive"),
+            tooltip::Position::Bottom,
+        ),
         rule::vertical(1),
         tooltip(
             toolbar_button(icons::import().size(18).into(), Message::ImportFiles),

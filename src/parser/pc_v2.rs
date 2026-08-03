@@ -85,6 +85,10 @@ impl ImgParser for PcV2Parser {
 
         result?;
 
+        // Release the old mapping before replacing an in-place archive, then
+        // map the file that was actually written.
+        archive.source_mmap = None;
+
         if remove_existing
             && let Some(ref src) = source_path
             && src != output_path
@@ -100,6 +104,9 @@ impl ImgParser for PcV2Parser {
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Untitled".to_string());
         archive.version = crate::parser::ImgVersion::Two;
+        let img_file = std::fs::File::open(output_path)
+            .context("failed to reopen packed IMG v2 archive")?;
+        archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
         archive.add_log("Archive saved".to_string());
         Ok(())
     }
