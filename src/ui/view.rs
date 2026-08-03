@@ -14,11 +14,13 @@ use crate::ui::fonts;
 use crate::ui::icons;
 use crate::ui::widgets as w;
 
+static LOGO_HANDLE: std::sync::LazyLock<image::Handle> = std::sync::LazyLock::new(|| {
+    image::Handle::from_bytes(include_bytes!("../../asset/logo/IMGEditorLogo.png").to_vec())
+});
+
 fn logo_element() -> Element<'static, Message> {
-    let handle =
-        image::Handle::from_bytes(include_bytes!("../../asset/logo/IMGEditorLogo.png").to_vec());
     container(
-        image(handle)
+        image(LOGO_HANDLE.clone())
             .width(Length::Fixed(96.0))
             .height(Length::Fixed(96.0))
             .content_fit(iced::ContentFit::Contain),
@@ -938,22 +940,34 @@ fn build_about(app: &App) -> Option<Element<'_, Message>> {
     if !app.show_about {
         return None;
     }
+
+    let about_content = column![
+        logo_element(),
+        Space::new().height(Length::Fixed(8.0)),
+        container(fonts::body(ABOUT_TEXT).align_x(iced::alignment::Horizontal::Center))
+            .width(Length::Fill),
+        Space::new().height(Length::Fixed(8.0)),
+        row![
+            button(w::icon_label(
+                icons::external_viewer().size(14),
+                fonts::body("Visit repository"),
+            ))
+            .on_press(Message::VisitRepository)
+            .style(button::primary),
+            button(w::icon_label(icons::close().size(14), fonts::body("Close")))
+                .on_press(Message::HideAbout),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(6)
+    .align_x(Alignment::Center);
+
     Some(modal_box(
         "About",
-        column![
-            logo_element(),
-            Space::new().height(Length::Fixed(8.0)),
-            fonts::body(ABOUT_TEXT),
-            Space::new().height(Length::Fixed(8.0)),
-            row![
-                button(fonts::body("Visit repository"))
-                    .on_press(Message::VisitRepository)
-                    .style(button::primary),
-                Space::new().width(Length::Fixed(8.0)),
-                button(fonts::body("Close")).on_press(Message::HideAbout),
-            ]
-        ]
-        .spacing(6),
+        container(about_content)
+            .width(Length::Fixed(400.0))
+            .align_x(iced::alignment::Horizontal::Center),
     ))
 }
 
@@ -1122,11 +1136,17 @@ fn modal_box<'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> Element<'a, Message> {
     let content: Element<'a, Message> = content.into();
-    let content = column![fonts::display(title), content]
+    let content = column![
+        fonts::display(title)
+            .align_x(iced::alignment::Horizontal::Center)
+            .width(Length::Fill),
+        content,
+    ]
         .spacing(8)
         .padding(16)
         .max_width(480)
-        .width(Length::Shrink);
+        .width(Length::Shrink)
+        .align_x(Alignment::Center);
     // Build a floating card with the design-system colors.
     // We use static defaults here because modal_box is called from a
     // non-App context (Element builder). The design system colors tied
