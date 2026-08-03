@@ -584,7 +584,6 @@ fn parse_nipixeldata_header(raw_pixels: &[u8]) -> Option<ParsedNiPixelData> {
     pos += num_mipmaps * 12;
     let num_pixels = u32::from_le_bytes(raw_pixels[pos..pos + 4].try_into().ok()?);
     pos += 4;
-    let num_faces = u32::from_le_bytes(raw_pixels[pos..pos + 4].try_into().ok()?);
     pos += 4;
     // The DXT chain starts here.
     let dxt_data_start = pos;
@@ -606,8 +605,6 @@ fn parse_nipixeldata_header(raw_pixels: &[u8]) -> Option<ParsedNiPixelData> {
         height: mip0_h,
         main_mip_size,
         dxt_data_start,
-        num_pixels,
-        num_faces,
     })
 }
 
@@ -621,8 +618,6 @@ struct ParsedNiPixelData {
     main_mip_size: u32,
     /// Byte offset within `raw_pixels` where the DXT chain begins.
     dxt_data_start: usize,
-    num_pixels: u32,
-    num_faces: u32,
 }
 
 /// Try to extract pixel data from a NiPixelData block. Returns RGBA TGA

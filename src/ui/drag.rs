@@ -99,6 +99,11 @@ impl DragState {
         self.count as usize
     }
 
+    /// Whether this drag contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
     /// Borrow the live entry indices as a slice. The slice length
     /// is the captured `count`, not the full `DRAG_MAX_ENTRIES`.
     pub fn indices(&self) -> &[usize] {

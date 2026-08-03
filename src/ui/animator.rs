@@ -18,14 +18,12 @@ pub type AnimationId = u64;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum State {
-    Idle,
     Running,
     Finished,
 }
 
 #[derive(Debug, Clone)]
 struct Animation {
-    id: AnimationId,
     start: f32,
     end: f32,
     duration: Duration,
@@ -35,9 +33,8 @@ struct Animation {
 }
 
 impl Animation {
-    fn new(id: AnimationId, from: f32, to: f32, duration: Duration, easing: Easing) -> Self {
+    fn new(from: f32, to: f32, duration: Duration, easing: Easing) -> Self {
         Self {
-            id,
             start: from,
             end: to,
             duration,
@@ -49,7 +46,6 @@ impl Animation {
 
     fn value(&self) -> f32 {
         match self.state {
-            State::Idle => self.start,
             State::Finished => self.end,
             State::Running => {
                 let t = if self.duration.is_zero() {
@@ -104,7 +100,7 @@ impl Animator {
         duration: Duration,
         easing: Easing,
     ) -> AnimationId {
-        let anim = Animation::new(id, from, to, duration, easing);
+        let anim = Animation::new(from, to, duration, easing);
         self.animations.insert(id, anim);
         self.next_id = self.next_id.max(id + 1);
         id
@@ -121,7 +117,7 @@ impl Animator {
         easing: Easing,
     ) -> AnimationId {
         let from = self.current_value(id);
-        let anim = Animation::new(id, from, to, duration, easing);
+        let anim = Animation::new(from, to, duration, easing);
         self.animations.insert(id, anim);
         id
     }

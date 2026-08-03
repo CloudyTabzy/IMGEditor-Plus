@@ -469,10 +469,6 @@ impl<'a> Reader<'a> {
         self.data.len().saturating_sub(self.pos)
     }
 
-    pub(crate) fn eof(&self) -> bool {
-        self.remaining() == 0
-    }
-
     pub(crate) fn require(&self, n: usize, what: &'static str) -> NifResult<()> {
         if self.remaining() < n {
             Err(NifError::UnexpectedEof(what))

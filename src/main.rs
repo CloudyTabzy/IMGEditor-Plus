@@ -1,72 +1,7 @@
-// TODO(narrow): replace this crate-wide allow with per-item `#[allow(dead_code)]` once
-// the bench-gated modules are wired so the compiler can see every call path. See TODO §6.
-#![allow(dead_code)]
 #![cfg_attr(not(feature = "bench"), windows_subsystem = "windows")]
 
-#[cfg(feature = "bench")]
-pub mod archive;
-#[cfg(not(feature = "bench"))]
-mod archive;
-
-#[cfg(feature = "bench")]
-pub mod sort;
-#[cfg(not(feature = "bench"))]
-mod sort;
-
-#[cfg(feature = "bench")]
-pub mod session;
-#[cfg(not(feature = "bench"))]
-mod session;
-
-pub mod dev_logger;
-
-#[cfg(feature = "bench")]
-pub mod config;
-#[cfg(not(feature = "bench"))]
-mod config;
-
-#[cfg(feature = "bench")]
-pub mod editor;
-#[cfg(not(feature = "bench"))]
-mod editor;
-
-#[cfg(feature = "bench")]
-pub mod inspector;
-#[cfg(not(feature = "bench"))]
-mod inspector;
-
-#[cfg(feature = "bench")]
-pub mod parser;
-#[cfg(not(feature = "bench"))]
-mod parser;
-
-#[cfg(feature = "bench")]
-pub mod runtime;
-#[cfg(not(feature = "bench"))]
-mod runtime;
-
-#[cfg(feature = "bench")]
-pub mod tasks;
-#[cfg(not(feature = "bench"))]
-mod tasks;
-
-#[cfg(feature = "bench")]
-pub mod ui;
-#[cfg(not(feature = "bench"))]
-mod ui;
-
-#[cfg(feature = "bench")]
-pub mod updater;
-#[cfg(not(feature = "bench"))]
-mod updater;
-
-#[cfg(feature = "bench")]
-pub mod utils;
-#[cfg(not(feature = "bench"))]
-mod utils;
-
 fn main() -> anyhow::Result<()> {
-    dev_logger::init_dev_log();
+    imgeditor::dev_logger::init_dev_log();
     install_panic_hook();
 
     #[cfg(all(windows, not(feature = "bench")))]
@@ -89,8 +24,8 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let config = config::Config::load();
-    crate::ui::run_app(config).map_err(|err| anyhow::anyhow!("{err}"))?;
+    let config = imgeditor::config::Config::load();
+    imgeditor::ui::run_app(config).map_err(|err| anyhow::anyhow!("{err}"))?;
     Ok(())
 }
 
@@ -126,7 +61,7 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         // Re-route the panic through dev_logger's structured report so
         // version + backtrace + breadcrumbs all land in one place.
-        let _ = dev_logger::write_crash_report(info);
+        let _ = imgeditor::dev_logger::write_crash_report(info);
         previous(info);
     }));
 }

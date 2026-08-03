@@ -349,7 +349,7 @@ impl<'a> SortContext<'a> {
     /// Look up an entry's IDE file label. Returns `""` if the entry
     /// is not associated with any IDE — that lets the comparator
     /// fall through to the name tiebreaker cleanly.
-    pub fn ide_for<'e>(&self, entry: &'e EntryInfo) -> &str {
+    pub fn ide_for(&self, entry: &EntryInfo) -> &str {
         self.ide_files
             .get(&entry.file_name_lower)
             .map(|s| s.as_str())
@@ -357,7 +357,7 @@ impl<'a> SortContext<'a> {
     }
 
     /// Same as `ide_for` but for COL files.
-    pub fn col_for<'e>(&self, entry: &'e EntryInfo) -> &str {
+    pub fn col_for(&self, entry: &EntryInfo) -> &str {
         self.col_files
             .get(&entry.file_name_lower)
             .map(|s| s.as_str())

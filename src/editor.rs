@@ -4,7 +4,7 @@ use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{ImgVersion, import_entry};
 use crate::sort::SortChain;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Editor {
     archives: Vec<ArchiveInfo>,
     selected_archive: Option<usize>,
@@ -14,18 +14,6 @@ pub struct Editor {
     /// app layer is responsible for keeping this in sync with
     /// `Config::default_sort_chain`.
     default_sort_chain: SortChain,
-}
-
-impl Default for Editor {
-    fn default() -> Self {
-        Self {
-            archives: Vec::new(),
-            selected_archive: None,
-            selected_entry: None,
-            pending_messages: Vec::new(),
-            default_sort_chain: SortChain::default(),
-        }
-    }
 }
 
 #[derive(Debug, thiserror::Error)]

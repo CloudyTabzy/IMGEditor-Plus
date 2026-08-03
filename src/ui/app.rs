@@ -40,8 +40,8 @@ pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
 pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
 
 #[derive(Debug, Clone)]
-pub(crate) enum OpenArchiveOutcome {
-    Opened(ArchiveInfo),
+pub enum OpenArchiveOutcome {
+    Opened(Box<ArchiveInfo>),
     Unsupported,
     Failed(String),
 }
@@ -482,7 +482,7 @@ impl App {
                     }
 
                     match ArchiveInfo::open(path) {
-                        Ok(archive) => OpenArchiveOutcome::Opened(archive),
+                        Ok(archive) => OpenArchiveOutcome::Opened(Box::new(archive)),
                         Err(error) => OpenArchiveOutcome::Failed(error.to_string()),
                     }
                 })
@@ -678,7 +678,7 @@ impl App {
             Message::ArchiveOpenCompleted { path, outcome } => {
                 match outcome {
                     OpenArchiveOutcome::Opened(archive) => {
-                        let _ = self.editor.add_opened_archive(archive);
+                        let _ = self.editor.add_opened_archive(*archive);
                         self.config.recent_files.touch(&path);
                         self.save_config();
                     }
@@ -1820,12 +1820,11 @@ impl App {
                 // Re-seed the draft from the active archive so the
                 // user can undo in-progress edits without closing the
                 // dialog.
-                if let Some(draft) = self.sort_draft.as_mut() {
-                    if let Some(i) = self.editor.selected_archive() {
-                        if let Some(a) = self.editor.archives().get(i) {
-                            *draft = a.sort_chain.clone();
-                        }
-                    }
+                if let Some(draft) = self.sort_draft.as_mut()
+                    && let Some(i) = self.editor.selected_archive()
+                    && let Some(a) = self.editor.archives().get(i)
+                {
+                    *draft = a.sort_chain.clone();
                 }
                 Task::none()
             }
@@ -1834,12 +1833,12 @@ impl App {
                 // default chain (so new archives inherit), and the
                 // persisted config (so the change survives a restart).
                 if let Some(draft) = self.sort_draft.take() {
-                    if let Some(i) = self.editor.selected_archive() {
-                        if let Some(a) = self.editor.archives_mut().get_mut(i) {
-                            a.sort_chain = draft.clone();
-                            let filter = self.search.clone();
-                            a.update_selected_list(&filter);
-                        }
+                    if let Some(i) = self.editor.selected_archive()
+                        && let Some(a) = self.editor.archives_mut().get_mut(i)
+                    {
+                        a.sort_chain = draft.clone();
+                        let filter = self.search.clone();
+                        a.update_selected_list(&filter);
                     }
                     self.config.default_sort_chain = draft.clone();
                     self.editor.set_default_sort_chain(draft);
@@ -2008,9 +2007,7 @@ impl App {
                     entry.file_name = compact_str::CompactString::from(
                         format!("{}.bak", entry.file_name),
                     );
-                    entry.file_name_lower = compact_str::CompactString::from(
-                        entry.file_name.to_ascii_lowercase(),
-                    );
+                    entry.file_name_lower = entry.file_name.to_ascii_lowercase();
                 }
                 target_archive.entries.push(entry);
             }
@@ -2026,13 +2023,11 @@ impl App {
             indices.reverse();
             indices.retain(|&i| i < source_archive.entries.len());
             indices.dedup();
-            let mut shift = 0u32;
-            for &i in &indices {
-                let actual = i - shift as usize;
+            for (shift, &i) in indices.iter().enumerate() {
+                let actual = i - shift;
                 source_archive.entries.remove(actual);
                 source_archive.selected_indices.retain(|&mut j| j != i);
                 source_archive.selected_lookup.remove(&i);
-                shift += 1;
             }
             source_archive.dirty = true;
         }

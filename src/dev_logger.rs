@@ -80,7 +80,6 @@ pub fn init_dev_log() {
     // reclaims the heap.
     let logger: &'static FileLogger = Box::leak(Box::new(FileLogger {
         file: Mutex::new(log_file),
-        path,
         max_level: max,
     }));
     if log::set_logger(logger).is_err() {
@@ -139,7 +138,6 @@ fn write_header(path: &PathBuf) -> std::io::Result<()> {
 
 struct FileLogger {
     file: Mutex<File>,
-    path: PathBuf,
     max_level: LevelFilter,
 }
 

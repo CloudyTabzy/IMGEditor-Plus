@@ -310,7 +310,7 @@ impl<'a> DbFile<'a> {
         let entry = self
             .entries
             .get(index as usize)
-            .ok_or_else(|| DbError::BadNameLength {
+            .ok_or(DbError::BadNameLength {
                 index,
                 got: 0,
                 remaining: 0,

@@ -14,14 +14,6 @@ use crate::parser::{
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PcV2Parser;
 
-impl PcV2Parser {
-    fn dir_path(img_path: &Path) -> PathBuf {
-        let mut path = img_path.to_path_buf();
-        path.set_extension("dir");
-        path
-    }
-}
-
 impl ImgParser for PcV2Parser {
     fn open(&self, archive: &mut ArchiveInfo) -> Result<()> {
         let Some(path) = archive.path.as_ref() else {

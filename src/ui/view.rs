@@ -1094,7 +1094,7 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
                     .into_boxed_slice(),
             ) as &'static [crate::archive::EntryInfo]
         })
-        .unwrap_or(&[]);
+        .unwrap_or(EMPTY_ENTRIES.as_ref());
     let archive_name: Option<&'static str> = app
         .editor
         .selected_archive()
