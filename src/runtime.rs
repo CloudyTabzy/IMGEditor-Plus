@@ -23,6 +23,14 @@ where
     runtime().spawn(future)
 }
 
+pub fn spawn_blocking<F, R>(function: F) -> tokio::task::JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    runtime().spawn_blocking(function)
+}
+
 pub fn block_on<F: std::future::Future>(future: F) -> F::Output {
     runtime().block_on(future)
 }

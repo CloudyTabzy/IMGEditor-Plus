@@ -37,6 +37,13 @@ const UPDATER_REPO: &str = "CloudyTabzy/IMGEditor-Plus";
 pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
 pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
 
+#[derive(Debug, Clone)]
+pub(crate) enum OpenArchiveOutcome {
+    Opened(ArchiveInfo),
+    Unsupported,
+    Failed(String),
+}
+
 pub const ABOUT_TEXT: &str = concat!(
     "IMG Editor Plus v",
     env!("CARGO_PKG_VERSION"),
@@ -74,6 +81,10 @@ pub enum Message {
     NewArchive,
     OpenArchive,
     OpenArchiveResult(Option<PathBuf>),
+    ArchiveOpenCompleted {
+        path: PathBuf,
+        outcome: OpenArchiveOutcome,
+    },
     /// Open a path from the recent-files list. Carries the raw
     /// path as it appeared in the menu; missing entries are
     /// filtered out before this fires.
@@ -91,6 +102,11 @@ pub enum Message {
 
     ImportFiles,
     ImportFilesResult(Vec<PathBuf>),
+    ImportCompleted {
+        index: usize,
+        count: usize,
+        result: Result<ArchiveInfo, String>,
+    },
     ExportAll,
     ExportSelected,
     ExportFolderResult(Option<PathBuf>),
@@ -454,25 +470,50 @@ impl App {
         }
     }
 
-    /// Open an archive at `path`, record it in the recent-files MRU
-    /// list on success, and surface failures via the toast or
-    /// unsupported-format dialog. Shared by the file-picker handler
-    /// and the Open-Recent menu so both paths get the same UX.
-    fn open_archive_path(&mut self, path: PathBuf) {
-        match self.editor.open_archive(&path) {
-            Ok(()) => {
-                self.config.recent_files.touch(&path);
-                self.save_config();
-            }
-            Err(crate::editor::OpenArchiveError::UnsupportedFormat) => {
-                // Don't touch the MRU list — a failed attempt
-                // shouldn't promote a file we couldn't open.
-                self.show_unsupported = Some(path);
-            }
-            Err(err) => {
-                self.toast = Some(format!("Failed to open archive: {err}"));
-            }
-        }
+    fn open_archive_path(&mut self, path: PathBuf) -> Task<Message> {
+        let result_path = path.clone();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    if crate::parser::detect_version(&path) == ImgVersion::Unknown {
+                        return OpenArchiveOutcome::Unsupported;
+                    }
+
+                    match ArchiveInfo::open(path) {
+                        Ok(archive) => OpenArchiveOutcome::Opened(archive),
+                        Err(error) => OpenArchiveOutcome::Failed(error.to_string()),
+                    }
+                })
+                .await
+                .unwrap_or_else(|error| {
+                    OpenArchiveOutcome::Failed(format!("open task panicked: {error}"))
+                })
+            },
+            move |outcome| Message::ArchiveOpenCompleted {
+                path: result_path,
+                outcome,
+            },
+        )
+    }
+
+    fn import_archive_task(index: usize, archive: ArchiveInfo, paths: Vec<PathBuf>) -> Task<Message> {
+        let count = paths.len();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut archive = archive;
+                    Editor::append_import_to(&mut archive, &paths, false);
+                    archive
+                })
+                .await
+                .map_err(|error| format!("import task panicked: {error}"))
+            },
+            move |result| Message::ImportCompleted {
+                index,
+                count,
+                result,
+            },
+        )
     }
 
     pub fn visit_repository() {
@@ -581,7 +622,12 @@ impl App {
         let index = self.editor.selected_archive().unwrap_or(0);
         let task = SaveTask::new(archive, path, version).remove_existing(remove_existing);
         Task::perform(
-            async move { task.run().await.map_err(|e| e.to_string()) },
+            async move {
+                tokio::task::spawn_blocking(move || task.run_blocking())
+                    .await
+                    .map_err(|e| format!("save task panicked: {e}"))?
+                    .map_err(|e| e.to_string())
+            },
             move |result| Message::SaveCompleted { index, result },
         )
     }
@@ -624,10 +670,25 @@ impl App {
             }
 
             Message::OpenArchiveResult(Some(path)) => {
-                self.open_archive_path(path);
-                Task::none()
+                self.open_archive_path(path)
             }
             Message::OpenArchiveResult(None) => Task::none(),
+            Message::ArchiveOpenCompleted { path, outcome } => {
+                match outcome {
+                    OpenArchiveOutcome::Opened(archive) => {
+                        let _ = self.editor.add_opened_archive(archive);
+                        self.config.recent_files.touch(&path);
+                        self.save_config();
+                    }
+                    OpenArchiveOutcome::Unsupported => {
+                        self.show_unsupported = Some(path);
+                    }
+                    OpenArchiveOutcome::Failed(error) => {
+                        self.toast = Some(format!("Failed to open archive: {error}"));
+                    }
+                }
+                Task::none()
+            }
 
             Message::OpenRecent(path) => {
                 // The menu only emits paths that still exist on disk
@@ -644,8 +705,7 @@ impl App {
                     ));
                     return Task::none();
                 }
-                self.open_archive_path(path);
-                Task::none()
+                self.open_archive_path(path)
             }
 
             Message::SaveArchive => {
@@ -709,6 +769,7 @@ impl App {
             | Message::NewArchive
             | Message::OpenArchive
             | Message::OpenArchiveResult(_)
+            | Message::ArchiveOpenCompleted { .. }
             | Message::OpenRecent(_)
             | Message::SaveArchive
             | Message::SaveArchiveAs
@@ -739,14 +800,21 @@ impl App {
                 if paths.is_empty() {
                     return Task::none();
                 }
-                if self.editor.selected_archive().is_some() {
-                    let count = paths.len();
-                    if let Some((_index, _archive)) = self.editor.clone_selected_archive() {
-                        self.editor.append_import(_index, paths, false);
-                    }
-                    self.toast = Some(format!("Imported {count} files."));
-                } else {
+                let Some((index, archive)) = self.editor.clone_selected_archive() else {
                     self.toast = Some("Open an archive first to import into it.".into());
+                    return Task::none();
+                };
+                Self::import_archive_task(index, archive, paths)
+            }
+            Message::ImportCompleted { index, count, result } => {
+                match result {
+                    Ok(archive) => {
+                        self.editor.replace_archive(index, archive);
+                        self.toast = Some(format!("Imported {count} files."));
+                    }
+                    Err(error) => {
+                        self.toast = Some(format!("Import failed: {error}"));
+                    }
                 }
                 Task::none()
             }
@@ -776,7 +844,12 @@ impl App {
                         ExportEngine::Parallel
                     });
                 Task::perform(
-                    async move { task.run().await.map_err(|e| e.to_string()) },
+                    async move {
+                        tokio::task::spawn_blocking(move || task.run_blocking())
+                            .await
+                            .map_err(|e| format!("export task panicked: {e}"))?
+                            .map_err(|e| e.to_string())
+                    },
                     move |result| Message::ExportCompleted { index, result },
                 )
             }
@@ -1421,22 +1494,13 @@ impl App {
                 if path.extension().is_some_and(|ext| {
                     ext.eq_ignore_ascii_case("img")
                 }) {
-                    if let Err(err) = self.editor.open_archive(&path) {
-                        if matches!(err, crate::editor::OpenArchiveError::UnsupportedFormat) {
-                            self.show_unsupported = Some(path);
-                        } else {
-                            self.toast = Some(format!("Failed to open archive: {err}"));
-                        }
-                    }
-                } else if self.editor.selected_archive().is_some() {
-                    self.toast = Some(format!("Imported {} dropped files.", 1));
-                    if let Some((_index, _archive)) = self.editor.clone_selected_archive() {
-                        self.editor.append_import(_index, vec![path], false);
-                    }
-                } else {
-                    self.toast = Some("Open an archive first to drop non-IMG files into it.".into());
+                    return self.open_archive_path(path);
                 }
-                Task::none()
+                let Some((index, archive)) = self.editor.clone_selected_archive() else {
+                    self.toast = Some("Open an archive first to drop non-IMG files into it.".into());
+                    return Task::none();
+                };
+                Self::import_archive_task(index, archive, vec![path])
             }
 
             Message::TxdDecodeRequested => {
@@ -1569,8 +1633,8 @@ impl App {
                 let nb_for_callback = nif_basename.clone();
                 Task::perform(
                     async move {
-                        let ide_map = crate::inspector::texture::IdeMap::build(&game_root);
                         tokio::task::spawn_blocking(move || {
+                            let ide_map = crate::inspector::texture::IdeMap::build(&game_root);
                             crate::inspector::texture_export::export_embedded_textures(
                                 &nif_basename,
                                 &ide_map,

@@ -49,6 +49,10 @@ impl SaveTask {
     }
 
     pub async fn run(self) -> anyhow::Result<ArchiveInfo> {
+        self.run_blocking()
+    }
+
+    pub fn run_blocking(self) -> anyhow::Result<ArchiveInfo> {
         let progress = self.archive.progress.clone();
         progress.start();
 
@@ -104,6 +108,10 @@ impl ExportTask {
     }
 
     pub async fn run(self) -> anyhow::Result<(usize, Vec<String>)> {
+        self.run_blocking()
+    }
+
+    pub fn run_blocking(self) -> anyhow::Result<(usize, Vec<String>)> {
         let ExportTask {
             archive,
             folder,

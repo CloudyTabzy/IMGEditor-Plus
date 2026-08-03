@@ -23,7 +23,7 @@ pub fn check_updates_future(
 ) -> Pin<Box<dyn Future<Output = UpdateResult> + Send>> {
     Box::pin(async move {
         let url = format!("https://api.github.com/repos/{repo}/tags");
-        match crate::runtime::spawn(async move {
+        match crate::runtime::spawn_blocking(move || {
             fetch_tags_blocking(&url, &current_version, &repo)
         })
         .await

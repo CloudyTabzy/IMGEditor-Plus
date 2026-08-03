@@ -83,6 +83,16 @@ impl Editor {
         self.selected_entry = None;
     }
 
+    pub fn add_opened_archive(&mut self, mut archive: ArchiveInfo) -> bool {
+        if self.archive_exists_by_name(&archive.file_name) {
+            return false;
+        }
+
+        archive.sort_chain = self.default_sort_chain.clone();
+        self.add_archive(archive);
+        true
+    }
+
     pub fn new_archive(&mut self) {
         let name = unique_archive_name(&self.archives, "Untitled");
         let mut archive = ArchiveInfo::new(name, true, ImgVersion::One);
@@ -295,19 +305,23 @@ impl Editor {
 
     pub fn append_import(&mut self, index: usize, paths: Vec<PathBuf>, replace: bool) {
         if let Some(archive) = self.archives.get_mut(index) {
-            let mut count = 0;
-            for path in &paths {
-                if import_entry(archive, path, replace).is_ok() {
-                    count += 1;
-                }
-            }
-            if count > 0 {
-                archive.dirty = true;
-                archive.invalidate_entry_caches();
-            }
-            archive.add_log(format!("Imported {count} entries"));
-            archive.update_search = true;
+            Self::append_import_to(archive, &paths, replace);
         }
+    }
+
+    pub fn append_import_to(archive: &mut ArchiveInfo, paths: &[PathBuf], replace: bool) {
+        let mut count = 0;
+        for path in paths {
+            if import_entry(archive, path, replace).is_ok() {
+                count += 1;
+            }
+        }
+        if count > 0 {
+            archive.dirty = true;
+            archive.invalidate_entry_caches();
+        }
+        archive.add_log(format!("Imported {count} entries"));
+        archive.update_search = true;
     }
 
     pub fn has_active_progress(&self) -> bool {
