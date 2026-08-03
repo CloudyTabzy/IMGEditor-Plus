@@ -944,8 +944,9 @@ fn build_about(app: &App) -> Option<Element<'_, Message>> {
     let about_content = column![
         logo_element(),
         Space::new().height(Length::Fixed(8.0)),
-        container(fonts::body(ABOUT_TEXT).align_x(iced::alignment::Horizontal::Center))
-            .width(Length::Fill),
+        fonts::body(ABOUT_TEXT)
+            .width(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Center),
         Space::new().height(Length::Fixed(8.0)),
         row![
             button(w::icon_label(
@@ -961,6 +962,7 @@ fn build_about(app: &App) -> Option<Element<'_, Message>> {
         .align_y(Alignment::Center),
     ]
     .spacing(6)
+    .width(Length::Fill)
     .align_x(Alignment::Center);
 
     Some(modal_box(
