@@ -13,6 +13,11 @@ pub mod sort;
 #[cfg(not(feature = "bench"))]
 mod sort;
 
+#[cfg(feature = "bench")]
+pub mod session;
+#[cfg(not(feature = "bench"))]
+mod session;
+
 pub mod dev_logger;
 
 #[cfg(feature = "bench")]
