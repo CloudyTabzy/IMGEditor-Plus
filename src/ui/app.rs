@@ -178,6 +178,90 @@ pub enum Message {
     Viewer3dToggleWireframe,
     Viewer3dToggleCullBackfaces,
     Viewer3dToggleTextured,
+
+    // Sort Manager dialog. The dialog edits a draft copy of the
+    // active archive's SortChain; "Apply" commits the draft to the
+    // archive + the global default. SlotIndex is a NewType so the
+    // compiler refuses accidental cross-pollination with other
+    // numeric state in the handler.
+    OpenSortManager,
+    CloseSortManager,
+    SortApplyDraft,
+    SortResetDraft,
+    SortAddSlot,
+    SortRemoveSlot(SortSlotIndex),
+    SortMoveSlotUp(SortSlotIndex),
+    SortMoveSlotDown(SortSlotIndex),
+    SortToggleSlotEnabled(SortSlotIndex),
+    SortSetSlotKey(SortSlotIndex, crate::sort::SortKey),
+    SortSetSlotDirection(SortSlotIndex, crate::sort::SortDirection),
+    SortSelectPreset(SortPreset),
+}
+
+/// NewType around `usize` that names a slot inside the Sort Manager's
+/// draft chain. Using a distinct type prevents the compiler from
+/// accepting a row index where a slot index is expected (or vice
+/// versa) — both are `usize` underneath, but the wrappers make the
+/// call sites self-documenting and catch bugs at the type level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SortSlotIndex(pub usize);
+
+/// Built-in sort presets the user can apply with one click. The
+/// index matches the dropdown order in `view.rs`; the payload is
+/// the chain shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SortPreset {
+    NameAZ,
+    NameZA,
+    TypeThenName,
+    SizeDesc,
+    OffsetAsc,
+}
+
+impl SortPreset {
+    /// Convert this preset to a `SortChain`. Each preset is a
+    /// single fixed chain the user can further edit (toggle
+    /// directions, add tiebreakers, etc.) before applying.
+    pub fn to_chain(self) -> crate::sort::SortChain {
+        use crate::sort::{SortChain, SortDirection, SortKey, SortPriority};
+        let p = |key, dir| SortPriority {
+            enabled: true,
+            key,
+            direction: dir,
+        };
+        match self {
+            SortPreset::NameAZ => SortChain::new(vec![p(SortKey::Name, SortDirection::Ascending)]),
+            SortPreset::NameZA => SortChain::new(vec![p(SortKey::Name, SortDirection::Descending)]),
+            SortPreset::TypeThenName => SortChain::new(vec![
+                p(SortKey::Type, SortDirection::Ascending),
+                p(SortKey::Name, SortDirection::Ascending),
+            ]),
+            SortPreset::SizeDesc => SortChain::new(vec![p(SortKey::Size, SortDirection::Descending)]),
+            SortPreset::OffsetAsc => SortChain::new(vec![p(SortKey::Offset, SortDirection::Ascending)]),
+        }
+    }
+
+    /// Display name for the dropdown. Kept here (not in `view.rs`)
+    /// so the preset list reads top-to-bottom in one place.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            SortPreset::NameAZ => "Name (A→Z)",
+            SortPreset::NameZA => "Name (Z→A)",
+            SortPreset::TypeThenName => "Type, then name",
+            SortPreset::SizeDesc => "Size (big → small)",
+            SortPreset::OffsetAsc => "Offset (low → high)",
+        }
+    }
+
+    /// All presets in picker order. Used by the dropdown to
+    /// populate its list without hard-coding it in `view.rs`.
+    pub const ALL: &'static [SortPreset] = &[
+        SortPreset::NameAZ,
+        SortPreset::NameZA,
+        SortPreset::TypeThenName,
+        SortPreset::SizeDesc,
+        SortPreset::OffsetAsc,
+    ];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +302,13 @@ pub struct App {
     pub update_state: UpdateState,
     pub update_check_manual: bool,
     pub toast: Option<String>,
+    /// Working copy of the sort chain while the Sort Manager
+    /// dialog is open. Edits land here first; "Apply" commits the
+    /// draft to the live archive + config. `None` when the dialog
+    /// is closed.
+    pub sort_draft: Option<crate::sort::SortChain>,
+    /// `true` while the Sort Manager modal is visible.
+    pub show_sort_manager: bool,
     pub last_export_selected_only: bool,
     pub fast_export: bool,
     pub panes: pane_grid::State<Pane>,
@@ -259,6 +350,9 @@ impl App {
         Self {
             editor: Editor::new(),
             config,
+            sort_draft: None,
+            show_sort_manager: false,
+            last_export_selected_only: false,
             search: String::new(),
             rename_buffer: String::new(),
             show_about: false,
@@ -269,7 +363,6 @@ impl App {
             update_state: UpdateState::Idle,
             update_check_manual: false,
             toast: None,
-            last_export_selected_only: false,
             fast_export,
             panes,
             context_menu: None,
@@ -1604,6 +1697,122 @@ impl App {
                 self.viewer3d_handle.toggle_textured();
                 Task::none()
             }
+
+            // ---- Sort Manager dialog ----
+            Message::OpenSortManager => {
+                // Seed the draft from the active archive's chain. If
+                // no archive is open, seed from the global default.
+                // The `take` would be tempting but the dialog is the
+                // only place the draft lives, so we just overwrite.
+                let draft = self
+                    .editor
+                    .selected_archive()
+                    .and_then(|i| self.editor.archives().get(i))
+                    .map(|a| a.sort_chain.clone())
+                    .unwrap_or_else(|| self.config.default_sort_chain.clone());
+                self.sort_draft = Some(draft);
+                self.show_sort_manager = true;
+                Task::none()
+            }
+            Message::CloseSortManager => {
+                // Discard the draft on close. "Apply" was the only
+                // path that committed changes; everything else just
+                // leaves the live archive alone.
+                self.sort_draft = None;
+                self.show_sort_manager = false;
+                Task::none()
+            }
+            Message::SortResetDraft => {
+                // Re-seed the draft from the active archive so the
+                // user can undo in-progress edits without closing the
+                // dialog.
+                if let Some(draft) = self.sort_draft.as_mut() {
+                    if let Some(i) = self.editor.selected_archive() {
+                        if let Some(a) = self.editor.archives().get(i) {
+                            *draft = a.sort_chain.clone();
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::SortApplyDraft => {
+                // Commit the draft to the live archive, the editor's
+                // default chain (so new archives inherit), and the
+                // persisted config (so the change survives a restart).
+                if let Some(draft) = self.sort_draft.take() {
+                    if let Some(i) = self.editor.selected_archive() {
+                        if let Some(a) = self.editor.archives_mut().get_mut(i) {
+                            a.sort_chain = draft.clone();
+                            let filter = self.search.clone();
+                            a.update_selected_list(&filter);
+                        }
+                    }
+                    self.config.default_sort_chain = draft.clone();
+                    self.editor.set_default_sort_chain(draft);
+                    self.save_config();
+                }
+                self.show_sort_manager = false;
+                Task::none()
+            }
+            Message::SortAddSlot => {
+                if let Some(draft) = self.sort_draft.as_mut() {
+                    // Add a disabled Size ASC slot as a neutral
+                    // default — the user almost always wants to
+                    // change the key after adding.
+                    draft.push(crate::sort::SortPriority::new(
+                        crate::sort::SortKey::Size,
+                        crate::sort::SortDirection::Ascending,
+                    ));
+                }
+                Task::none()
+            }
+            Message::SortRemoveSlot(SortSlotIndex(index)) => {
+                if let Some(draft) = self.sort_draft.as_mut() {
+                    draft.remove(index);
+                }
+                Task::none()
+            }
+            Message::SortMoveSlotUp(SortSlotIndex(index)) => {
+                if let Some(draft) = self.sort_draft.as_mut()
+                    && index > 0
+                {
+                    draft.move_slot(index, index - 1);
+                }
+                Task::none()
+            }
+            Message::SortMoveSlotDown(SortSlotIndex(index)) => {
+                if let Some(draft) = self.sort_draft.as_mut() {
+                    draft.move_slot(index, index + 1);
+                }
+                Task::none()
+            }
+            Message::SortToggleSlotEnabled(SortSlotIndex(index)) => {
+                if let Some(draft) = self.sort_draft.as_mut() {
+                    draft.toggle_enabled(index);
+                }
+                Task::none()
+            }
+            Message::SortSetSlotKey(SortSlotIndex(index), key) => {
+                if let Some(draft) = self.sort_draft.as_mut() {
+                    draft.set_key(index, key);
+                }
+                Task::none()
+            }
+            Message::SortSetSlotDirection(SortSlotIndex(index), direction) => {
+                if let Some(draft) = self.sort_draft.as_mut() {
+                    draft.set_direction(index, direction);
+                }
+                Task::none()
+            }
+            Message::SortSelectPreset(preset) => {
+                // Built-in presets — each is a one-line chain shape
+                // the user can further edit. Direction is encoded in
+                // the variant so a single call site handles them all.
+                if let Some(draft) = self.sort_draft.as_mut() {
+                    *draft = preset.to_chain();
+                }
+                Task::none()
+            }
         }
     }
 
@@ -1818,6 +2027,10 @@ impl App {
             Item::new(menu_button(
                 format!("Close tab ({})", shortcut_display(Shortcut::Close)),
                 Message::CloseSelectedArchive,
+            )),
+            Item::new(menu_button(
+                "Sort by…".to_string(),
+                Message::OpenSortManager,
             )),
         ])
         .max_width(220.0);

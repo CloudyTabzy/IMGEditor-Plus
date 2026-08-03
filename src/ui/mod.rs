@@ -5,6 +5,7 @@ pub mod dialogs;
 pub mod easing;
 pub mod fonts;
 pub mod keymap;
+pub mod sort_manager;
 pub mod theme;
 pub mod tokens;
 pub mod viewer3d_widget;

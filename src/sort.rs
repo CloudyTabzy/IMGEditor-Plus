@@ -53,6 +53,15 @@ pub enum SortKey {
     ColFile,
 }
 
+impl std::fmt::Display for SortKey {
+    /// Display the human-readable name. Lets the Iced `PickList` and
+    /// other widgets use the type as a labelled option without an
+    /// explicit `String` conversion at every call site.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.display_name())
+    }
+}
+
 impl SortKey {
     /// All keys in picker order. Used by the UI to populate the
     /// "Add sort key" dropdown without hard-coding the list in

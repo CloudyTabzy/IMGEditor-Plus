@@ -893,6 +893,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_welcome(app),
         build_unsupported(app),
         build_update_status(app),
+        build_sort_manager(app),
     ]
     .into_iter()
     .flatten()
@@ -1001,6 +1002,97 @@ fn build_update_status(app: &App) -> Option<Element<'_, Message>> {
         ]
         .spacing(6),
     ))
+}
+
+/// `static` empty maps for the IDE/COL fallback. Living for `'static`
+/// lets `build_sort_manager` return `Element<'static, ...>` without
+/// leaking per-call locals. The maps are never mutated, so a shared
+/// global is sound.
+static EMPTY_IDE_MAP: std::sync::LazyLock<
+    std::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
+> = std::sync::LazyLock::new(std::collections::HashMap::new);
+static EMPTY_COL_MAP: std::sync::LazyLock<
+    std::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
+> = std::sync::LazyLock::new(std::collections::HashMap::new);
+
+fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
+    if !app.show_sort_manager {
+        return None;
+    }
+    let draft = app.sort_draft.as_ref()?;
+
+    // The preview pane shows the first 10 entries of the active
+    // archive sorted through the draft chain. We pull them from
+    // the in-memory archive state — no disk I/O. The IDE/COL
+    // maps are empty here; the comparator falls back to name
+    // sort when those keys are in the chain, which matches what
+    // the user sees in the actual table.
+    // The dialog's Element lifetime is tied to the borrowed data
+    // (draft, preview, IDE/COL maps). The simplest way to satisfy
+    // the borrow checker is to leak the per-call data — the dialog
+    // is open for at most a few seconds and the cost is bounded by
+    // `PREVIEW_MAX * sizeof(EntryInfo)` per open. The leak is the
+    // "Rust alternative" — we trade a few hundred bytes for the
+    // ability to return an `Element<'static>` from a borrowed
+    // `&App` context without restructuring the entire view layer.
+    // Empty-slice leak shared across all "no archive" invocations
+    // so we never allocate just to leak a 0-byte slice. Same cost
+    // model as the static HashMaps above.
+    static EMPTY_ENTRIES: std::sync::LazyLock<
+        Box<[crate::archive::EntryInfo]>,
+    > = std::sync::LazyLock::new(|| Box::new([]));
+
+    let leaked: &'static [crate::archive::EntryInfo] = app
+        .editor
+        .selected_archive()
+        .and_then(|idx| app.editor.archives().get(idx))
+        .map(|a| {
+            Box::leak(
+                a.entries
+                    .iter()
+                    .take(10)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ) as &'static [crate::archive::EntryInfo]
+        })
+        .unwrap_or(&[]);
+    let archive_name: Option<&'static str> = app
+        .editor
+        .selected_archive()
+        .and_then(|idx| app.editor.archives().get(idx))
+        .map(|a| Box::leak(a.file_name.clone().into_boxed_str()) as &'static str);
+
+    let dialog = crate::ui::sort_manager::build(
+        archive_name,
+        draft,
+        leaked,
+        None, // primary_type - populated for the table view, not the dialog
+        &EMPTY_IDE_MAP,
+        &EMPTY_COL_MAP,
+    );
+
+    // Wrap the dialog content in our modal frame. We can't use the
+    // generic `modal_box` helper here because the dialog's lifetime
+    // is tied to the borrowed `&App` context, not `'static`. The
+    // dialog already renders its own title + footer so the modal
+    // frame is just a styled container.
+    Some(
+        Container::new(dialog)
+            .style(|_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(
+                    Color::from_rgb(0.10, 0.11, 0.13),
+                )),
+                text_color: Some(Color::WHITE),
+                border: iced::Border {
+                    color: Color::from_rgb(0.30, 0.32, 0.36),
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..Default::default()
+            })
+            .into(),
+    )
 }
 
 fn modal_box<'a>(

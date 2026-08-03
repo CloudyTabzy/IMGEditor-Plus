@@ -8,7 +8,7 @@ use memmap2::Mmap;
 use smallvec::SmallVec;
 
 use crate::parser::{DecodedTexture, EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, encode_entry_name};
-use crate::sort::{SortChain, SortDirection};
+use crate::sort::SortChain;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportStatus {
