@@ -3,6 +3,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::sort::{SortChain, SortDirection, SortKey, SortPriority};
+
 /// Maximum number of recent files retained in the MRU list. Bounded
 /// so the settings file stays a reasonable size and the menu doesn't
 /// scroll off the screen.
@@ -188,6 +190,31 @@ impl FromStr for ThemeMode {
     }
 }
 
+/// Parse a `SortKey` from its display name (case-insensitive). Used
+/// to deserialize the persisted `sort_prio_N` lines.
+impl FromStr for SortKey {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        for k in SortKey::ALL {
+            if k.display_name().eq_ignore_ascii_case(s.trim()) {
+                return Ok(*k);
+            }
+        }
+        Err(())
+    }
+}
+
+impl FromStr for SortDirection {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "ascending" | "asc" | "↑" => Ok(SortDirection::Ascending),
+            "descending" | "desc" | "↓" => Ok(SortDirection::Descending),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WindowGeometry {
     pub size: Option<[f32; 2]>,
@@ -203,6 +230,10 @@ pub struct Config {
     pub last_export_folder: Option<PathBuf>,
     pub last_open_folder: Option<PathBuf>,
     pub recent_files: RecentFiles,
+    /// Default sort chain applied to newly-opened archives. Per-archive
+    /// sort state lives on `ArchiveInfo::sort_chain` and is initialized
+    /// from this value.
+    pub default_sort_chain: SortChain,
     pub update_check_enabled: bool,
     pub update_notify_disabled: bool,
     pub fast_export: bool,
@@ -217,6 +248,7 @@ impl Default for Config {
             last_export_folder: None,
             last_open_folder: None,
             recent_files: RecentFiles::new(),
+            default_sort_chain: SortChain::default(),
             update_check_enabled: true,
             update_notify_disabled: false,
             fast_export: false,
@@ -241,6 +273,7 @@ impl Config {
         // settings file. The BTreeMap keeps insertion ordered by key.
         let mut pending_recent: std::collections::BTreeMap<usize, PathBuf> =
             std::collections::BTreeMap::new();
+        let mut pending_sort_priorities: Vec<SortPriority> = Vec::new();
         for line in contents.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
@@ -294,6 +327,72 @@ impl Config {
                         pending_recent.insert(index, PathBuf::from(value));
                     }
                 }
+                key if key.starts_with("sort_prio_") => {
+                    // sort_prio_N=enabled,SortKey,SortDirection
+                    // Example: sort_prio_0=true,Name,Ascending
+                    let mut parts = value.splitn(3, ',');
+                    let enabled = parts
+                        .next()
+                        .and_then(|s| s.parse::<bool>().ok())
+                        .unwrap_or(false);
+                    let sort_key = parts
+                        .next()
+                        .and_then(|s| s.parse::<SortKey>().ok())
+                        .unwrap_or(SortKey::Name);
+                    let direction = parts
+                        .next()
+                        .and_then(|s| s.parse::<SortDirection>().ok())
+                        .unwrap_or(SortDirection::Ascending);
+                    let prio = SortPriority {
+                        enabled,
+                        key: sort_key,
+                        direction,
+                    };
+                    if let Some(index) = key
+                        .strip_prefix("sort_prio_")
+                        .and_then(|n| n.parse::<usize>().ok())
+                    {
+                        while pending_sort_priorities.len() <= index {
+                            pending_sort_priorities.push(SortPriority::disabled());
+                        }
+                        pending_sort_priorities[index] = prio;
+                    }
+                }
+                key if key.starts_with("sort_prio_") => {
+                    // sort_prio_N=enabled,SortKey,SortDirection
+                    // Example: sort_prio_0=true,Name,Ascending
+                    let mut parts = value.splitn(3, ',');
+                    let enabled = parts
+                        .next()
+                        .and_then(|s| s.parse::<bool>().ok())
+                        .unwrap_or(false);
+                    let sort_key = parts
+                        .next()
+                        .and_then(|s| s.parse::<SortKey>().ok())
+                        .unwrap_or(SortKey::Name);
+                    let direction = parts
+                        .next()
+                        .and_then(|s| s.parse::<SortDirection>().ok())
+                        .unwrap_or(SortDirection::Ascending);
+                    let prio = SortPriority {
+                        enabled,
+                        key: sort_key,
+                        direction,
+                    };
+                    // Buffer in file order; SortChain is rebuilt in
+                    // priority order from this vec below.
+                    if let Some(index) = key
+                        .strip_prefix("sort_prio_")
+                        .and_then(|n| n.parse::<usize>().ok())
+                    {
+                        // Sparse vec; grow as needed.
+                        while pending_sort_priorities.len() <= index {
+                            pending_sort_priorities
+                                .push(SortPriority::disabled());
+                        }
+                        pending_sort_priorities[index] = prio;
+                    }
+                }
                 "update_check_enabled" => {
                     config.update_check_enabled = value.eq_ignore_ascii_case("true");
                 }
@@ -314,6 +413,10 @@ impl Config {
         for (_index, path) in pending_recent.into_iter().rev() {
             config.recent_files.touch(path);
         }
+        // Apply sort priorities in file order (which mirrors the
+        // saved priority chain). Truncate any trailing disabled
+        // placeholders we inserted to make the vec sparse-friendly.
+        config.default_sort_chain = SortChain::new(pending_sort_priorities);
         config
     }
 
@@ -359,6 +462,16 @@ impl Config {
         }
         for (index, entry) in self.recent_files.iter() {
             writeln!(file, "recent_{}={}", index, entry.path.display())?;
+        }
+        for (index, prio) in self.default_sort_chain.iter().enumerate() {
+            writeln!(
+                file,
+                "sort_prio_{}={},{},{}",
+                index,
+                prio.enabled,
+                prio.key.display_name(),
+                prio.direction.display_name()
+            )?;
         }
         writeln!(
             file,
@@ -439,6 +552,7 @@ mod tests {
             last_export_folder: Some(PathBuf::from("C:/out")),
             last_open_folder: Some(PathBuf::from("C:/in")),
             recent_files: RecentFiles::new(),
+            default_sort_chain: SortChain::default(),
             update_check_enabled: false,
             update_notify_disabled: true,
             fast_export: true,

@@ -5,7 +5,8 @@ use iced::widget::{
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_fonts::lucide;
 
-use crate::archive::{ExportStatus, SortColumn, SortDirection};
+use crate::archive::{ExportStatus, SortColumn};
+use crate::sort::SortDirection;
 
 use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::pipeline::RenderFlags;

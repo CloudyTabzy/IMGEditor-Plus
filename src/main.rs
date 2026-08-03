@@ -8,6 +8,11 @@ pub mod archive;
 #[cfg(not(feature = "bench"))]
 mod archive;
 
+#[cfg(feature = "bench")]
+pub mod sort;
+#[cfg(not(feature = "bench"))]
+mod sort;
+
 pub mod dev_logger;
 
 #[cfg(feature = "bench")]

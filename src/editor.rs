@@ -2,13 +2,30 @@ use std::path::PathBuf;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{ImgVersion, import_entry};
+use crate::sort::SortChain;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Editor {
     archives: Vec<ArchiveInfo>,
     selected_archive: Option<usize>,
     selected_entry: Option<usize>,
     pending_messages: Vec<String>,
+    /// Default sort chain copied into newly-opened archives. The
+    /// app layer is responsible for keeping this in sync with
+    /// `Config::default_sort_chain`.
+    default_sort_chain: SortChain,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Self {
+            archives: Vec::new(),
+            selected_archive: None,
+            selected_entry: None,
+            pending_messages: Vec::new(),
+            default_sort_chain: SortChain::default(),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -22,6 +39,13 @@ pub enum OpenArchiveError {
 impl Editor {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Replace the default sort chain used for newly-opened archives.
+    /// The app layer calls this whenever the user reconfigures the
+    /// sort so subsequent opens inherit the new setup.
+    pub fn set_default_sort_chain(&mut self, chain: SortChain) {
+        self.default_sort_chain = chain;
     }
 
     pub fn archives(&self) -> &[ArchiveInfo] {
@@ -61,7 +85,8 @@ impl Editor {
 
     pub fn new_archive(&mut self) {
         let name = unique_archive_name(&self.archives, "Untitled");
-        let archive = ArchiveInfo::new(name, true, ImgVersion::One);
+        let mut archive = ArchiveInfo::new(name, true, ImgVersion::One);
+        archive.sort_chain = self.default_sort_chain.clone();
         self.add_archive(archive);
     }
 
@@ -82,7 +107,8 @@ impl Editor {
             return Err(OpenArchiveError::UnsupportedFormat);
         }
 
-        let archive = ArchiveInfo::open(path).map_err(OpenArchiveError::OpenFailed)?;
+        let mut archive = ArchiveInfo::open(path).map_err(OpenArchiveError::OpenFailed)?;
+        archive.sort_chain = self.default_sort_chain.clone();
         self.add_archive(archive);
         Ok(())
     }

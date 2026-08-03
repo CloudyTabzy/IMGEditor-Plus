@@ -10,7 +10,8 @@ use iced_aw::menu::{Item, Menu, MenuBar};
 use iced_fonts::LUCIDE_FONT_BYTES;
 use memmap2::Mmap;
 
-use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn, SortDirection};
+use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn};
+use crate::sort::SortDirection;
 use crate::dev_logger;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1286,6 +1287,11 @@ impl App {
                     }
                     let filter = self.search.clone();
                     archive.update_selected_list(&filter);
+                    // Promote the current chain to the global default
+                    // so the next archive opened inherits this sort.
+                    // Cheap, since the chain is at most 10 priorities.
+                    self.config.default_sort_chain = archive.sort_chain.clone();
+                    self.save_config();
                 }
                 Task::none()
             }

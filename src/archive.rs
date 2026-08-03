@@ -8,6 +8,7 @@ use memmap2::Mmap;
 use smallvec::SmallVec;
 
 use crate::parser::{DecodedTexture, EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, encode_entry_name};
+use crate::sort::{SortChain, SortDirection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportStatus {
@@ -88,24 +89,30 @@ impl ProgressInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortColumn {
+    /// Display-only: the underlying sort lives on
+    /// `ArchiveInfo::sort_chain` (a `SortChain` of up to 10 priority
+    /// slots). These three variants are kept as a compatibility
+    /// shim for the existing single-column header buttons in
+    /// `view.rs`; they map to the primary slot of the chain at the
+    /// call site.
     Name,
     Type,
     Size,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortDirection {
-    Ascending,
-    Descending,
-}
-
+/// Header-button state. The actual sort algorithm lives on
+/// `sort_chain`; this struct only tracks which column header is
+/// visually active, which direction the arrow points, and the
+/// cached "primary type" label for the Type column. `direction`
+/// is `crate::sort::SortDirection` so the display shim and the
+/// new chain share a single direction type.
 #[derive(Debug, Clone)]
 pub struct SortState {
     pub column: SortColumn,
-    pub direction: SortDirection,
+    pub direction: crate::sort::SortDirection,
     pub type_index: usize,
-    /// Cached header text for the Type column. Recomputed only when the sort
-    /// state or the underlying file-type set changes.
+    /// Cached header text for the Type column. Recomputed only when
+    /// the underlying file-type set changes.
     pub type_header_label: String,
 }
 
@@ -113,7 +120,7 @@ impl Default for SortState {
     fn default() -> Self {
         Self {
             column: SortColumn::Name,
-            direction: SortDirection::Ascending,
+            direction: crate::sort::SortDirection::Ascending,
             type_index: 0,
             type_header_label: "Type".to_string(),
         }
@@ -175,7 +182,15 @@ pub struct ArchiveInfo {
     pub dirty: bool,
     pub source_mmap: Option<Arc<Mmap>>,
     pub last_export_folder: Option<PathBuf>,
+    /// Display-only: which header column the user clicked, used
+    /// to drive the legacy `archive.sort.column`/`direction` paths
+    /// in `view.rs`. Multi-key sorting is driven by
+    /// `sort_chain` directly.
     pub sort: SortState,
+    /// Multi-key sort configuration for this archive. Copied from
+    /// `Config::default_sort_chain` when the archive is opened, so
+    /// archives don't bleed sort state into each other.
+    pub sort_chain: SortChain,
     pub inspection_cache: std::collections::HashMap<usize, EntryInspection>,
     /// Cached decoded TXD textures per entry index.
     pub txd_cache: std::collections::HashMap<usize, Vec<DecodedTexture>>,
@@ -211,6 +226,7 @@ impl ArchiveInfo {
             source_mmap: None,
             last_export_folder: None,
             sort: SortState::default(),
+            sort_chain: SortChain::default(),
             inspection_cache: std::collections::HashMap::new(),
             txd_cache: std::collections::HashMap::new(),
             cached_file_types: None,
@@ -248,6 +264,7 @@ impl ArchiveInfo {
             source_mmap: None,
             last_export_folder: None,
             sort: SortState::default(),
+            sort_chain: SortChain::default(),
             inspection_cache: std::collections::HashMap::new(),
             txd_cache: std::collections::HashMap::new(),
             cached_file_types: None,
@@ -287,39 +304,33 @@ impl ArchiveInfo {
             .filter(|(_, e)| e.file_name_lower.contains(&filter))
             .collect();
 
-        matches.sort_by(|(_, a), (_, b)| match self.sort.column {
-            SortColumn::Name => {
-                let ord = a.file_name.cmp(&b.file_name);
-                if self.sort.direction == SortDirection::Descending {
-                    ord.reverse()
-                } else {
-                    ord
-                }
-            }
-            SortColumn::Type => {
-                let primary = if unique_types.is_empty() {
-                    CompactString::new("")
-                } else {
-                    unique_types[self.sort.type_index % unique_types.len()].clone()
-                };
-                let a_primary = a.file_type == primary;
-                let b_primary = b.file_type == primary;
-                let primary_ord = b_primary.cmp(&a_primary);
-                if primary_ord != std::cmp::Ordering::Equal {
-                    primary_ord
-                } else {
-                    a.file_name.cmp(&b.file_name)
-                }
-            }
-            SortColumn::Size => {
-                let ord = a.sector.cmp(&b.sector);
-                if self.sort.direction == SortDirection::Descending {
-                    ord.reverse()
-                } else {
-                    ord
-                }
-            }
-        });
+        // Build the IDE/COL sort context once per sort so the
+        // comparator can resolve labels for the entry names we're
+        // about to order. Without a resolved mapping the chain
+        // gracefully falls back to name sorting.
+        let primary_type = if self.sort.column == SortColumn::Type && !unique_types.is_empty() {
+            Some(
+                unique_types
+                    .get(self.sort.type_index % unique_types.len())
+                    .map(|s| s.as_str())
+                    .unwrap_or(""),
+            )
+        } else {
+            None
+        };
+        // We don't currently maintain per-entry IDE/COL maps in
+        // ArchiveInfo; the comparator falls through to name sort
+        // when the maps are empty, which is the safe default.
+        let sort_ctx = crate::sort::SortContext {
+            primary_type,
+            ..crate::sort::SortContext::empty()
+        };
+
+        // Use the multi-key chain for the actual ordering. The
+        // legacy single-column `sort` field is only used to drive
+        // the "primary type" bubble via `primary_type` above; the
+        // full chain takes over from there.
+        matches.sort_by(|(_, a), (_, b)| self.sort_chain.cmp(a, b, &sort_ctx));
 
         for (display_row, (entry_index, _)) in matches.into_iter().enumerate() {
             self.selected_lookup.insert(entry_index, display_row);
