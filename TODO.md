@@ -1,6 +1,6 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v3.5.0** (embedded 3D viewer round of fixes — Blender-style orbit, rotating view gizmo, AA grid floor, dimmed under-floor turntable). 153 tests passing.
+Last shipped: **v3.7.0** (archive workflow, session management, responsive background work, and expanded format support). 201 tests passing.
 
 Next phase: **supporting other game formats**.
 
