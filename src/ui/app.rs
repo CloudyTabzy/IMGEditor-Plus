@@ -27,8 +27,10 @@ use crate::ui::animator::Animator;
 use crate::ui::design::Design;
 use crate::ui::dialogs::{self, SaveArchiveChoice};
 use crate::ui::fonts;
+use crate::ui::icons;
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
 use crate::ui::theme::resolve_theme;
+use crate::ui::widgets as w;
 use crate::updater::{UpdateResult, UpdateState, check_updates_future};
 
 const REPO_URL: &str = "https://github.com/CloudyTabzy/IMGEditor-Plus";
@@ -2238,7 +2240,11 @@ impl App {
                 Message::OpenArchive,
             )),
             Item::with_menu(
-                menu_button("Open Recent".to_string(), Message::Noop),
+                menu_button_with_icon(
+                    "Open Recent".to_string(),
+                    icons::open_archive().size(16).into(),
+                    Message::Noop,
+                ),
                 recent_menu,
             ),
             Item::new(menu_button(
@@ -2386,11 +2392,20 @@ fn open_export_folder(path: &std::path::Path) {
 }
 
 fn menu_button<'a>(label: String, message: Message) -> Element<'a, Message> {
-    iced::widget::button(
+    menu_button_with_icon(label, menu_icon(&message), message)
+}
+
+fn menu_button_with_icon<'a>(
+    label: String,
+    icon: Element<'a, Message>,
+    message: Message,
+) -> Element<'a, Message> {
+    iced::widget::button(w::icon_label(
+        icon,
         fonts::body(label)
             .align_x(iced::alignment::Horizontal::Left)
             .width(iced::Length::Fill),
-    )
+    ))
     .on_press(message)
     .width(iced::Length::Fill)
     .style(|theme: &iced::Theme, status: iced::widget::button::Status| iced::widget::button::Style {
@@ -2406,6 +2421,28 @@ fn menu_button<'a>(label: String, message: Message) -> Element<'a, Message> {
             ..iced::widget::button::Style::default()
         })
         .into()
+}
+
+fn menu_icon(message: &Message) -> Element<'static, Message> {
+    let icon = match message {
+        Message::NewArchive => icons::new_archive(),
+        Message::OpenArchive | Message::OpenRecent(_) => icons::open_archive(),
+        Message::SaveArchive | Message::SaveArchiveAsResult(_) | Message::SaveArchiveAs => {
+            icons::save()
+        }
+        Message::CloseSelectedArchive => icons::close(),
+        Message::OpenSortManager => icons::sort(),
+        Message::ImportFiles => icons::import(),
+        Message::ExportAll | Message::ExportSelected => icons::export(),
+        Message::SelectAll => icons::check(),
+        Message::InvertSelection => icons::invert_selection(),
+        Message::DeleteSelected => icons::delete(),
+        Message::SetTheme(_) => icons::settings(),
+        Message::CheckUpdatesManual | Message::ShowAbout => icons::help(),
+        Message::VisitRepository => icons::external_viewer(),
+        _ => icons::generic_file(),
+    };
+    icon.size(16).into()
 }
 
 pub fn run_app(config: Config) -> iced::Result {

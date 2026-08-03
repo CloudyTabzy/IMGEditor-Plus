@@ -224,6 +224,20 @@ pub fn menubar_row<'a, Message: 'a>() -> Row<'a, Message> {
         .align_y(Alignment::Center)
 }
 
+/// Compose a compact icon and label while keeping alignment consistent across
+/// menus, context actions, and secondary controls.
+pub fn icon_label<'a, Message: 'a>(
+    icon: impl Into<Element<'a, Message>>,
+    label: impl Into<Element<'a, Message>>,
+) -> Row<'a, Message> {
+    Row::new()
+        .push(icon.into())
+        .push(Space::new().width(Length::Fixed(6.0)))
+        .push(label.into())
+        .spacing(0)
+        .align_y(Alignment::Center)
+}
+
 /// Build a styled `Column` for the root layout with no spacing.
 pub fn root_column<'a, Message: 'a>() -> Column<'a, Message> {
     Column::new().spacing(0).width(Length::Fill).height(Length::Fill)

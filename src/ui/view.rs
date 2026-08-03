@@ -3,8 +3,6 @@ use iced::widget::{
     mouse_area, pane_grid, progress_bar, rule, row, stack, text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length};
-use iced_fonts::lucide;
-
 use crate::archive::{ExportStatus, SortColumn};
 use crate::sort::SortDirection;
 
@@ -13,6 +11,7 @@ use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::ui::app::{App, EntryAction, InspectorTab, Message, Pane, ABOUT_TEXT};
 use crate::ui::fonts;
+use crate::ui::icons;
 use crate::ui::widgets as w;
 
 fn logo_element() -> Element<'static, Message> {
@@ -188,7 +187,7 @@ impl App {
             text_input("", &self.rename_buffer)
                 .on_input(Message::RenameInputChanged)
                 .on_submit(Message::CommitRename)
-                .width(Length::FillPortion(6))
+                .width(Length::Fill)
                 .into()
         } else {
             let label = if is_selected {
@@ -196,11 +195,17 @@ impl App {
             } else {
                 fonts::body(file_name)
             };
-            label.width(Length::FillPortion(6)).into()
+            label.width(Length::Fill).into()
         };
 
-        let row_content: Element<'_, Message> = row![
+        let name_cell = w::icon_label(
+            icons::file_type(&entry.file_name).size(16),
             name_widget,
+        )
+        .width(Length::FillPortion(6));
+
+        let row_content: Element<'_, Message> = row![
+            name_cell,
             if is_selected {
                 fonts::strong(file_type).width(Length::FillPortion(2))
             } else {
@@ -322,14 +327,20 @@ impl App {
         .width(Length::Fill);
 
         if in_use {
-            col = col.push(button(fonts::body("Cancel")).on_press(Message::CancelActive));
+            col = col.push(
+                button(w::icon_label(icons::close().size(14), fonts::body("Cancel")))
+                    .on_press(Message::CancelActive),
+            );
         }
 
         if let Some(_folder) = archive.last_export_folder.as_ref()
             && !in_use
         {
             col = col.push(
-                button(fonts::body("Open export folder"))
+                button(w::icon_label(
+                    icons::open_archive().size(14),
+                    fonts::body("Open export folder"),
+                ))
                     .on_press(Message::OpenLastExportFolder),
             );
         }
@@ -426,7 +437,7 @@ impl App {
         };
 
         let prompt: Element<'_, Message> = if !has_scene && is_nif {
-            button(fonts::body("Render NIF"))
+            button(w::icon_label(icons::model().size(14), fonts::body("Render NIF")))
                 .on_press(Message::EntryContextAction(EntryAction::Render))
                 .into()
         } else if !has_scene {
@@ -525,7 +536,11 @@ impl App {
         let Some(textures) = textures else {
             return column![
                 fonts::caption(format!("TXD {}.txd not yet decoded.", entry.file_name)),
-                button(fonts::body("Decode textures")).on_press(Message::TxdDecodeRequested),
+                button(w::icon_label(
+                    icons::texture().size(14),
+                    fonts::body("Decode textures"),
+                ))
+                .on_press(Message::TxdDecodeRequested),
             ]
             .spacing(4)
             .align_x(Alignment::Center)
@@ -547,10 +562,10 @@ impl App {
             .height(Length::Fill)
             .padding(8);
         col = col.push(
-            button(fonts::body(format!(
-                "Export textures ({})",
-                textures.len()
-            )))
+            button(w::icon_label(
+                icons::export().size(14),
+                fonts::body(format!("Export textures ({})", textures.len())),
+            ))
             .on_press(Message::TxdExportTextures),
         );
         if textures.len() > 1 {
@@ -601,10 +616,13 @@ impl App {
         let flags = self.viewer3d_handle.with(|i| i.flags);
         let button_height = Length::Fixed(28.0);
         let mut row = Row::new().spacing(4).padding(2);
-        row = row.push(fonts::caption("3D:"));
+        row = row.push(w::icon_label(icons::model().size(14), fonts::caption("3D:")));
         row = row.push(
             tooltip(
-                button(fonts::caption("Reset view"))
+                button(w::icon_label(
+                    icons::refresh().size(14),
+                    fonts::caption("Reset view"),
+                ))
                     .on_press(Message::Viewer3dReset)
                     .height(button_height),
                 fonts::caption("Re-fit the camera to the model. Shortcut: R"),
@@ -613,7 +631,7 @@ impl App {
         );
         row = row.push(
             tooltip(
-                button(fonts::caption("Clear"))
+                button(w::icon_label(icons::close().size(14), fonts::caption("Clear")))
                     .on_press(Message::Viewer3dClear)
                     .height(button_height),
                 fonts::caption("Drop the loaded scene"),
@@ -754,34 +772,34 @@ fn toolbar_button(
 fn build_toolbar(accent: Color, bg: Color) -> Element<'static, Message> {
     let toolbar = row![
         tooltip(
-            toolbar_button(lucide::file_plus().size(18).into(), Message::NewArchive),
+            toolbar_button(icons::new_archive().size(18).into(), Message::NewArchive),
             fonts::body("New"),
             tooltip::Position::Bottom,
         ),
         tooltip(
-            toolbar_button(lucide::folder_open().size(18).into(), Message::OpenArchive),
+            toolbar_button(icons::open_archive().size(18).into(), Message::OpenArchive),
             fonts::body("Open"),
             tooltip::Position::Bottom,
         ),
         tooltip(
-            toolbar_button(lucide::save().size(18).into(), Message::SaveArchive),
+            toolbar_button(icons::save().size(18).into(), Message::SaveArchive),
             fonts::body("Save"),
             tooltip::Position::Bottom,
         ),
         rule::vertical(1),
         tooltip(
-            toolbar_button(lucide::download().size(18).into(), Message::ImportFiles),
+            toolbar_button(icons::import().size(18).into(), Message::ImportFiles),
             fonts::body("Import"),
             tooltip::Position::Bottom,
         ),
         tooltip(
-            toolbar_button(lucide::upload().size(18).into(), Message::ExportSelected),
+            toolbar_button(icons::export().size(18).into(), Message::ExportSelected),
             fonts::body("Export selected"),
             tooltip::Position::Bottom,
         ),
         rule::vertical(1),
         tooltip(
-            toolbar_button(lucide::trash_two().size(18).into(), Message::DeleteSelected),
+            toolbar_button(icons::delete().size(18).into(), Message::DeleteSelected),
             fonts::body("Delete selected"),
             tooltip::Position::Bottom,
         ),
@@ -808,6 +826,8 @@ fn build_toolbar(accent: Color, bg: Color) -> Element<'static, Message> {
 
 pub fn build(app: &App) -> Element<'_, Message> {
     let design = app.design();
+    let tab_surface = design.surface_subtle();
+    let empty_state_accent = design.accent();
     let menubar = app.menubar();
     let toolbar = build_toolbar(design.accent(), design.surface_subtle());
 
@@ -841,7 +861,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         }
         let row = Row::with_children(tab_rows).spacing(4).padding(4);
         Container::new(row).style(move |_| iced::widget::container::Style {
-            background: Some(iced::Background::Color(design.surface_subtle())),
+            background: Some(iced::Background::Color(tab_surface)),
             ..Default::default()
         }).into()
     };
@@ -850,6 +870,8 @@ pub fn build(app: &App) -> Element<'_, Message> {
         Container::new(
             column![
                 Space::new().height(Length::Fill),
+                icons::archive().size(42).color(empty_state_accent),
+                Space::new().height(Length::Fixed(8.0)),
                 fonts::display("Open or create an archive to get started."),
                 Space::new().height(Length::Fixed(8.0)),
                 fonts::caption("Or drag and drop an .img file here to open it."),
@@ -862,7 +884,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         .into()
     } else {
         let search = row![
-            fonts::header("Search:"),
+            w::icon_label(icons::search().size(15), fonts::header("Search:")),
             text_input("", &app.search)
                 .on_input(Message::SearchChanged)
                 .width(Length::Fill),
@@ -1277,14 +1299,32 @@ fn build_autoscroll_indicator() -> Element<'static, Message> {
 }
 
 fn context_button(label: &str, message: Message) -> iced::widget::Button<'_, Message> {
-    button(
+    button(w::icon_label(
+        context_icon(&message),
         fonts::body(label)
             .align_x(iced::alignment::Horizontal::Left)
             .width(Length::Fill),
-    )
+    ))
     .on_press(message)
     .width(Length::Fill)
     .style(crate::ui::view::menu_button_style)
+}
+
+fn context_icon(message: &Message) -> Element<'static, Message> {
+    let icon = match message {
+        Message::EntryContextAction(action) => match action {
+            EntryAction::CopyName => icons::copy(),
+            EntryAction::Rename => icons::rename(),
+            EntryAction::Delete => icons::delete(),
+            EntryAction::Export => icons::export(),
+            EntryAction::Render => icons::model(),
+            EntryAction::RenderExternal => icons::external_viewer(),
+            EntryAction::ViewTextures => icons::texture(),
+            EntryAction::ExportEmbeddedTextures => icons::export(),
+        },
+        _ => icons::generic_file(),
+    };
+    icon.size(16).into()
 }
 
 fn label_value(label: &str, value: String) -> Element<'_, Message> {
@@ -1306,7 +1346,10 @@ fn label_value_owned(label: &str, value: String) -> Element<'_, Message> {
 }
 
 fn copy_button(label: &str, message: Message) -> Element<'_, Message> {
-    button(fonts::caption(label).align_x(iced::alignment::Horizontal::Center))
+    button(w::icon_label(
+        icons::copy().size(13),
+        fonts::caption(label).align_x(iced::alignment::Horizontal::Center),
+    ))
         .on_press(message)
         .width(Length::Shrink)
         .style(menu_button_style)

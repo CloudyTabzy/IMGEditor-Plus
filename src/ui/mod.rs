@@ -5,6 +5,7 @@ pub mod dialogs;
 pub mod drag;
 pub mod easing;
 pub mod fonts;
+pub mod icons;
 pub mod keymap;
 pub mod sort_manager;
 pub mod theme;
