@@ -23,11 +23,15 @@
 //! owned here and rebuilt only when the scene changes or the viewport
 //! resizes.
 
+use std::sync::{Arc, Mutex};
+
 use bytemuck::{Pod, Zeroable};
 
 use crate::inspector::scene3d::camera::OrbitCamera;
 use crate::inspector::scene3d::mesh::{SceneMesh, SceneTexture, VERTEX_STRIDE};
-use crate::inspector::scene3d::scene::Scene;
+use crate::inspector::scene3d::scene::{
+    MAX_VIEWPORT_PIXELS, Scene, validate_scene_data,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
@@ -227,6 +231,7 @@ impl GpuTexture {
         queue: &wgpu::Queue,
         tex: &SceneTexture,
         layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
     ) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("imgeditor-scene3d/diffuse"),
@@ -273,7 +278,7 @@ impl GpuTexture {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&default_sampler(device)),
+                        resource: wgpu::BindingResource::Sampler(sampler),
                     },
                 ],
             },
@@ -289,6 +294,7 @@ impl GpuTexture {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
     ) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("imgeditor-scene3d/diffuse_default"),
@@ -335,7 +341,7 @@ impl GpuTexture {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&default_sampler(device)),
+                        resource: wgpu::BindingResource::Sampler(sampler),
                     },
                 ],
             },
@@ -371,6 +377,7 @@ pub struct ScenePipelines {
     pub camera_layout: wgpu::BindGroupLayout,
     pub texture_layout: wgpu::BindGroupLayout,
     pub compositor_layout: wgpu::BindGroupLayout,
+    pub texture_sampler: wgpu::Sampler,
     pub compositor_sampler: wgpu::Sampler,
     pub camera_buffer: wgpu::Buffer,
     pub camera_bind_group: wgpu::BindGroup,
@@ -563,7 +570,13 @@ impl ScenePipelines {
             }],
         });
 
-        let default_diffuse = GpuTexture::default_white(device, queue, &texture_layout);
+        let texture_sampler = default_sampler(device);
+        let default_diffuse = GpuTexture::default_white(
+            device,
+            queue,
+            &texture_layout,
+            &texture_sampler,
+        );
 
         let compositor_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("imgeditor-scene3d/compositor_sampler"),
@@ -701,6 +714,7 @@ impl ScenePipelines {
             camera_layout,
             texture_layout,
             compositor_layout,
+            texture_sampler,
             compositor_sampler,
             camera_buffer,
             camera_bind_group,
@@ -763,6 +777,94 @@ impl ScenePipelines {
         self.scene_color_view = Some(view);
         self.compositor_bind_group = Some(bind_group);
     }
+
+    pub fn release_scene_color(&mut self) {
+        self.compositor_bind_group = None;
+        self.scene_color_view = None;
+        self.scene_color_tex = None;
+    }
+}
+
+/// Validate scene data against both the CPU-side safety policy and the
+/// actual limits negotiated for this device.
+pub fn validate_scene_for_device(
+    device: &wgpu::Device,
+    scene: &Scene,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    validate_scene_data(scene)?;
+    let limits = device.limits();
+    if width == 0 || height == 0 {
+        return Err("3D viewer received a zero-sized viewport".to_string());
+    }
+    let pixels = (width as u64)
+        .checked_mul(height as u64)
+        .ok_or_else(|| "3D viewport size overflowed".to_string())?;
+    if pixels > MAX_VIEWPORT_PIXELS {
+        return Err(format!(
+            "3D viewport is {}x{}; the viewer limit is {} pixels",
+            width, height, MAX_VIEWPORT_PIXELS
+        ));
+    }
+    if width > limits.max_texture_dimension_2d || height > limits.max_texture_dimension_2d {
+        return Err(format!(
+            "3D viewport is {}x{} but this GPU supports textures up to {}x{}",
+            width, height, limits.max_texture_dimension_2d, limits.max_texture_dimension_2d
+        ));
+    }
+    for mesh in &scene.meshes {
+        if let Some(texture) = &mesh.diffuse
+            && (texture.width > limits.max_texture_dimension_2d
+                || texture.height > limits.max_texture_dimension_2d)
+        {
+            return Err(format!(
+                "mesh '{}' texture is {}x{} but this GPU supports textures up to {}x{}",
+                mesh.name,
+                texture.width,
+                texture.height,
+                limits.max_texture_dimension_2d,
+                limits.max_texture_dimension_2d
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn record_gpu_error(slot: &Mutex<Option<String>>, message: String) {
+    log::error!(target: "imgeditor.scene3d", "GPU viewer error: {message}");
+    if let Ok(mut current) = slot.lock()
+        && current.is_none()
+    {
+        *current = Some(message);
+    }
+}
+
+pub(crate) fn register_gpu_error_handlers(
+    device: &wgpu::Device,
+) -> Arc<Mutex<Option<String>>> {
+    let slot = Arc::new(Mutex::new(None));
+    let uncaptured_slot = Arc::clone(&slot);
+    device.on_uncaptured_error(Arc::new(move |error| {
+        let message = match &error {
+            wgpu::Error::OutOfMemory { .. } => "GPU ran out of memory".to_string(),
+            wgpu::Error::Validation { description, .. } => {
+                format!("GPU validation error: {description}")
+            }
+            wgpu::Error::Internal { description, .. } => {
+                format!("GPU internal error: {description}")
+            }
+        };
+        record_gpu_error(&uncaptured_slot, message);
+    }));
+    let lost_slot = Arc::clone(&slot);
+    device.set_device_lost_callback(move |reason, message| {
+        record_gpu_error(
+            &lost_slot,
+            format!("GPU device lost ({reason:?}): {message}"),
+        );
+    });
+    slot
 }
 
 fn build_lit_pipeline(

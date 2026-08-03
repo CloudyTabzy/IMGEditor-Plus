@@ -42,10 +42,18 @@ impl HeadlessRenderer {
             ..Default::default()
         }))
         .map_err(|e| format!("adapter request failed: {e}"))?;
+        let required_features = if adapter
+            .features()
+            .contains(wgpu::Features::POLYGON_MODE_LINE)
+        {
+            wgpu::Features::POLYGON_MODE_LINE
+        } else {
+            wgpu::Features::empty()
+        };
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("imgeditor-scene3d-headless"),
-                required_features: wgpu::Features::POLYGON_MODE_LINE,
+                required_features,
                 required_limits: wgpu::Limits::downlevel_defaults(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::Performance,
@@ -95,6 +103,19 @@ pub struct RenderedFrame {
         if width == 0 || height == 0 {
             return Err("zero-area render".into());
         }
+        pipeline::validate_scene_for_device(device, scene, width, height)?;
+        let unpadded_bytes_per_row = width
+            .checked_mul(4)
+            .ok_or_else(|| "readback row size overflowed".to_string())?;
+        let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = unpadded_bytes_per_row
+            .checked_add(alignment - 1)
+            .ok_or_else(|| "aligned readback row size overflowed".to_string())?
+            / alignment
+            * alignment;
+        let readback_size = (padded_bytes_per_row as u64)
+            .checked_mul(height as u64)
+            .ok_or_else(|| "readback buffer size overflowed".to_string())?;
 
         let color_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("imgeditor-scene3d-headless/color"),
@@ -115,7 +136,7 @@ pub struct RenderedFrame {
 
         let read_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("imgeditor-scene3d-headless/readback"),
-            size: (width as u64) * (height as u64) * 4,
+            size: readback_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -137,7 +158,15 @@ pub struct RenderedFrame {
             let tex = mesh
                 .diffuse
                 .as_ref()
-                .map(|t| GpuTexture::from_scene_texture(device, queue, t, &pipelines.texture_layout));
+                .map(|t| {
+                    GpuTexture::from_scene_texture(
+                        device,
+                        queue,
+                        t,
+                        &pipelines.texture_layout,
+                        &pipelines.texture_sampler,
+                    )
+                });
             mesh_gpus.push((gpu, tex));
         }
 
@@ -224,29 +253,7 @@ pub struct RenderedFrame {
             buffer: &read_buf,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &color_tex,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &read_buf,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 4),
+                bytes_per_row: Some(padded_bytes_per_row),
                 rows_per_image: Some(height),
             },
         },
@@ -267,7 +274,12 @@ pub struct RenderedFrame {
     });
 
     let mapped = slice.get_mapped_range();
-    let rgba: Vec<u8> = mapped.to_vec();
+    let row_size = unpadded_bytes_per_row as usize;
+    let padded_row_size = padded_bytes_per_row as usize;
+    let mut rgba = Vec::with_capacity(row_size * height as usize);
+    for row in mapped.chunks(padded_row_size).take(height as usize) {
+        rgba.extend_from_slice(&row[..row_size]);
+    }
     drop(mapped);
     read_buf.unmap();
 
@@ -356,6 +368,19 @@ mod tests {
         let meta = std::fs::metadata(&tmp).unwrap();
         assert!(meta.len() > 100);
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn readback_strips_alignment_padding() {
+        let renderer = HeadlessRenderer::new().expect("renderer");
+        let scene = triangle_scene();
+        let camera = OrbitCamera::new(Viewport {
+            width: 17,
+            height: 9,
+        });
+        let frame = render_frame(&renderer, &scene, &camera, 17, 9, RenderFlags::empty())
+            .expect("unaligned render");
+        assert_eq!(frame.rgba.len(), 17 * 9 * 4);
     }
 
     #[test]
@@ -667,7 +692,13 @@ mod tests {
             .map(|m| {
                 let gpu = GpuMesh::from_scene_mesh(device, queue, m);
                 let tex = m.diffuse.as_ref().map(|t| {
-                    GpuTexture::from_scene_texture(device, queue, t, &pipelines.texture_layout)
+                    GpuTexture::from_scene_texture(
+                        device,
+                        queue,
+                        t,
+                        &pipelines.texture_layout,
+                        &pipelines.texture_sampler,
+                    )
                 });
                 (gpu, tex)
             })

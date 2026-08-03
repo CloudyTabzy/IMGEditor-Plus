@@ -43,7 +43,7 @@ use iced_widget::renderer::wgpu::primitive::{self, Pipeline as PrimitivePipeline
 use crate::inspector::scene3d::camera::OrbitCamera;
 use crate::inspector::scene3d::pipeline::{
     GpuMesh, GpuTexture, RenderFlags, ScenePipelines, create_depth_texture,
-    effective_texture_flag,
+    effective_texture_flag, register_gpu_error_handlers, validate_scene_for_device,
 };
 use crate::inspector::scene3d::scene::Scene;
 
@@ -51,6 +51,10 @@ const ORBIT_SENSITIVITY: f32 = 0.010;
 const PAN_SENSITIVITY: f32 = 0.0012;
 const WHEEL_ZOOM_PER_PIXEL: f32 = 0.0015;
 const WHEEL_ZOOM_PER_LINE: f32 = 0.06;
+
+fn resource_cache_flags(flags: RenderFlags) -> u32 {
+    flags.intersection(RenderFlags::HAS_TEXTURE).bits()
+}
 
 #[derive(Debug, Default)]
 pub struct SceneHandle {
@@ -63,6 +67,7 @@ pub struct SceneHandleInner {
     pub camera: OrbitCamera,
     pub flags: RenderFlags,
     pub dirty: bool,
+    pub gpu_error: Option<String>,
 }
 
 impl SceneHandle {
@@ -74,12 +79,14 @@ impl SceneHandle {
         let mut inner = self.inner.lock().expect("scene handle mutex");
         inner.camera.reset_to_aabb(&scene.aabb);
         inner.scene = Some(Arc::new(scene));
+        inner.gpu_error = None;
         inner.dirty = true;
     }
 
     pub fn clear(&self) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
         inner.scene = None;
+        inner.gpu_error = None;
         inner.dirty = true;
     }
 
@@ -122,6 +129,14 @@ impl SceneHandle {
     pub(crate) fn with_mut<R>(&self, f: impl FnOnce(&mut SceneHandleInner) -> R) -> R {
         let mut inner = self.inner.lock().expect("scene handle mutex");
         f(&mut inner)
+    }
+
+    pub(crate) fn set_gpu_error(&self, message: String) {
+        self.with_mut(|inner| inner.gpu_error = Some(message));
+    }
+
+    pub(crate) fn clear_gpu_error(&self) {
+        self.with_mut(|inner| inner.gpu_error = None);
     }
 }
 
@@ -394,6 +409,7 @@ impl primitive::Primitive for ScenePrimitive {
         let scale = viewport.scale_factor();
         let width = ((bounds.width * scale).round() as u32).max(1);
         let height = ((bounds.height * scale).round() as u32).max(1);
+        pipeline.prepared_this_frame = true;
         pipeline.record_last_viewport(width, height);
         pipeline.record_widget_rect(
             bounds.x * scale,
@@ -410,12 +426,31 @@ impl primitive::Primitive for ScenePrimitive {
                 height,
             });
             (inner.scene.clone(), true)
-        }) else { return };
+        }) else {
+            pipeline.release_scene_resources();
+            return;
+        };
         let _ = cam_updated;
+        if let Some(error) = pipeline.gpu_error() {
+            self.handle.set_gpu_error(error);
+            pipeline.release_scene_resources();
+            return;
+        }
+        if let Err(error) = validate_scene_for_device(device, &scene, width, height) {
+            self.handle.set_gpu_error(error);
+            pipeline.release_scene_resources();
+            return;
+        }
+        self.handle.clear_gpu_error();
         pipeline.ensure_size(device, width, height);
         pipeline.ensure_offscreen(device, width, height);
         let (camera, flags) = self.handle.with(|i| (i.camera.clone(), i.flags));
         pipeline.upload_if_changed(device, queue, &scene, &camera, flags);
+        let _ = device.poll(wgpu::PollType::Poll);
+        if let Some(error) = pipeline.gpu_error() {
+            self.handle.set_gpu_error(error);
+            pipeline.release_scene_resources();
+        }
     }
 
     fn draw(
@@ -438,9 +473,12 @@ impl primitive::Primitive for ScenePrimitive {
         target: &wgpu::TextureView,
         clip_bounds: &Rectangle<u32>,
     ) {
-        let (scene, camera, flags) = self.handle.with(|i| {
-            (i.scene.clone(), i.camera.clone(), i.flags)
+        let (scene, camera, flags, gpu_error) = self.handle.with(|i| {
+            (i.scene.clone(), i.camera.clone(), i.flags, i.gpu_error.is_some())
         });
+        if gpu_error || pipeline.gpu_error().is_some() {
+            return;
+        }
         let Some(scene) = scene else { return };
         // First pass: render the model into the offscreen color target.
         pipeline.render_to_offscreen(encoder, &scene, &camera, flags);
@@ -472,6 +510,8 @@ pub struct ScenePipeline {
     pub cached_signature: u64,
     pub cached_flags_bits: u32,
     pub mesh_cache: Vec<(GpuMesh, Option<GpuTexture>)>,
+    pub prepared_this_frame: bool,
+    gpu_error: Arc<Mutex<Option<String>>>,
 }
 
 impl ScenePipeline {
@@ -507,12 +547,17 @@ impl ScenePipeline {
         camera: &OrbitCamera,
         flags: RenderFlags,
     ) {
-        let signature = scene_signature(scene);
         let scene_ptr = scene as *const Scene as usize;
         let eff_flags = effective_texture_flag(scene, flags);
+        let signature = if scene_ptr == self.cached_scene_ptr {
+            self.cached_signature
+        } else {
+            scene_signature(scene)
+        };
+        let resource_flags = resource_cache_flags(eff_flags);
         if scene_ptr == self.cached_scene_ptr
             && signature == self.cached_signature
-            && eff_flags.bits() == self.cached_flags_bits
+            && resource_flags == self.cached_flags_bits
         {
             self.render_pipelines.update_camera(
                 queue,
@@ -525,12 +570,18 @@ impl ScenePipeline {
         }
         self.cached_scene_ptr = scene_ptr;
         self.cached_signature = signature;
-        self.cached_flags_bits = eff_flags.bits();
+        self.cached_flags_bits = resource_flags;
         self.mesh_cache.clear();
         for mesh in &scene.meshes {
             let gpu = GpuMesh::from_scene_mesh(device, queue, mesh);
             let tex = mesh.diffuse.as_ref().map(|t| {
-                GpuTexture::from_scene_texture(device, queue, t, &self.render_pipelines.texture_layout)
+                GpuTexture::from_scene_texture(
+                    device,
+                    queue,
+                    t,
+                    &self.render_pipelines.texture_layout,
+                    &self.render_pipelines.texture_sampler,
+                )
             });
             self.mesh_cache.push((gpu, tex));
         }
@@ -541,6 +592,22 @@ impl ScenePipeline {
             scene.ambient,
             eff_flags,
         );
+    }
+
+    fn release_scene_resources(&mut self) {
+        self.mesh_cache.clear();
+        self.cached_signature = 0;
+        self.cached_scene_ptr = 0;
+        self.cached_flags_bits = u32::MAX;
+        self.depth_view = None;
+        self.depth_tex = None;
+        self.width = 0;
+        self.height = 0;
+        self.render_pipelines.release_scene_color();
+    }
+
+    fn gpu_error(&self) -> Option<String> {
+        self.gpu_error.lock().ok().and_then(|error| error.clone())
     }
 
     /// Render the 3D model into the offscreen color target + depth target.
@@ -745,14 +812,21 @@ impl PrimitivePipeline for ScenePipeline {
             cached_signature: 0,
             cached_flags_bits: 0,
             mesh_cache: Vec::new(),
+            prepared_this_frame: false,
+            gpu_error: register_gpu_error_handlers(device),
         }
     }
 
     fn trim(&mut self) {
-        self.mesh_cache.clear();
-        self.cached_signature = 0;
-        self.cached_scene_ptr = 0;
-        self.cached_flags_bits = u32::MAX;
+        // Iced calls `trim` at the end of every frame. It is a primitive
+        // storage lifecycle hook, not a request to discard resources that
+        // are still used by the next frame. Rebuilding here caused all NIF
+        // buffers and textures to churn every frame and was the primary OOM
+        // trigger for large scenes.
+        if !self.prepared_this_frame {
+            self.release_scene_resources();
+        }
+        self.prepared_this_frame = false;
     }
 }
 
@@ -837,6 +911,18 @@ mod tests {
     }
 
     #[test]
+    fn gpu_error_can_be_cleared_for_retry() {
+        let h = SceneHandle::new();
+        h.set_gpu_error("test GPU failure".into());
+        assert_eq!(
+            h.with(|i| i.gpu_error.clone()),
+            Some("test GPU failure".to_string())
+        );
+        h.clear_gpu_error();
+        assert!(h.with(|i| i.gpu_error.is_none()));
+    }
+
+    #[test]
     fn scene_signature_changes_with_geometry() {
         let a = Scene {
             meshes: vec![],
@@ -858,6 +944,19 @@ mod tests {
             aabb: crate::inspector::scene3d::mesh::Aabb::default(),
         });
         assert_ne!(scene_signature(&a), scene_signature(&b));
+    }
+
+    #[test]
+    fn raster_flags_do_not_invalidate_gpu_resource_cache() {
+        let textured = RenderFlags::HAS_TEXTURE;
+        assert_eq!(
+            resource_cache_flags(textured),
+            resource_cache_flags(textured | RenderFlags::WIREFRAME | RenderFlags::CULL_BACK)
+        );
+        assert_ne!(
+            resource_cache_flags(RenderFlags::empty()),
+            resource_cache_flags(RenderFlags::HAS_TEXTURE)
+        );
     }
 
     #[test]

@@ -419,11 +419,32 @@ impl App {
         let has_scene = self
             .viewer3d_handle
             .with(|inner| inner.scene.is_some());
+        let gpu_error = self
+            .viewer3d_handle
+            .with(|inner| inner.gpu_error.clone());
 
         let toolbar = self.build_viewer3d_toolbar(is_nif);
         let stats = self.build_viewer3d_stats();
 
-        let body: Element<'_, Message> = if has_scene || is_nif {
+        let body: Element<'_, Message> = if let Some(error) = gpu_error {
+            container(
+                column![
+                    fonts::header("GPU viewer unavailable"),
+                    fonts::caption(error),
+                    fonts::caption("Try clearing the preview or selecting a smaller model."),
+                    button(fonts::body("Clear viewer error"))
+                        .on_press(Message::Viewer3dClear),
+                ]
+                .spacing(8)
+                .align_x(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .padding(16)
+            .into()
+        } else if has_scene || is_nif {
             let widget = crate::ui::viewer3d_widget::Scene3dWidget::new(
                 self.viewer3d_handle.clone(),
             );
