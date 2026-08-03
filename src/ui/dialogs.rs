@@ -54,6 +54,25 @@ pub fn import_files() -> Task<Vec<PathBuf>> {
     )
 }
 
+#[cfg(feature = "native-dialogs")]
+pub fn import_folder() -> Task<Option<PathBuf>> {
+    Task::perform(
+        async {
+            rfd::AsyncFileDialog::new()
+                .set_title("Select folder to import")
+                .pick_folder()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        },
+        |folder| folder,
+    )
+}
+
+#[cfg(not(feature = "native-dialogs"))]
+pub fn import_folder() -> Task<Option<PathBuf>> {
+    Task::none()
+}
+
 #[cfg(not(feature = "native-dialogs"))]
 pub fn import_files() -> Task<Vec<PathBuf>> {
     Task::none()

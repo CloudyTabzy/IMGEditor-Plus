@@ -36,6 +36,12 @@ pub enum ImgVersion {
     Unknown,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportEntryResult {
+    Imported,
+    Skipped { reason: String },
+}
+
 pub fn detect_version(path: &Path) -> ImgVersion {
     if PcV1Parser.is_valid(path) {
         ImgVersion::One
@@ -246,14 +252,25 @@ pub fn export_entry_to_file(
 }
 
 pub fn import_entry(archive: &mut ArchiveInfo, path: &Path, replace: bool) -> anyhow::Result<()> {
+    import_entry_with_result(archive, path, replace).map(|_| ())
+}
+
+pub fn import_entry_with_result(
+    archive: &mut ArchiveInfo,
+    path: &Path,
+    replace: bool,
+) -> anyhow::Result<ImportEntryResult> {
     if path.extension().is_none() {
-        return Ok(());
+        return Ok(ImportEntryResult::Skipped {
+            reason: "file has no extension".to_string(),
+        });
     }
 
     let metadata = std::fs::metadata(path)?;
     if !metadata.is_file() {
-        archive.add_log(format!("Skipping {}. Not a regular file.", path.display()));
-        return Ok(());
+        let reason = "Not a regular file".to_string();
+        archive.add_log(format!("Skipping {}. {reason}.", path.display()));
+        return Ok(ImportEntryResult::Skipped { reason });
     }
 
     let file_name = path
@@ -262,8 +279,9 @@ pub fn import_entry(archive: &mut ArchiveInfo, path: &Path, replace: bool) -> an
         .ok_or_else(|| anyhow::anyhow!("import path is not valid UTF-8"))?;
 
     if file_name.chars().count() > MAX_ENTRY_NAME_LEN {
-        archive.add_log(format!("Skipping {file_name}. Name too large."));
-        return Ok(());
+        let reason = format!("name exceeds {MAX_ENTRY_NAME_LEN} characters");
+        archive.add_log(format!("Skipping {file_name}. {reason}."));
+        return Ok(ImportEntryResult::Skipped { reason });
     }
 
     if replace {
@@ -278,7 +296,7 @@ pub fn import_entry(archive: &mut ArchiveInfo, path: &Path, replace: bool) -> an
     entry.imported = true;
     entry.sector = (sector_rounded_size(byte_len) / SECTOR_SIZE) as u32;
     archive.entries.push(entry);
-    Ok(())
+    Ok(ImportEntryResult::Imported)
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -7,7 +8,10 @@ use compact_str::CompactString;
 use rayon::prelude::*;
 
 use crate::archive::{ArchiveInfo, EntryInfo, PackStats, ProgressInfo};
-use crate::parser::{ImgParser, ImgVersion, PcV1Parser, PcV2Parser, SECTOR_SIZE, unique_output_path};
+use crate::parser::{
+    ImgParser, ImgVersion, ImportEntryResult, PcV1Parser, PcV2Parser, SECTOR_SIZE,
+    import_entry_with_result, unique_output_path,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ExportMode {
@@ -82,6 +86,112 @@ impl SaveTask {
 }
 
 #[derive(Debug, Clone)]
+pub struct FolderImportPlan {
+    pub folder: PathBuf,
+    pub files: Vec<PathBuf>,
+    pub scan_skipped: Vec<String>,
+    pub duplicate_count: usize,
+    pub total_bytes: u64,
+    pub target_archive_name: String,
+    pub target_archive_path: Option<PathBuf>,
+}
+
+impl FolderImportPlan {
+    pub fn discovered_count(&self) -> usize {
+        self.files.len() + self.scan_skipped.len()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderDuplicatePolicy {
+    Skip,
+    Replace,
+}
+
+#[derive(Debug, Clone)]
+pub struct FolderImportSummary {
+    pub discovered: usize,
+    pub imported: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub cancelled: bool,
+    pub details: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FolderImportOutcome {
+    pub archive: ArchiveInfo,
+    pub summary: FolderImportSummary,
+    pub target_archive_name: String,
+    pub target_archive_path: Option<PathBuf>,
+}
+
+pub fn scan_import_folder(folder: &Path, archive: &ArchiveInfo) -> anyhow::Result<FolderImportPlan> {
+    let mut files = Vec::new();
+    let mut scan_skipped = Vec::new();
+    let mut total_bytes = 0_u64;
+
+    for item in std::fs::read_dir(folder)? {
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => {
+                scan_skipped.push(format!("directory entry: {error}"));
+                continue;
+            }
+        };
+        let path = item.path();
+        let metadata = match item.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                scan_skipped.push(format!("{}: {error}", path.display()));
+                continue;
+            }
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+
+        total_bytes = total_bytes
+            .checked_add(metadata.len())
+            .ok_or_else(|| anyhow::anyhow!("folder contents are too large"))?;
+        files.push(path);
+    }
+
+    files.sort_by_cached_key(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default()
+    });
+
+    let existing_names: HashSet<String> = archive
+        .entries
+        .iter()
+        .map(|entry| entry.file_name.to_string().to_ascii_lowercase())
+        .collect();
+    let mut seen_names = HashSet::new();
+    let duplicate_count = files
+        .iter()
+        .filter(|path| {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            !seen_names.insert(name.clone()) || existing_names.contains(&name)
+        })
+        .count();
+
+    Ok(FolderImportPlan {
+        folder: folder.to_path_buf(),
+        files,
+        scan_skipped,
+        duplicate_count,
+        total_bytes,
+        target_archive_name: archive.file_name.clone(),
+        target_archive_path: archive.path.clone(),
+    })
+}
+
+#[derive(Debug, Clone)]
 pub struct PackOutcome {
     pub archive: ArchiveInfo,
     pub stats: PackStats,
@@ -120,6 +230,120 @@ impl PackTask {
         ));
 
         Ok(PackOutcome { archive, stats })
+    }
+}
+
+#[derive(Debug)]
+pub struct FolderImportTask {
+    pub archive: ArchiveInfo,
+    pub plan: FolderImportPlan,
+    pub duplicate_policy: FolderDuplicatePolicy,
+}
+
+impl FolderImportTask {
+    pub fn new(
+        archive: ArchiveInfo,
+        plan: FolderImportPlan,
+        duplicate_policy: FolderDuplicatePolicy,
+    ) -> Self {
+        Self {
+            archive,
+            plan,
+            duplicate_policy,
+        }
+    }
+
+    pub async fn run(self) -> anyhow::Result<FolderImportOutcome> {
+        self.run_blocking()
+    }
+
+    pub fn run_blocking(self) -> anyhow::Result<FolderImportOutcome> {
+        let FolderImportTask {
+            mut archive,
+            plan,
+            duplicate_policy,
+        } = self;
+        let progress = archive.progress.clone();
+        progress.start();
+
+        let mut summary = FolderImportSummary {
+            discovered: plan.discovered_count(),
+            imported: 0,
+            skipped: plan.scan_skipped.len(),
+            failed: 0,
+            cancelled: false,
+            details: plan.scan_skipped.clone(),
+        };
+        let mut seen_names: HashSet<String> = archive
+            .entries
+            .iter()
+            .map(|entry| entry.file_name.to_string().to_ascii_lowercase())
+            .collect();
+
+        for (index, path) in plan.files.iter().enumerate() {
+            if progress.is_cancelled() {
+                summary.cancelled = true;
+                summary.skipped += plan.files.len() - index;
+                push_import_detail(&mut summary, "Import cancelled; remaining files were skipped.");
+                break;
+            }
+
+            let display_name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            let key = display_name.to_ascii_lowercase();
+            let duplicate = !seen_names.insert(key);
+
+            if duplicate && duplicate_policy == FolderDuplicatePolicy::Skip {
+                summary.skipped += 1;
+                push_import_detail(&mut summary, format!("{display_name}: duplicate skipped"));
+            } else {
+                let replace = duplicate && duplicate_policy == FolderDuplicatePolicy::Replace;
+                match import_entry_with_result(&mut archive, path, replace) {
+                    Ok(ImportEntryResult::Imported) => summary.imported += 1,
+                    Ok(ImportEntryResult::Skipped { reason }) => {
+                        summary.skipped += 1;
+                        push_import_detail(&mut summary, format!("{display_name}: {reason}"));
+                    }
+                    Err(error) => {
+                        summary.failed += 1;
+                        push_import_detail(&mut summary, format!("{display_name}: {error}"));
+                    }
+                }
+            }
+
+            progress.set_percentage((index + 1) as f32 / plan.files.len().max(1) as f32);
+        }
+
+        if summary.imported > 0 {
+            archive.dirty = true;
+            archive.invalidate_entry_caches();
+        }
+        archive.add_log(format!(
+            "Folder import: {} imported, {} skipped, {} failed",
+            summary.imported, summary.skipped, summary.failed
+        ));
+        for detail in &summary.details {
+            archive.add_log(format!("Folder import detail: {detail}"));
+        }
+        archive.update_search = true;
+        progress.finish();
+
+        Ok(FolderImportOutcome {
+            archive,
+            summary,
+            target_archive_name: plan.target_archive_name,
+            target_archive_path: plan.target_archive_path,
+        })
+    }
+}
+
+const MAX_IMPORT_DETAILS: usize = 12;
+
+fn push_import_detail(summary: &mut FolderImportSummary, detail: impl Into<String>) {
+    if summary.details.len() < MAX_IMPORT_DETAILS {
+        summary.details.push(detail.into());
     }
 }
 
@@ -478,5 +702,78 @@ mod tests {
         assert_eq!(packed.entries[1].offset, 1537);
         assert_eq!(read_entry_data(&packed, &packed.entries[0]).unwrap()[0], b'A');
         assert_eq!(read_entry_data(&packed, &packed.entries[1]).unwrap()[0], b'B');
+    }
+
+    #[test]
+    fn folder_scan_is_top_level_and_detects_duplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("existing.dff"), b"existing").unwrap();
+        std::fs::write(dir.path().join("new.txd"), b"new").unwrap();
+        std::fs::write(dir.path().join("README"), b"ignored by importer").unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("nested.dff"), b"nested").unwrap();
+
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("existing.dff"));
+        let plan = scan_import_folder(dir.path(), &archive).unwrap();
+
+        assert_eq!(plan.files.len(), 3);
+        assert_eq!(plan.duplicate_count, 1);
+        assert_eq!(plan.scan_skipped.len(), 0);
+        assert_eq!(plan.discovered_count(), 3);
+        assert!(plan.files.iter().all(|path| path.parent() == Some(dir.path())));
+    }
+
+    #[test]
+    fn folder_import_skip_policy_reports_skips_and_imports() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("existing.dff"), b"replacement").unwrap();
+        std::fs::write(dir.path().join("new.txd"), b"new").unwrap();
+        std::fs::write(dir.path().join("README"), b"no extension").unwrap();
+
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("existing.dff"));
+        let plan = scan_import_folder(dir.path(), &archive).unwrap();
+        let outcome = FolderImportTask::new(archive, plan, FolderDuplicatePolicy::Skip)
+            .run_blocking()
+            .unwrap();
+
+        assert_eq!(outcome.summary.discovered, 3);
+        assert_eq!(outcome.summary.imported, 1);
+        assert_eq!(outcome.summary.skipped, 2);
+        assert_eq!(outcome.summary.failed, 0);
+        assert_eq!(outcome.archive.entries.len(), 2);
+        assert!(outcome.archive.entries.iter().any(|entry| entry.file_name == "existing.dff"));
+        assert!(outcome.archive.entries.iter().any(|entry| entry.file_name == "new.txd"));
+        assert!(outcome.archive.logs.iter().any(|log| log.contains("duplicate skipped")));
+    }
+
+    #[test]
+    fn folder_import_replace_policy_replaces_duplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("existing.dff"), b"replacement").unwrap();
+        std::fs::write(dir.path().join("new.txd"), b"new").unwrap();
+        std::fs::write(dir.path().join("README"), b"no extension").unwrap();
+
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("existing.dff"));
+        let plan = scan_import_folder(dir.path(), &archive).unwrap();
+        let outcome = FolderImportTask::new(archive, plan, FolderDuplicatePolicy::Replace)
+            .run_blocking()
+            .unwrap();
+
+        assert_eq!(outcome.summary.imported, 2);
+        assert_eq!(outcome.summary.skipped, 1);
+        assert_eq!(outcome.summary.failed, 0);
+        assert_eq!(outcome.archive.entries.len(), 2);
+        let replaced = outcome
+            .archive
+            .entries
+            .iter()
+            .find(|entry| entry.file_name == "existing.dff")
+            .unwrap();
+        assert!(replaced.imported);
+        assert_eq!(replaced.source_path.as_deref(), Some(dir.path().join("existing.dff").as_path()));
     }
 }

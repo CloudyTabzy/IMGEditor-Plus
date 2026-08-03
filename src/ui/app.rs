@@ -22,7 +22,11 @@ use crate::inspector::viewer3d::{self, ViewerEvent};
 use crate::parser::{
     DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
 };
-use crate::tasks::{ExportEngine, ExportMode, ExportTask, PackOutcome, PackTask, SaveTask};
+use crate::tasks::{
+    ExportEngine, ExportMode, ExportTask, FolderDuplicatePolicy, FolderImportOutcome,
+    FolderImportPlan, FolderImportSummary, FolderImportTask, PackOutcome, PackTask, SaveTask,
+    scan_import_folder,
+};
 use crate::ui::animator::Animator;
 use crate::ui::design::Design;
 use crate::ui::dialogs::{self, SaveArchiveChoice};
@@ -115,6 +119,18 @@ pub enum Message {
         index: usize,
         count: usize,
         result: Result<ArchiveInfo, String>,
+    },
+    ImportFolder,
+    ImportFolderResult(Option<PathBuf>),
+    FolderScanCompleted {
+        index: usize,
+        result: Result<FolderImportPlan, String>,
+    },
+    ConfirmFolderImport(FolderDuplicatePolicy),
+    CancelFolderImport,
+    FolderImportCompleted {
+        index: usize,
+        result: Result<FolderImportOutcome, String>,
     },
     ExportAll,
     ExportSelected,
@@ -354,6 +370,7 @@ pub struct App {
     pub update_state: UpdateState,
     pub update_check_manual: bool,
     pub toast: Option<String>,
+    pub pending_folder_import: Option<(usize, FolderImportPlan)>,
     /// Working copy of the sort chain while the Sort Manager
     /// dialog is open. Edits land here first; "Apply" commits the
     /// draft to the live archive + config. `None` when the dialog
@@ -428,6 +445,7 @@ impl App {
             update_state: UpdateState::Idle,
             update_check_manual: false,
             toast: None,
+            pending_folder_import: None,
             fast_export,
             panes,
             context_menu: None,
@@ -691,6 +709,55 @@ impl App {
         )
     }
 
+    fn scan_import_folder_task(
+        index: usize,
+        archive: ArchiveInfo,
+        folder: PathBuf,
+    ) -> Task<Message> {
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || scan_import_folder(&folder, &archive))
+                    .await
+                    .map_err(|error| format!("folder scan task panicked: {error}"))?
+                    .map_err(|error| error.to_string())
+            },
+            move |result| Message::FolderScanCompleted { index, result },
+        )
+    }
+
+    fn run_folder_import(
+        &self,
+        index: usize,
+        archive: ArchiveInfo,
+        plan: FolderImportPlan,
+        duplicate_policy: FolderDuplicatePolicy,
+    ) -> Task<Message> {
+        let task = FolderImportTask::new(archive, plan, duplicate_policy);
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || task.run_blocking())
+                    .await
+                    .map_err(|error| format!("folder import task panicked: {error}"))?
+                    .map_err(|error| error.to_string())
+            },
+            move |result| Message::FolderImportCompleted { index, result },
+        )
+    }
+
+    fn folder_import_target_matches(
+        &self,
+        index: usize,
+        target_name: &str,
+        target_path: Option<&PathBuf>,
+    ) -> bool {
+        self.editor
+            .archives()
+            .get(index)
+            .is_some_and(|archive| {
+                archive.file_name == target_name && archive.path.as_ref() == target_path
+            })
+    }
+
     fn run_pack(
         &self,
         archive: ArchiveInfo,
@@ -941,10 +1008,111 @@ impl App {
                 match result {
                     Ok(archive) => {
                         self.editor.replace_archive(index, archive);
+                        if let Some(archive) = self.editor.archives_mut().get_mut(index) {
+                            archive.update_selected_list(&self.search);
+                        }
                         self.toast = Some(format!("Imported {count} files."));
                     }
                     Err(error) => {
                         self.toast = Some(format!("Import failed: {error}"));
+                    }
+                }
+                Task::none()
+            }
+
+            Message::ImportFolder => {
+                self.toast = None;
+                if self.editor.selected_archive().is_none() {
+                    self.toast = Some("Open an archive first to import a folder.".into());
+                    return Task::none();
+                }
+                dialogs::import_folder().map(Message::ImportFolderResult)
+            }
+            Message::ImportFolderResult(Some(folder)) => {
+                let Some((index, archive)) = self.editor.clone_selected_archive() else {
+                    self.toast = Some("Open an archive first to import a folder.".into());
+                    return Task::none();
+                };
+                Self::scan_import_folder_task(index, archive, folder)
+            }
+            Message::ImportFolderResult(None) => Task::none(),
+            Message::FolderScanCompleted { index, result } => {
+                match result {
+                    Ok(plan) if plan.files.is_empty() => {
+                        self.toast = Some(format!(
+                            "No regular files found in {}.",
+                            plan.folder.display()
+                        ));
+                    }
+                    Ok(plan) => {
+                        if self.folder_import_target_matches(
+                            index,
+                            &plan.target_archive_name,
+                            plan.target_archive_path.as_ref(),
+                        ) {
+                            self.pending_folder_import = Some((index, plan));
+                        } else {
+                            self.toast = Some(
+                                "The target archive changed while the folder was being scanned."
+                                    .into(),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        self.toast = Some(format!("Folder scan failed: {error}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::ConfirmFolderImport(duplicate_policy) => {
+                let Some((index, plan)) = self.pending_folder_import.take() else {
+                    return Task::none();
+                };
+                if !self.folder_import_target_matches(
+                    index,
+                    &plan.target_archive_name,
+                    plan.target_archive_path.as_ref(),
+                ) {
+                    self.toast = Some("The target archive is no longer selected.".into());
+                    return Task::none();
+                }
+                let Some(archive) = self.editor.archives().get(index).cloned() else {
+                    self.toast = Some("The target archive is no longer open.".into());
+                    return Task::none();
+                };
+                if archive.progress.in_use() {
+                    self.toast = Some("An archive operation is already running.".into());
+                    return Task::none();
+                }
+                self.run_folder_import(index, archive, plan, duplicate_policy)
+            }
+            Message::CancelFolderImport => {
+                self.pending_folder_import = None;
+                Task::none()
+            }
+            Message::FolderImportCompleted { index, result } => {
+                match result {
+                    Ok(outcome) => {
+                        if !self.folder_import_target_matches(
+                            index,
+                            &outcome.target_archive_name,
+                            outcome.target_archive_path.as_ref(),
+                        ) {
+                            self.toast = Some(
+                                "Folder import discarded because the target archive changed."
+                                    .into(),
+                            );
+                            return Task::none();
+                        }
+                        let summary = outcome.summary;
+                        self.editor.replace_archive(index, outcome.archive);
+                        if let Some(archive) = self.editor.archives_mut().get_mut(index) {
+                            archive.update_selected_list(&self.search);
+                        }
+                        self.toast = Some(format_folder_import_summary(&summary));
+                    }
+                    Err(error) => {
+                        self.toast = Some(format!("Folder import failed: {error}"));
                     }
                 }
                 Task::none()
@@ -2420,6 +2588,10 @@ impl App {
                 Message::ImportFiles,
             )),
             Item::new(menu_button(
+                "Import folder".to_string(),
+                Message::ImportFolder,
+            )),
+            Item::new(menu_button(
                 format!("Export all ({})", shortcut_display(Shortcut::ExportAll)),
                 Message::ExportAll,
             )),
@@ -2543,7 +2715,7 @@ fn menu_button<'a>(label: String, message: Message) -> Element<'a, Message> {
     menu_button_with_icon(label, menu_icon(&message), message)
 }
 
-fn format_byte_count(bytes: u64) -> String {
+pub(crate) fn format_byte_count(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut value = bytes as f64;
     let mut unit = 0;
@@ -2557,6 +2729,23 @@ fn format_byte_count(bytes: u64) -> String {
     } else {
         format!("{value:.1} {}", UNITS[unit])
     }
+}
+
+fn format_folder_import_summary(summary: &FolderImportSummary) -> String {
+    let prefix = if summary.cancelled {
+        "Folder import cancelled"
+    } else {
+        "Folder import complete"
+    };
+    let details = if summary.failed > 0 || !summary.details.is_empty() {
+        " See the archive log for details."
+    } else {
+        ""
+    };
+    format!(
+        "{prefix}: {} imported, {} skipped, {} failed.{details}",
+        summary.imported, summary.skipped, summary.failed
+    )
 }
 
 fn menu_button_with_icon<'a>(
@@ -2598,6 +2787,7 @@ fn menu_icon(message: &Message) -> Element<'static, Message> {
         Message::CloseSelectedArchive => icons::close(),
         Message::OpenSortManager => icons::sort(),
         Message::ImportFiles => icons::import(),
+        Message::ImportFolder => icons::open_archive(),
         Message::ExportAll | Message::ExportSelected => icons::export(),
         Message::SelectAll => icons::check(),
         Message::InvertSelection => icons::invert_selection(),

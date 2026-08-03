@@ -9,6 +9,7 @@ use crate::sort::SortDirection;
 use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
+use crate::tasks::FolderDuplicatePolicy;
 use crate::ui::app::{App, EntryAction, InspectorTab, Message, Pane, ABOUT_TEXT};
 use crate::ui::fonts;
 use crate::ui::icons;
@@ -801,6 +802,11 @@ fn build_toolbar(accent: Color, bg: Color) -> Element<'static, Message> {
             tooltip::Position::Bottom,
         ),
         tooltip(
+            toolbar_button(icons::open_archive().size(18).into(), Message::ImportFolder),
+            fonts::body("Import folder"),
+            tooltip::Position::Bottom,
+        ),
+        tooltip(
             toolbar_button(icons::export().size(18).into(), Message::ExportSelected),
             fonts::body("Export selected"),
             tooltip::Position::Bottom,
@@ -923,6 +929,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_about(app),
         build_welcome(app),
         build_unsupported(app),
+        build_folder_import(app),
         build_update_status(app),
         build_sort_manager(app),
     ]
@@ -1024,6 +1031,65 @@ fn build_unsupported(app: &App) -> Option<Element<'_, Message>> {
         ]
         .spacing(6),
     ))
+}
+
+fn build_folder_import(app: &App) -> Option<Element<'_, Message>> {
+    let (_, plan) = app.pending_folder_import.as_ref()?;
+    let duplicate_text = if plan.duplicate_count == 0 {
+        "No duplicate names detected.".to_string()
+    } else {
+        format!(
+            "{} duplicate name(s) detected. Choose how to handle them.",
+            plan.duplicate_count
+        )
+    };
+    let scan_text = if plan.scan_skipped.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} item(s) could not be inspected and will be skipped.",
+            plan.scan_skipped.len()
+        ))
+    };
+
+    let mut actions = Row::new()
+        .spacing(8)
+        .push(
+            button(fonts::body(if plan.duplicate_count == 0 {
+                "Import files"
+            } else {
+                "Import (skip duplicates)"
+            }))
+            .on_press(Message::ConfirmFolderImport(FolderDuplicatePolicy::Skip))
+            .style(button::primary),
+        );
+    if plan.duplicate_count > 0 {
+        actions = actions.push(
+            button(fonts::body("Replace duplicates"))
+                .on_press(Message::ConfirmFolderImport(FolderDuplicatePolicy::Replace)),
+        );
+    }
+    actions = actions.push(
+        button(fonts::body("Cancel")).on_press(Message::CancelFolderImport),
+    );
+
+    let mut content = column![
+        fonts::body(format!("Folder: {}", plan.folder.display())),
+        fonts::body(format!(
+            "{} regular file(s) • {}",
+            plan.files.len(),
+            crate::ui::app::format_byte_count(plan.total_bytes)
+        )),
+        fonts::caption("Only files directly inside this folder are included; subfolders are not scanned."),
+        fonts::caption(duplicate_text),
+    ]
+    .spacing(6);
+    if let Some(scan_text) = scan_text {
+        content = content.push(fonts::caption(scan_text));
+    }
+    content = content.push(Space::new().height(Length::Fixed(8.0))).push(actions);
+
+    Some(modal_box("Import folder", content))
 }
 
 fn build_update_status(app: &App) -> Option<Element<'_, Message>> {
