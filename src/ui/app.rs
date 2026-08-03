@@ -73,6 +73,10 @@ pub enum Message {
     NewArchive,
     OpenArchive,
     OpenArchiveResult(Option<PathBuf>),
+    /// Open a path from the recent-files list. Carries the raw
+    /// path as it appeared in the menu; missing entries are
+    /// filtered out before this fires.
+    OpenRecent(PathBuf),
     SaveArchive,
     SaveArchiveAs,
     SaveArchiveAsResult(Option<SaveArchiveChoice>),
@@ -328,6 +332,27 @@ impl App {
         }
     }
 
+    /// Open an archive at `path`, record it in the recent-files MRU
+    /// list on success, and surface failures via the toast or
+    /// unsupported-format dialog. Shared by the file-picker handler
+    /// and the Open-Recent menu so both paths get the same UX.
+    fn open_archive_path(&mut self, path: PathBuf) {
+        match self.editor.open_archive(&path) {
+            Ok(()) => {
+                self.config.recent_files.touch(&path);
+                self.save_config();
+            }
+            Err(crate::editor::OpenArchiveError::UnsupportedFormat) => {
+                // Don't touch the MRU list — a failed attempt
+                // shouldn't promote a file we couldn't open.
+                self.show_unsupported = Some(path);
+            }
+            Err(err) => {
+                self.toast = Some(format!("Failed to open archive: {err}"));
+            }
+        }
+    }
+
     pub fn visit_repository() {
         let _ = webbrowser::open(REPO_URL);
     }
@@ -477,16 +502,29 @@ impl App {
             }
 
             Message::OpenArchiveResult(Some(path)) => {
-                if let Err(err) = self.editor.open_archive(&path) {
-                    if matches!(err, crate::editor::OpenArchiveError::UnsupportedFormat) {
-                        self.show_unsupported = Some(path);
-                    } else {
-                        self.toast = Some(format!("Failed to open archive: {err}"));
-                    }
-                }
+                self.open_archive_path(path);
                 Task::none()
             }
             Message::OpenArchiveResult(None) => Task::none(),
+
+            Message::OpenRecent(path) => {
+                // The menu only emits paths that still exist on disk
+                // (RecentFiles::iter_existing), but the file may have
+                // been deleted between menu render and click. Guard
+                // anyway so we don't surprise the user with an
+                // "unsupported format" toast.
+                if !path.exists() {
+                    self.config.recent_files.remove(&path);
+                    self.save_config();
+                    self.toast = Some(format!(
+                        "File no longer exists: {}",
+                        path.display()
+                    ));
+                    return Task::none();
+                }
+                self.open_archive_path(path);
+                Task::none()
+            }
 
             Message::SaveArchive => {
                 self.toast = None;
@@ -549,6 +587,7 @@ impl App {
             | Message::NewArchive
             | Message::OpenArchive
             | Message::OpenArchiveResult(_)
+            | Message::OpenRecent(_)
             | Message::SaveArchive
             | Message::SaveArchiveAs
             | Message::SaveArchiveAsResult(_)
@@ -1719,6 +1758,36 @@ impl App {
     }
 
     pub fn menubar(&self) -> Element<'_, Message> {
+        // The "Open Recent" submenu is built from `iter_existing` so
+        // dead links vanish without mutating the stored MRU list.
+        // An empty list renders a single disabled "No recent files"
+        // item so the user can see why the menu is empty.
+        let recent_menu_items: Vec<Item<'_, Message, _, _>> = if self
+            .config
+            .recent_files
+            .iter_existing()
+            .next()
+            .is_none()
+        {
+            vec![Item::new(iced::Element::from(
+                iced::widget::text("No recent files").size(13),
+            ))]
+        } else {
+            self.config
+                .recent_files
+                .iter()
+                .map(|(index, entry)| {
+                    let label = self
+                        .config
+                        .recent_files
+                        .menu_label(index, 60);
+                    let path = entry.path.clone();
+                    Item::new(menu_button(label, Message::OpenRecent(path)))
+                })
+                .collect()
+        };
+        let recent_menu = Menu::new(recent_menu_items).max_width(320.0);
+
         let file_menu = Menu::new(vec![
             Item::new(menu_button(
                 format!("New ({})", shortcut_display(Shortcut::New)),
@@ -1728,6 +1797,10 @@ impl App {
                 format!("Open… ({})", shortcut_display(Shortcut::Open)),
                 Message::OpenArchive,
             )),
+            Item::with_menu(
+                menu_button("Open Recent".to_string(), Message::Noop),
+                recent_menu,
+            ),
             Item::new(menu_button(
                 format!("Save ({})", shortcut_display(Shortcut::Save)),
                 Message::SaveArchive,
