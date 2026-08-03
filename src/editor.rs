@@ -140,6 +140,20 @@ impl Editor {
         self.selected_entry = index;
     }
 
+    /// Mark a context-menu target as selected without clearing an existing
+    /// multi-selection. This matches the original editor's context actions:
+    /// the clicked entry is included in Delete/Export while other selected
+    /// entries remain selected.
+    pub fn select_context_entry(&mut self, index: usize) {
+        if let Some(archive) = self.selected_archive_mut()
+            && let Some(entry) = archive.entries.get_mut(index)
+        {
+            entry.selected = true;
+            archive.refresh_export_status();
+            self.selected_entry = Some(index);
+        }
+    }
+
     pub fn select_entry(&mut self, clicked: usize, shift: bool, ctrl: bool) {
         let anchor = self.selected_entry;
 
@@ -400,6 +414,21 @@ mod tests {
         editor.delete_selected();
         assert_eq!(editor.archives[0].entries.len(), 1);
         assert_eq!(editor.archives[0].entries[0].file_name, "b.txd");
+    }
+
+    #[test]
+    fn context_selection_preserves_existing_selection() {
+        let mut editor = Editor::new();
+        editor.new_archive();
+        editor.archives[0].entries.push(EntryInfo::new("a.dff"));
+        editor.archives[0].entries.push(EntryInfo::new("b.txd"));
+        editor.archives[0].entries[0].selected = true;
+
+        editor.select_context_entry(1);
+
+        assert!(editor.archives[0].entries[0].selected);
+        assert!(editor.archives[0].entries[1].selected);
+        assert_eq!(editor.selected_entry, Some(1));
     }
 
     #[test]

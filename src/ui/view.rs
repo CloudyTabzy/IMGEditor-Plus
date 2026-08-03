@@ -187,6 +187,7 @@ impl App {
 
         let name_widget: Element<'_, Message> = if is_renaming {
             text_input("", &self.rename_buffer)
+                .id(iced::widget::Id::new("rename_input"))
                 .on_input(Message::RenameInputChanged)
                 .on_submit(Message::CommitRename)
                 .width(Length::Fill)
@@ -888,6 +889,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         let search = row![
             w::icon_label(icons::search().size(15), fonts::header("Search:")),
             text_input("", &app.search)
+                .id(iced::widget::Id::new("search_input"))
                 .on_input(Message::SearchChanged)
                 .width(Length::Fill),
         ]

@@ -250,6 +250,12 @@ pub fn import_entry(archive: &mut ArchiveInfo, path: &Path, replace: bool) -> an
         return Ok(());
     }
 
+    let metadata = std::fs::metadata(path)?;
+    if !metadata.is_file() {
+        archive.add_log(format!("Skipping {}. Not a regular file.", path.display()));
+        return Ok(());
+    }
+
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -266,7 +272,7 @@ pub fn import_entry(archive: &mut ArchiveInfo, path: &Path, replace: bool) -> an
             .retain(|entry| !entry.file_name.eq_ignore_ascii_case(file_name));
     }
 
-    let byte_len = std::fs::metadata(path)?.len();
+    let byte_len = metadata.len();
     let mut entry = EntryInfo::new(file_name);
     entry.source_path = Some(path.to_path_buf());
     entry.imported = true;
@@ -326,6 +332,22 @@ mod tests {
         std::fs::write(&base, "x").unwrap();
 
         assert_eq!(unique_output_path(&base), dir.path().join("file (2).txt"));
+    }
+
+    #[test]
+    fn import_entry_skips_directories_with_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let import_dir = dir.path().join("textures.txd");
+        std::fs::create_dir(&import_dir).unwrap();
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+
+        import_entry(&mut archive, &import_dir, false).unwrap();
+
+        assert!(archive.entries.is_empty());
+        assert!(archive
+            .logs
+            .iter()
+            .any(|log| log.contains("Not a regular file")));
     }
 
     #[test]

@@ -35,6 +35,8 @@ use crate::updater::{UpdateResult, UpdateState, check_updates_future};
 
 const REPO_URL: &str = "https://github.com/CloudyTabzy/IMGEditor-Plus";
 const UPDATER_REPO: &str = "CloudyTabzy/IMGEditor-Plus";
+const SEARCH_INPUT_ID: &str = "search_input";
+const RENAME_INPUT_ID: &str = "rename_input";
 
 pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
 pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
@@ -128,6 +130,8 @@ pub enum Message {
     CancelActive,
 
     SearchChanged(String),
+    SearchFocusChanged(bool),
+    RenameFocusChanged(bool),
     DebounceTick,
     RefreshFilter,
 
@@ -332,6 +336,11 @@ pub struct App {
     pub config: Config,
     pub search: String,
     pub rename_buffer: String,
+    search_focused: bool,
+    rename_focused: bool,
+    pending_shortcut: Option<Shortcut>,
+    pending_search_focus: Option<bool>,
+    pending_rename_focus: Option<bool>,
     pub show_about: bool,
     pub show_welcome: bool,
     pub welcome_persist: bool,
@@ -401,6 +410,11 @@ impl App {
             last_export_selected_only: false,
             search: String::new(),
             rename_buffer: String::new(),
+            search_focused: false,
+            rename_focused: false,
+            pending_shortcut: None,
+            pending_search_focus: None,
+            pending_rename_focus: None,
             show_about: false,
             show_welcome,
             welcome_persist: true,
@@ -614,6 +628,44 @@ impl App {
         Task::none()
     }
 
+    fn input_focus_task() -> Task<Message> {
+        Task::batch(vec![
+            iced::widget::operation::is_focused(iced::widget::Id::new(SEARCH_INPUT_ID))
+                .map(Message::SearchFocusChanged),
+            iced::widget::operation::is_focused(iced::widget::Id::new(RENAME_INPUT_ID))
+                .map(Message::RenameFocusChanged),
+        ])
+    }
+
+    fn begin_shortcut_focus_check(&mut self, shortcut: Shortcut) -> Task<Message> {
+        self.pending_shortcut = Some(shortcut);
+        self.pending_search_focus = None;
+        self.pending_rename_focus = None;
+        Self::input_focus_task()
+    }
+
+    fn resolve_shortcut_focus_check(&mut self) -> Task<Message> {
+        let (Some(search_focused), Some(rename_focused)) =
+            (self.pending_search_focus, self.pending_rename_focus)
+        else {
+            return Task::none();
+        };
+        let Some(shortcut) = self.pending_shortcut.take() else {
+            return Task::none();
+        };
+
+        self.pending_search_focus = None;
+        self.pending_rename_focus = None;
+        self.search_focused = search_focused;
+        self.rename_focused = rename_focused;
+
+        if search_focused || rename_focused {
+            Task::none()
+        } else {
+            self.handle_shortcut(shortcut)
+        }
+    }
+
     fn run_save(
         &self,
         archive: ArchiveInfo,
@@ -648,7 +700,10 @@ impl App {
             Shortcut::SelectAll => Task::done(Message::SelectAll),
             Shortcut::InvertSelection => Task::done(Message::InvertSelection),
             Shortcut::Delete => Task::done(Message::DeleteSelected),
-            Shortcut::FocusSearch => Task::none(),
+            Shortcut::FocusSearch => {
+                self.search_focused = true;
+                iced::widget::operation::focus(iced::widget::Id::new(SEARCH_INPUT_ID))
+            }
             Shortcut::CheckUpdates => Task::done(Message::CheckUpdatesManual),
         }
     }
@@ -659,7 +714,9 @@ impl App {
         match message {
             Message::Noop => Task::none(),
 
-            Message::ShortcutPressed(shortcut) => self.handle_shortcut(shortcut),
+            Message::ShortcutPressed(shortcut) => {
+                self.begin_shortcut_focus_check(shortcut)
+            }
 
             Message::NewArchive => {
                 self.editor.new_archive();
@@ -921,17 +978,21 @@ impl App {
                     if let Some(archive) = self.editor.selected_archive_mut() {
                         archive.set_rename(index);
                     }
+                    self.rename_focused = true;
+                    return iced::widget::operation::focus(iced::widget::Id::new(RENAME_INPUT_ID));
                 }
                 Task::none()
             }
             Message::RenameInputChanged(value) => {
                 self.rename_buffer = value;
+                self.rename_focused = true;
                 Task::none()
             }
             Message::CommitRename => {
                 let new_name = self.rename_buffer.clone();
                 self.editor.rename_selected(&new_name);
                 self.rename_buffer.clear();
+                self.rename_focused = false;
                 Task::none()
             }
             Message::CancelRename => {
@@ -939,6 +1000,7 @@ impl App {
                     archive.clear_rename();
                 }
                 self.rename_buffer.clear();
+                self.rename_focused = false;
                 Task::none()
             }
             Message::CancelActive => {
@@ -958,7 +1020,18 @@ impl App {
                     self.search = value;
                     self.filter_pending = true;
                 }
+                self.search_focused = true;
                 Task::none()
+            }
+            Message::SearchFocusChanged(focused) => {
+                self.search_focused = focused;
+                self.pending_search_focus = Some(focused);
+                self.resolve_shortcut_focus_check()
+            }
+            Message::RenameFocusChanged(focused) => {
+                self.rename_focused = focused;
+                self.pending_rename_focus = Some(focused);
+                self.resolve_shortcut_focus_check()
             }
             Message::DebounceTick => {
                 if self.filter_pending {
@@ -1026,7 +1099,11 @@ impl App {
                             self.rename_buffer = entry.file_name.to_string();
                         }
                     }
-                    self.refresh_inspection()
+                    self.rename_focused = true;
+                    Task::batch(vec![
+                        self.refresh_inspection(),
+                        iced::widget::operation::focus(iced::widget::Id::new(RENAME_INPUT_ID)),
+                    ])
                 } else {
                     Task::none()
                 };
@@ -1034,7 +1111,7 @@ impl App {
             }
             Message::EntryRightClicked(display_row) => {
                 let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
-                    self.editor.set_selected_entry(Some(entry_index));
+                    self.editor.select_context_entry(entry_index);
                     self.context_menu = Some((entry_index, display_row));
                     self.refresh_inspection()
                 } else {
@@ -1060,7 +1137,7 @@ impl App {
                 EntryAction::Rename => Task::done(Message::StartRename),
                 EntryAction::Delete => {
                     self.editor.delete_selected();
-                    Task::none()
+                    Task::batch(vec![self.refresh_inspection(), Task::none()])
                 }
                 EntryAction::Export => {
                     self.last_export_selected_only = true;
@@ -2499,6 +2576,16 @@ mod tests {
         App::new(Config::default())
     }
 
+    fn test_app_with_entries() -> App {
+        let mut app = test_app();
+        app.editor.new_archive();
+        let archive = app.editor.archives_mut().first_mut().unwrap();
+        archive.entries.push(EntryInfo::new("first.dff"));
+        archive.entries.push(EntryInfo::new("second.txd"));
+        archive.update_selected_list("");
+        app
+    }
+
     #[test]
     fn search_changed_updates_text_immediately() {
         let mut app = test_app();
@@ -2543,5 +2630,42 @@ mod tests {
         let _ = app.update(Message::CommitRename);
 
         assert!(app.rename_buffer.is_empty());
+    }
+
+    #[test]
+    fn context_delete_targets_right_clicked_entry() {
+        let mut app = test_app_with_entries();
+
+        let _ = app.update(Message::EntryRightClicked(1));
+        assert!(app.editor.archives()[0].entries[1].selected);
+
+        let _ = app.update(Message::EntryContextAction(EntryAction::Delete));
+
+        assert_eq!(app.editor.archives()[0].entries.len(), 1);
+        assert_eq!(app.editor.archives()[0].entries[0].file_name, "first.dff");
+    }
+
+    #[test]
+    fn shortcuts_are_ignored_while_text_input_is_focused() {
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0].entries[0].selected = true;
+
+        let _ = app.update(Message::ShortcutPressed(Shortcut::Delete));
+        let _ = app.update(Message::SearchFocusChanged(true));
+        let _ = app.update(Message::RenameFocusChanged(false));
+        assert_eq!(app.editor.archives()[0].entries.len(), 2);
+
+        let _ = app.update(Message::ShortcutPressed(Shortcut::Delete));
+        let _ = app.update(Message::SearchFocusChanged(false));
+        let _ = app.update(Message::RenameFocusChanged(false));
+        let _ = app.update(Message::DeleteSelected);
+        assert_eq!(app.editor.archives()[0].entries.len(), 1);
+    }
+
+    #[test]
+    fn focus_search_shortcut_marks_search_focused() {
+        let mut app = test_app();
+        let _ = app.handle_shortcut(Shortcut::FocusSearch);
+        assert!(app.search_focused);
     }
 }
