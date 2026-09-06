@@ -619,6 +619,65 @@ mod tests {
     }
 
     #[test]
+    fn mascot_fixtures_render_to_png_when_present() {
+        let root = std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/NIF");
+        let names = [
+            "Player_Mascot.nif",
+            "Player_Mascot_nh.nif",
+            "Player_Mascot_W.nif",
+        ];
+        let existing = names
+            .iter()
+            .filter(|name| root.join(name).exists())
+            .count();
+        if existing == 0 {
+            return;
+        }
+
+        let renderer = HeadlessRenderer::new().expect("renderer");
+        for name in names {
+            let Ok(bytes) = std::fs::read(root.join(name)) else {
+                continue;
+            };
+            let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
+                &bytes,
+                crate::inspector::scene3d::camera::BaseOrientation::Zup,
+                |_| None,
+            )
+            .expect("mascot scene decoded");
+            let mut camera = OrbitCamera::new(Viewport {
+                width: 512,
+                height: 512,
+            });
+            camera.reset_to_aabb(&scene.aabb);
+            let frame = render_frame(
+                &renderer,
+                &scene,
+                &camera,
+                512,
+                512,
+                RenderFlags::empty(),
+            )
+            .expect("mascot frame rendered");
+            let stem = std::path::Path::new(name)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("mascot");
+            let out = std::path::Path::new("target")
+                .join(format!("scene3d-{stem}.png"));
+            if let Some(parent) = out.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            write_png(&frame, &out).expect("mascot PNG written");
+            assert!(
+                std::fs::metadata(&out).expect("mascot PNG exists").len() > 200,
+                "mascot PNG suspiciously small: {}",
+                out.display()
+            );
+        }
+    }
+
+    #[test]
     fn full_pipeline_with_grid_and_gizmo() {
         // Smoke-renders the full GUI pipeline (clear + grid + lit +
         // gizmo) using a real NIF. Output to

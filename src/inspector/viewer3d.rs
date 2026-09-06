@@ -1105,28 +1105,33 @@ mod tests {
     }
 
     #[test]
-    fn mascot_fixture_is_upright_when_present() {
-        let path = std::path::Path::new(
-            "C:/Games/Bully - Scholarship Edition/Stream/NIF/Player_Mascot_nh.nif",
-        );
-        let Ok(bytes) = std::fs::read(path) else {
-            return;
-        };
-        let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
-            &bytes,
-            crate::inspector::scene3d::camera::BaseOrientation::Zup,
-            |_| None,
-        )
-        .expect("mascot fixture should decode");
+    fn mascot_fixtures_have_upright_viewer_bounds_when_present() {
+        for name in [
+            "Player_Mascot.nif",
+            "Player_Mascot_nh.nif",
+            "Player_Mascot_W.nif",
+        ] {
+            let path = std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/NIF")
+                .join(name);
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
+                &bytes,
+                crate::inspector::scene3d::camera::BaseOrientation::Zup,
+                |_| None,
+            )
+            .expect("mascot fixture should decode");
 
-        assert!(
-            scene.aabb.min[1] > -0.25,
-            "mascot feet should not be below the viewer origin"
-        );
-        assert!(
-            scene.aabb.max[1] > 1.0,
-            "mascot head should be above the viewer origin"
-        );
+            assert!(
+                scene.aabb.min[1] > -0.25,
+                "{name} feet should not be below the viewer origin"
+            );
+            assert!(
+                scene.aabb.max[1] > 1.0,
+                "{name} head should be above the viewer origin"
+            );
+        }
     }
 
     #[test]
