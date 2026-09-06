@@ -590,17 +590,13 @@ impl Transform3d {
     }
 
     fn from_nif_transform(transform: &nif::NiTransform) -> Self {
-        let columns = transform.rotation.m;
         Self {
-            // Matrix33 is stored as three columns by the NIF reader. Keep
-            // the scene graph's explicit row-major representation separate
-            // so parent composition and column-vector multiplication use the
-            // same convention as the reference importer.
-            rotation: [
-                [columns[0][0], columns[1][0], columns[2][0]],
-                [columns[0][1], columns[1][1], columns[2][1]],
-                [columns[0][2], columns[1][2], columns[2][2]],
-            ],
+            // The NIF reader keeps each on-disk 3-f32 group in order. This is
+            // already the basis expected by Bully's reference importer;
+            // transposing it here applies node rotations in the opposite
+            // direction. Transform3d stores the coefficients row-major for
+            // its column-vector operations.
+            rotation: transform.rotation.m,
             translation: [
                 transform.translation.x,
                 transform.translation.y,
@@ -1066,20 +1062,70 @@ mod tests {
     }
 
     #[test]
-    fn nif_matrix_columns_are_transposed_to_row_major() {
-        // On disk this is a +90° Z rotation stored column-major. A direct
-        // use of Matrix33::m would rotate +X toward -Y instead.
+    fn nif_matrix_order_matches_bully_scene_transforms() {
+        // This is the on-disk basis used by Bully's +90° mascot root
+        // correction. Transposing it would turn the correction upside down.
         let transform = nif::NiTransform {
             rotation: Matrix33 {
-                m: [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                m: [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
             },
             scale: 1.0,
             ..Default::default()
         };
         let world = Transform3d::from_nif_transform(&transform);
         assert_eq!(
-            world.point(Vector3 { x: 1.0, ..Vector3::default() }),
-            [0.0, 1.0, 0.0]
+            world.point(Vector3 {
+                y: 1.0,
+                ..Vector3::default()
+            }),
+            [0.0, 0.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn mascot_root_stays_upright_after_zup_conversion() {
+        use crate::inspector::scene3d::camera::BaseOrientation;
+
+        let transform = nif::NiTransform {
+            rotation: Matrix33 {
+                m: [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
+            },
+            scale: 1.0,
+            ..Default::default()
+        };
+        let source = Transform3d::from_nif_transform(&transform).point(Vector3 {
+            y: 1.0,
+            ..Vector3::default()
+        });
+        let camera = BaseOrientation::Zup.to_yup_matrix()
+            * glam::Vec4::new(source[0], source[1], source[2], 1.0);
+
+        assert!((camera.y - 1.0).abs() < 1e-6);
+        assert!(camera.x.abs() < 1e-6 && camera.z.abs() < 1e-6);
+    }
+
+    #[test]
+    fn mascot_fixture_is_upright_when_present() {
+        let path = std::path::Path::new(
+            "C:/Games/Bully - Scholarship Edition/Stream/NIF/Player_Mascot_nh.nif",
+        );
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
+            &bytes,
+            crate::inspector::scene3d::camera::BaseOrientation::Zup,
+            |_| None,
+        )
+        .expect("mascot fixture should decode");
+
+        assert!(
+            scene.aabb.min[1] > -0.25,
+            "mascot feet should not be below the viewer origin"
+        );
+        assert!(
+            scene.aabb.max[1] > 1.0,
+            "mascot head should be above the viewer origin"
         );
     }
 
