@@ -14,6 +14,7 @@ use crate::ui::app::{App, EntryAction, InspectorTab, Message, Pane, ABOUT_TEXT};
 use crate::ui::fonts;
 use crate::ui::icons;
 use crate::ui::widgets as w;
+use crate::ui::viewer3d_widget::SceneOriginMode;
 
 static LOGO_HANDLE: std::sync::LazyLock<image::Handle> = std::sync::LazyLock::new(|| {
     image::Handle::from_bytes(include_bytes!("../../asset/logo/IMGEditorLogo.png").to_vec())
@@ -483,7 +484,7 @@ impl App {
     }
 
     fn build_viewer3d_stats(&self) -> Element<'_, Message> {
-        let (triangles, vertices, textures, has_scene, w, h, orientation) = self
+        let (triangles, vertices, textures, has_scene, w, h, orientation, origin_mode) = self
             .viewer3d_handle
             .with(|i| {
                 let w = i.camera.viewport.width.max(1);
@@ -501,6 +502,7 @@ impl App {
                     w,
                     h,
                     orient,
+                    i.origin_mode,
                 )
             });
         let orient_label = match orientation {
@@ -508,10 +510,14 @@ impl App {
             BaseOrientation::Zup => "Z-up",
             BaseOrientation::Xup => "X-up",
         };
+        let origin_label = match origin_mode {
+            SceneOriginMode::Centered => "centered",
+            SceneOriginMode::World => "world",
+        };
         let line = if has_scene {
             format!(
-                "{} vertices   {} triangles   {} textures   {}×{}   {}",
-                vertices, triangles, textures, w, h, orient_label
+                "{} vertices   {} triangles   {} textures   {}×{}   {}   {}",
+                vertices, triangles, textures, w, h, orient_label, origin_label
             )
         } else {
             "No scene loaded".to_string()
@@ -638,7 +644,9 @@ impl App {
         if !is_nif {
             return Space::new().height(Length::Fixed(28.0)).into();
         }
-        let flags = self.viewer3d_handle.with(|i| i.flags);
+        let (flags, origin_mode) = self
+            .viewer3d_handle
+            .with(|i| (i.flags, i.origin_mode));
         let button_height = Length::Fixed(28.0);
         let mut row = Row::new().spacing(4).padding(2);
         row = row.push(w::icon_label(icons::model().size(14), fonts::caption("3D:")));
@@ -677,6 +685,11 @@ impl App {
             checkbox(flags.contains(RenderFlags::HAS_TEXTURE))
                 .label("Textured")
                 .on_toggle(|_| Message::Viewer3dToggleTextured),
+        );
+        row = row.push(
+            checkbox(origin_mode == SceneOriginMode::Centered)
+                .label("Center origin")
+                .on_toggle(|_| Message::Viewer3dToggleCenterOrigin),
         );
         row.into()
     }

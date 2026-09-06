@@ -45,12 +45,47 @@ use crate::inspector::scene3d::pipeline::{
     GpuMesh, GpuTexture, RenderFlags, ScenePipelines, create_depth_texture,
     effective_texture_flag, register_gpu_error_handlers, validate_scene_for_device,
 };
+use crate::inspector::scene3d::mesh::Aabb;
 use crate::inspector::scene3d::scene::Scene;
 
 const ORBIT_SENSITIVITY: f32 = 0.010;
 const PAN_SENSITIVITY: f32 = 0.0012;
 const WHEEL_ZOOM_PER_PIXEL: f32 = 0.0015;
 const WHEEL_ZOOM_PER_LINE: f32 = 0.06;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SceneOriginMode {
+    #[default]
+    Centered,
+    World,
+}
+
+fn scene_display_offset(scene: &Scene, mode: SceneOriginMode) -> [f32; 3] {
+    if mode == SceneOriginMode::World {
+        return [0.0; 3];
+    }
+    let center = scene.aabb.center();
+    if center.iter().all(|value| value.is_finite()) {
+        [-center[0], -center[1], -center[2]]
+    } else {
+        [0.0; 3]
+    }
+}
+
+fn translated_aabb(aabb: Aabb, offset: [f32; 3]) -> Aabb {
+    Aabb {
+        min: [
+            aabb.min[0] + offset[0],
+            aabb.min[1] + offset[1],
+            aabb.min[2] + offset[2],
+        ],
+        max: [
+            aabb.max[0] + offset[0],
+            aabb.max[1] + offset[1],
+            aabb.max[2] + offset[2],
+        ],
+    }
+}
 
 fn resource_cache_flags(flags: RenderFlags) -> u32 {
     flags.intersection(RenderFlags::HAS_TEXTURE).bits()
@@ -66,6 +101,7 @@ pub struct SceneHandleInner {
     pub scene: Option<Arc<Scene>>,
     pub camera: OrbitCamera,
     pub flags: RenderFlags,
+    pub(crate) origin_mode: SceneOriginMode,
     pub dirty: bool,
     pub gpu_error: Option<String>,
 }
@@ -77,7 +113,8 @@ impl SceneHandle {
 
     pub fn set_scene(&self, scene: Scene) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
-        inner.camera.reset_to_aabb(&scene.aabb);
+        let offset = scene_display_offset(&scene, inner.origin_mode);
+        inner.camera.reset_to_aabb(&translated_aabb(scene.aabb, offset));
         inner.scene = Some(Arc::new(scene));
         inner.gpu_error = None;
         inner.dirty = true;
@@ -94,11 +131,30 @@ impl SceneHandle {
     /// The scene itself is preserved.
     pub fn reset_camera(&self) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
-        let aabb = inner.scene.as_ref().map(|s| s.aabb);
-        if let Some(aabb) = aabb {
+        let display_aabb = inner
+            .scene
+            .as_ref()
+            .map(|scene| translated_aabb(scene.aabb, scene_display_offset(scene, inner.origin_mode)));
+        if let Some(aabb) = display_aabb {
             inner.camera.reset_to_aabb(&aabb);
         } else {
             inner.camera = OrbitCamera::default();
+        }
+        inner.dirty = true;
+    }
+
+    pub fn toggle_center_origin(&self) {
+        let mut inner = self.inner.lock().expect("scene handle mutex");
+        inner.origin_mode = match inner.origin_mode {
+            SceneOriginMode::Centered => SceneOriginMode::World,
+            SceneOriginMode::World => SceneOriginMode::Centered,
+        };
+        let display_aabb = inner
+            .scene
+            .as_ref()
+            .map(|scene| translated_aabb(scene.aabb, scene_display_offset(scene, inner.origin_mode)));
+        if let Some(aabb) = display_aabb {
+            inner.camera.reset_to_aabb(&aabb);
         }
         inner.dirty = true;
     }
@@ -417,20 +473,24 @@ impl primitive::Primitive for ScenePrimitive {
             width as f32,
             height as f32,
         );
-        let (Some(scene), cam_updated) = self.handle.with_mut(|inner| {
+        let (Some(scene), origin_offset) = self.handle.with_mut(|inner| {
             if inner.scene.is_none() {
-                return (None, false);
+                return (None, [0.0; 3]);
             }
             inner.camera.set_viewport(crate::inspector::scene3d::camera::Viewport {
                 width,
                 height,
             });
-            (inner.scene.clone(), true)
+            let scene = inner.scene.clone();
+            let offset = scene
+                .as_ref()
+                .map(|scene| scene_display_offset(scene, inner.origin_mode))
+                .unwrap_or([0.0; 3]);
+            (scene, offset)
         }) else {
             pipeline.release_scene_resources();
             return;
         };
-        let _ = cam_updated;
         if let Some(error) = pipeline.gpu_error() {
             self.handle.set_gpu_error(error);
             pipeline.release_scene_resources();
@@ -445,7 +505,7 @@ impl primitive::Primitive for ScenePrimitive {
         pipeline.ensure_size(device, width, height);
         pipeline.ensure_offscreen(device, width, height);
         let (camera, flags) = self.handle.with(|i| (i.camera.clone(), i.flags));
-        pipeline.upload_if_changed(device, queue, &scene, &camera, flags);
+        pipeline.upload_if_changed(device, queue, &scene, &camera, flags, origin_offset);
         let _ = device.poll(wgpu::PollType::Poll);
         if let Some(error) = pipeline.gpu_error() {
             self.handle.set_gpu_error(error);
@@ -509,6 +569,7 @@ pub struct ScenePipeline {
     pub cached_scene_ptr: usize,
     pub cached_signature: u64,
     pub cached_flags_bits: u32,
+    pub cached_origin_offset: [f32; 3],
     pub mesh_cache: Vec<(GpuMesh, Option<GpuTexture>)>,
     pub prepared_this_frame: bool,
     gpu_error: Arc<Mutex<Option<String>>>,
@@ -546,6 +607,7 @@ impl ScenePipeline {
         scene: &Scene,
         camera: &OrbitCamera,
         flags: RenderFlags,
+        origin_offset: [f32; 3],
     ) {
         let scene_ptr = scene as *const Scene as usize;
         let eff_flags = effective_texture_flag(scene, flags);
@@ -558,6 +620,7 @@ impl ScenePipeline {
         if scene_ptr == self.cached_scene_ptr
             && signature == self.cached_signature
             && resource_flags == self.cached_flags_bits
+            && origin_offset == self.cached_origin_offset
         {
             self.render_pipelines.update_camera(
                 queue,
@@ -571,9 +634,10 @@ impl ScenePipeline {
         self.cached_scene_ptr = scene_ptr;
         self.cached_signature = signature;
         self.cached_flags_bits = resource_flags;
+        self.cached_origin_offset = origin_offset;
         self.mesh_cache.clear();
         for mesh in &scene.meshes {
-            let gpu = GpuMesh::from_scene_mesh(device, queue, mesh);
+            let gpu = GpuMesh::from_scene_mesh_at_offset(device, queue, mesh, origin_offset);
             let tex = mesh.diffuse.as_ref().map(|t| {
                 GpuTexture::from_scene_texture(
                     device,
@@ -599,6 +663,7 @@ impl ScenePipeline {
         self.cached_signature = 0;
         self.cached_scene_ptr = 0;
         self.cached_flags_bits = u32::MAX;
+        self.cached_origin_offset = [0.0; 3];
         self.depth_view = None;
         self.depth_tex = None;
         self.width = 0;
@@ -811,6 +876,7 @@ impl PrimitivePipeline for ScenePipeline {
             cached_scene_ptr: 0,
             cached_signature: 0,
             cached_flags_bits: 0,
+            cached_origin_offset: [0.0; 3],
             mesh_cache: Vec::new(),
             prepared_this_frame: false,
             gpu_error: register_gpu_error_handlers(device),
@@ -872,7 +938,7 @@ mod tests {
     }
 
     #[test]
-    fn set_scene_clears_camera_to_aabb_fit() {
+    fn set_scene_centres_camera_on_origin_by_default() {
         let h = SceneHandle::new();
         let scene = Scene {
             meshes: vec![crate::inspector::scene3d::mesh::SceneMesh {
@@ -897,9 +963,32 @@ mod tests {
         h.with(|i| {
             assert!(i.scene.is_some());
             let c = i.camera.target;
-            assert!((c[0] - 1.5).abs() < 1e-4);
-            assert!((c[1] - 1.5).abs() < 1e-4);
-            assert!((c[2] - 1.5).abs() < 1e-4);
+            assert_eq!(i.origin_mode, SceneOriginMode::Centered);
+            assert_eq!(c, [0.0, 0.0, 0.0]);
+        });
+    }
+
+    #[test]
+    fn origin_toggle_restores_authentic_world_position() {
+        let h = SceneHandle::new();
+        let scene = Scene {
+            meshes: vec![],
+            aabb: crate::inspector::scene3d::mesh::Aabb {
+                min: [99.0, 198.0, 297.0],
+                max: [105.0, 204.0, 303.0],
+            },
+            ..Scene::empty(crate::inspector::scene3d::camera::BaseOrientation::Zup)
+        };
+        h.set_scene(scene);
+        h.toggle_center_origin();
+        h.with(|i| {
+            assert_eq!(i.origin_mode, SceneOriginMode::World);
+            assert_eq!(i.camera.target, [102.0, 201.0, 300.0]);
+        });
+        h.toggle_center_origin();
+        h.with(|i| {
+            assert_eq!(i.origin_mode, SceneOriginMode::Centered);
+            assert_eq!(i.camera.target, [0.0, 0.0, 0.0]);
         });
     }
 

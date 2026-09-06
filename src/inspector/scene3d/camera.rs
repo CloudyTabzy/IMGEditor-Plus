@@ -278,6 +278,14 @@ mod tests {
     }
 
     #[test]
+    fn zup_z_axis_maps_to_camera_up() {
+        let m = BaseOrientation::Zup.to_yup_matrix();
+        // Bully's source +Z is up; the Y-up render frame must preserve that.
+        let v = m * glam::Vec4::new(0.0, 0.0, 1.0, 1.0);
+        assert!(approx_pt([v.x, v.y, v.z], [0.0, 1.0, 0.0]));
+    }
+
+    #[test]
     fn xup_x_axis_maps_to_camera_y() {
         let m = BaseOrientation::Xup.to_yup_matrix();
         let v = m * glam::Vec4::new(1.0, 0.0, 0.0, 1.0);

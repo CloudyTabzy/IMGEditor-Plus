@@ -218,6 +218,7 @@ pub enum Message {
     Viewer3dSelectTab(InspectorTab),
     Viewer3dClear,
     Viewer3dReset,
+    Viewer3dToggleCenterOrigin,
     Viewer3dToggleWireframe,
     Viewer3dToggleCullBackfaces,
     Viewer3dToggleTextured,
@@ -2101,6 +2102,10 @@ impl App {
             }
             Message::Viewer3dReset => {
                 self.viewer3d_handle.reset_camera();
+                Task::none()
+            }
+            Message::Viewer3dToggleCenterOrigin => {
+                self.viewer3d_handle.toggle_center_origin();
                 Task::none()
             }
             Message::Viewer3dToggleWireframe => {

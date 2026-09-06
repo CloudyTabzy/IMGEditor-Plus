@@ -174,11 +174,39 @@ pub struct GpuMesh {
 
 impl GpuMesh {
     pub fn from_scene_mesh(device: &wgpu::Device, queue: &wgpu::Queue, mesh: &SceneMesh) -> Self {
+        Self::from_scene_mesh_at_offset(device, queue, mesh, [0.0; 3])
+    }
+
+    pub fn from_scene_mesh_at_offset(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mesh: &SceneMesh,
+        offset: [f32; 3],
+    ) -> Self {
         use wgpu::util::DeviceExt;
 
+        let translated_vertices = if offset == [0.0; 3] {
+            None
+        } else {
+            Some(
+                mesh.vertices
+                    .iter()
+                    .map(|vertex| {
+                        let mut vertex = *vertex;
+                        for (axis, value) in offset.into_iter().enumerate() {
+                            vertex.position[axis] += value;
+                        }
+                        vertex
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let vertices = translated_vertices
+            .as_deref()
+            .unwrap_or(mesh.vertices.as_slice());
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("imgeditor-scene3d/vertex"),
-            contents: bytemuck::cast_slice(&mesh.vertices),
+            contents: bytemuck::cast_slice(vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

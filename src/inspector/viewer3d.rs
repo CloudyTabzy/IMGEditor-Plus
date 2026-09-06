@@ -590,12 +590,17 @@ impl Transform3d {
     }
 
     fn from_nif_transform(transform: &nif::NiTransform) -> Self {
+        let columns = transform.rotation.m;
         Self {
-            // Matrix33 is stored as three columns by the NIF reader. Its
-            // flattened values are the row-major matrix used by the
-            // reference viewer once the transpose is applied at multiply
-            // time.
-            rotation: transform.rotation.m,
+            // Matrix33 is stored as three columns by the NIF reader. Keep
+            // the scene graph's explicit row-major representation separate
+            // so parent composition and column-vector multiplication use the
+            // same convention as the reference importer.
+            rotation: [
+                [columns[0][0], columns[1][0], columns[2][0]],
+                [columns[0][1], columns[1][1], columns[2][1]],
+                [columns[0][2], columns[1][2], columns[2][2]],
+            ],
             translation: [
                 transform.translation.x,
                 transform.translation.y,
@@ -1058,6 +1063,24 @@ mod tests {
         let child = identity_transform([1.0, 0.0, 0.0], 3.0);
         let world = Transform3d::compose(parent, child);
         assert_eq!(world.point(Vector3 { x: 1.0, ..Vector3::default() }), [18.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn nif_matrix_columns_are_transposed_to_row_major() {
+        // On disk this is a +90° Z rotation stored column-major. A direct
+        // use of Matrix33::m would rotate +X toward -Y instead.
+        let transform = nif::NiTransform {
+            rotation: Matrix33 {
+                m: [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            },
+            scale: 1.0,
+            ..Default::default()
+        };
+        let world = Transform3d::from_nif_transform(&transform);
+        assert_eq!(
+            world.point(Vector3 { x: 1.0, ..Vector3::default() }),
+            [0.0, 1.0, 0.0]
+        );
     }
 
     #[test]
