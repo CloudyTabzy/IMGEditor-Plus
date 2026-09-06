@@ -227,6 +227,17 @@ impl Editor {
         }
     }
 
+    pub fn clear_selection(&mut self) {
+        if let Some(archive) = self.selected_archive_mut() {
+            archive.clear_rename();
+            for entry in &mut archive.entries {
+                entry.selected = false;
+            }
+            archive.refresh_export_status();
+        }
+        self.selected_entry = None;
+    }
+
     pub fn delete_selected(&mut self) {
         if let Some(archive) = self.selected_archive_mut() {
             archive.entries.retain(|entry| !entry.selected);
@@ -401,6 +412,22 @@ mod tests {
 
         editor.invert_selection();
         assert!(editor.archives[0].entries.iter().all(|e| !e.selected));
+    }
+
+    #[test]
+    fn clear_selection_resets_entries_and_anchor() {
+        let mut editor = Editor::new();
+        editor.new_archive();
+        editor.archives[0].entries.push(EntryInfo::new("a.dff"));
+        editor.archives[0].entries.push(EntryInfo::new("b.txd"));
+        editor.archives[0].entries[0].selected = true;
+        editor.archives[0].entries[1].selected = true;
+        editor.selected_entry = Some(1);
+
+        editor.clear_selection();
+
+        assert!(editor.archives[0].entries.iter().all(|e| !e.selected));
+        assert_eq!(editor.selected_entry, None);
     }
 
     #[test]

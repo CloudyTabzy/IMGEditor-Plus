@@ -411,21 +411,31 @@ impl App {
                 .align_y(Alignment::Center)
                 .into();
         };
-        let entry_lower = archive
-            .entries
-            .get(self.editor.selected_entry().unwrap_or(0))
-            .map(|e| e.file_name.to_ascii_lowercase())
-            .unwrap_or_default();
+        let Some(entry_index) = self.editor.selected_entry() else {
+            return container(fonts::caption("Select a .nif entry to preview it in 3D."))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into();
+        };
+        let Some(entry) = archive.entries.get(entry_index) else {
+            return container(fonts::caption("The selected entry is no longer available."))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into();
+        };
+        let entry_lower = entry.file_name.to_ascii_lowercase();
         let is_nif = entry_lower.ends_with(".nif");
-        let has_scene = self
-            .viewer3d_handle
-            .with(|inner| inner.scene.is_some());
-        let gpu_error = self
-            .viewer3d_handle
-            .with(|inner| inner.gpu_error.clone());
+        let scene_matches = self.viewer_scene_matches_selection();
+        let gpu_error = scene_matches
+            .then(|| self.viewer3d_handle.with(|inner| inner.gpu_error.clone()))
+            .flatten();
 
-        let toolbar = self.build_viewer3d_toolbar(is_nif);
-        let stats = self.build_viewer3d_stats();
+        let toolbar = self.build_viewer3d_toolbar(is_nif, scene_matches);
+        let stats = self.build_viewer3d_stats(scene_matches);
 
         let body: Element<'_, Message> = if let Some(error) = gpu_error {
             container(
@@ -445,11 +455,21 @@ impl App {
             .align_y(Alignment::Center)
             .padding(16)
             .into()
-        } else if has_scene || is_nif {
+        } else if scene_matches {
             let widget = crate::ui::viewer3d_widget::Scene3dWidget::new(
                 self.viewer3d_handle.clone(),
             );
             widget.into()
+        } else if is_nif {
+            container(fonts::caption(
+                "This NIF is selected but not loaded in the 3D viewer yet.",
+            ))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .padding(16)
+            .into()
         } else {
             container(fonts::caption(format!(
                 "The in-app viewer renders .nif entries. {} isn't a NIF — use the right-click menu to open it in an external viewer.",
@@ -462,11 +482,9 @@ impl App {
             .into()
         };
 
-        let prompt: Element<'_, Message> = if !has_scene && is_nif {
-            button(w::icon_label(icons::model().size(14), fonts::body("Render NIF")))
-                .on_press(Message::EntryContextAction(EntryAction::Render))
-                .into()
-        } else if !has_scene {
+        let prompt: Element<'_, Message> = if !scene_matches && is_nif {
+            fonts::caption("Use ‘Load selected’ above to preview this NIF.").into()
+        } else if !scene_matches {
             fonts::caption("Select a .nif entry, then right-click → Open in 3D viewer.").into()
         } else {
             Space::new().height(Length::Fixed(0.0)).into()
@@ -483,7 +501,7 @@ impl App {
         col.into()
     }
 
-    fn build_viewer3d_stats(&self) -> Element<'_, Message> {
+    fn build_viewer3d_stats(&self, scene_matches: bool) -> Element<'_, Message> {
         let (triangles, vertices, textures, has_scene, w, h, orientation, origin_mode) = self
             .viewer3d_handle
             .with(|i| {
@@ -492,13 +510,26 @@ impl App {
                 let orient = i
                     .scene
                     .as_ref()
+                    .filter(|_| scene_matches)
                     .map(|s| s.base_orientation)
                     .unwrap_or(BaseOrientation::Yup);
                 (
-                    i.scene.as_ref().map(|s| s.total_triangles()).unwrap_or(0),
-                    i.scene.as_ref().map(|s| s.total_vertices()).unwrap_or(0),
-                    i.scene.as_ref().map(|s| s.textured_mesh_count()).unwrap_or(0),
-                    i.scene.is_some(),
+                    i.scene
+                        .as_ref()
+                        .filter(|_| scene_matches)
+                        .map(|s| s.total_triangles())
+                        .unwrap_or(0),
+                    i.scene
+                        .as_ref()
+                        .filter(|_| scene_matches)
+                        .map(|s| s.total_vertices())
+                        .unwrap_or(0),
+                    i.scene
+                        .as_ref()
+                        .filter(|_| scene_matches)
+                        .map(|s| s.textured_mesh_count())
+                        .unwrap_or(0),
+                    scene_matches && i.scene.is_some(),
                     w,
                     h,
                     orient,
@@ -542,7 +573,14 @@ impl App {
                 .align_y(Alignment::Center)
                 .into();
         };
-        let entry_index = self.editor.selected_entry().unwrap_or(0);
+        let Some(entry_index) = self.editor.selected_entry() else {
+            return container(fonts::caption("Select a TXD, NFT, or NIF entry to preview textures."))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into();
+        };
         let Some(entry) = archive.entries.get(entry_index) else {
             return container(fonts::caption("Select a .txd or .nft entry to preview textures."))
                 .width(Length::Fill)
@@ -571,12 +609,12 @@ impl App {
         let Some(textures) = textures else {
             if is_nif {
                 return column![
-                    fonts::caption("Render this NIF in the 3D view first to resolve its companion textures."),
+                    fonts::caption("Load the selected NIF to resolve its companion textures."),
                     button(w::icon_label(
                         icons::model().size(14),
-                        fonts::body("Render NIF textures"),
+                        fonts::body("Load selected NIF"),
                     ))
-                    .on_press(Message::EntryContextAction(EntryAction::Render)),
+                    .on_press(Message::Viewer3dLoadSelected),
                 ]
                 .spacing(6)
                 .align_x(Alignment::Center)
@@ -588,7 +626,7 @@ impl App {
                 fonts::caption(format!("{kind} {entry_name} is not yet decoded.")),
                 button(w::icon_label(
                     icons::texture().size(14),
-                    fonts::body(format!("Decode {kind} textures")),
+                    fonts::body(format!("Load selected {kind} textures")),
                 ))
                 .on_press(Message::TextureDecodeRequested),
             ]
@@ -611,6 +649,15 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(8);
+        if is_nif && !self.viewer_scene_matches_selection() {
+            col = col.push(
+                button(w::icon_label(
+                    icons::model().size(14),
+                    fonts::body("Load selected NIF"),
+                ))
+                .on_press(Message::Viewer3dLoadSelected),
+            );
+        }
         col = col.push(
             button(w::icon_label(
                 icons::export().size(14),
@@ -619,8 +666,10 @@ impl App {
             .on_press(Message::TextureExport),
         );
         if textures.len() > 1 {
-            let mut sel_row = Row::new().spacing(4);
-            sel_row = sel_row.push(fonts::caption("Texture:"));
+            let mut sel_row = Row::new()
+                .spacing(4)
+                .width(Length::Shrink)
+                .align_y(Alignment::Center);
             for (i, _) in textures.iter().enumerate() {
                 let label = if i == tex_idx {
                     format!("● {}", i + 1)
@@ -629,11 +678,29 @@ impl App {
                 };
                 sel_row = sel_row.push(
                     button(fonts::caption(label))
+                        .width(Length::Fixed(38.0))
+                        .height(Length::Fixed(28.0))
                         .on_press(Message::TextureSelect(i))
                         .style(button::text),
                 );
             }
-            col = col.push(sel_row);
+            let slot_rail = Scrollable::new(sel_row)
+                .width(Length::Fill)
+                .height(Length::Fixed(32.0))
+                .direction(iced::widget::scrollable::Direction::Horizontal(
+                    iced::widget::scrollable::Scrollbar::new().scroller_width(10.0),
+                ));
+            col = col.push(
+                column![
+                    fonts::caption(format!(
+                        "Texture {}/{}",
+                        tex_idx + 1,
+                        textures.len()
+                    )),
+                    slot_rail,
+                ]
+                .spacing(2),
+            );
         }
         col = col.push(label_value_owned("Name", tex.name.clone()));
         col = col.push(label_value_owned(
@@ -704,9 +771,24 @@ impl App {
         col.into()
     }
 
-    fn build_viewer3d_toolbar(&self, is_nif: bool) -> Element<'_, Message> {
+    fn build_viewer3d_toolbar(&self, is_nif: bool, scene_matches: bool) -> Element<'_, Message> {
         if !is_nif {
             return Space::new().height(Length::Fixed(28.0)).into();
+        }
+        if !scene_matches {
+            return row![
+                w::icon_label(icons::model().size(14), fonts::caption("3D:")),
+                button(w::icon_label(
+                    icons::refresh().size(14),
+                    fonts::caption("Load selected"),
+                ))
+                .on_press(Message::Viewer3dLoadSelected)
+                .height(Length::Fixed(28.0)),
+            ]
+            .spacing(4)
+            .padding(2)
+            .width(Length::Fill)
+            .into();
         }
         let (flags, origin_mode) = self
             .viewer3d_handle

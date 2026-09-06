@@ -143,6 +143,7 @@ pub enum Message {
 
     SelectAll,
     InvertSelection,
+    ClearSelection,
     DeleteSelected,
     StartRename,
     RenameInputChanged(String),
@@ -215,6 +216,7 @@ pub enum Message {
     ExportEmbeddedTexturesCompleted { entry_index: usize, nif_basename: String, result: Result<crate::inspector::texture_export::ExportReport, String> },
 
     Viewer3dRequestLoad { archive_index: usize, entry_index: usize },
+    Viewer3dLoadSelected,
     Viewer3dLoadCompleted { archive_index: usize, entry_index: usize, result: Result<crate::inspector::scene3d::Scene, String> },
     Viewer3dSelectTab(InspectorTab),
     Viewer3dClear,
@@ -396,6 +398,10 @@ pub struct App {
     pub selected_texture: usize,
     /// Whether the texture tab should draw the matching NIF UV layout.
     pub show_texture_uv: bool,
+    /// Archive/entry identity of the scene currently shown in the 3D viewer.
+    /// Selection can change without destroying the current scene, so the UI
+    /// uses this identity to avoid presenting a stale model as the new one.
+    pub active_viewer_entry: Option<(usize, usize)>,
     pub scroll_y: f32,
     pub selected_inspector_tab: InspectorTab,
     pub viewer3d_handle: std::sync::Arc<crate::ui::viewer3d_widget::SceneHandle>,
@@ -456,6 +462,7 @@ impl App {
             inspected_entry: None,
             selected_texture: 0,
             show_texture_uv: false,
+            active_viewer_entry: None,
             scroll_y: 0.0,
             filter_pending: false,
             autoscroll: None,
@@ -694,6 +701,55 @@ impl App {
         }
     }
 
+    pub(crate) fn selected_entry_key(&self) -> Option<(usize, usize)> {
+        Some((self.editor.selected_archive()?, self.editor.selected_entry()?))
+    }
+
+    pub(crate) fn viewer_scene_matches_selection(&self) -> bool {
+        self.active_viewer_entry == self.selected_entry_key()
+            && self.viewer3d_handle.with(|inner| inner.scene.is_some())
+    }
+
+    fn reset_texture_preview_state(&mut self) {
+        self.selected_texture = 0;
+        self.show_texture_uv = false;
+    }
+
+    fn load_selected_nif(&mut self, target_tab: InspectorTab) -> Task<Message> {
+        let Some(archive_index) = self.editor.selected_archive() else {
+            self.toast = Some("Select a NIF entry first.".into());
+            return Task::none();
+        };
+        let Some(entry_index) = self.editor.selected_entry() else {
+            self.toast = Some("Select a NIF entry first.".into());
+            return Task::none();
+        };
+        let Some(entry) = self
+            .editor
+            .archives()
+            .get(archive_index)
+            .and_then(|archive| archive.entries.get(entry_index))
+        else {
+            self.toast = Some("The selected entry is no longer available.".into());
+            return Task::none();
+        };
+        if !entry.file_name.to_ascii_lowercase().ends_with(".nif") {
+            self.toast = Some(format!(
+                "In-app 3D viewer only supports .nif ({}).",
+                entry.file_name
+            ));
+            return Task::none();
+        }
+
+        self.selected_inspector_tab = target_tab;
+        self.active_viewer_entry = None;
+        self.viewer3d_handle.clear();
+        Task::done(Message::Viewer3dRequestLoad {
+            archive_index,
+            entry_index,
+        })
+    }
+
     fn run_save(
         &self,
         archive: ArchiveInfo,
@@ -795,6 +851,7 @@ impl App {
             Shortcut::ExportSelected => Task::done(Message::ExportSelected),
             Shortcut::SelectAll => Task::done(Message::SelectAll),
             Shortcut::InvertSelection => Task::done(Message::InvertSelection),
+            Shortcut::ClearSelection => Task::done(Message::ClearSelection),
             Shortcut::Delete => Task::done(Message::DeleteSelected),
             Shortcut::FocusSearch => {
                 self.search_focused = true;
@@ -816,6 +873,8 @@ impl App {
 
             Message::NewArchive => {
                 self.editor.new_archive();
+                self.active_viewer_entry = None;
+                self.viewer3d_handle.clear();
                 Task::none()
             }
 
@@ -981,16 +1040,22 @@ impl App {
 
             Message::CloseSelectedArchive => {
                 self.editor.close_selected_archive();
+                self.active_viewer_entry = None;
+                self.viewer3d_handle.clear();
                 let task = self.refresh_inspection();
                 Task::batch(vec![task, Task::none()])
             }
             Message::CloseArchiveTab(index) => {
                 self.editor.close_archive(index);
+                self.active_viewer_entry = None;
+                self.viewer3d_handle.clear();
                 let task = self.refresh_inspection();
                 Task::batch(vec![task, Task::none()])
             }
             Message::SelectArchiveTab(index) => {
                 self.editor.select_archive(index);
+                self.active_viewer_entry = None;
+                self.viewer3d_handle.clear();
                 let task = self.refresh_inspection();
                 Task::batch(vec![task, Task::none()])
             }
@@ -1205,6 +1270,14 @@ impl App {
                 let task = self.refresh_inspection();
                 Task::batch(vec![task, Task::none()])
             }
+            Message::ClearSelection => {
+                self.editor.clear_selection();
+                self.inspected_entry = None;
+                self.reset_texture_preview_state();
+                self.active_viewer_entry = None;
+                self.viewer3d_handle.clear();
+                Task::none()
+            }
             Message::DeleteSelected => {
                 self.editor.delete_selected();
                 let task = self.refresh_inspection();
@@ -1328,6 +1401,7 @@ impl App {
                     let shift = self.modifiers.shift();
                     let ctrl = self.modifiers.command();
                     self.editor.select_entry(entry_index, shift, ctrl);
+                    self.reset_texture_preview_state();
                     self.refresh_inspection()
                 } else {
                     Task::none()
@@ -1338,6 +1412,7 @@ impl App {
                 let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
                     self.editor.set_selected_entry(Some(entry_index));
                     self.editor.select_entry(entry_index, false, false);
+                    self.reset_texture_preview_state();
                     if let Some(archive) = self.editor.selected_archive_mut() {
                         archive.set_rename(entry_index);
                         if let Some(entry) = archive.entries.get(entry_index) {
@@ -1357,6 +1432,7 @@ impl App {
             Message::EntryRightClicked(display_row) => {
                 let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
                     self.editor.select_context_entry(entry_index);
+                    self.reset_texture_preview_state();
                     self.context_menu = Some((entry_index, display_row));
                     self.refresh_inspection()
                 } else {
@@ -1427,34 +1503,7 @@ impl App {
                 }
                 EntryAction::Render => {
                     dev_logger::breadcrumb("user: open in 3D viewer (in-app)");
-                    let Some(archive_index) = self.editor.selected_archive() else {
-                        return Task::none();
-                    };
-                    let Some(entry_index) = self.editor.selected_entry() else {
-                        return Task::none();
-                    };
-                    let lower = {
-                        let Some(archive) = self.editor.archives().get(archive_index) else {
-                            return Task::none();
-                        };
-                        let Some(entry) = archive.entries.get(entry_index) else {
-                            return Task::none();
-                        };
-                        entry.file_name.to_lowercase()
-                    };
-                    if !lower.ends_with(".nif") {
-                        self.toast = Some(format!(
-                            "In-app 3D viewer only supports .nif ({}). Use 'Open in external viewer' for other formats.",
-                            lower
-                        ));
-                        return Task::none();
-                    }
-                    self.selected_inspector_tab = InspectorTab::Model3D;
-                    self.viewer3d_handle.clear();
-                    Task::done(Message::Viewer3dRequestLoad {
-                        archive_index,
-                        entry_index,
-                    })
+                    self.load_selected_nif(InspectorTab::Model3D)
                 }
                 EntryAction::RenderExternal => {
                     dev_logger::breadcrumb("user: open in external viewer (PLY)");
@@ -2003,6 +2052,10 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Viewer3dLoadSelected => {
+                let target_tab = self.selected_inspector_tab;
+                self.load_selected_nif(target_tab)
+            }
             Message::Viewer3dRequestLoad {
                 archive_index,
                 entry_index,
@@ -2097,6 +2150,11 @@ impl App {
                 entry_index,
                 result,
             } => {
+                if self.editor.selected_archive() != Some(archive_index)
+                    || self.editor.selected_entry() != Some(entry_index)
+                {
+                    return Task::none();
+                }
                 match result {
                     Ok(scene) => {
                         dev_logger::breadcrumb(&format!(
@@ -2113,7 +2171,7 @@ impl App {
                             archive.texture_cache.insert(entry_index, texture_previews);
                         }
                         self.viewer3d_handle.set_scene(scene);
-                        self.selected_inspector_tab = InspectorTab::Model3D;
+                        self.active_viewer_entry = Some((archive_index, entry_index));
                         if let Some(archive) = self.editor.selected_archive_mut() {
                             archive.add_log("In-app 3D viewer ready".to_string());
                         }
@@ -2130,6 +2188,7 @@ impl App {
                 Task::none()
             }
             Message::Viewer3dClear => {
+                self.active_viewer_entry = None;
                 self.viewer3d_handle.clear();
                 Task::none()
             }
@@ -2691,6 +2750,13 @@ impl App {
             )),
             Item::new(menu_button(
                 format!(
+                    "Clear selection ({})",
+                    shortcut_display(Shortcut::ClearSelection)
+                ),
+                Message::ClearSelection,
+            )),
+            Item::new(menu_button(
+                format!(
                     "Delete selected ({})",
                     shortcut_display(Shortcut::Delete)
                 ),
@@ -2863,6 +2929,7 @@ fn menu_icon(message: &Message) -> Element<'static, Message> {
         Message::ExportAll | Message::ExportSelected => icons::export(),
         Message::SelectAll => icons::check(),
         Message::InvertSelection => icons::invert_selection(),
+        Message::ClearSelection => icons::close(),
         Message::DeleteSelected => icons::delete(),
         Message::SetTheme(_) => icons::settings(),
         Message::CheckUpdatesManual | Message::ShowAbout => icons::help(),
@@ -2998,6 +3065,24 @@ mod tests {
 
         assert_eq!(app.editor.archives()[0].entries.len(), 1);
         assert_eq!(app.editor.archives()[0].entries[0].file_name, "first.dff");
+    }
+
+    #[test]
+    fn clear_selection_shortcut_clears_selection_and_preview_target() {
+        let mut app = test_app_with_entries();
+        app.editor.select_entry(1, false, false);
+        app.active_viewer_entry = Some((0, 1));
+        app.selected_texture = 3;
+        app.show_texture_uv = true;
+
+        let _ = app.handle_shortcut(Shortcut::ClearSelection);
+        let _ = app.update(Message::ClearSelection);
+
+        assert_eq!(app.editor.selected_entry(), None);
+        assert!(app.editor.archives()[0].entries.iter().all(|entry| !entry.selected));
+        assert_eq!(app.active_viewer_entry, None);
+        assert_eq!(app.selected_texture, 0);
+        assert!(!app.show_texture_uv);
     }
 
     #[test]

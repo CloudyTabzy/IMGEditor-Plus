@@ -15,6 +15,7 @@ pub enum Shortcut {
     ExportSelected,
     SelectAll,
     InvertSelection,
+    ClearSelection,
     Delete,
     FocusSearch,
     CheckUpdates,
@@ -34,6 +35,7 @@ impl Shortcut {
             Shortcut::ExportSelected => "Export selected",
             Shortcut::SelectAll => "Select all",
             Shortcut::InvertSelection => "Invert selection",
+            Shortcut::ClearSelection => "Clear selection",
             Shortcut::Delete => "Delete selected",
             Shortcut::FocusSearch => "Focus search",
             Shortcut::CheckUpdates => "Check for updates",
@@ -69,6 +71,7 @@ pub fn shortcut_chord(shortcut: Shortcut) -> KeyChord {
         Shortcut::ExportSelected => (Physical::Code(Code::KeyE), Modifiers::CTRL | Modifiers::SHIFT),
         Shortcut::SelectAll => (Physical::Code(Code::KeyA), Modifiers::CTRL),
         Shortcut::InvertSelection => (Physical::Code(Code::KeyA), Modifiers::CTRL | Modifiers::SHIFT),
+        Shortcut::ClearSelection => (Physical::Code(Code::Escape), Modifiers::empty()),
         Shortcut::Delete => (Physical::Code(Code::Delete), Modifiers::empty()),
         Shortcut::FocusSearch => (Physical::Code(Code::KeyF), Modifiers::CTRL),
         Shortcut::CheckUpdates => (Physical::Code(Code::KeyU), Modifiers::CTRL),
@@ -106,6 +109,7 @@ pub fn detect_pressed(pressed_physical: Physical, pressed_mods: Modifiers) -> Op
         Shortcut::ExportSelected,
         Shortcut::SelectAll,
         Shortcut::InvertSelection,
+        Shortcut::ClearSelection,
         Shortcut::Delete,
         Shortcut::FocusSearch,
         Shortcut::CheckUpdates,
@@ -190,6 +194,7 @@ pub fn all_shortcuts() -> Vec<Shortcut> {
         Shortcut::ExportSelected,
         Shortcut::SelectAll,
         Shortcut::InvertSelection,
+        Shortcut::ClearSelection,
         Shortcut::Delete,
         Shortcut::FocusSearch,
         Shortcut::CheckUpdates,
@@ -219,6 +224,12 @@ mod tests {
     fn detect_plain_delete() {
         let detected = detect_pressed(Physical::Code(Code::Delete), Modifiers::empty());
         assert_eq!(detected, Some(Shortcut::Delete));
+    }
+
+    #[test]
+    fn detect_escape_clears_selection() {
+        let detected = detect_pressed(Physical::Code(Code::Escape), Modifiers::empty());
+        assert_eq!(detected, Some(Shortcut::ClearSelection));
     }
 
     #[test]
