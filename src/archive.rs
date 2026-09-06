@@ -214,8 +214,10 @@ pub struct ArchiveInfo {
     /// archives don't bleed sort state into each other.
     pub sort_chain: SortChain,
     pub inspection_cache: std::collections::HashMap<usize, EntryInspection>,
-    /// Cached decoded TXD textures per entry index.
-    pub txd_cache: std::collections::HashMap<usize, Vec<DecodedTexture>>,
+    /// Decoded texture previews keyed by archive entry index. The cache is
+    /// shared by RenderWare TXD dictionaries, Bully NFT catalogs, and NIF
+    /// scenes whose companion textures were resolved by the 3D viewer.
+    pub texture_cache: std::collections::HashMap<usize, Vec<DecodedTexture>>,
     /// Cache for `unique_file_types()` invalidated whenever entries are added,
     /// removed, or renamed.
     cached_file_types: Option<Vec<CompactString>>,
@@ -250,7 +252,7 @@ impl ArchiveInfo {
             sort: SortState::default(),
             sort_chain: SortChain::default(),
             inspection_cache: std::collections::HashMap::new(),
-            txd_cache: std::collections::HashMap::new(),
+            texture_cache: std::collections::HashMap::new(),
             cached_file_types: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
@@ -288,7 +290,7 @@ impl ArchiveInfo {
             sort: SortState::default(),
             sort_chain: SortChain::default(),
             inspection_cache: std::collections::HashMap::new(),
-            txd_cache: std::collections::HashMap::new(),
+            texture_cache: std::collections::HashMap::new(),
             cached_file_types: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
@@ -498,7 +500,7 @@ pub fn infer_file_type(file_name: &str) -> CompactString {
 
     if lower.contains(".dff") {
         CompactString::new("Model")
-    } else if lower.contains(".txd") {
+    } else if lower.contains(".txd") || lower.contains(".nft") {
         CompactString::new("Texture")
     } else if lower.contains(".col") {
         CompactString::new("Collision")
@@ -527,6 +529,7 @@ mod tests {
     fn infer_known_types() {
         assert_eq!(infer_file_type("player.dff"), "Model");
         assert_eq!(infer_file_type("PLAYER.TXD"), "Texture");
+        assert_eq!(infer_file_type("PLAYER.NFT"), "Texture");
         assert_eq!(infer_file_type("coll.col"), "Collision");
         assert_eq!(infer_file_type("anim.ifp"), "Animation");
         assert_eq!(infer_file_type("item.ipl"), "Placement");

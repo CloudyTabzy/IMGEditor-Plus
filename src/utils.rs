@@ -10,7 +10,7 @@ pub fn extension_type(file_name: &str) -> Option<&'static str> {
         .and_then(|extension| extension.to_str())
         .map(|extension| match extension.to_ascii_lowercase().as_str() {
             "dff" => "Model",
-            "txd" => "Texture",
+            "txd" | "nft" => "Texture",
             "col" => "Collision",
             "ifp" => "Animation",
             "ipl" => "Placement",

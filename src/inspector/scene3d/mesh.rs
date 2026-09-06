@@ -221,6 +221,10 @@ fn decode_tga_rle(bytes: &[u8], pixel_count: usize) -> Option<Vec<u8>> {
 #[derive(Clone, Debug)]
 pub struct SceneMesh {
     pub name: String,
+    /// Diffuse texture basename as referenced by the source NIF. Keeping the
+    /// name alongside the decoded pixels lets the texture tab match UVs to a
+    /// selected NFT/TXD texture without relying on texture byte identity.
+    pub texture_name: Option<String>,
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
     pub diffuse: Option<SceneTexture>,

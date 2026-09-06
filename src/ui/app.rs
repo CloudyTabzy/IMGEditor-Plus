@@ -200,14 +200,15 @@ pub enum Message {
 
     FilesDropped(PathBuf),
 
-    TxdDecodeRequested,
-    TxdDecoded {
+    TextureDecodeRequested,
+    TextureDecoded {
         index: usize,
         result: Result<Vec<DecodedTexture>, String>,
     },
-    TxdSelectTexture(usize),
-    TxdExportTextures,
-    TxdExportFolderResult(Option<PathBuf>),
+    TextureSelect(usize),
+    TextureExport,
+    TextureExportFolderResult(Option<PathBuf>),
+    TextureUvToggled(bool),
 
     ExportEmbeddedTexturesRequest { entry_index: usize, nif_basename: String },
     ExportEmbeddedTexturesFolderResult { entry_index: usize, nif_basename: String, folder: Option<PathBuf> },
@@ -391,8 +392,10 @@ pub struct App {
     pub panes: pane_grid::State<Pane>,
     pub context_menu: Option<(usize, usize)>,
     pub inspected_entry: Option<(usize, EntryInspection)>,
-    /// Index into the decoded TXD textures currently being viewed.
-    pub txd_selected_texture: usize,
+    /// Index into the decoded textures currently being viewed.
+    pub selected_texture: usize,
+    /// Whether the texture tab should draw the matching NIF UV layout.
+    pub show_texture_uv: bool,
     pub scroll_y: f32,
     pub selected_inspector_tab: InspectorTab,
     pub viewer3d_handle: std::sync::Arc<crate::ui::viewer3d_widget::SceneHandle>,
@@ -451,7 +454,8 @@ impl App {
             panes,
             context_menu: None,
             inspected_entry: None,
-            txd_selected_texture: 0,
+            selected_texture: 0,
+            show_texture_uv: false,
             scroll_y: 0.0,
             filter_pending: false,
             autoscroll: None,
@@ -1385,7 +1389,7 @@ impl App {
                     dialogs::save_folder().map(Message::ExportFolderResult)
                 }
                 EntryAction::ViewTextures => {
-                    Task::done(Message::TxdDecodeRequested)
+                    Task::done(Message::TextureDecodeRequested)
                 }
                 EntryAction::ExportEmbeddedTextures => {
                     let Some(archive_index) = self.editor.selected_archive() else {
@@ -1823,22 +1827,23 @@ impl App {
                 Self::import_archive_task(index, archive, vec![path])
             }
 
-            Message::TxdDecodeRequested => {
+            Message::TextureDecodeRequested => {
                 let Some(entry_index) = self.editor.selected_entry() else {
                     return Task::none();
                 };
                 // Cache miss or first request: decode in the background.
-                self.txd_selected_texture = 0;
-                self.decode_txd(entry_index)
+                self.selected_texture = 0;
+                self.show_texture_uv = false;
+                self.decode_texture_entry(entry_index)
             }
 
-            Message::TxdDecoded { index, result } => {
+            Message::TextureDecoded { index, result } => {
                 match result {
                     Ok(textures) => {
                         if let Some(archive) = self.editor.selected_archive_mut() {
                             let count = textures.len();
-                            archive.txd_cache.insert(index, textures);
-                            archive.add_log(format!("Decoded {count} TXD texture(s)"));
+                            archive.texture_cache.insert(index, textures);
+                            archive.add_log(format!("Decoded {count} texture preview(s)"));
                             self.toast = Some(format!("Decoded {count} texture(s)"));
                         }
                     }
@@ -1849,16 +1854,16 @@ impl App {
                 Task::none()
             }
 
-            Message::TxdSelectTexture(index) => {
-                self.txd_selected_texture = index;
+            Message::TextureSelect(index) => {
+                self.selected_texture = index;
                 Task::none()
             }
 
-            Message::TxdExportTextures => {
-                dialogs::save_folder().map(Message::TxdExportFolderResult)
+            Message::TextureExport => {
+                dialogs::save_folder().map(Message::TextureExportFolderResult)
             }
 
-            Message::TxdExportFolderResult(Some(folder)) => {
+            Message::TextureExportFolderResult(Some(folder)) => {
                 let Some(archive_index) = self.editor.selected_archive() else {
                     return Task::none();
                 };
@@ -1869,7 +1874,7 @@ impl App {
                     .editor
                     .archives()
                     .get(archive_index)
-                    .and_then(|a| a.txd_cache.get(&entry_index))
+                    .and_then(|a| a.texture_cache.get(&entry_index))
                     .cloned();
                 let Some(textures) = textures else {
                     self.toast = Some("No decoded textures to export.".into());
@@ -1922,7 +1927,12 @@ impl App {
                 )
             }
 
-            Message::TxdExportFolderResult(None) => Task::none(),
+            Message::TextureExportFolderResult(None) => Task::none(),
+
+            Message::TextureUvToggled(show) => {
+                self.show_texture_uv = show;
+                Task::none()
+            }
 
             Message::ExportEmbeddedTexturesRequest { entry_index, nif_basename } => {
                 let _ = entry_index;
@@ -2087,26 +2097,32 @@ impl App {
                 entry_index,
                 result,
             } => {
-                let _ = (archive_index, entry_index);
-                    match result {
-                        Ok(scene) => {
-                            dev_logger::breadcrumb(&format!(
-                                "3D load ok: {} verts, {} tris, {} textured meshes",
-                                scene.total_vertices(),
-                                scene.total_triangles(),
-                                scene.textured_mesh_count()
-                            ));
-                            self.viewer3d_handle.set_scene(scene);
-                            self.selected_inspector_tab = InspectorTab::Model3D;
-                            if let Some(archive) = self.editor.selected_archive_mut() {
-                                archive.add_log("In-app 3D viewer ready".to_string());
-                            }
+                match result {
+                    Ok(scene) => {
+                        dev_logger::breadcrumb(&format!(
+                            "3D load ok: {} verts, {} tris, {} textured meshes",
+                            scene.total_vertices(),
+                            scene.total_triangles(),
+                            scene.textured_mesh_count()
+                        ));
+                        let texture_previews =
+                            crate::ui::texture_preview::decoded_textures_from_scene(&scene);
+                        if !texture_previews.is_empty()
+                            && let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
+                        {
+                            archive.texture_cache.insert(entry_index, texture_previews);
                         }
-                        Err(e) => {
-                            dev_logger::breadcrumb(&format!("3D load failed: {e}"));
-                            self.toast = Some(format!("3D load failed: {e}"));
+                        self.viewer3d_handle.set_scene(scene);
+                        self.selected_inspector_tab = InspectorTab::Model3D;
+                        if let Some(archive) = self.editor.selected_archive_mut() {
+                            archive.add_log("In-app 3D viewer ready".to_string());
                         }
                     }
+                    Err(e) => {
+                        dev_logger::breadcrumb(&format!("3D load failed: {e}"));
+                        self.toast = Some(format!("3D load failed: {e}"));
+                    }
+                }
                 Task::none()
             }
             Message::Viewer3dSelectTab(tab) => {
@@ -2384,18 +2400,18 @@ impl App {
         ));
     }
 
-    fn decode_txd(&self, entry_index: usize) -> Task<Message> {
+    fn decode_texture_entry(&self, entry_index: usize) -> Task<Message> {
         let Some(archive_index) = self.editor.selected_archive() else {
             return Task::none();
         };
-        let (entry_clone, archive_path) = {
+        let (entry_clone, archive_path, archive_entries) = {
             let Some(archive) = self.editor.archives().get(archive_index) else {
                 return Task::none();
             };
             let Some(entry) = archive.entries.get(entry_index) else {
                 return Task::none();
             };
-            (entry.clone(), archive.path.clone())
+            (entry.clone(), archive.path.clone(), archive.entries.clone())
         };
 
         Task::perform(
@@ -2405,30 +2421,57 @@ impl App {
                         &entry_clone,
                         archive_path.as_deref(),
                     ).map_err(|e| format!("Failed to read entry: {e}"))?;
-                    let txd = crate::parser::txd::parse_txd(&data)
-                        .map_err(|e| format!("TXD parse failed: {e}"))?;
+                    let extension = std::path::Path::new(entry_clone.file_name.as_str())
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
 
-                    let mut decoded = Vec::new();
-                    for tex in &txd.textures {
-                        let rgba = tex.decode_rgba().map_err(|e| format!("Texture decode failed: {e}"))?;
-                        decoded.push(DecodedTexture {
-                            name: tex.diffuse_name.clone(),
-                            width: tex.width,
-                            height: tex.height,
-                            rgba,
-                            has_alpha: tex.has_alpha != 0 || tex.raster_format != 0x200,
-                            format_name: tex.format_name().to_string(),
-                            mipmap_count: tex.num_mipmaps as u32,
-                            handle: std::sync::OnceLock::new(),
-                        });
+                    match extension.as_str() {
+                        "txd" => {
+                            let txd = crate::parser::txd::parse_txd(&data)
+                                .map_err(|e| format!("TXD parse failed: {e}"))?;
+
+                            let mut decoded = Vec::new();
+                            for tex in &txd.textures {
+                                let rgba = tex
+                                    .decode_rgba()
+                                    .map_err(|e| format!("Texture decode failed: {e}"))?;
+                                decoded.push(DecodedTexture {
+                                    name: tex.diffuse_name.clone(),
+                                    width: tex.width,
+                                    height: tex.height,
+                                    rgba,
+                                    has_alpha: tex.has_alpha != 0 || tex.raster_format != 0x200,
+                                    format_name: tex.format_name().to_string(),
+                                    mipmap_count: tex.num_mipmaps as u32,
+                                    handle: std::sync::OnceLock::new(),
+                                });
+                            }
+                            Ok(decoded)
+                        }
+                        "nft" => {
+                            let archive_texture_index =
+                                crate::inspector::texture::ArchiveTextureIndex::from_entries(
+                                    &archive_entries,
+                                    archive_path.as_deref(),
+                                );
+                            crate::inspector::texture::decode_nft_textures_with_resolver(
+                                &data,
+                                |source_path| archive_texture_index.read(source_path),
+                            )
+                        }
+                        _ => Err(format!(
+                            "Texture preview supports TXD and NFT entries; '{}' is not a supported texture container.",
+                            entry_clone.file_name
+                        )),
                     }
-                    Ok(decoded)
                 })
                 .await;
 
                 result.unwrap_or_else(|e| Err(format!("task panicked: {e}")))
             },
-            move |result| Message::TxdDecoded {
+            move |result| Message::TextureDecoded {
                 index: entry_index,
                 result,
             },

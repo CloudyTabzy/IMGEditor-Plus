@@ -10,6 +10,7 @@ pub mod keymap;
 pub mod sort_manager;
 pub mod theme;
 pub mod tokens;
+pub mod texture_preview;
 pub mod viewer3d_widget;
 pub mod view;
 pub mod widgets;

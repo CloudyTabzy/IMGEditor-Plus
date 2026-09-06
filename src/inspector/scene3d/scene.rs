@@ -179,6 +179,7 @@ mod tests {
         let scene = Scene {
             meshes: vec![SceneMesh {
                 name: "test".to_string(),
+                texture_name: None,
                 vertices: vec![
                     Vertex {
                         position: [0.0; 3],
@@ -214,6 +215,7 @@ mod tests {
         let mut scene = Scene {
             meshes: vec![SceneMesh {
                 name: "bad".to_string(),
+                texture_name: None,
                 vertices: vec![Vertex {
                     position: [0.0; 3],
                     normal: [0.0; 3],

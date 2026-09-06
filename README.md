@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v3.10.1
+# 🎮 IMG Editor Plus v3.11.0
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -42,10 +42,11 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 
 ### 🎨 Embedded 3D Model Viewer (v3.4+)
 - ✅ **In-app wgpu renderer** — same wgpu device Iced uses, no second window or thread battle
-- ✅ **Tab split in the right pane** — `Model 3D` (new) | `Texture` (TXD preview)
+- ✅ **Tab split in the right pane** — `Model 3D` (new) | `Texture` (TXD/NFT preview)
 - ✅ **Orbit / pan / zoom camera** — LMB drag to orbit, MMB drag to pan, wheel to zoom
 - ✅ **Lit + wireframe pipelines** — single WGSL shader, `W` cycles wireframe (toolbar)
 - ✅ **Textured paths** — DXT1/DXT5 diffuse decoded on `spawn_blocking` so the UI thread stays responsive
+- ✅ **Bully NFT companion textures** — embedded Gamebryo pixel data and archive-backed source paths are previewed as RGBA
 - ✅ **External PLY viewer fallback** — right-click `Open in external viewer` for non-NIF formats (DFF / COL) and any user preference
 - ✅ **Configurable base orientation** — Y-up default, `B` cycles to Z-up / X-up. Persists in `settings.ini`.
 
@@ -54,7 +55,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Rotating view-axis gizmo** — the small XYZ widget in the corner tracks the camera as it orbits
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
-- ✅ **201 tests passing** — covers parser, save, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, and headless wgpu against a real Bully fixture
+- ✅ **243 tests passing** — covers parser, save, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against a real Bully fixture
 
 ---
 
@@ -90,8 +91,10 @@ for the engineering story behind the two engines.
 
 ### 🎨 Texture Viewer
 - ✅ **TXD** (RenderWare Texture Dictionary) — full parser + 13 raster format decoder (DXT1/3/5, 1555, 565, 4444, 8888, PAL4, PAL8, + more)
-- ✅ **Inline preview** — `image::Viewer` widget in the info panel
-- ✅ **Multi-texture selector** — navigate textures within a TXD
+- ✅ **NFT** (Bully/Gamebryo texture catalog) — embedded DXT1/DXT5 payloads and archive-backed TGA/DDS/PNG sources
+- ✅ **Inline preview** — cached RGBA preview in the info panel, shared by TXD, NFT, and rendered NIF textures
+- ✅ **Multi-texture selector** — navigate textures within a TXD or NFT
+- ✅ **UV overlay** — toggle matching NIF triangle UVs over the fit-to-preview texture
 - ✅ **Export to TGA** — dump all textures to `.tga` files
 
 ### 🧪 Entry Inspector

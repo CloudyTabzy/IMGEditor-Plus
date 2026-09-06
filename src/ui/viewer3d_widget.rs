@@ -48,7 +48,7 @@ use crate::inspector::scene3d::mesh::Aabb;
 use crate::inspector::scene3d::scene::Scene;
 
 const ORBIT_SENSITIVITY: f32 = 0.010;
-const PAN_SENSITIVITY: f32 = 0.0008;
+const PAN_SENSITIVITY: f32 = 0.00092;
 const WHEEL_ZOOM_PER_PIXEL: f32 = 0.0015;
 const WHEEL_ZOOM_PER_LINE: f32 = 0.06;
 
@@ -957,6 +957,7 @@ mod tests {
         let scene = Scene {
             meshes: vec![crate::inspector::scene3d::mesh::SceneMesh {
                 name: "unit".into(),
+                texture_name: None,
                 vertices: vec![],
                 indices: vec![],
                 diffuse: None,
@@ -1037,6 +1038,7 @@ mod tests {
         let mut b = a.clone();
         b.meshes.push(crate::inspector::scene3d::mesh::SceneMesh {
             name: "x".into(),
+            texture_name: None,
             vertices: vec![crate::inspector::scene3d::mesh::Vertex {
                 position: [0.0, 1.0, 2.0],
                 normal: [0.0, 1.0, 0.0],

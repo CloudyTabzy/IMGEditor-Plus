@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::archive::EntryInfo;
 use crate::inspector::nif::{BlockPayload, NifFile, NiPixelDataPayload};
+use crate::inspector::scene3d::mesh::SceneTexture;
+use crate::parser::DecodedTexture;
 
 const MAX_TEXTURE_DIMENSION: u32 = 8_192;
 
@@ -232,6 +234,130 @@ impl NftCatalog {
     }
 }
 
+/// Decode every texture payload that can be recovered from an NFT catalog.
+///
+/// Bully NFT files are Gamebryo texture catalogs rather than RenderWare TXD
+/// dictionaries. Some carry the compressed pixels in a referenced
+/// `NiPixelData` block, while others only carry the source path and rely on a
+/// texture file stored beside the catalog or in an IMG archive. The resolver
+/// callback covers that latter case without coupling this parser to archive
+/// ownership or UI state.
+pub fn decode_nft_textures(bytes: &[u8]) -> Result<Vec<DecodedTexture>, String> {
+    decode_nft_textures_with_resolver(bytes, |_| None)
+}
+
+/// Variant of [`decode_nft_textures`] that can resolve external texture files
+/// by the source path recorded in each `NiSourceTexture` block.
+pub fn decode_nft_textures_with_resolver<F>(
+    bytes: &[u8],
+    mut resolve_external: F,
+) -> Result<Vec<DecodedTexture>, String>
+where
+    F: FnMut(&str) -> Option<Vec<u8>>,
+{
+    let catalog = parse_nft_catalog_bytes(bytes)
+        .ok_or_else(|| "NFT parse failed: unsupported or malformed Gamebryo texture catalog".to_string())?;
+    let catalog_count = catalog.entries.len();
+    let mut decoded = Vec::new();
+
+    for (key, entry) in catalog.entries {
+        let source_path = entry.source_path.clone();
+        let scene_texture = entry
+            .pixel_data
+            .and_then(|payload| decode_texture_payload(&payload))
+            .or_else(|| {
+                resolve_external(&source_path)
+                    .or_else(|| resolve_external(&key))
+                    .and_then(|payload| decode_texture_payload(&payload))
+            });
+        let Some((scene_texture, format_name)) = scene_texture else {
+            continue;
+        };
+        let name = Path::new(&source_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&key)
+            .to_string();
+        let has_alpha = scene_texture
+            .rgba
+            .chunks_exact(4)
+            .any(|pixel| pixel[3] < 255);
+
+        decoded.push(DecodedTexture {
+            name,
+            width: scene_texture.width,
+            height: scene_texture.height,
+            rgba: scene_texture.rgba,
+            has_alpha,
+            format_name: format_name.to_string(),
+            mipmap_count: 1,
+            handle: std::sync::OnceLock::new(),
+        });
+    }
+
+    decoded.sort_by_key(|texture| texture.name.to_ascii_lowercase());
+    if decoded.is_empty() {
+        return Err(format!(
+            "NFT contains {catalog_count} texture record(s), but no decodable pixel payloads were found."
+        ));
+    }
+    Ok(decoded)
+}
+
+fn decode_texture_payload(bytes: &[u8]) -> Option<(SceneTexture, &'static str)> {
+    if bytes.starts_with(b"DDS ") {
+        return decode_dds_payload(bytes).map(|texture| (texture, "DDS (NFT payload)"));
+    }
+    if let Some(texture) = SceneTexture::from_tga(bytes) {
+        return Some((texture, "TGA (NFT payload)"));
+    }
+
+    // A few extracted Bully catalogs can point at a PNG instead of a TGA.
+    // Keep this fallback narrow: the existing `image` dependency is already
+    // used by the application and is compiled with PNG support.
+    let decoded = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let (width, height) = decoded.dimensions();
+    if width == 0
+        || height == 0
+        || width > MAX_TEXTURE_DIMENSION
+        || height > MAX_TEXTURE_DIMENSION
+    {
+        return None;
+    }
+    Some((
+        SceneTexture {
+            width,
+            height,
+            rgba: decoded.into_raw(),
+        },
+        "PNG (NFT payload)",
+    ))
+}
+
+fn decode_dds_payload(bytes: &[u8]) -> Option<SceneTexture> {
+    if bytes.len() < 128 {
+        return None;
+    }
+    let height = u32::from_le_bytes(bytes[12..16].try_into().ok()?);
+    let width = u32::from_le_bytes(bytes[16..20].try_into().ok()?);
+    if width == 0
+        || height == 0
+        || width > MAX_TEXTURE_DIMENSION
+        || height > MAX_TEXTURE_DIMENSION
+    {
+        return None;
+    }
+    let compressed = &bytes[128..];
+    let tga = match &bytes[84..88] {
+        b"DXT1" => dxt1_to_tga(compressed, width, height),
+        b"DXT3" => dxt3_to_tga(compressed, width, height),
+        b"DXT5" => dxt5_to_tga(compressed, width, height),
+        _ => return None,
+    };
+    SceneTexture::from_tga(&tga)
+}
+
 fn texture_key(name: &str) -> String {
     name.rsplit(['/', '\\'])
         .next()
@@ -303,8 +429,15 @@ fn extract_embedded_pixels(nft: &NifFile, nft_bytes: &[u8], block_idx: usize) ->
         .checked_mul(ph as usize)?
         .checked_mul(4)?;
     let data_start = 8;
-    let available = pixel_bytes.len().saturating_sub(data_start).min(expected);
-    if available < 4 { return None; }
+    let available = pixel_bytes
+        .len()
+        .saturating_sub(data_start)
+        .min(expected)
+        / 4
+        * 4;
+    if available < 4 {
+        return None;
+    }
 
     let mut tga = Vec::with_capacity(18 + available);
     tga.push(0); tga.push(0); tga.push(2);
@@ -518,6 +651,84 @@ fn dxt1_to_tga(data: &[u8], w: u32, h: u32) -> Vec<u8> {
                     let px = block_px[row * 4 + col];
                     let dst = 18 + (img_y * w as usize + img_x) * 4;
                     tga[dst..dst+4].copy_from_slice(&[px[2], px[1], px[0], px[3]]); // BGRA
+                }
+            }
+        }
+    }
+    tga
+}
+
+/// Decompress a single DXT3/BC2 16-byte block to 4×4 RGBA pixels.
+fn dxt3_block_to_rgba(block: &[u8]) -> [[u8; 4]; 16] {
+    let c0 = u16::from_le_bytes([block[8], block[9]]);
+    let c1 = u16::from_le_bytes([block[10], block[11]]);
+    let expand = |c: u16| -> [u8; 3] {
+        let r = ((c >> 11) & 0x1F) as u8;
+        let g = ((c >> 5) & 0x3F) as u8;
+        let b = (c & 0x1F) as u8;
+        [
+            (r << 3) | (r >> 2),
+            (g << 2) | (g >> 4),
+            (b << 3) | (b >> 2),
+        ]
+    };
+    let col0 = expand(c0);
+    let col1 = expand(c1);
+    let colors = [
+        col0,
+        col1,
+        [
+            ((2 * col0[0] as u16 + col1[0] as u16) / 3) as u8,
+            ((2 * col0[1] as u16 + col1[1] as u16) / 3) as u8,
+            ((2 * col0[2] as u16 + col1[2] as u16) / 3) as u8,
+        ],
+        [
+            ((col0[0] as u16 + 2 * col1[0] as u16) / 3) as u8,
+            ((col0[1] as u16 + 2 * col1[1] as u16) / 3) as u8,
+            ((col0[2] as u16 + 2 * col1[2] as u16) / 3) as u8,
+        ],
+    ];
+    let codes = u32::from_le_bytes([block[12], block[13], block[14], block[15]]);
+    let alpha = u64::from_le_bytes([
+        block[0], block[1], block[2], block[3], block[4], block[5], block[6], block[7],
+    ]);
+    let mut out = [[0u8; 4]; 16];
+    for (i, pixel) in out.iter_mut().enumerate() {
+        let color = colors[((codes >> (i * 2)) & 3) as usize];
+        let alpha_nibble = ((alpha >> (i * 4)) & 0xF) as u8;
+        *pixel = [color[0], color[1], color[2], alpha_nibble * 17];
+    }
+    out
+}
+
+/// Decompress DXT3 data to RGBA TGA bytes.
+fn dxt3_to_tga(data: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let bw = w.div_ceil(4).max(1) as usize;
+    let bh = h.div_ceil(4).max(1) as usize;
+    let mut tga = vec![0u8; 18 + (w * h * 4) as usize];
+    tga[2] = 2;
+    tga[12..14].copy_from_slice(&(w as u16).to_le_bytes());
+    tga[14..16].copy_from_slice(&(h as u16).to_le_bytes());
+    tga[16] = 32;
+    tga[17] = 0x28;
+
+    for by in 0..bh {
+        for bx in 0..bw {
+            let src = (by * bw + bx) * 16;
+            if src + 16 > data.len() {
+                continue;
+            }
+            let block_px = dxt3_block_to_rgba(&data[src..src + 16]);
+            for row in 0..4 {
+                for col in 0..4 {
+                    let img_y = by * 4 + row;
+                    let img_x = bx * 4 + col;
+                    if img_y >= h as usize || img_x >= w as usize {
+                        continue;
+                    }
+                    let px = block_px[row * 4 + col];
+                    let dst = 18 + (img_y * w as usize + img_x) * 4;
+                    tga[dst..dst + 4].copy_from_slice(&[px[2], px[1], px[0], px[3]]);
                 }
             }
         }
@@ -1458,5 +1669,16 @@ mod tests {
             catalog.entries.values().any(|entry| entry.pixel_data.is_some()),
             "Player_Mascot.nft should expose at least one decoded pixel payload"
         );
+        let nft_bytes = index
+            .read("Player_Mascot.nft")
+            .expect("Player_Mascot.nft bytes should be readable");
+        let previews = decode_nft_textures(&nft_bytes)
+            .expect("Player_Mascot.nft should produce texture-tab previews");
+        assert!(!previews.is_empty());
+        assert!(previews.iter().all(|texture| {
+            texture.width > 0
+                && texture.height > 0
+                && texture.rgba.len() == texture.width as usize * texture.height as usize * 4
+        }));
     }
 }

@@ -158,6 +158,7 @@ fn mesh_from_data(
 
     SceneMesh {
         name: data.name.clone(),
+        texture_name: data.texture_name.clone(),
         vertices,
         indices,
         diffuse,

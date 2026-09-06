@@ -336,6 +336,7 @@ mod tests {
         let aabb = Aabb::from_points(&positions).unwrap();
         let mesh = SceneMesh {
             name: "tri".into(),
+            texture_name: None,
             vertices,
             indices,
             diffuse: None,

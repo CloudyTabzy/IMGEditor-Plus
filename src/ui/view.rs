@@ -1,5 +1,5 @@
 use iced::widget::{
-    checkbox, Column, Container, Row, Scrollable, Space, button, column, container, image,
+    canvas, checkbox, Column, Container, Row, Scrollable, Space, button, column, container, image,
     mouse_area, pane_grid, progress_bar, rule, row, stack, text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length};
@@ -544,18 +544,22 @@ impl App {
         };
         let entry_index = self.editor.selected_entry().unwrap_or(0);
         let Some(entry) = archive.entries.get(entry_index) else {
-            return container(fonts::caption("Select a .txd entry to preview textures."))
+            return container(fonts::caption("Select a .txd or .nft entry to preview textures."))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Alignment::Center)
                 .align_y(Alignment::Center)
                 .into();
         };
-        let is_txd = entry.file_name.to_ascii_lowercase().ends_with(".txd");
-        if !is_txd {
+        let entry_name = entry.file_name.to_string();
+        let lower = entry_name.to_ascii_lowercase();
+        let is_txd = lower.ends_with(".txd");
+        let is_nft = lower.ends_with(".nft");
+        let is_nif = lower.ends_with(".nif");
+        if !is_txd && !is_nft && !is_nif {
             return container(fonts::caption(format!(
-                "{} is not a .txd file. Texture preview is available for .txd entries only.",
-                entry.file_name
+                "{} is not a texture container. Preview is available for TXD, NFT, or rendered NIF entries.",
+                entry_name
             )))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -563,15 +567,30 @@ impl App {
             .align_y(Alignment::Center)
             .into();
         }
-        let textures = archive.txd_cache.get(&entry_index);
+        let textures = archive.texture_cache.get(&entry_index);
         let Some(textures) = textures else {
+            if is_nif {
+                return column![
+                    fonts::caption("Render this NIF in the 3D view first to resolve its companion textures."),
+                    button(w::icon_label(
+                        icons::model().size(14),
+                        fonts::body("Render NIF textures"),
+                    ))
+                    .on_press(Message::EntryContextAction(EntryAction::Render)),
+                ]
+                .spacing(6)
+                .align_x(Alignment::Center)
+                .padding(8)
+                .into();
+            }
+            let kind = if is_nft { "NFT" } else { "TXD" };
             return column![
-                fonts::caption(format!("TXD {}.txd not yet decoded.", entry.file_name)),
+                fonts::caption(format!("{kind} {entry_name} is not yet decoded.")),
                 button(w::icon_label(
                     icons::texture().size(14),
-                    fonts::body("Decode textures"),
+                    fonts::body(format!("Decode {kind} textures")),
                 ))
-                .on_press(Message::TxdDecodeRequested),
+                .on_press(Message::TextureDecodeRequested),
             ]
             .spacing(4)
             .align_x(Alignment::Center)
@@ -579,14 +598,14 @@ impl App {
             .into();
         };
         if textures.is_empty() {
-            return container(fonts::caption("No textures in TXD."))
+            return container(fonts::caption("No decodable textures in this container."))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Alignment::Center)
                 .align_y(Alignment::Center)
                 .into();
         }
-        let tex_idx = self.txd_selected_texture.min(textures.len() - 1);
+        let tex_idx = self.selected_texture.min(textures.len() - 1);
         let tex = &textures[tex_idx];
         let mut col = Column::new().spacing(6)
             .width(Length::Fill)
@@ -597,7 +616,7 @@ impl App {
                 icons::export().size(14),
                 fonts::body(format!("Export textures ({})", textures.len())),
             ))
-            .on_press(Message::TxdExportTextures),
+            .on_press(Message::TextureExport),
         );
         if textures.len() > 1 {
             let mut sel_row = Row::new().spacing(4);
@@ -610,7 +629,7 @@ impl App {
                 };
                 sel_row = sel_row.push(
                     button(fonts::caption(label))
-                        .on_press(Message::TxdSelectTexture(i))
+                        .on_press(Message::TextureSelect(i))
                         .style(button::text),
                 );
             }
@@ -625,6 +644,33 @@ impl App {
             "Alpha",
             if tex.has_alpha { "Yes" } else { "No" }.to_string(),
         ));
+
+        let uv_triangles = self.viewer3d_handle.with(|inner| {
+            inner
+                .scene
+                .as_deref()
+                .map(|scene| crate::ui::texture_preview::uv_triangles_for_texture(scene, &tex.name))
+                .unwrap_or_default()
+        });
+        let uv_toggle = checkbox(self.show_texture_uv && !uv_triangles.is_empty())
+            .label("Show UV map")
+            .on_toggle_maybe(
+                (!uv_triangles.is_empty())
+                    .then_some(|show| Message::TextureUvToggled(show)),
+            );
+        col = col.push(
+            row![
+                uv_toggle,
+                if uv_triangles.is_empty() {
+                    fonts::caption("Load matching NIF geometry in the 3D view to enable UVs")
+                } else {
+                    fonts::caption(format!("{} triangles", uv_triangles.len()))
+                },
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        );
+
         // Lazily build the Iced image handle once per texture and cache it on
         // the decoded texture. This avoids cloning the full RGBA buffer on every
         // frame while the texture tab is open.
@@ -632,10 +678,28 @@ impl App {
             .handle
             .get_or_init(|| image::Handle::from_rgba(tex.width, tex.height, tex.rgba.clone()))
             .clone();
-        let preview = image::Viewer::new(handle)
+        let preview: Element<'_, Message> = if self.show_texture_uv && !uv_triangles.is_empty() {
+            let image_layer = image(handle)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .content_fit(iced::ContentFit::Contain)
+                .into();
+            let overlay = canvas::Canvas::new(crate::ui::texture_preview::TextureUvOverlay {
+                image_width: tex.width,
+                image_height: tex.height,
+                triangles: uv_triangles,
+            })
             .width(Length::Fill)
             .height(Length::Fill)
-            .content_fit(iced::ContentFit::Contain);
+            .into();
+            stack(vec![image_layer, overlay]).width(Length::Fill).height(Length::Fill).into()
+        } else {
+            image::Viewer::new(handle)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .content_fit(iced::ContentFit::Contain)
+                .into()
+        };
         col = col.push(preview);
         col.into()
     }
@@ -1325,7 +1389,7 @@ fn build_context_menu(
         );
     }
 
-    if entry.file_name.to_lowercase().ends_with(".txd") {
+    if lower.ends_with(".txd") || lower.ends_with(".nft") {
         items.push(
             context_button("View textures",
                 Message::EntryContextAction(EntryAction::ViewTextures)).into(),
