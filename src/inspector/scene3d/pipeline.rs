@@ -951,7 +951,7 @@ fn build_lit_pipeline(
 
 /// Two-triangle fullscreen quad in clip space ([-1, 1] x [-1, 1]).
 /// UV (0, 0) is the top-left of the texture, (1, 1) is the bottom-right;
-/// the compositor WGSL flips V explicitly so the texture appears upright.
+/// the compositor samples these coordinates directly.
 fn build_quad_vertex_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     use wgpu::util::DeviceExt;
     let verts = [
@@ -1036,6 +1036,12 @@ mod tests {
         let bytes = bytemuck::bytes_of(&u).to_vec();
         let back: &CameraUniform = bytemuck::from_bytes(&bytes);
         assert_eq!(back.flags, 1);
+    }
+
+    #[test]
+    fn compositor_preserves_render_target_orientation() {
+        assert!(COMPOSITOR_WGSL.contains("out.uv = input.uv;"));
+        assert!(!COMPOSITOR_WGSL.contains("1.0 - input.uv.y"));
     }
 
     #[test]

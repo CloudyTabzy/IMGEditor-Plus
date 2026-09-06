@@ -16,7 +16,11 @@ struct VertexOut {
 fn vs_main(input: VertexIn) -> VertexOut {
     var out: VertexOut;
     out.clip_position = vec4<f32>(input.position, 1.0);
-    out.uv = vec2<f32>(input.uv.x, 1.0 - input.uv.y);
+    // The fullscreen quad already supplies top-left UVs for its top-left
+    // clip-space vertices. Sampling directly preserves the offscreen
+    // render's orientation; an extra V flip turns models and the gizmo
+    // upside down in the embedded viewer.
+    out.uv = input.uv;
     return out;
 }
 
