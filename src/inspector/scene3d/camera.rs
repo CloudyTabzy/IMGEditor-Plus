@@ -233,9 +233,9 @@ impl OrbitCamera {
         let world_up = glam::Vec3::Y;
         let right = forward.cross(world_up).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
-        self.target[0] += (right.x * dx - up.x * dy) * s;
-        self.target[1] += (right.y * dx - up.y * dy) * s;
-        self.target[2] += (right.z * dx - up.z * dy) * s;
+        self.target[0] += (right.x * dx + up.x * dy) * s;
+        self.target[1] += (right.y * dx + up.y * dy) * s;
+        self.target[2] += (right.z * dx + up.z * dy) * s;
     }
 
     /// Exponential zoom. `factor > 1.0` zooms out, `< 1.0` zooms in.
@@ -379,6 +379,28 @@ mod tests {
         });
         let m = cam.view();
         assert!(m.determinant().abs() > 0.0);
+    }
+
+    #[test]
+    fn pan_follows_vertical_pointer_delta() {
+        let mut horizontal = OrbitCamera::new(Viewport {
+            width: 800,
+            height: 600,
+        });
+        horizontal.pan(10.0, 0.0, 0.01);
+        assert!(horizontal.target[0] > 0.0);
+        assert!(approx_eq(horizontal.target[1], 0.0));
+        assert!(approx_eq(horizontal.target[2], 0.0));
+
+        let mut cam = OrbitCamera::new(Viewport {
+            width: 800,
+            height: 600,
+        });
+        cam.pan(0.0, 10.0, 0.01);
+        assert!(cam.target[1] > 0.0, "dragging down should pan the view down");
+
+        cam.pan(0.0, -20.0, 0.01);
+        assert!(cam.target[1] < 0.0, "dragging up should pan the view up");
     }
 
     #[test]
