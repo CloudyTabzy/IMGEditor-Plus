@@ -230,7 +230,12 @@ impl Scene3dWidget {
     }
 }
 
-fn handle_event(camera: &mut OrbitCamera, state: &mut DragState, event: &Event) -> bool {
+fn handle_event(
+    camera: &mut OrbitCamera,
+    state: &mut DragState,
+    event: &Event,
+    cursor_inside: bool,
+) -> bool {
     match event {
         Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left)) => {
             state.dragging = true;
@@ -268,6 +273,9 @@ fn handle_event(camera: &mut OrbitCamera, state: &mut DragState, event: &Event) 
             }
         }
         Event::Mouse(MouseEvent::WheelScrolled { delta, .. }) => {
+            if !cursor_inside {
+                return false;
+            }
             let factor = match delta {
                 ScrollDelta::Lines { y, .. } => {
                     if *y > 0.0 {
@@ -363,7 +371,8 @@ where
                 state.dragging = false;
                 dirty = true;
             }
-            let mut needs_redraw = handle_event(&mut inner.camera, state, event);
+            let mut needs_redraw =
+                handle_event(&mut inner.camera, state, event, cursor_inside);
             if !state.dragging {
                 state.last = None;
             }
@@ -1137,5 +1146,55 @@ mod tests {
             yaw.abs() > 1e-4,
             "expected left-drag to orbit the camera, yaw = {yaw}"
         );
+    }
+
+    #[test]
+    fn wheel_zoom_is_scoped_to_viewer_bounds() {
+        type TestWidget = dyn Widget<(), iced::Theme, MockRenderer>;
+
+        let handle = Arc::new(SceneHandle::new());
+        let mut widget = Scene3dWidget::new(handle.clone());
+        let mut tree = Tree {
+            tag: <Scene3dWidget as Widget<(), iced::Theme, MockRenderer>>::tag(&widget),
+            state: <Scene3dWidget as Widget<(), iced::Theme, MockRenderer>>::state(&widget),
+            children: Vec::new(),
+        };
+        let node = Node::new(Size::new(200.0, 200.0));
+        let viewport = Rectangle::new(Point::ORIGIN, Size::new(200.0, 200.0));
+        let renderer = MockRenderer;
+        let mut clipboard = iced::advanced::clipboard::Null;
+        let mut messages = Vec::<()>::new();
+        let mut drive = |event: Event, cursor: Cursor| {
+            TestWidget::update(
+                &mut widget,
+                &mut tree,
+                &event,
+                layout::Layout::new(&node),
+                cursor,
+                &renderer,
+                &mut clipboard,
+                &mut Shell::new(&mut messages),
+                &viewport,
+            );
+        };
+
+        let before = handle.with(|inner| inner.camera.distance);
+        drive(
+            Event::Mouse(MouseEvent::WheelScrolled {
+                delta: ScrollDelta::Lines { x: 0.0, y: 1.0 },
+            }),
+            Cursor::Available(Point::new(300.0, 50.0)),
+        );
+        let outside = handle.with(|inner| inner.camera.distance);
+        assert_eq!(outside, before, "outside scroll must not zoom the viewer");
+
+        drive(
+            Event::Mouse(MouseEvent::WheelScrolled {
+                delta: ScrollDelta::Lines { x: 0.0, y: 1.0 },
+            }),
+            Cursor::Available(Point::new(100.0, 100.0)),
+        );
+        let inside = handle.with(|inner| inner.camera.distance);
+        assert_ne!(inside, outside, "inside scroll should zoom the viewer");
     }
 }

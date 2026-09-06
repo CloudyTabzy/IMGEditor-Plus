@@ -648,7 +648,10 @@ impl App {
             .viewer3d_handle
             .with(|i| (i.flags, i.origin_mode));
         let button_height = Length::Fixed(28.0);
-        let mut row = Row::new().spacing(4).padding(2);
+        let mut row = Row::new()
+            .spacing(4)
+            .padding(2)
+            .width(Length::Fill);
         row = row.push(w::icon_label(icons::model().size(14), fonts::caption("3D:")));
         row = row.push(
             tooltip(
@@ -691,7 +694,7 @@ impl App {
                 .label("Center origin")
                 .on_toggle(|_| Message::Viewer3dToggleCenterOrigin),
         );
-        row.into()
+        row.wrap().vertical_spacing(4).into()
     }
 
     fn build_inspection_panel(inspection: &EntryInspection) -> Element<'_, Message> {
