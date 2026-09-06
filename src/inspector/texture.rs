@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::inspector::nif::{BlockPayload, NifFile, NiPixelDataPayload};
 
+const MAX_TEXTURE_DIMENSION: u32 = 8_192;
+
 /// Maps model name (lowercase) → txd/NFT name (from .ide `objs` entries).
 #[derive(Debug, Default)]
 pub struct IdeMap {
@@ -120,6 +122,18 @@ impl IdeMap {
         }
         None
     }
+
+    /// Locate an external texture by basename. Bully's extracted assets can
+    /// live beside the NIF rather than in its companion NFT, so this is the
+    /// safe fallback used by the embedded viewer after NFT lookup misses.
+    pub fn locate_external_texture(&self, texture_name: &str) -> Option<PathBuf> {
+        let basename = texture_name
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|name| !name.is_empty())?;
+        let root = self.game_root.as_ref()?;
+        Self::find_file_recursive(root, &basename.to_lowercase())
+    }
 }
 
 // ---- NFT catalog (texture basename → source path) ---------------------
@@ -142,13 +156,20 @@ pub struct TextureEntry {
 impl NftCatalog {
     pub fn get_pixels(&self, texture_basename: &str) -> Option<&[u8]> {
         self.entries
-            .get(&texture_basename.to_lowercase())
+            .get(&texture_key(texture_basename))
             .and_then(|e| e.pixel_data.as_deref())
     }
 
     pub fn has_texture(&self, texture_basename: &str) -> bool {
-        self.entries.contains_key(&texture_basename.to_lowercase())
+        self.entries.contains_key(&texture_key(texture_basename))
     }
+}
+
+fn texture_key(name: &str) -> String {
+    name.rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .to_lowercase()
 }
 
 // ---- Embedded pixel data extraction ----------------------------------
@@ -184,12 +205,13 @@ fn extract_embedded_pixels(nft: &NifFile, nft_bytes: &[u8], block_idx: usize) ->
     // 4. controller (i32)
     // 5. use_external (u8) = already checked as 0
     // 6. file_name_index (u32)
-    // 7. pixel_layout (u32)
-    // 8. use_mipmaps (u32)
-    // 9. alpha_format (u32)
-    // 10. is_static (u8)
-    // 11. direct_render (u8)
-    // 12. persist_render_data (u8)
+    // 7. pixel_data_ref (i32)
+    // 8. pixel_layout (u32)
+    // 9. use_mipmaps (u32)
+    // 10. alpha_format (u32)
+    // 11. is_static (u8)
+    // 12. direct_render (u8)
+    // 13. persist_render_data (u8)
     let header_end = after_extra + 4 + 1 + 4 + 4 + 4 + 4 + 1 + 1 + 1;
     if header_end >= raw.len() {
         // No pixel data — fully legit for NFT that only stores metadata
@@ -202,9 +224,17 @@ fn extract_embedded_pixels(nft: &NifFile, nft_bytes: &[u8], block_idx: usize) ->
     if pixel_bytes.len() < 8 { return None; }
     let pw = u32::from_le_bytes(pixel_bytes[0..4].try_into().ok()?);
     let ph = u32::from_le_bytes(pixel_bytes[4..8].try_into().ok()?);
-    if pw == 0 || pw > 16384 || ph == 0 || ph > 16384 { return None; }
+    if pw == 0
+        || pw > MAX_TEXTURE_DIMENSION
+        || ph == 0
+        || ph > MAX_TEXTURE_DIMENSION
+    {
+        return None;
+    }
 
-    let expected = pw as usize * ph as usize * 4;
+    let expected = (pw as usize)
+        .checked_mul(ph as usize)?
+        .checked_mul(4)?;
     let data_start = 8;
     let available = pixel_bytes.len().saturating_sub(data_start).min(expected);
     if available < 4 { return None; }
@@ -276,6 +306,17 @@ fn extract_pixels_for_nft(
     nft_bytes: &[u8],
     tex_block_idx: usize,
 ) -> Option<Vec<u8>> {
+    // The reference is authoritative when present. Scanning by block order
+    // can associate a shared pixel block with the wrong source texture.
+    if let Some(Some(BlockPayload::NiSourceTexture(tex))) = nft.payloads.get(tex_block_idx)
+        && tex.pixel_data_ref >= 0
+        && let Some(Some(BlockPayload::NiPixelData(pd))) =
+            nft.payloads.get(tex.pixel_data_ref as usize)
+        && let Some(pixels) = extract_dds_from_nipixeldata(pd)
+    {
+        return Some(pixels);
+    }
+
     // Check inline pixel data first (NiSourceTexture embedded).
     if let Some(tga) = extract_embedded_pixels(nft, nft_bytes, tex_block_idx)
         && tga.len() > 22
@@ -567,7 +608,11 @@ fn parse_nipixeldata_header(raw_pixels: &[u8]) -> Option<ParsedNiPixelData> {
     let mip0_w = u32::from_le_bytes(raw_pixels[pos..pos + 4].try_into().ok()?);
     let mip0_h = u32::from_le_bytes(raw_pixels[pos + 4..pos + 8].try_into().ok()?);
     let _mip0_off = u32::from_le_bytes(raw_pixels[pos + 8..pos + 12].try_into().ok()?);
-    if mip0_w == 0 || mip0_h == 0 || mip0_w > 16384 || mip0_h > 16384 {
+    if mip0_w == 0
+        || mip0_h == 0
+        || mip0_w > MAX_TEXTURE_DIMENSION
+        || mip0_h > MAX_TEXTURE_DIMENSION
+    {
         return None;
     }
     // Main mip size: the offset of mipmap[1] (the second entry in
@@ -1211,9 +1256,9 @@ mod tests {
     /// read by 8 bytes and assigned textures to the wrong slots.
     /// After the fix, `1950Fridge.nif` block 7 should have:
     ///   - flags = 0x0005
-    ///   - apply_mode = 0x0009 (Bully's value, not NifTools' 0x0002)
-    ///   - 11 slots, with slots 2, 5, 8 populated
-    ///     (detail, bump, decal 2 — see NifSkope's UI which calls
+    ///   - apply_mode is derived from the flags (0x0002 for flags 0x0005)
+    ///   - 9 slots, with slots 2, 5, 8 populated
+    ///     (detail, bump, decal 0 — see NifSkope's UI which calls
     ///     these "Base / Normal Map / Specular" by Bully convention)
     ///   - num_shader_textures = 0
     #[test]
@@ -1235,11 +1280,11 @@ mod tests {
         let tex = found.expect("1950Fridge should have NiTexturingProperty");
 
         // The 3 populated slots in 1950Fridge are 2 (detail/_d),
-        // 5 (bump/_n), and 8 (decal 2/_s) — Bully's NifSkope UI calls
+        // 5 (bump/_n), and 8 (decal 0/_s) — Bully's NifSkope UI calls
         // them "Base / Normal / Specular" by the texture filename
         // suffix even though the slot indices are detail/bump/decal.
         assert_eq!(tex.flags, 0x0005);
-        assert_eq!(tex.apply_mode, 0x0009);
+        assert_eq!(tex.apply_mode, 0x0002);
         assert_eq!(tex.num_shader_textures, 0);
         assert!(tex.base.is_none(), "base slot empty in 1950Fridge");
         assert!(tex.dark.is_none());
@@ -1253,11 +1298,11 @@ mod tests {
             tex.bump_map.is_some(),
             "slot 5 (bump) must hold the normal map"
         );
-        assert!(tex.decal[0].is_none());
+        assert!(tex.decal[0].is_some(), "slot 8 (decal 0) must hold the specular map");
         assert!(tex.decal[1].is_none());
         assert!(
-            tex.decal[2].is_some(),
-            "slot 8 (decal 2) must hold the specular map"
+            tex.decal[2].is_none(),
+            "slot 10 should be empty"
         );
         assert!(tex.decal[3].is_none());
 
@@ -1265,9 +1310,58 @@ mod tests {
         // (8, 9, 10 in 1950Fridge).
         let d = tex.detail.as_ref().unwrap().source_ref as u32;
         let n = tex.bump_map.as_ref().unwrap().source_ref as u32;
-        let s = tex.decal[2].as_ref().unwrap().source_ref as u32;
+        let s = tex.decal[0].as_ref().unwrap().source_ref as u32;
         assert!(d < nif.blocks.len() as u32, "detail ref {d} OOB");
         assert!(n < nif.blocks.len() as u32, "bump ref {n} OOB");
         assert!(s < nif.blocks.len() as u32, "specular ref {s} OOB");
+    }
+
+    #[test]
+    fn nft_catalog_matches_full_source_texture_paths() {
+        let mut entries = HashMap::new();
+        entries.insert(
+            String::from("chair_d.tga"),
+            TextureEntry {
+                source_path: String::from("models/chair_d.tga"),
+                pixel_data: Some(vec![1, 2, 3]),
+            },
+        );
+        let catalog = NftCatalog { entries };
+        assert_eq!(catalog.get_pixels("models\\chair_d.tga"), Some(&[1, 2, 3][..]));
+    }
+
+    #[test]
+    fn ide_map_finds_external_texture_by_basename() {
+        let dir = tempfile::tempdir().unwrap();
+        let texture_dir = dir.path().join("Stream").join("New folder");
+        std::fs::create_dir_all(&texture_dir).unwrap();
+        let texture = texture_dir.join("chair_d.tga");
+        std::fs::write(&texture, [0u8; 4]).unwrap();
+        let map = IdeMap {
+            inner: HashMap::new(),
+            game_root: Some(dir.path().to_path_buf()),
+        };
+        assert_eq!(
+            map.locate_external_texture("Z:\\models\\chair_d.tga"),
+            Some(texture)
+        );
+    }
+
+    #[test]
+    fn bully_fixture_catalog_resolves_referenced_pixels_when_present() {
+        let root = Path::new("C:/Games/Bully - Scholarship Edition");
+        if !root.is_dir() {
+            return;
+        }
+        let ide_map = IdeMap::build(root);
+        let Some(catalog) = resolve_textures_for_nif("1950Fridge", &ide_map) else {
+            // The NIF fixture may be installed without its companion NFT.
+            return;
+        };
+        assert!(!catalog.entries.is_empty());
+        assert!(
+            catalog.entries.values().any(|entry| entry.pixel_data.is_some()),
+            "at least one source texture should resolve its NiPixelData reference"
+        );
     }
 }

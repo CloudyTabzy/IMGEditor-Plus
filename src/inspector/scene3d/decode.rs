@@ -1,7 +1,8 @@
 //! NIF → [`Scene`] pipeline.
 //!
-//! Reuses [`crate::inspector::viewer3d::collect_mesh`] for the strip-to-triangle
-//! and per-`NiTriShape` transform work, then performs three additional
+//! Reuses [`crate::inspector::viewer3d::collect_meshes`] for scene-graph
+//! traversal, strip-to-triangle conversion, inherited transforms, and
+//! per-mesh texture selection, then performs three additional
 //! steps that the PLY writer doesn't need:
 //!
 //! 1. Apply the source base orientation (Y-up / Z-up / X-up) to every
@@ -12,8 +13,7 @@
 //!    framing helper.
 //!
 //! Texture resolution is **deferred** to the caller via the
-//! `texture_resolver` closure. CPU-side DXT decoding is async-burdensome
-//! and is wired up in Phase 17.3 alongside the Iced message glue.
+//! `texture_resolver` closure so archive I/O stays outside this decoder.
 
 use glam::Mat4;
 use thiserror::Error;
@@ -22,7 +22,7 @@ use crate::inspector::nif::NifFile;
 use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::mesh::{Aabb, SceneMesh, SceneTexture, Vertex};
 use crate::inspector::scene3d::scene::Scene;
-use crate::inspector::viewer3d::{collect_mesh, find_diffuse_texture, MeshData};
+use crate::inspector::viewer3d::{collect_meshes, MeshData};
 
 #[derive(Debug, Error)]
 pub enum DecodeError {
@@ -32,9 +32,8 @@ pub enum DecodeError {
 
 /// Build a [`Scene`] from an already-parsed NIF.
 ///
-/// `texture_resolver` is called once per mesh that exposes a diffuse
-/// name. The current pipeline leaves textures `None` for callers that
-/// pass a no-op closure; Phase 17.3 plugs in the NFT lookup.
+/// `texture_resolver` is called once per mesh that exposes a diffuse name.
+/// Callers that pass a no-op closure intentionally receive untextured meshes.
 pub fn build_scene_from_nif<F>(
     nif: &NifFile,
     base_orientation: BaseOrientation,
@@ -43,22 +42,25 @@ pub fn build_scene_from_nif<F>(
 where
     F: Fn(&str) -> Option<crate::inspector::scene3d::mesh::SceneTexture>,
 {
-    let raw = collect_mesh(nif).ok_or(DecodeError::NoGeometry)?;
-    let mut meshes = Vec::new();
-
-    // A single NIF may describe several `NiTriShape` blocks; the
-    // upstream `collect_mesh` flattens them into one big mesh. We keep
-    // that for MVP — splitting would mean rebuilding the `Scene` graph
-    // and is deferred to Phase 17.4.
-    let diffuse_name = find_diffuse_texture(nif);
-    let diffuse = diffuse_name.as_deref().and_then(texture_resolver);
-    let mesh = mesh_from_data(&raw, base_orientation, diffuse);
-    let scene_aabb = mesh.aabb;
-    meshes.push(mesh);
+    let raw_meshes = collect_meshes(nif);
+    if raw_meshes.is_empty() {
+        return Err(DecodeError::NoGeometry);
+    }
+    let mut meshes = Vec::with_capacity(raw_meshes.len());
+    let mut scene_aabb: Option<Aabb> = None;
+    for raw in &raw_meshes {
+        let diffuse = raw.texture_name.as_deref().and_then(&texture_resolver);
+        let mesh = mesh_from_data(raw, base_orientation, diffuse);
+        scene_aabb = Some(match scene_aabb {
+            Some(aabb) => aabb.merged(mesh.aabb),
+            None => mesh.aabb,
+        });
+        meshes.push(mesh);
+    }
 
     Ok(Scene {
         meshes,
-        aabb: scene_aabb,
+        aabb: scene_aabb.unwrap_or_default(),
         ambient: [0.42, 0.44, 0.48],
         key_light: [0.65, 0.85, 0.55],
         base_orientation,
@@ -155,7 +157,7 @@ fn mesh_from_data(
     };
 
     SceneMesh {
-        name: String::from("mesh"),
+        name: data.name.clone(),
         vertices,
         indices,
         diffuse,
@@ -166,6 +168,7 @@ fn mesh_from_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     fn approx_pt(a: [f32; 3], b: [f32; 3]) -> bool {
         let dx = (a[0] - b[0]).abs();
@@ -216,5 +219,30 @@ mod tests {
         assert!(scene.total_triangles() > 0);
         let r = scene.aabb.bounding_radius();
         assert!(r > 0.0 && r.is_finite());
+    }
+
+    #[test]
+    fn decoder_routes_fixture_diffuse_names_per_mesh_when_present() {
+        let path = "C:/Games/Bully - Scholarship Edition/Stream/test1/1950Fridge.nif";
+        let root = std::path::Path::new("C:/Games/Bully - Scholarship Edition");
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let ide_map = crate::inspector::texture::IdeMap::build(root);
+        let names = RefCell::new(Vec::new());
+        let scene = parse_and_build_scene(&bytes, BaseOrientation::Yup, |name| {
+            names.borrow_mut().push(name.to_string());
+            ide_map
+                .locate_external_texture(name)
+                .and_then(|path| std::fs::read(path).ok())
+                .and_then(|bytes| SceneTexture::from_tga(&bytes))
+        })
+        .expect("1950Fridge should decode");
+        assert!(
+            names.borrow().iter().any(|name| name.to_ascii_lowercase().contains(".tga")),
+            "the scene graph should expose a diffuse texture reference"
+        );
+        assert!(scene.textured_mesh_count() > 0, "the fixture diffuse texture should render");
     }
 }

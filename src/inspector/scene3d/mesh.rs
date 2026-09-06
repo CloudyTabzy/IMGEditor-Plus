@@ -12,6 +12,7 @@ use bytemuck::{Pod, Zeroable};
 
 /// Number of bytes per vertex. Position (12) + normal (12) + uv (8).
 pub const VERTEX_STRIDE: usize = 32;
+const MAX_TEXTURE_DIMENSION: u32 = 8_192;
 
 /// Interleaved vertex format used by every mesh in the viewer.
 ///
@@ -110,23 +111,26 @@ pub struct SceneTexture {
 }
 
 impl SceneTexture {
-    /// Interpret a TGA blob written by `inspector::texture::dxt{1,5}_to_tga`.
-    /// Returns `None` if the header is malformed or the pixel format is
-    /// not 32-bit uncompressed RGBA.
+    /// Interpret a 32-bit true-color TGA blob. The texture extraction path
+    /// writes standard BGRA bytes, while external NFT tools may use RLE or
+    /// a bottom/right origin, so all of those details are normalized here.
     pub fn from_tga(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < 18 {
             return None;
         }
         let image_type = bytes[2];
-        // 2 = uncompressed true-color; 10 = RLE true-color. We accept
-        // both; the existing texture.rs pipeline emits type 2 only.
         if image_type != 2 && image_type != 10 {
             return None;
         }
         let width = u16::from_le_bytes([bytes[12], bytes[13]]) as u32;
         let height = u16::from_le_bytes([bytes[14], bytes[15]]) as u32;
         let bpp = bytes[16];
-        if bpp != 32 || width == 0 || height == 0 {
+        if bpp != 32
+            || width == 0
+            || height == 0
+            || width > MAX_TEXTURE_DIMENSION
+            || height > MAX_TEXTURE_DIMENSION
+        {
             return None;
         }
         let id_length = bytes[0] as usize;
@@ -136,24 +140,43 @@ impl SceneTexture {
             return None;
         }
         let pixel_offset = 18 + id_length;
-        let expected = (width as usize)
-            .checked_mul(height as usize)?
-            .checked_mul(4)?;
-        if bytes.len() < pixel_offset + expected {
-            return None;
-        }
-        // The descriptor byte says where the origin is; we always
-        // render with top-to-bottom, so the caller is expected to
-        // flip if the source had bottom-to-bottom origin. The
-        // existing TGA writer uses 0x20 (top-left).
-        let descriptor = bytes[17];
-        let flipped = (descriptor & 0x10) == 0;
-        let raw = &bytes[pixel_offset..pixel_offset + expected];
-        let rgba = if flipped {
-            flip_vertically(raw, width as usize, height as usize, 4)
+        let pixel_count = (width as usize).checked_mul(height as usize)?;
+        let encoded = bytes.get(pixel_offset..)?;
+        let bgra = if image_type == 2 {
+            let expected = pixel_count.checked_mul(4)?;
+            if encoded.len() < expected {
+                return None;
+            }
+            encoded[..expected].to_vec()
         } else {
-            raw.to_vec()
+            decode_tga_rle(encoded, pixel_count)?
         };
+        let descriptor = bytes[17];
+        let top_origin = descriptor & 0x20 != 0;
+        let right_origin = descriptor & 0x10 != 0;
+        let mut rgba = vec![0u8; pixel_count * 4];
+        for source_y in 0..height as usize {
+            for source_x in 0..width as usize {
+                let x = if right_origin {
+                    width as usize - 1 - source_x
+                } else {
+                    source_x
+                };
+                let y = if top_origin {
+                    source_y
+                } else {
+                    height as usize - 1 - source_y
+                };
+                let src = (source_y * width as usize + source_x) * 4;
+                let dst = (y * width as usize + x) * 4;
+                rgba[dst..dst + 4].copy_from_slice(&[
+                    bgra[src + 2],
+                    bgra[src + 1],
+                    bgra[src],
+                    bgra[src + 3],
+                ]);
+            }
+        }
         Some(Self {
             width,
             height,
@@ -166,15 +189,30 @@ impl SceneTexture {
     }
 }
 
-fn flip_vertically(src: &[u8], width: usize, height: usize, stride: usize) -> Vec<u8> {
-    let mut out = vec![0u8; src.len()];
-    let row = width * stride;
-    for y in 0..height {
-        let src_row = &src[y * row..(y + 1) * row];
-        let dst_row = &mut out[(height - 1 - y) * row..(height - y) * row];
-        dst_row.copy_from_slice(src_row);
+fn decode_tga_rle(bytes: &[u8], pixel_count: usize) -> Option<Vec<u8>> {
+    let mut pixels = Vec::with_capacity(pixel_count * 4);
+    let mut cursor = 0usize;
+    while pixels.len() < pixel_count * 4 {
+        let packet = *bytes.get(cursor)?;
+        cursor += 1;
+        let count = (packet & 0x7F) as usize + 1;
+        if count > pixel_count.saturating_sub(pixels.len() / 4) {
+            return None;
+        }
+        if packet & 0x80 != 0 {
+            let pixel = bytes.get(cursor..cursor + 4)?;
+            cursor += 4;
+            for _ in 0..count {
+                pixels.extend_from_slice(pixel);
+            }
+        } else {
+            let byte_count = count.checked_mul(4)?;
+            let raw = bytes.get(cursor..cursor + byte_count)?;
+            cursor += byte_count;
+            pixels.extend_from_slice(raw);
+        }
     }
-    out
+    Some(pixels)
 }
 
 /// Geometry for one mesh inside a `Scene`. The renderer treats
@@ -310,11 +348,11 @@ mod tests {
         tga[14..16].copy_from_slice(&2u16.to_le_bytes());
         tga[16] = 32;
         tga[17] = 0x00; // bottom-left origin → flip
-        // Bottom row first (y=0): RED, GREEN.
-        tga[18..22].copy_from_slice(&[0xFF, 0x00, 0x00, 0xFF]);
+        // Bottom row first (y=0), stored in TGA's BGRA order: RED, GREEN.
+        tga[18..22].copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
         tga[22..26].copy_from_slice(&[0x00, 0xFF, 0x00, 0xFF]);
         // Top row (y=1): BLUE, WHITE.
-        tga[26..30].copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
+        tga[26..30].copy_from_slice(&[0xFF, 0x00, 0x00, 0xFF]);
         tga[30..34].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
         let tex = SceneTexture::from_tga(&tga).unwrap();
         // After flip: top row (y=1) first.
@@ -322,5 +360,19 @@ mod tests {
         assert_eq!(&tex.rgba[4..8], &[0xFF, 0xFF, 0xFF, 0xFF]); // WHITE
         assert_eq!(&tex.rgba[8..12], &[0xFF, 0x00, 0x00, 0xFF]); // RED
         assert_eq!(&tex.rgba[12..16], &[0x00, 0xFF, 0x00, 0xFF]); // GREEN
+    }
+
+    #[test]
+    fn texture_from_tga_decodes_rle_bgra() {
+        let mut tga = vec![0u8; 18];
+        tga[2] = 10;
+        tga[12..14].copy_from_slice(&2u16.to_le_bytes());
+        tga[14..16].copy_from_slice(&1u16.to_le_bytes());
+        tga[16] = 32;
+        tga[17] = 0x20;
+        // One run packet containing two red pixels in BGRA order.
+        tga.extend_from_slice(&[0x81, 0x00, 0x00, 0xFF, 0xFF]);
+        let tex = SceneTexture::from_tga(&tga).unwrap();
+        assert_eq!(tex.rgba, vec![255, 0, 0, 255, 255, 0, 0, 255]);
     }
 }

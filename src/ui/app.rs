@@ -2038,6 +2038,13 @@ impl App {
                                     .as_ref()
                                     .and_then(|cat| cat.get_pixels(name))
                                     .and_then(SceneTexture::from_tga)
+                                    .or_else(|| {
+                                        ide_map
+                                            .as_ref()
+                                            .and_then(|map| map.locate_external_texture(name))
+                                            .and_then(|path| std::fs::read(path).ok())
+                                            .and_then(|bytes| SceneTexture::from_tga(&bytes))
+                                    })
                             };
                             let base = crate::inspector::scene3d::camera::BaseOrientation::Zup;
                             let scene = crate::inspector::scene3d::decode::parse_and_build_scene(

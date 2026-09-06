@@ -534,25 +534,15 @@ fn open_file_detached(path: &Path) {
 
 // ---- Texture resolution ----------------------------------------------
 
-/// Walk NIF blocks to find the first NiTexturingProperty's base texture file name.
-/// Falls back to the first orphan NiSourceTexture block when no property has
-/// a populated base slot (common in Bully NIFs that store textures outside
-/// the property block).
+/// Walk NIF blocks to find the first diffuse texture file name. Base slots
+/// are preferred; a conservative detail/orphan fallback covers Bully files
+/// that store the diffuse map outside the canonical base slot.
 pub(crate) fn find_diffuse_texture(nif: &NifFile) -> Option<String> {
-    // First pass: look through NiTexturingProperty blocks for a populated base.
-    for payload in nif.payloads.iter().flatten() {
-        if let BlockPayload::NiTexturingProperty(tp) = payload
-            && let Some(ref base) = tp.base
-            && base.source_ref >= 0
+    for (property_idx, payload) in nif.payloads.iter().enumerate() {
+        if matches!(payload, Some(BlockPayload::NiTexturingProperty(_)))
+            && let Some(name) = diffuse_texture_for_properties(nif, &[property_idx as i32])
         {
-            let tex_idx = base.source_ref as usize;
-            if let Some(Some(BlockPayload::NiSourceTexture(tex))) =
-                nif.payloads.get(tex_idx)
-                && let Some(ref name) = tex.file_name
-                && !name.is_empty()
-            {
-                return Some(name.clone());
-            }
+            return Some(name);
         }
     }
     // Second pass: orphan NiSourceTexture blocks (no property references
@@ -561,6 +551,7 @@ pub(crate) fn find_diffuse_texture(nif: &NifFile) -> Option<String> {
         if let BlockPayload::NiSourceTexture(tex) = payload
             && let Some(ref name) = tex.file_name
             && !name.is_empty()
+            && looks_like_diffuse_texture(name)
         {
             return Some(name.clone());
         }
@@ -570,206 +561,573 @@ pub(crate) fn find_diffuse_texture(nif: &NifFile) -> Option<String> {
 
 // ---- Mesh collection -------------------------------------------------
 
-/// Geometry extracted from a NIF in a flat, GPU-uploadable form. Used by
-/// the PLY writer and reused by the embedded 3D viewer (`scene3d::decode`).
+/// Geometry extracted from one NIF geometry node. The embedded viewer keeps
+/// these meshes separate so each one can resolve its own diffuse texture.
 pub(crate) struct MeshData {
+    pub(crate) name: String,
+    pub(crate) texture_name: Option<String>,
     pub(crate) positions: Vec<[f32; 3]>,
     pub(crate) normals: Vec<[f32; 3]>,
     pub(crate) uvs: Vec<[f32; 2]>,
     pub(crate) indices: Vec<u32>,
 }
 
-/// Accumulates geometry across multiple `append_mesh` calls so the
-/// function can take a single `&mut` accumulator instead of a long
-/// list of independent `&mut Vec<...>` references.
-struct MeshAccumulator {
-    positions: Vec<[f32; 3]>,
-    indices: Vec<u32>,
-    normals: Vec<[f32; 3]>,
-    uvs: Vec<[f32; 2]>,
-    base_vertex: u32,
+#[derive(Clone, Copy, Debug)]
+struct Transform3d {
+    /// Row-major matrix that multiplies column vectors.
+    rotation: [[f32; 3]; 3],
+    translation: [f32; 3],
+    scale: f32,
 }
 
-impl MeshAccumulator {
-    fn new() -> Self {
+impl Transform3d {
+    fn identity() -> Self {
         Self {
-            positions: Vec::new(),
-            indices: Vec::new(),
-            normals: Vec::new(),
-            uvs: Vec::new(),
-            base_vertex: 0,
+            rotation: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            translation: [0.0; 3],
+            scale: 1.0,
         }
     }
 
-    fn into_mesh_data(self) -> MeshData {
-        MeshData {
-            positions: self.positions,
-            normals: self.normals,
-            uvs: self.uvs,
-            indices: self.indices,
+    fn from_nif_transform(transform: &nif::NiTransform) -> Self {
+        Self {
+            // Matrix33 is stored as three columns by the NIF reader. Its
+            // flattened values are the row-major matrix used by the
+            // reference viewer once the transpose is applied at multiply
+            // time.
+            rotation: transform.rotation.m,
+            translation: [
+                transform.translation.x,
+                transform.translation.y,
+                transform.translation.z,
+            ],
+            scale: transform.scale,
         }
+    }
+
+    fn compose(parent: Self, local: Self) -> Self {
+        let rotation = multiply_mat3(parent.rotation, local.rotation);
+        let local_translation = multiply_vec3(
+            parent.rotation,
+            scale_vec3(local.translation, parent.scale),
+        );
+        Self {
+            rotation,
+            translation: add_vec3(parent.translation, local_translation),
+            scale: parent.scale * local.scale,
+        }
+    }
+
+    fn point(self, point: nif::Vector3) -> [f32; 3] {
+        add_vec3(
+            multiply_vec3(
+            self.rotation,
+            [point.x * self.scale, point.y * self.scale, point.z * self.scale],
+            ),
+            self.translation,
+        )
+    }
+
+    fn normal(self, normal: nif::Vector3) -> [f32; 3] {
+        let matrix = glam::Mat3::from_cols_array(&[
+            self.rotation[0][0],
+            self.rotation[1][0],
+            self.rotation[2][0],
+            self.rotation[0][1],
+            self.rotation[1][1],
+            self.rotation[2][1],
+            self.rotation[0][2],
+            self.rotation[1][2],
+            self.rotation[2][2],
+        ]);
+        let input = glam::Vec3::new(normal.x, normal.y, normal.z);
+        let transformed = if matrix.determinant().abs() > 1e-6 {
+            matrix.inverse().transpose() * input
+        } else {
+            matrix * input
+        };
+        let sign = if self.scale < 0.0 { -1.0 } else { 1.0 };
+        [transformed.x * sign, transformed.y * sign, transformed.z * sign]
     }
 }
 
-pub(crate) fn collect_mesh(nif: &NifFile) -> Option<MeshData> {
-    let mut acc = MeshAccumulator::new();
+fn add_vec3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
 
-    for (block_idx, _block) in nif.blocks.iter().enumerate() {
-        let Some(ref payload) = nif.payloads[block_idx] else {
-            continue;
-        };
+fn scale_vec3(v: [f32; 3], scale: f32) -> [f32; 3] {
+    [v[0] * scale, v[1] * scale, v[2] * scale]
+}
 
-        let (data_ref, shape_xform) = match payload {
-            BlockPayload::NiTriShape(data) => {
-                let col0 = data.rotation.m[0];
-                let col1 = data.rotation.m[1];
-                let col2 = data.rotation.m[2];
-                let rotation = [
-                    [col0[0], col1[0], col2[0]],
-                    [col0[1], col1[1], col2[1]],
-                    [col0[2], col1[2], col2[2]],
-                ];
-                (
-                    data.data_ref,
-                    ShapeTransform {
-                        rotation,
-                        translation: data.translation,
-                        scale: data.scale,
-                    },
-                )
-            }
-            BlockPayload::NiTriStrips(data) => {
-                let col0 = data.base.rotation.m[0];
-                let col1 = data.base.rotation.m[1];
-                let col2 = data.base.rotation.m[2];
-                let rotation = [
-                    [col0[0], col1[0], col2[0]],
-                    [col0[1], col1[1], col2[1]],
-                    [col0[2], col1[2], col2[2]],
-                ];
-                (
-                    data.base.data_ref,
-                    ShapeTransform {
-                        rotation,
-                        translation: data.base.translation,
-                        scale: data.base.scale,
-                    },
-                )
-            }
-            _ => continue,
-        };
+fn multiply_vec3(matrix: [[f32; 3]; 3], vector: [f32; 3]) -> [f32; 3] {
+    [
+        matrix[0][0] * vector[0] + matrix[0][1] * vector[1] + matrix[0][2] * vector[2],
+        matrix[1][0] * vector[0] + matrix[1][1] * vector[1] + matrix[1][2] * vector[2],
+        matrix[2][0] * vector[0] + matrix[2][1] * vector[1] + matrix[2][2] * vector[2],
+    ]
+}
 
-        if data_ref < 0 {
-            continue;
-        }
-        let data_idx = data_ref as usize;
-
-        let Some(Some(data_payload)) = nif.payloads.get(data_idx) else {
-            continue;
-        };
-
-        match data_payload {
-            BlockPayload::NiTriShapeData(data) => {
-                append_mesh(data, None, &shape_xform, &mut acc);
-            }
-            BlockPayload::NiTriStripsData(data) => {
-                append_mesh(&data.base, Some(data), &shape_xform, &mut acc);
-            }
-            _ => {}
+fn multiply_mat3(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for row in 0..3 {
+        for col in 0..3 {
+            out[row][col] = (0..3).map(|k| a[row][k] * b[k][col]).sum();
         }
     }
+    out
+}
 
-    if acc.positions.is_empty() {
-        None
+fn normalize3(vector: [f32; 3]) -> [f32; 3] {
+    let length = (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
+    if length > 1e-6 {
+        [vector[0] / length, vector[1] / length, vector[2] / length]
     } else {
-        Some(acc.into_mesh_data())
+        [0.0, 1.0, 0.0]
     }
 }
 
-pub(crate) struct ShapeTransform {
-    pub(crate) rotation: [[f32; 3]; 3],
-    pub(crate) translation: nif::Vector3,
-    pub(crate) scale: f32,
+fn geometric_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
+    let mut normals = vec![[0.0; 3]; positions.len()];
+    for triangle in indices.chunks_exact(3) {
+        let a = positions[triangle[0] as usize];
+        let b = positions[triangle[1] as usize];
+        let c = positions[triangle[2] as usize];
+        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let face = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        for &index in triangle {
+            let normal = &mut normals[index as usize];
+            normal[0] += face[0];
+            normal[1] += face[1];
+            normal[2] += face[2];
+        }
+    }
+    normals.into_iter().map(normalize3).collect()
 }
 
-fn append_mesh(
+fn triangle_indices(
     data: &NiTriShapeDataPayload,
     strips: Option<&NiTriStripsDataPayload>,
-    xform: &ShapeTransform,
-    acc: &mut MeshAccumulator,
-) {
-    if data.vertices.is_empty() {
-        return;
-    }
-
-    let rot = &xform.rotation;
-
-    for v in &data.vertices {
-        let sx = v.x * xform.scale;
-        let sy = v.y * xform.scale;
-        let sz = v.z * xform.scale;
-        acc.positions.push([
-            rot[0][0] * sx + rot[1][0] * sy + rot[2][0] * sz + xform.translation.x,
-            rot[0][1] * sx + rot[1][1] * sy + rot[2][1] * sz + xform.translation.y,
-            rot[0][2] * sx + rot[1][2] * sy + rot[2][2] * sz + xform.translation.z,
-        ]);
-    }
-
-    if !data.normals.is_empty() {
-        for n in &data.normals {
-            let nx = rot[0][0] * n.x + rot[1][0] * n.y + rot[2][0] * n.z;
-            let ny = rot[0][1] * n.x + rot[1][1] * n.y + rot[2][1] * n.z;
-            let nz = rot[0][2] * n.x + rot[1][2] * n.y + rot[2][2] * n.z;
-            acc.normals.push([nx, ny, nz]);
-        }
-    }
-
-    if !data.uvs.is_empty() {
-        let uv_count = data.num_vertices as usize;
-        for i in 0..uv_count {
-            let uv = data.uvs[i];
-            acc.uvs.push([uv.u, uv.v]);
-        }
-    }
-
-    let base_vertex = acc.base_vertex;
+) -> Vec<u32> {
+    let vertex_count = data.vertices.len() as u32;
+    let mut indices = Vec::new();
     if !data.triangles.is_empty() {
-        for tri in &data.triangles {
-            acc.indices.push(base_vertex + tri.v0 as u32);
-            acc.indices.push(base_vertex + tri.v1 as u32);
-            acc.indices.push(base_vertex + tri.v2 as u32);
+        for triangle in &data.triangles {
+            let candidate = [triangle.v0 as u32, triangle.v1 as u32, triangle.v2 as u32];
+            if candidate.iter().all(|&index| index < vertex_count)
+                && candidate[0] != candidate[1]
+                && candidate[0] != candidate[2]
+                && candidate[1] != candidate[2]
+            {
+                indices.extend_from_slice(&candidate);
+            }
         }
     } else if let Some(strips) = strips {
         let mut offset = 0usize;
-        for &len in &strips.strip_lengths {
-            let len = len as usize;
-            if len < 3 {
-                offset += len;
-                continue;
+        for &strip_length in &strips.strip_lengths {
+            let length = strip_length as usize;
+            let Some(end) = offset.checked_add(length) else {
+                break;
+            };
+            if end > strips.points.len() {
+                break;
             }
-            for j in 0..len - 2 {
-                let i0 = strips.points[offset + j] as u32;
-                let i1 = strips.points[offset + j + 1] as u32;
-                let i2 = strips.points[offset + j + 2] as u32;
-                let (a, b, c) = if j % 2 == 0 {
-                    (i0, i1, i2)
-                } else {
-                    (i1, i0, i2)
-                };
-                // Strips use repeated indices as restart markers;
-                // any triangle with duplicate indices is degenerate
-                // and not part of the mesh (see bully-nif-tools'
-                // reveng/notes/research_notes.md § NiTriStripsData).
-                if a == b || a == c || b == c {
-                    continue;
+            for j in 0..length.saturating_sub(2) {
+                let mut triangle = [
+                    strips.points[offset + j] as u32,
+                    strips.points[offset + j + 1] as u32,
+                    strips.points[offset + j + 2] as u32,
+                ];
+                if j % 2 != 0 {
+                    triangle.swap(0, 1);
                 }
-                acc.indices.push(base_vertex + a);
-                acc.indices.push(base_vertex + b);
-                acc.indices.push(base_vertex + c);
+                if triangle.iter().all(|&index| index < vertex_count)
+                    && triangle[0] != triangle[1]
+                    && triangle[0] != triangle[2]
+                    && triangle[1] != triangle[2]
+                {
+                    indices.extend_from_slice(&triangle);
+                }
             }
-            offset += len;
+            offset = end;
+        }
+    }
+    indices
+}
+
+fn source_texture_name(nif: &NifFile, desc: &nif::TexDesc) -> Option<String> {
+    let source_index = usize::try_from(desc.source_ref).ok()?;
+    let Some(Some(BlockPayload::NiSourceTexture(texture))) = nif.payloads.get(source_index) else {
+        return None;
+    };
+    texture
+        .file_name
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+}
+
+fn texture_basename(name: &str) -> &str {
+    name.rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+}
+
+fn looks_like_diffuse_texture(name: &str) -> bool {
+    let stem = texture_basename(name)
+        .rsplit_once('.')
+        .map_or(texture_basename(name), |(stem, _)| stem)
+        .to_ascii_lowercase();
+    let suffix = stem.rsplit('_').next().unwrap_or(stem.as_str());
+    !matches!(suffix, "n" | "nm" | "normal" | "s" | "spec" | "specular" | "h" | "height")
+}
+
+fn diffuse_texture_for_properties(nif: &NifFile, properties: &[i32]) -> Option<String> {
+    let mut detail_fallback = None;
+    for &property_ref in properties.iter().rev() {
+        let Some(property_idx) = usize::try_from(property_ref).ok() else {
+            continue;
+        };
+        let Some(Some(BlockPayload::NiTexturingProperty(texturing))) = nif.payloads.get(property_idx)
+        else {
+            continue;
+        };
+        if let Some(base) = texturing.base.as_ref().and_then(|desc| source_texture_name(nif, desc)) {
+            return Some(base);
+        }
+        if detail_fallback.is_none() {
+            detail_fallback = texturing
+                .detail
+                .as_ref()
+                .and_then(|desc| source_texture_name(nif, desc))
+                .filter(|name| looks_like_diffuse_texture(name));
+        }
+    }
+    detail_fallback
+}
+
+fn geometry_mesh(
+    nif: &NifFile,
+    block_idx: usize,
+    shape: &nif::NiTriShapeData,
+    world: Transform3d,
+    properties: &[i32],
+) -> Option<MeshData> {
+    if shape.flags & 1 != 0 || shape.data_ref < 0 {
+        return None;
+    }
+    let data_idx = usize::try_from(shape.data_ref).ok()?;
+    let (data, strips) = match nif.payloads.get(data_idx)?.as_ref()? {
+        BlockPayload::NiTriShapeData(data) => (data, None),
+        BlockPayload::NiTriStripsData(data) => (&data.base, Some(data)),
+        _ => return None,
+    };
+    if data.vertices.is_empty() {
+        return None;
+    }
+
+    let positions: Vec<_> = data.vertices.iter().map(|point| world.point(*point)).collect();
+    let mut indices = triangle_indices(data, strips);
+    if world.scale < 0.0 {
+        for triangle in indices.chunks_exact_mut(3) {
+            triangle.swap(1, 2);
+        }
+    }
+    let calculated_normals = geometric_normals(&positions, &indices);
+    let normals = if data.normals.len() == positions.len() {
+        data.normals
+            .iter()
+            .enumerate()
+            .map(|(index, normal)| {
+                let transformed = world.normal(*normal);
+                let length = transformed[0] * transformed[0]
+                    + transformed[1] * transformed[1]
+                    + transformed[2] * transformed[2];
+                if length > 1e-10 {
+                    normalize3(transformed)
+                } else {
+                    calculated_normals[index]
+                }
+            })
+            .collect()
+    } else {
+        calculated_normals
+    };
+    let uvs = if data.num_uv_sets > 0 && data.uvs.len() >= data.vertices.len() {
+        data.uvs[..data.vertices.len()]
+            .iter()
+            .map(|uv| [uv.u, uv.v])
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    Some(MeshData {
+        name: shape
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("mesh_{block_idx}")),
+        texture_name: diffuse_texture_for_properties(nif, properties)
+            .or_else(|| find_diffuse_texture(nif)),
+        positions,
+        normals,
+        uvs,
+        indices,
+    })
+}
+
+fn visit_scene_node(
+    nif: &NifFile,
+    block_idx: usize,
+    parent: Transform3d,
+    inherited_properties: &[i32],
+    path: &mut Vec<usize>,
+    meshes: &mut Vec<MeshData>,
+) {
+    if path.contains(&block_idx) {
+        return;
+    }
+    let Some(Some(payload)) = nif.payloads.get(block_idx) else {
+        return;
+    };
+    path.push(block_idx);
+    match payload {
+        BlockPayload::NiNode(node) => {
+            let world = Transform3d::compose(
+                parent,
+                Transform3d::from_nif_transform(&nif::NiTransform {
+                    rotation: node.rotation,
+                    translation: node.translation,
+                    scale: node.scale,
+                }),
+            );
+            let mut properties = inherited_properties.to_vec();
+            properties.extend_from_slice(&node.properties);
+            for &child in &node.children {
+                if let Ok(child_idx) = usize::try_from(child) {
+                    visit_scene_node(nif, child_idx, world, &properties, path, meshes);
+                }
+            }
+        }
+        BlockPayload::NiTriShape(shape) => {
+            let world = Transform3d::compose(
+                parent,
+                Transform3d::from_nif_transform(&nif::NiTransform {
+                    rotation: shape.rotation,
+                    translation: shape.translation,
+                    scale: shape.scale,
+                }),
+            );
+            let mut properties = inherited_properties.to_vec();
+            properties.extend_from_slice(&shape.properties);
+            if let Some(mesh) = geometry_mesh(nif, block_idx, shape, world, &properties) {
+                meshes.push(mesh);
+            }
+        }
+        BlockPayload::NiTriStrips(strips) => {
+            let shape = &strips.base;
+            let world = Transform3d::compose(
+                parent,
+                Transform3d::from_nif_transform(&nif::NiTransform {
+                    rotation: shape.rotation,
+                    translation: shape.translation,
+                    scale: shape.scale,
+                }),
+            );
+            let mut properties = inherited_properties.to_vec();
+            properties.extend_from_slice(&shape.properties);
+            if let Some(mesh) = geometry_mesh(nif, block_idx, shape, world, &properties) {
+                meshes.push(mesh);
+            }
+        }
+        _ => {}
+    }
+    path.pop();
+}
+
+pub(crate) fn collect_meshes(nif: &NifFile) -> Vec<MeshData> {
+    let mut meshes = Vec::new();
+    let mut path = Vec::new();
+    for &root in &nif.footer.roots {
+        if let Ok(root_idx) = usize::try_from(root) {
+            visit_scene_node(
+                nif,
+                root_idx,
+                Transform3d::identity(),
+                &[],
+                &mut path,
+                &mut meshes,
+            );
+        }
+    }
+    if meshes.is_empty() {
+        for block_idx in 0..nif.blocks.len() {
+            visit_scene_node(
+                nif,
+                block_idx,
+                Transform3d::identity(),
+                &[],
+                &mut path,
+                &mut meshes,
+            );
+        }
+    }
+    meshes
+}
+
+pub(crate) fn collect_mesh(nif: &NifFile) -> Option<MeshData> {
+    let meshes = collect_meshes(nif);
+    let first = meshes.first()?;
+    let all_normals = meshes
+        .iter()
+        .all(|mesh| mesh.normals.len() == mesh.positions.len());
+    let all_uvs = meshes
+        .iter()
+        .all(|mesh| mesh.uvs.len() == mesh.positions.len());
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+    for mesh in &meshes {
+        let base = positions.len() as u32;
+        positions.extend_from_slice(&mesh.positions);
+        if all_normals {
+            normals.extend_from_slice(&mesh.normals);
+        }
+        if all_uvs {
+            uvs.extend_from_slice(&mesh.uvs);
+        }
+        indices.extend(mesh.indices.iter().map(|index| base + *index));
+    }
+    Some(MeshData {
+        name: String::from("mesh"),
+        texture_name: first.texture_name.clone(),
+        positions,
+        normals,
+        uvs,
+        indices,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inspector::nif::{
+        BlockMeta, Endian, Footer, Matrix33, NiSourceTextureData,
+        NiTexturingPropertyData, NifFile, TexDesc, Triangle, Vector3,
+    };
+
+    fn identity_transform(translation: [f32; 3], scale: f32) -> Transform3d {
+        Transform3d {
+            rotation: Matrix33::identity().m,
+            translation,
+            scale,
         }
     }
 
-    acc.base_vertex += data.vertices.len() as u32;
+    fn fake_nif(payloads: Vec<Option<BlockPayload>>, roots: Vec<i32>) -> NifFile {
+        let blocks = payloads
+            .iter()
+            .map(|_| BlockMeta {
+                type_index: 0,
+                type_name: String::new(),
+                size: 0,
+                offset: 0,
+            })
+            .collect();
+        NifFile {
+            header_line: String::new(),
+            version: nif::BULLY_NIF_VERSION,
+            endian: Endian::Little,
+            user_version: 0,
+            strings: Vec::new(),
+            block_types: Vec::new(),
+            blocks,
+            payloads,
+            footer: Footer { roots },
+        }
+    }
+
+    #[test]
+    fn parent_transform_composes_scale_then_translation() {
+        let parent = identity_transform([10.0, 0.0, 0.0], 2.0);
+        let child = identity_transform([1.0, 0.0, 0.0], 3.0);
+        let world = Transform3d::compose(parent, child);
+        assert_eq!(world.point(Vector3 { x: 1.0, ..Vector3::default() }), [18.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn reflected_mesh_reverses_winding_and_calculates_normals() {
+        let data = NiTriShapeDataPayload {
+            num_vertices: 3,
+            vertices: vec![
+                Vector3::default(),
+                Vector3 { x: 1.0, ..Vector3::default() },
+                Vector3 { y: 1.0, ..Vector3::default() },
+            ],
+            triangles: vec![Triangle { v0: 0, v1: 1, v2: 2 }],
+            ..Default::default()
+        };
+        let nif = fake_nif(vec![Some(BlockPayload::NiTriShapeData(data))], Vec::new());
+        let shape = nif::NiTriShapeData {
+            data_ref: 0,
+            scale: -1.0,
+            ..Default::default()
+        };
+        let mesh = geometry_mesh(
+            &nif,
+            1,
+            &shape,
+            identity_transform([0.0, 0.0, 0.0], -1.0),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(mesh.indices, vec![0, 2, 1]);
+        assert_eq!(mesh.normals, vec![[0.0, 0.0, -1.0]; 3]);
+    }
+
+    #[test]
+    fn diffuse_selection_prefers_base_and_rejects_normal_fallbacks() {
+        let source = NiSourceTextureData {
+            file_name: Some(String::from("models/chair_d.tga")),
+            ..Default::default()
+        };
+        let normal_source = NiSourceTextureData {
+            file_name: Some(String::from("models/chair_n.tga")),
+            ..Default::default()
+        };
+        let texturing = NiTexturingPropertyData {
+            detail: Some(TexDesc {
+                source_ref: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let nif = fake_nif(
+            vec![
+                Some(BlockPayload::NiSourceTexture(source)),
+                Some(BlockPayload::NiSourceTexture(normal_source)),
+                Some(BlockPayload::NiTexturingProperty(texturing)),
+            ],
+            Vec::new(),
+        );
+        assert_eq!(
+            diffuse_texture_for_properties(&nif, &[2]),
+            Some(String::from("models/chair_d.tga"))
+        );
+        let normal_property = NiTexturingPropertyData {
+            detail: Some(TexDesc {
+                source_ref: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut nif = nif;
+        nif.payloads[2] = Some(BlockPayload::NiTexturingProperty(normal_property));
+        assert_eq!(diffuse_texture_for_properties(&nif, &[2]), None);
+    }
 }

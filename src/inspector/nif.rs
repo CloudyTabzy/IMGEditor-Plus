@@ -307,6 +307,7 @@ pub struct NiSourceTextureData {
     pub use_external: u8,
     pub file_name_index: u32,
     pub file_name: Option<String>,
+    pub pixel_data_ref: i32,
     pub pixel_layout: u32,
     pub use_mipmaps: u32,
     pub alpha_format: u32,
@@ -383,13 +384,21 @@ pub struct TexDesc {
 pub struct NiTexturingPropertyData {
     pub flags: u16,
     pub apply_mode: u16,
+    pub texture_count: u32,
     pub base: Option<TexDesc>,
     pub dark: Option<TexDesc>,
     pub detail: Option<TexDesc>,
     pub gloss: Option<TexDesc>,
     pub glow: Option<TexDesc>,
     pub bump_map: Option<TexDesc>,
+    pub normal: Option<TexDesc>,
+    pub parallax: Option<TexDesc>,
     pub decal: [Option<TexDesc>; 4],
+    pub bump_luma_scale: f32,
+    pub bump_luma_offset: f32,
+    pub bump_matrix: [f32; 4],
+    pub parallax_offset: f32,
+    pub shader_textures: Vec<(Option<TexDesc>, Option<u32>)>,
     pub num_shader_textures: u32,
 }
 
@@ -984,6 +993,7 @@ fn read_ni_source_texture(r: &mut Reader<'_>) -> NifResult<NiSourceTextureData> 
         use_external: r.read_u8("use_external")?,
         file_name_index: r.read_ni_fixed_string_index("file_name")?,
         file_name: None,
+        pixel_data_ref: r.read_i32("pixel_data_ref")?,
         pixel_layout: r.read_u32("pixel_layout")?,
         use_mipmaps: r.read_u32("use_mipmaps")?,
         alpha_format: r.read_u32("alpha_format")?,
@@ -1132,24 +1142,38 @@ fn read_ni_texturing_property(r: &mut Reader<'_>) -> NifResult<NiTexturingProper
     let _ = r.read_i32("controller")?;
 
     let flags = r.read_u16("flags")?;
-    let apply_mode = r.read_u16("apply_mode")?;
+    let apply_mode = (flags >> 1) & 0x7;
+    let texture_count = r.read_u32("texture_count")?;
+    if texture_count > 64 {
+        return Err(NifError::InvalidField(
+            "texture_count",
+            format!("{texture_count} exceeds the supported slot limit"),
+        ));
+    }
     let mut out = NiTexturingPropertyData {
         flags,
         apply_mode,
+        texture_count,
         ..Default::default()
     };
 
-    // Bully on-disk layout (verified against 1950Fridge.nif, 1_02Gate.nif):
-    // 11 (has + TexDesc) pairs read in fixed order regardless of any
-    //   count field (there is none in this version):
-    //   0 Base, 1 Dark, 2 Detail, 3 Gloss, 4 Glow, 5 Bump,
-    //   6 Decal 0, 7 Decal 1, 8 Decal 2, 9 Decal 3, 10 (reserved).
-    // A `has` byte of 0 skips the corresponding `TexDesc` body.
-    let mut slots = [const { None }; 11];
-    for slot in slots.iter_mut() {
+    // Bully's stream uses: base, dark, detail, gloss, glow, bump,
+    // normal, parallax, then four decal slots. The bump and parallax
+    // records carry extra values immediately after their descriptors.
+    let mut slots = vec![None; texture_count.max(12) as usize];
+    for (index, slot) in slots.iter_mut().enumerate().take(texture_count as usize) {
         let has = r.read_bool("has_tex")?;
         if has {
             *slot = Some(read_tex_desc(r)?);
+            if index == 5 {
+                out.bump_luma_scale = r.read_f32("bump_luma_scale")?;
+                out.bump_luma_offset = r.read_f32("bump_luma_offset")?;
+                for value in &mut out.bump_matrix {
+                    *value = r.read_f32("bump_matrix")?;
+                }
+            } else if index == 7 {
+                out.parallax_offset = r.read_f32("parallax_offset")?;
+            }
         }
     }
 
@@ -1159,9 +1183,31 @@ fn read_ni_texturing_property(r: &mut Reader<'_>) -> NifResult<NiTexturingProper
     out.gloss = slots[3].take();
     out.glow = slots[4].take();
     out.bump_map = slots[5].take();
-    out.decal = [slots[6].take(), slots[7].take(), slots[8].take(), slots[9].take()];
+    out.normal = slots[6].take();
+    out.parallax = slots[7].take();
+    out.decal = [
+        slots[8].take(),
+        slots[9].take(),
+        slots[10].take(),
+        slots[11].take(),
+    ];
 
     out.num_shader_textures = r.read_u32("num_shader_textures")?;
+    if out.num_shader_textures > 4096 {
+        return Err(NifError::InvalidField(
+            "num_shader_textures",
+            format!("{} exceeds the supported limit", out.num_shader_textures),
+        ));
+    }
+    out.shader_textures.reserve(out.num_shader_textures as usize);
+    for _ in 0..out.num_shader_textures {
+        if r.read_bool("has_shader_texture")? {
+            out.shader_textures
+                .push((Some(read_tex_desc(r)?), Some(r.read_u32("shader_texture_type")?)));
+        } else {
+            out.shader_textures.push((None, None));
+        }
+    }
     Ok(out)
 }
 
@@ -1342,4 +1388,101 @@ fn read_strips_footer(
         Vec::new()
     };
     (num_triangles, num_strips, strip_lengths, has_points, points)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn push_u16(bytes: &mut Vec<u8>, value: u16) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_i32(bytes: &mut Vec<u8>, value: i32) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_f32(bytes: &mut Vec<u8>, value: f32) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_tex_desc(bytes: &mut Vec<u8>, source_ref: i32) {
+        push_i32(bytes, source_ref);
+        push_u16(bytes, 0);
+        bytes.push(0);
+    }
+
+    #[test]
+    fn source_texture_reads_pixel_data_reference_before_formats() {
+        let mut bytes = Vec::new();
+        push_u32(&mut bytes, u32::MAX); // name
+        push_u32(&mut bytes, 0); // extra data count
+        push_i32(&mut bytes, -1); // controller
+        bytes.push(0); // use external
+        push_u32(&mut bytes, 4); // file name
+        push_i32(&mut bytes, 12); // pixel data reference
+        push_u32(&mut bytes, 2); // pixel layout
+        push_u32(&mut bytes, 3); // mipmaps
+        push_u32(&mut bytes, 4); // alpha format
+        bytes.extend_from_slice(&[1, 1, 0]); // static, direct, persist
+
+        let mut reader = Reader::new(&bytes, Endian::Little);
+        let texture = read_ni_source_texture(&mut reader).unwrap();
+        assert_eq!(texture.file_name_index, 4);
+        assert_eq!(texture.pixel_data_ref, 12);
+        assert_eq!(texture.pixel_layout, 2);
+        assert_eq!(texture.use_mipmaps, 3);
+        assert_eq!(texture.alpha_format, 4);
+        assert_eq!(reader.remaining(), 0);
+    }
+
+    #[test]
+    fn texturing_property_reads_counted_bully_slots() {
+        let mut bytes = Vec::new();
+        push_u32(&mut bytes, u32::MAX); // name
+        push_u32(&mut bytes, 0); // extra data count
+        push_i32(&mut bytes, -1); // controller
+        push_u16(&mut bytes, 0x0005); // flags
+        push_u32(&mut bytes, 9); // Bully texture slots
+
+        for slot in 0..9 {
+            let populated = matches!(slot, 2 | 5 | 8);
+            bytes.push(u8::from(populated));
+            if !populated {
+                continue;
+            }
+            push_tex_desc(&mut bytes, slot + 7);
+            if slot == 5 {
+                push_f32(&mut bytes, 1.25);
+                push_f32(&mut bytes, -0.25);
+                for value in [1.0, 0.0, 0.0, 1.0] {
+                    push_f32(&mut bytes, value);
+                }
+            }
+            if slot == 7 {
+                push_f32(&mut bytes, 0.5);
+            }
+        }
+        push_u32(&mut bytes, 0); // shader texture count
+
+        let mut reader = Reader::new(&bytes, Endian::Little);
+        let property = read_ni_texturing_property(&mut reader).unwrap();
+        assert_eq!(property.flags, 0x0005);
+        assert_eq!(property.apply_mode, 0x0002);
+        assert_eq!(property.texture_count, 9);
+        assert_eq!(property.detail.as_ref().unwrap().source_ref, 9);
+        assert_eq!(property.bump_map.as_ref().unwrap().source_ref, 12);
+        assert_eq!(property.decal[0].as_ref().unwrap().source_ref, 15);
+        assert_eq!(property.bump_luma_scale, 1.25);
+        assert_eq!(property.bump_luma_offset, -0.25);
+        assert_eq!(property.bump_matrix, [1.0, 0.0, 0.0, 1.0]);
+        assert!(property.normal.is_none());
+        assert!(property.parallax.is_none());
+        assert_eq!(property.num_shader_textures, 0);
+        assert_eq!(reader.remaining(), 0);
+    }
 }
