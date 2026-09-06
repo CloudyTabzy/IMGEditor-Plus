@@ -50,9 +50,11 @@ impl<Message> canvas::Program<Message> for TextureUvOverlay {
             .with_line_join(canvas::LineJoin::Round)
             .with_line_cap(canvas::LineCap::Round);
         for triangle in &self.triangles {
-            let points = triangle.map(|uv| uv_to_point(image_rect, uv));
             for edge in [(0, 1), (1, 2), (2, 0)] {
-                frame.stroke(&canvas::Path::line(points[edge.0], points[edge.1]), stroke);
+                for segment in wrapped_uv_edge(triangle[edge.0], triangle[edge.1]) {
+                    let points = segment.map(|uv| uv_to_point(image_rect, uv));
+                    frame.stroke(&canvas::Path::line(points[0], points[1]), stroke);
+                }
             }
         }
 
@@ -89,6 +91,90 @@ fn uv_to_point(image_rect: Rectangle, uv: [f32; 2]) -> Point {
         image_rect.x + uv[0] * image_rect.width,
         image_rect.y + uv[1] * image_rect.height,
     )
+}
+
+const UV_EPSILON: f32 = 1e-6;
+const MAX_UV_TILE_CROSSES: usize = 256;
+
+/// Split a UV edge at texture-repeat boundaries and return the portions that
+/// belong to the displayed [0, 1] × [0, 1] texture tile.
+///
+/// NIF assets commonly use repeated UVs (for example, a door texture may be
+/// tiled twice across a mesh). The 3D sampler repeats those coordinates, but
+/// drawing the raw endpoints would place the overlay outside the image and
+/// hide most of the useful topology. Splitting before wrapping preserves the
+/// seam locations; simply taking `fract` of both endpoints would connect the
+/// wrong corners across a repeat boundary.
+fn wrapped_uv_edge(start: [f32; 2], end: [f32; 2]) -> Vec<[[f32; 2]; 2]> {
+    if !start
+        .iter()
+        .chain(end.iter())
+        .all(|value| value.is_finite())
+    {
+        return Vec::new();
+    }
+
+    if start
+        .iter()
+        .chain(end.iter())
+        .all(|value| *value >= -UV_EPSILON && *value <= 1.0 + UV_EPSILON)
+    {
+        return vec![[
+            [clamp_uv(start[0]), clamp_uv(start[1])],
+            [clamp_uv(end[0]), clamp_uv(end[1])],
+        ]];
+    }
+
+    let mut cuts = vec![0.0, 1.0];
+    for axis in 0..2 {
+        let delta = end[axis] - start[axis];
+        if delta.abs() <= UV_EPSILON {
+            continue;
+        }
+        let lower = start[axis].min(end[axis]).floor() + 1.0;
+        let upper = start[axis].max(end[axis]).ceil();
+        let mut boundary = lower;
+        let mut crossings = 0;
+        while boundary < upper && crossings < MAX_UV_TILE_CROSSES {
+            let t = (boundary - start[axis]) / delta;
+            if t > UV_EPSILON && t < 1.0 - UV_EPSILON {
+                cuts.push(t);
+            }
+            boundary += 1.0;
+            crossings += 1;
+        }
+    }
+    cuts.sort_by(f32::total_cmp);
+    cuts.dedup_by(|a, b| (*a - *b).abs() <= UV_EPSILON);
+
+    let mut segments = Vec::with_capacity(cuts.len().saturating_sub(1));
+    for pair in cuts.windows(2) {
+        let t0 = pair[0];
+        let t1 = pair[1];
+        let midpoint = lerp_uv(start, end, (t0 + t1) * 0.5);
+        let tile = [midpoint[0].floor(), midpoint[1].floor()];
+        let a = lerp_uv(start, end, t0);
+        let b = lerp_uv(start, end, t1);
+        let local_a = [clamp_uv(a[0] - tile[0]), clamp_uv(a[1] - tile[1])];
+        let local_b = [clamp_uv(b[0] - tile[0]), clamp_uv(b[1] - tile[1])];
+        if (local_a[0] - local_b[0]).abs() > UV_EPSILON
+            || (local_a[1] - local_b[1]).abs() > UV_EPSILON
+        {
+            segments.push([local_a, local_b]);
+        }
+    }
+    segments
+}
+
+fn lerp_uv(start: [f32; 2], end: [f32; 2], t: f32) -> [f32; 2] {
+    [
+        start[0] + (end[0] - start[0]) * t,
+        start[1] + (end[1] - start[1]) * t,
+    ]
+}
+
+fn clamp_uv(value: f32) -> f32 {
+    value.clamp(0.0, 1.0)
 }
 
 /// Return triangles belonging to the selected diffuse texture.
@@ -226,5 +312,59 @@ mod tests {
         };
         assert_eq!(uv_triangles_for_texture(&scene, "brick_d.tga").len(), 1);
         assert!(uv_triangles_for_texture(&scene, "other.tga").is_empty());
+    }
+
+    #[test]
+    fn repeated_truck_barr_uvs_stay_inside_the_preview_tile_when_present() {
+        let path = "C:/Dev/bully-nif-tools/Nif_Files/3_06TruckBarr.nif";
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(_) => return,
+        };
+        let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
+            &bytes,
+            BaseOrientation::Zup,
+            |_| None,
+        )
+        .expect("truck barr should decode");
+        let triangles = uv_triangles_for_texture(&scene, "Traindoor_d.tga");
+        assert_eq!(triangles.len(), 4);
+        assert!(
+            triangles
+                .iter()
+                .flatten()
+                .any(|uv| uv[0] < 0.0 || uv[0] > 1.0 || uv[1] < 0.0 || uv[1] > 1.0)
+        );
+
+        let segments = triangles
+            .iter()
+            .flat_map(|triangle| {
+                [(0, 1), (1, 2), (2, 0)]
+                    .into_iter()
+                    .flat_map(move |(a, b)| wrapped_uv_edge(triangle[a], triangle[b]))
+            })
+            .collect::<Vec<_>>();
+        assert!(!segments.is_empty());
+        assert!(
+            segments
+                .iter()
+                .flatten()
+                .flatten()
+                .all(|value| { *value >= -UV_EPSILON && *value <= 1.0 + UV_EPSILON })
+        );
+    }
+
+    #[test]
+    fn uv_edges_crossing_repeat_boundaries_are_split() {
+        let segments = wrapped_uv_edge([-0.25, 0.25], [1.25, 0.75]);
+        assert!(segments.len() >= 2);
+        assert!(
+            segments
+                .iter()
+                .flatten()
+                .flatten()
+                .all(|value| { *value >= -UV_EPSILON && *value <= 1.0 + UV_EPSILON })
+        );
+        assert_eq!(wrapped_uv_edge([0.1, 0.2], [0.8, 0.9]).len(), 1);
     }
 }
