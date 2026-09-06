@@ -1997,14 +1997,14 @@ impl App {
                 archive_index,
                 entry_index,
             } => {
-                let (entry_clone, archive_path) = {
+                let (entry_clone, archive_path, archive_entries) = {
                     let Some(archive) = self.editor.archives().get(archive_index) else {
                         return Task::none();
                     };
                     let Some(entry) = archive.entries.get(entry_index) else {
                         return Task::none();
                     };
-                    (entry.clone(), archive.path.clone())
+                    (entry.clone(), archive.path.clone(), archive.entries.clone())
                 };
                 let nif_basename = std::path::Path::new(&entry_clone.file_name)
                     .file_stem()
@@ -2026,6 +2026,11 @@ impl App {
                             let ide_map = game_root
                                 .as_ref()
                                 .map(|root| crate::inspector::texture::IdeMap::build(root));
+                            let archive_texture_index =
+                                crate::inspector::texture::ArchiveTextureIndex::from_entries(
+                                    &archive_entries,
+                                    archive_path.as_deref(),
+                                );
                             let nft_catalog = ide_map
                                 .as_ref()
                                 .and_then(|map| {
@@ -2033,12 +2038,23 @@ impl App {
                                         &nif_basename,
                                         map,
                                     )
+                                })
+                                .or_else(|| {
+                                    archive_texture_index.resolve_textures_for_nif(
+                                        &nif_basename,
+                                        ide_map.as_ref(),
+                                    )
                                 });
                             let resolver = move |name: &str| {
                                 nft_catalog
                                     .as_ref()
                                     .and_then(|cat| cat.get_pixels(name))
                                     .and_then(SceneTexture::from_tga)
+                                    .or_else(|| {
+                                        archive_texture_index
+                                            .read(name)
+                                            .and_then(|bytes| SceneTexture::from_tga(&bytes))
+                                    })
                                     .or_else(|| {
                                         ide_map
                                             .as_ref()
@@ -2075,9 +2091,10 @@ impl App {
                     match result {
                         Ok(scene) => {
                             dev_logger::breadcrumb(&format!(
-                                "3D load ok: {} verts, {} tris",
+                                "3D load ok: {} verts, {} tris, {} textured meshes",
                                 scene.total_vertices(),
-                                scene.total_triangles()
+                                scene.total_triangles(),
+                                scene.textured_mesh_count()
                             ));
                             self.viewer3d_handle.set_scene(scene);
                             self.selected_inspector_tab = InspectorTab::Model3D;

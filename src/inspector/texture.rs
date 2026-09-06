@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::archive::EntryInfo;
 use crate::inspector::nif::{BlockPayload, NifFile, NiPixelDataPayload};
 
 const MAX_TEXTURE_DIMENSION: u32 = 8_192;
@@ -136,6 +137,72 @@ impl IdeMap {
     }
 }
 
+/// Case-insensitive lookup over the entries of an opened IMG archive.
+///
+/// Bully keeps most NIF/NFT pairs inside IMG archives instead of exposing
+/// them as loose files. The filesystem-only [`IdeMap`] remains useful for
+/// extracted installations, while this index lets the embedded viewer read
+/// companion NFT data through the archive entry metadata it already owns.
+#[derive(Debug, Clone)]
+pub struct ArchiveTextureIndex {
+    entries: HashMap<String, EntryInfo>,
+    archive_path: Option<PathBuf>,
+}
+
+impl ArchiveTextureIndex {
+    pub fn from_entries(entries: &[EntryInfo], archive_path: Option<&Path>) -> Self {
+        let mut indexed = HashMap::with_capacity(entries.len());
+        for entry in entries {
+            indexed
+                .entry(texture_key(entry.file_name.as_str()))
+                .or_insert_with(|| entry.clone());
+        }
+        Self {
+            entries: indexed,
+            archive_path: archive_path.map(Path::to_path_buf),
+        }
+    }
+
+    /// Read an archive entry by basename, preserving IMG sector padding just
+    /// as the normal entry reader does. NIF parsers intentionally tolerate
+    /// that trailing padding.
+    pub fn read(&self, name: &str) -> Option<Vec<u8>> {
+        let entry = self.entries.get(&texture_key(name))?;
+        crate::parser::read_entry_data_from_source(entry, self.archive_path.as_deref()).ok()
+    }
+
+    /// Resolve a companion NFT from archive entries. An IDE-derived texture
+    /// dictionary name is preferred when available; the same-basename NFT is
+    /// the reliable fallback used by character and prop assets.
+    pub fn resolve_textures_for_nif(
+        &self,
+        nif_basename: &str,
+        ide_map: Option<&IdeMap>,
+    ) -> Option<NftCatalog> {
+        let mut candidates = Vec::with_capacity(2);
+        if let Some(txd_name) = ide_map.and_then(|map| map.nft_name_for(nif_basename)) {
+            candidates.push(format!("{txd_name}.nft"));
+        }
+        let direct = format!("{nif_basename}.nft");
+        if !candidates
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&direct))
+        {
+            candidates.push(direct);
+        }
+
+        for candidate in candidates {
+            let Some(bytes) = self.read(&candidate) else {
+                continue;
+            };
+            if let Some(catalog) = parse_nft_catalog_bytes(&bytes) {
+                return Some(catalog);
+            }
+        }
+        None
+    }
+}
+
 // ---- NFT catalog (texture basename → source path) ---------------------
 
 /// Catalog extracted from a single `.nft` file:
@@ -265,7 +332,11 @@ pub fn resolve_textures_for_nif(
 ) -> Option<NftCatalog> {
     let nft_path = ide_map.resolve_nft_path(nif_basename)?;
     let nft_bytes = fs::read(&nft_path).ok()?;
-    let mut nft = NifFile::parse(&nft_bytes).ok()?;
+    parse_nft_catalog_bytes(&nft_bytes)
+}
+
+fn parse_nft_catalog_bytes(nft_bytes: &[u8]) -> Option<NftCatalog> {
+    let mut nft = NifFile::parse(nft_bytes).ok()?;
     nft.resolve_string_indices();
 
     let mut entries = HashMap::new();
@@ -1362,6 +1433,30 @@ mod tests {
         assert!(
             catalog.entries.values().any(|entry| entry.pixel_data.is_some()),
             "at least one source texture should resolve its NiPixelData reference"
+        );
+    }
+
+    #[test]
+    fn bully_archive_catalog_resolves_player_mascot_pixels_when_present() {
+        let archive_path = Path::new(
+            "C:/Games/Bully - Scholarship Edition/Stream/World.img",
+        );
+        if !archive_path.is_file() {
+            return;
+        }
+        let archive = crate::archive::ArchiveInfo::open(archive_path)
+            .expect("World.img should open");
+        let index = ArchiveTextureIndex::from_entries(
+            &archive.entries,
+            archive.path.as_deref(),
+        );
+        let catalog = index
+            .resolve_textures_for_nif("Player_Mascot", None)
+            .expect("Player_Mascot.nft should be found in World.img");
+        assert!(!catalog.entries.is_empty());
+        assert!(
+            catalog.entries.values().any(|entry| entry.pixel_data.is_some()),
+            "Player_Mascot.nft should expose at least one decoded pixel payload"
         );
     }
 }

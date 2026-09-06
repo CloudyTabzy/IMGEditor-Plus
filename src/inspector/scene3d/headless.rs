@@ -621,6 +621,9 @@ mod tests {
     #[test]
     fn mascot_fixtures_render_to_png_when_present() {
         let root = std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/NIF");
+        let archive_path = std::path::Path::new(
+            "C:/Games/Bully - Scholarship Edition/Stream/World.img",
+        );
         let names = [
             "Player_Mascot.nif",
             "Player_Mascot_nh.nif",
@@ -630,21 +633,50 @@ mod tests {
             .iter()
             .filter(|name| root.join(name).exists())
             .count();
-        if existing == 0 {
+        if existing == 0 || !archive_path.is_file() {
             return;
         }
 
+        let archive = crate::archive::ArchiveInfo::open(archive_path).expect("World.img");
+        let archive_index = crate::inspector::texture::ArchiveTextureIndex::from_entries(
+            &archive.entries,
+            archive.path.as_deref(),
+        );
         let renderer = HeadlessRenderer::new().expect("renderer");
         for name in names {
             let Ok(bytes) = std::fs::read(root.join(name)) else {
                 continue;
             };
+            let nif_basename = std::path::Path::new(name)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("mascot");
+            let catalog = archive_index
+                .resolve_textures_for_nif(nif_basename, None)
+                .expect("mascot NFT should be found in World.img");
             let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
                 &bytes,
                 crate::inspector::scene3d::camera::BaseOrientation::Zup,
-                |_| None,
+                |texture_name| {
+                    catalog
+                        .get_pixels(texture_name)
+                        .and_then(crate::inspector::scene3d::mesh::SceneTexture::from_tga)
+                        .or_else(|| {
+                            archive_index
+                                .read(texture_name)
+                                .and_then(|bytes| {
+                                    crate::inspector::scene3d::mesh::SceneTexture::from_tga(
+                                        &bytes,
+                                    )
+                                })
+                        })
+                },
             )
             .expect("mascot scene decoded");
+            assert!(
+                scene.textured_mesh_count() > 0,
+                "{name} should resolve at least one diffuse texture"
+            );
             let mut camera = OrbitCamera::new(Viewport {
                 width: 512,
                 height: 512,
@@ -656,7 +688,7 @@ mod tests {
                 &camera,
                 512,
                 512,
-                RenderFlags::empty(),
+                RenderFlags::HAS_TEXTURE,
             )
             .expect("mascot frame rendered");
             let stem = std::path::Path::new(name)
