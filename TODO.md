@@ -1,6 +1,6 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v3.8.0** (archive workflow, session management, responsive background work, expanded format support, and hardened 3D GPU resource management). 218 tests passing.
+Last shipped: **v3.9.0** (Bully NIF scene parsing, texture resolution, and safer textured 3D previews). 228 tests passing.
 
 Next phase: **supporting other game formats**.
 
