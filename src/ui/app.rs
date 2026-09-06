@@ -1210,7 +1210,7 @@ impl App {
                     .engine(if self.fast_export {
                         ExportEngine::Fast
                     } else {
-                        ExportEngine::Parallel
+                        ExportEngine::ZeroCopy
                     });
                 Task::perform(
                     async move {

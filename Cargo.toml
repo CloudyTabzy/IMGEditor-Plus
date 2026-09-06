@@ -65,3 +65,7 @@ codegen-units = 16
 opt-level = 3
 panic = "abort"
 strip = "symbols"
+
+[[example]]
+name = "probe_filecreate"
+required-features = ["bench"]

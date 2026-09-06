@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -22,11 +22,15 @@ pub enum ExportMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportEngine {
     /// Chunked parallel export with Rayon + per-worker BufReader.
-    /// Default. Good UI responsiveness; throughput within noise of C++.
+    /// Good UI responsiveness; throughput within noise of C++.
     Parallel,
     /// Single-threaded sequential export mirroring the original C++ behavior.
     /// Minimizes thread coordination overhead on I/O-bound systems.
     Fast,
+    /// Zero-copy parallel export: writes entry data straight from the archive
+    /// memory map with no intermediate buffers and no per-entry disk-based
+    /// collision checks. Falls back to `Parallel` when no mmap is available.
+    ZeroCopy,
 }
 
 #[derive(Debug)]
@@ -363,7 +367,7 @@ impl ExportTask {
             archive,
             folder,
             mode,
-            engine: ExportEngine::Parallel,
+            engine: ExportEngine::ZeroCopy,
             progress,
         }
     }
@@ -409,6 +413,8 @@ impl ExportTask {
                 total,
                 &completed,
             )
+        } else if self.engine == ExportEngine::ZeroCopy && archive.source_mmap.is_some() {
+            export_entries_zero_copy(&entries, &archive, &folder, &progress, total, &completed)
         } else {
             export_entries_batched(
                 &entries,
@@ -585,6 +591,108 @@ fn write_output_buffered(path: &Path, data: &[u8]) -> anyhow::Result<()> {
     writer.write_all(data)?;
     writer.flush()?;
     Ok(())
+}
+
+fn export_entries_zero_copy(
+    entries: &[EntryInfo],
+    archive: &ArchiveInfo,
+    folder: &std::path::Path,
+    progress: &ProgressInfo,
+    total: usize,
+    completed: &AtomicUsize,
+) -> Vec<(CompactString, anyhow::Result<()>)> {
+    let Some(mmap) = archive.source_mmap.clone() else {
+        return export_entries_batched(entries, archive, folder, progress, total, completed);
+    };
+
+    let paths = precompute_output_paths(entries, folder);
+    let progress_step = (total / 256).max(64);
+
+    entries
+        .par_iter()
+        .zip(paths.par_iter())
+        .map(|(entry, output_path)| {
+            if progress.is_cancelled() {
+                return (
+                    entry.file_name.clone(),
+                    Err(anyhow::anyhow!("Export cancelled")),
+                );
+            }
+
+            let result = export_entry_zero_copy(entry, output_path, &mmap);
+
+            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+            if done % progress_step == 0 || done == total {
+                progress.set_percentage(done as f32 / total as f32);
+            }
+
+            (entry.file_name.clone(), result)
+        })
+        .collect()
+}
+
+fn export_entry_zero_copy(
+    entry: &EntryInfo,
+    output_path: &Path,
+    mmap: &memmap2::Mmap,
+) -> anyhow::Result<()> {
+    if entry.imported {
+        let Some(source) = entry.source_path.as_ref() else {
+            anyhow::bail!("imported entry has no source path");
+        };
+        std::fs::copy(source, output_path)?;
+        return Ok(());
+    }
+
+    let offset = u64::from(entry.offset) * SECTOR_SIZE;
+    let size = (u64::from(entry.sector) * SECTOR_SIZE) as usize;
+    let start = usize::try_from(offset)?;
+    let end = start
+        .checked_add(size)
+        .filter(|&end| end <= mmap.len())
+        .ok_or_else(|| anyhow::anyhow!("entry range exceeds archive size"))?;
+
+    std::fs::write(output_path, &mmap[start..end])?;
+    Ok(())
+}
+
+/// Resolve every output path before the parallel phase. When the output
+/// directory starts empty (the common export-to-new-folder case), collision
+/// numbering is resolved in memory without any `exists()` syscalls; otherwise
+/// falls back to the disk-checking `unique_output_path` per entry.
+fn precompute_output_paths(entries: &[EntryInfo], folder: &std::path::Path) -> Vec<PathBuf> {
+    let dir_empty = std::fs::read_dir(folder)
+        .map(|mut it| it.next().is_none())
+        .unwrap_or(false);
+
+    let mut name_counts: HashMap<CompactString, usize> = HashMap::with_capacity(entries.len());
+    entries
+        .iter()
+        .map(|entry| {
+            let base = folder.join(entry.file_name.as_str());
+            if !dir_empty {
+                return unique_output_path(&base);
+            }
+            let count = name_counts.entry(entry.file_name_lower.clone()).or_insert(0);
+            *count += 1;
+            if *count == 1 {
+                return base;
+            }
+            numbered_path(&base, *count)
+        })
+        .collect()
+}
+
+/// Mirrors `unique_output_path` numbering: `name.ext` -> `name (2).ext`.
+fn numbered_path(path: &Path, index: usize) -> PathBuf {
+    let stem = path.file_stem().unwrap_or_default();
+    let ext = path.extension().unwrap_or_default();
+    let mut name = format!("{} ({})", stem.to_string_lossy(), index);
+    if !ext.is_empty() {
+        name.push('.');
+        name.push_str(&ext.to_string_lossy());
+    }
+    path.with_file_name(name)
 }
 
 fn anyhow_forward<E: std::fmt::Display>(err: E) -> anyhow::Error {
@@ -775,5 +883,118 @@ mod tests {
             .unwrap();
         assert!(replaced.imported);
         assert_eq!(replaced.source_path.as_deref(), Some(dir.path().join("existing.dff").as_path()));
+    }
+
+    #[test]
+    fn zero_copy_export_writes_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = create_fragmented_v1(dir.path());
+        let archive = ArchiveInfo::open(&source).unwrap();
+        let out_dir = dir.path().join("export-zc");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let (count, _) = ExportTask::new(archive, out_dir.clone(), ExportMode::All)
+            .engine(ExportEngine::ZeroCopy)
+            .run_blocking()
+            .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(
+            std::fs::read(out_dir.join("first.dff")).unwrap(),
+            vec![b'A'; SECTOR_SIZE as usize]
+        );
+        assert_eq!(
+            std::fs::read(out_dir.join("second.txd")).unwrap(),
+            vec![b'B'; SECTOR_SIZE as usize]
+        );
+    }
+
+    #[test]
+    fn zero_copy_export_numbers_duplicate_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("dup.img");
+        let mut img = File::create(&img_path).unwrap();
+        img.write_all(&vec![b'A'; SECTOR_SIZE as usize]).unwrap();
+        img.write_all(&vec![b'B'; SECTOR_SIZE as usize]).unwrap();
+        drop(img);
+        let dir_path = dir.path().join("dup.dir");
+        let mut directory = File::create(dir_path).unwrap();
+        write_entry_record(&mut directory, 0, 1, "dup.dff");
+        write_entry_record(&mut directory, 1, 1, "dup.dff");
+        drop(directory);
+
+        let archive = ArchiveInfo::open(&img_path).unwrap();
+        let out_dir = dir.path().join("export-dup");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let (count, _) = ExportTask::new(archive, out_dir.clone(), ExportMode::All)
+            .engine(ExportEngine::ZeroCopy)
+            .run_blocking()
+            .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(
+            std::fs::read(out_dir.join("dup.dff")).unwrap(),
+            vec![b'A'; SECTOR_SIZE as usize]
+        );
+        assert_eq!(
+            std::fs::read(out_dir.join("dup (2).dff")).unwrap(),
+            vec![b'B'; SECTOR_SIZE as usize]
+        );
+    }
+
+    #[test]
+    fn zero_copy_export_handles_imported_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = create_fragmented_v1(dir.path());
+        let mut archive = ArchiveInfo::open(&source).unwrap();
+        let external = dir.path().join("external.dff");
+        std::fs::write(&external, b"imported-payload").unwrap();
+        let mut entry = EntryInfo::new("imported.dff");
+        entry.imported = true;
+        entry.source_path = Some(external);
+        archive.entries.push(entry);
+        let out_dir = dir.path().join("export-imp");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let (count, _) = ExportTask::new(archive, out_dir.clone(), ExportMode::All)
+            .engine(ExportEngine::ZeroCopy)
+            .run_blocking()
+            .unwrap();
+
+        assert_eq!(count, 3);
+        assert_eq!(
+            std::fs::read(out_dir.join("imported.dff")).unwrap(),
+            b"imported-payload"
+        );
+    }
+
+    #[test]
+    fn zero_copy_export_never_overwrites_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = create_fragmented_v1(dir.path());
+        let archive = ArchiveInfo::open(&source).unwrap();
+        let out_dir = dir.path().join("export-occupied");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        std::fs::write(out_dir.join("first.dff"), b"pre-existing").unwrap();
+
+        let (count, _) = ExportTask::new(archive, out_dir.clone(), ExportMode::All)
+            .engine(ExportEngine::ZeroCopy)
+            .run_blocking()
+            .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(
+            std::fs::read(out_dir.join("first.dff")).unwrap(),
+            b"pre-existing"
+        );
+        assert_eq!(
+            std::fs::read(out_dir.join("first (2).dff")).unwrap(),
+            vec![b'A'; SECTOR_SIZE as usize]
+        );
+        assert_eq!(
+            std::fs::read(out_dir.join("second.txd")).unwrap(),
+            vec![b'B'; SECTOR_SIZE as usize]
+        );
     }
 }
