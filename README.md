@@ -45,7 +45,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Tab split in the right pane** — `Model 3D` (new) | `Texture` (TXD/NFT preview)
 - ✅ **Orbit / pan / zoom camera** — LMB drag to orbit, MMB drag to pan, wheel to zoom
 - ✅ **Lit + wireframe pipelines** — single WGSL shader, `W` cycles wireframe (toolbar)
-- ✅ **Textured paths** — DXT1/DXT5 diffuse decoded on `spawn_blocking` so the UI thread stays responsive
+- ✅ **Textured paths** — DXT1/DXT3/DXT5 diffuse decoded on `spawn_blocking` so the UI thread stays responsive
 - ✅ **Bully NFT companion textures** — embedded Gamebryo pixel data and archive-backed source paths are previewed as RGBA
 - ✅ **External PLY viewer fallback** — right-click `Open in external viewer` for non-NIF formats (DFF / COL) and any user preference
 - ✅ **Configurable base orientation** — Y-up default, `B` cycles to Z-up / X-up. Persists in `settings.ini`.
@@ -55,7 +55,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Rotating view-axis gizmo** — the small XYZ widget in the corner tracks the camera as it orbits
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
-- ✅ **243 tests passing** — covers parser, save, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against a real Bully fixture
+- ✅ **253 tests passing** — covers parser, save, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against real Bully fixtures
 
 ---
 
@@ -91,7 +91,7 @@ for the engineering story behind the two engines.
 
 ### 🎨 Texture Viewer
 - ✅ **TXD** (RenderWare Texture Dictionary) — full parser + 13 raster format decoder (DXT1/3/5, 1555, 565, 4444, 8888, PAL4, PAL8, + more)
-- ✅ **NFT** (Bully/Gamebryo texture catalog) — embedded DXT1/DXT5 payloads and archive-backed TGA/DDS/PNG sources
+- ✅ **NFT** (Bully/Gamebryo texture catalog) — embedded DXT1/DXT3/DXT5 payloads and archive-backed TGA/DDS/PNG sources
 - ✅ **Inline preview** — cached RGBA preview in the info panel, shared by TXD, NFT, and rendered NIF textures
 - ✅ **Multi-texture selector** — navigate textures within a TXD or NFT
 - ✅ **UV overlay** — toggle matching NIF triangle UVs over the fit-to-preview texture
@@ -106,7 +106,7 @@ for the engineering story behind the two engines.
 - ✅ **Copy entry details** to clipboard
 
 ### 🏗️ Design & UX
-- ✅ **6 theme modes** — System, Light, Catppuccin Mocha, Tokyo Night, Gruvbox Dark, **Everforest**
+- ✅ **6 theme modes** — Dark, Light, Catppuccin Mocha, Tokyo Night, Gruvbox, **Everforest**
 - ✅ **Design token system** — Tailwind-inspired color/spacing/radius/elevation scales, vendored in-tree
 - ✅ **Smooth animation engine** — 26 easing curves, animated progress bar, animated status-bar pulse
 - ✅ **Inter + Bricolage + Lucide icon fonts** — clean, modern typography
@@ -118,7 +118,7 @@ for the engineering story behind the two engines.
 
 ## 🎨 Themes
 
-Pick your vibe from the **View → Theme** menu. Every theme is wired into a shared design-token system so buttons, tables, modals, and accents stay consistent.
+Pick your vibe from the **Themes** menu. Every theme is wired into a shared design-token system so buttons, tables, modals, and accents stay consistent.
 
 <details>
 <summary>Click to preview all themes</summary>
@@ -185,7 +185,7 @@ Or package a release:
 .\package-release.ps1
 ```
 
-The `dist\` folder then contains the portable `.exe` plus file-association notes.
+The `dist\` folder then contains the portable `.exe`, `README.md`, and `LICENSE`.
 
 ---
 
