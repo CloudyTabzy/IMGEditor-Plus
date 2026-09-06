@@ -542,7 +542,7 @@ fn extract_pixels_for_nft(
     None
 }
 
-/// Build a 128-byte DDS header for a DXT1/DXT5 texture.
+/// Build a 128-byte DDS header for a DXT1/DXT3/DXT5 texture.
 fn build_dds_header(w: u32, h: u32, fourcc: &[u8; 4], mip_count: u32) -> Vec<u8> {
     let bpb: u32 = if fourcc == b"DXT1" { 8 } else { 16 };
     let pitch = w.div_ceil(4).max(1) * h.div_ceil(4).max(1) * bpb;
@@ -564,6 +564,29 @@ fn build_dds_header(w: u32, h: u32, fourcc: &[u8; 4], mip_count: u32) -> Vec<u8>
     hdr[84..88].copy_from_slice(fourcc);                 // dwFourCC
     hdr[108..112].copy_from_slice(&caps.to_le_bytes());
     hdr
+}
+
+/// Map Bully/Gamebryo `NiPixelFormat` values to their DXT family.
+///
+/// Bully uses 4 = DXT1, 5 = DXT3, and 6 = DXT5. Keeping this mapping in one
+/// place avoids silently treating DXT3's explicit alpha block as DXT5's
+/// interpolated alpha block.
+fn nif_dxt_fourcc(pixel_format: u32) -> Option<&'static [u8; 4]> {
+    match pixel_format {
+        4 => Some(b"DXT1"),
+        5 => Some(b"DXT3"),
+        6 => Some(b"DXT5"),
+        _ => None,
+    }
+}
+
+fn nif_dxt_to_tga(data: &[u8], width: u32, height: u32, fourcc: &[u8; 4]) -> Vec<u8> {
+    match fourcc {
+        b"DXT1" => dxt1_to_tga(data, width, height),
+        b"DXT3" => dxt3_to_tga(data, width, height),
+        b"DXT5" => dxt5_to_tga(data, width, height),
+        _ => unreachable!("nif_dxt_fourcc only returns supported DXT formats"),
+    }
 }
 
 /// Compute DXT mip chain size in bytes.
@@ -948,7 +971,7 @@ struct ParsedNiPixelData {
 }
 
 /// Try to extract pixel data from a NiPixelData block. Returns RGBA TGA
-/// bytes for DXT1 and DXT5, or DDS bytes as a last-resort fallback
+/// bytes for DXT1, DXT3, and DXT5, or DDS bytes as a last-resort fallback
 /// when the explicit header can't be parsed.
 fn extract_dds_from_nipixeldata(pd: &NiPixelDataPayload) -> Option<Vec<u8>> {
     let raw = &pd.raw_pixels;
@@ -958,11 +981,7 @@ fn extract_dds_from_nipixeldata(pd: &NiPixelDataPayload) -> Option<Vec<u8>> {
     // and the size guesser below only works by coincidence for 9 of
     // 12 textures (see Docs/bully_embedded_texture_export.md).
     if let Some(hdr) = parse_nipixeldata_header(raw) {
-        let fourcc = match pd.pixel_format {
-            4 => b"DXT1",
-            5 | 6 => b"DXT5",
-            _ => return None,
-        };
+        let fourcc = nif_dxt_fourcc(pd.pixel_format)?;
         let dxt_start = hdr.dxt_data_start;
         let dxt_end = dxt_start
             .checked_add(hdr.main_mip_size as usize)?
@@ -971,10 +990,7 @@ fn extract_dds_from_nipixeldata(pd: &NiPixelDataPayload) -> Option<Vec<u8>> {
             return None;
         }
         let pixel_data = &raw[dxt_start..dxt_end];
-        return Some(match fourcc {
-            b"DXT1" => dxt1_to_tga(pixel_data, hdr.width, hdr.height),
-            _ => dxt5_to_tga(pixel_data, hdr.width, hdr.height),
-        });
+        return Some(nif_dxt_to_tga(pixel_data, hdr.width, hdr.height, fourcc));
     }
 
     // Legacy fallback: try to guess dimensions and format from the
@@ -1001,36 +1017,34 @@ fn extract_dds_from_nipixeldata(pd: &NiPixelDataPayload) -> Option<Vec<u8>> {
         (64, 64), (64, 32), (32, 64), (64, 16), (16, 64),
         (32, 32), (16, 16), (8, 8),
     ];
-    let four_dxt1 = b"DXT1";
-    let four_dxt5 = b"DXT5";
+    let fourcc = nif_dxt_fourcc(pd.pixel_format)?;
 
-    for &fourcc in &[four_dxt1, four_dxt5] {
-        for &(w, h) in &candidates {
-            let (chain, _mips) = dxt_chain_size(w, h, fourcc);
-            if chain > block_size {
-                continue;
-            }
-            let hdr_sz = block_size - chain;
-            if !(40..=512).contains(&hdr_sz) {
-                continue;
-            }
-
-            let px_start = hdr_sz as usize;
-            if px_start + chain as usize > raw.len() {
-                continue;
-            }
-            let pixel_data = &raw[px_start..px_start + chain as usize];
-
-            if fourcc == b"DXT1" {
-                return Some(dxt1_to_tga(pixel_data, w, h));
-            }
-            // DXT5: keep as DDS (no TGA decoder in legacy path).
-            let dds_hdr = build_dds_header(w, h, fourcc, 1);
-            let mut out = Vec::with_capacity(dds_hdr.len() + pixel_data.len());
-            out.extend_from_slice(&dds_hdr);
-            out.extend_from_slice(pixel_data);
-            return Some(out);
+    for &(w, h) in &candidates {
+        let (chain, _mips) = dxt_chain_size(w, h, fourcc);
+        if chain > block_size {
+            continue;
         }
+        let hdr_sz = block_size - chain;
+        if !(40..=512).contains(&hdr_sz) {
+            continue;
+        }
+
+        let px_start = hdr_sz as usize;
+        if px_start + chain as usize > raw.len() {
+            continue;
+        }
+        let pixel_data = &raw[px_start..px_start + chain as usize];
+
+        if fourcc == b"DXT1" || fourcc == b"DXT3" {
+            return Some(nif_dxt_to_tga(pixel_data, w, h, fourcc));
+        }
+
+        // DXT5: keep as DDS in the legacy path.
+        let dds_hdr = build_dds_header(w, h, fourcc, 1);
+        let mut out = Vec::with_capacity(dds_hdr.len() + pixel_data.len());
+        out.extend_from_slice(&dds_hdr);
+        out.extend_from_slice(pixel_data);
+        return Some(out);
     }
     None
 }
@@ -1049,6 +1063,9 @@ mod tests {
         assert_eq!(size, 43_704);
 
         let (size, _) = dxt_chain_size(256, 256, b"DXT5");
+        assert_eq!(size, 87_408);
+
+        let (size, _) = dxt_chain_size(256, 256, b"DXT3");
         assert_eq!(size, 87_408);
 
         let (size, _) = dxt_chain_size(128, 128, b"DXT1");
@@ -1217,6 +1234,34 @@ mod tests {
         assert_eq!(u16::from_le_bytes([out[14], out[15]]), 128);
         // 8-bit alpha channel for DXT5.
         assert_eq!(out[17] & 0x0F, 8);
+    }
+
+    #[test]
+    fn nipixeldata_explicit_header_4x4_dxt3_preserves_explicit_alpha() {
+        // DXT3 stores one 4-bit alpha value per pixel. The first pixel uses
+        // alpha nibble 1 (17/255); DXT5 would interpret this block differently.
+        let dxt_data = [
+            0xF1, 0, 0, 0, 0, 0, 0, 0,
+            0x00, 0xF8, // red RGB565 endpoint
+            0xE0, 0x07, // green RGB565 endpoint
+            0, 0, 0, 0, // all pixels use endpoint 0
+        ];
+        let raw = build_test_nipixeldata(5, &[(4, 4, 0)], &dxt_data);
+        let pd = NiPixelDataPayload {
+            pixel_format: 5, // PX_FMT_DXT3
+            num_faces: 1,
+            num_mipmaps: 1,
+            bytes_per_pixel: 16,
+            num_pixels: dxt_data.len() as u32,
+            raw_pixels: raw,
+        };
+
+        let out = extract_dds_from_nipixeldata(&pd).expect("4x4 DXT3 should extract");
+        assert_eq!(out.len(), 18 + 4 * 4 * 4);
+        assert_eq!(out[18], 0); // B
+        assert_eq!(out[19], 0); // G
+        assert_eq!(out[20], 255); // R
+        assert_eq!(out[21], 17); // explicit DXT3 alpha nibble
     }
 
     /// Regression test: 256×512 DXT1 (Player_03_s in Bully) — the
