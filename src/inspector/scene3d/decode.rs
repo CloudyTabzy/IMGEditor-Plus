@@ -246,4 +246,42 @@ mod tests {
         );
         assert!(scene.textured_mesh_count() > 0, "the fixture diffuse texture should render");
     }
+
+    #[test]
+    fn decoder_preserves_bbagbottle_strip_topology_when_present() {
+        let path = "C:/Dev/bully-nif-tools/Nif_Files/1S01_bbagbottle.nif";
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(_) => return,
+        };
+        let mut nif = NifFile::parse(&bytes).expect("bbagbottle fixture should parse");
+        nif.resolve_string_indices();
+        let strips = nif
+            .payloads
+            .iter()
+            .filter_map(|payload| match payload.as_ref()? {
+                crate::inspector::nif::BlockPayload::NiTriStripsData(data) => Some(data),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(strips.len(), 2, "the bottle should contain two strip meshes");
+        assert!(strips.iter().all(|data| data.base.triangles.is_empty()));
+        assert_eq!(
+            strips
+                .iter()
+                .map(|data| data.num_triangles as usize)
+                .sum::<usize>(),
+            380
+        );
+        assert!(strips.iter().all(|data| {
+            data.has_points
+                && !data.points.is_empty()
+                && data.strip_lengths.iter().sum::<u16>() as usize == data.points.len()
+        }));
+
+        let scene = build_scene_from_nif(&nif, BaseOrientation::Zup, |_| None)
+            .expect("bbagbottle should produce a scene");
+        assert_eq!(scene.total_vertices(), 262);
+        assert_eq!(scene.total_triangles(), 160);
+    }
 }

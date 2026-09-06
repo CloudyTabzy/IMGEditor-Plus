@@ -813,7 +813,12 @@ fn parse_block(type_name: &str, raw: &[u8], endian: Endian) -> NifResult<BlockPa
         }
         "NiTriShapeData" => BlockPayload::NiTriShapeData(read_ni_tri_shape_data(&mut r)?),
         "NiTriStripsData" => {
-            let base = read_ni_tri_shape_data(&mut r)?;
+            // NiTriStripsData shares the common NiGeometryData prefix with
+            // NiTriShapeData, but its footer is different: it stores strip
+            // lengths and point indices instead of a triangle table and
+            // match groups. Reading the shape footer here would consume the
+            // strip header as if it were triangle data.
+            let base = read_ni_geometry_data_common(&mut r)?;
             let (num_triangles, num_strips, strip_lengths, has_points, points) =
                 read_strips_footer(&mut r);
             BlockPayload::NiTriStripsData(NiTriStripsDataPayload {
@@ -1211,12 +1216,12 @@ fn read_ni_texturing_property(r: &mut Reader<'_>) -> NifResult<NiTexturingProper
     Ok(out)
 }
 
-// The NIF tri-shape reader conditionally populates many Vec fields
-// depending on the has_* flags read from the file. The structure reads
-// top-to-bottom mirroring the on-disk format, which is more important
-// than collapsing it into a single struct literal.
+// The NIF geometry-data reader conditionally populates many Vec fields
+// depending on the has_* flags read from the file. NiTriShapeData and
+// NiTriStripsData share this prefix but have different trailing topology
+// records, so the common portion must be parsed independently.
 #[allow(clippy::field_reassign_with_default)]
-fn read_ni_tri_shape_data(r: &mut Reader<'_>) -> NifResult<NiTriShapeDataPayload> {
+fn read_ni_geometry_data_common(r: &mut Reader<'_>) -> NifResult<NiTriShapeDataPayload> {
     let mut out = NiTriShapeDataPayload::default();
     out.group_id = r.read_i32("group_id")?;
     out.num_vertices = r.read_u16("num_vertices")?;
@@ -1261,7 +1266,12 @@ fn read_ni_tri_shape_data(r: &mut Reader<'_>) -> NifResult<NiTriShapeDataPayload
     }
     out.consistency_flags = r.read_u16("consistency_flags")?;
     out.additional_data_ref = r.read_i32("additional_data")?;
-    // TriShapeData-specific: triangles
+    Ok(out)
+}
+
+fn read_ni_tri_shape_data(r: &mut Reader<'_>) -> NifResult<NiTriShapeDataPayload> {
+    let mut out = read_ni_geometry_data_common(r)?;
+    // TriShapeData-specific: triangles and match groups.
     if r.remaining() < 2 + 4 + 1 {
         // Truncated block; leave triangles empty.
         return Ok(out);
@@ -1410,10 +1420,59 @@ mod tests {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
 
+    fn push_vec3(bytes: &mut Vec<u8>, value: [f32; 3]) {
+        for component in value {
+            push_f32(bytes, component);
+        }
+    }
+
     fn push_tex_desc(bytes: &mut Vec<u8>, source_ref: i32) {
         push_i32(bytes, source_ref);
         push_u16(bytes, 0);
         bytes.push(0);
+    }
+
+    #[test]
+    fn tri_strips_data_keeps_strip_footer_out_of_shape_triangles() {
+        let mut bytes = Vec::new();
+        push_i32(&mut bytes, 0); // group id
+        push_u16(&mut bytes, 3); // vertices
+        bytes.extend_from_slice(&[0, 0]); // keep/compress flags
+        bytes.push(1); // has vertices
+        push_vec3(&mut bytes, [0.0, 0.0, 0.0]);
+        push_vec3(&mut bytes, [1.0, 0.0, 0.0]);
+        push_vec3(&mut bytes, [0.0, 0.0, 1.0]);
+        push_u16(&mut bytes, 1); // one UV set
+        bytes.push(0); // has normals
+        push_vec3(&mut bytes, [0.0, 0.0, 0.0]); // bounding center
+        push_f32(&mut bytes, 1.0); // bounding radius
+        bytes.push(0); // has vertex colors
+        for uv in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]] {
+            push_f32(&mut bytes, uv[0]);
+            push_f32(&mut bytes, uv[1]);
+        }
+        push_u16(&mut bytes, 0); // consistency flags
+        push_i32(&mut bytes, -1); // additional data
+
+        // NiTriStripsData topology footer: one three-point strip.
+        push_u16(&mut bytes, 1); // number of triangles
+        push_u16(&mut bytes, 1); // number of strips
+        push_u16(&mut bytes, 3); // strip length
+        bytes.push(1); // has points
+        for index in [0, 1, 2] {
+            push_u16(&mut bytes, index);
+        }
+
+        let payload = parse_block("NiTriStripsData", &bytes, Endian::Little).unwrap();
+        let BlockPayload::NiTriStripsData(data) = payload else {
+            panic!("expected NiTriStripsData payload");
+        };
+        assert!(data.base.triangles.is_empty());
+        assert_eq!(data.num_triangles, 1);
+        assert_eq!(data.num_strips, 1);
+        assert_eq!(data.strip_lengths, vec![3]);
+        assert!(data.has_points);
+        assert_eq!(data.points, vec![0, 1, 2]);
     }
 
     #[test]
