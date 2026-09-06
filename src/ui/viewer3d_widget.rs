@@ -18,7 +18,7 @@
 //!   per-frame depth texture + mesh cache.
 //!
 //! The widget keeps its own drag state inside the `widget::Tree`
-//! state so continuous mouse-drag orbits work correctly across frames.
+//! state so continuous mouse drags work correctly across frames.
 
 use std::sync::{Arc, Mutex};
 
@@ -32,7 +32,6 @@ use iced::{
     advanced::layout::{self, Limits, Node},
     advanced::renderer,
     advanced::Widget,
-    keyboard::{Event as KeyEvent, Modifiers},
     mouse::{
         self, Button as MouseButton, Cursor, Event as MouseEvent, ScrollDelta,
     },
@@ -49,7 +48,7 @@ use crate::inspector::scene3d::mesh::Aabb;
 use crate::inspector::scene3d::scene::Scene;
 
 const ORBIT_SENSITIVITY: f32 = 0.010;
-const PAN_SENSITIVITY: f32 = 0.0012;
+const PAN_SENSITIVITY: f32 = 0.0006;
 const WHEEL_ZOOM_PER_PIXEL: f32 = 0.0015;
 const WHEEL_ZOOM_PER_LINE: f32 = 0.06;
 
@@ -196,12 +195,55 @@ impl SceneHandle {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DragMode {
+    Orbit,
+    Pan,
+}
+
+impl DragMode {
+    fn from_button(button: MouseButton) -> Option<Self> {
+        match button {
+            MouseButton::Left => Some(Self::Orbit),
+            MouseButton::Middle => Some(Self::Pan),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Default)]
 struct DragState {
-    dragging: bool,
-    shift: bool,
+    mode: Option<DragMode>,
     last: Option<Point>,
     cursor_inside: bool,
+}
+
+impl DragState {
+    fn begin(&mut self, button: MouseButton) -> bool {
+        let Some(mode) = DragMode::from_button(button) else {
+            return false;
+        };
+        self.mode = Some(mode);
+        self.last = None;
+        true
+    }
+
+    fn end(&mut self, button: MouseButton) -> bool {
+        let Some(mode) = DragMode::from_button(button) else {
+            return false;
+        };
+        if self.mode == Some(mode) {
+            self.mode = None;
+            self.last = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn is_dragging(&self) -> bool {
+        self.mode.is_some()
+    }
 }
 
 pub struct Scene3dWidget {
@@ -237,30 +279,18 @@ fn handle_event(
     cursor_inside: bool,
 ) -> bool {
     match event {
-        Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left)) => {
-            state.dragging = true;
-            state.last = None;
-            false
+        Event::Mouse(MouseEvent::ButtonPressed(button)) if cursor_inside => {
+            state.begin(*button)
         }
-        Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Middle)) => {
-            state.dragging = true;
-            state.last = None;
-            false
-        }
-        Event::Mouse(MouseEvent::ButtonReleased(MouseButton::Left | MouseButton::Middle)) => {
-            state.dragging = false;
-            state.last = None;
-            false
-        }
+        Event::Mouse(MouseEvent::ButtonReleased(button)) => state.end(*button),
         Event::Mouse(MouseEvent::CursorMoved { position }) => {
-            if state.dragging {
+            if let Some(mode) = state.mode {
                 if let Some(last) = state.last {
                     let dx = position.x - last.x;
                     let dy = position.y - last.y;
-                    if state.shift {
-                        camera.pan(dx, dy, PAN_SENSITIVITY);
-                    } else {
-                        camera.orbit(dx, dy, ORBIT_SENSITIVITY);
+                    match mode {
+                        DragMode::Orbit => camera.orbit(dx, dy, ORBIT_SENSITIVITY),
+                        DragMode::Pan => camera.pan(dx, dy, PAN_SENSITIVITY),
                     }
                     state.last = Some(*position);
                     true
@@ -345,38 +375,14 @@ where
         let cursor_inside = cursor.position_in(bounds).is_some();
         let prev_inside = state.cursor_inside;
         state.cursor_inside = cursor_inside;
-        if let Event::Keyboard(KeyEvent::ModifiersChanged(modifiers)) = event {
-            state.shift = modifiers.shift();
-        }
         let mut dirty = false;
         self.handle.with_mut(|inner| {
-            if cursor_inside {
-                // NOTE: do NOT touch `state.last` here. `handle_event`
-                // owns the drag anchor — pre-seeding it with the current
-                // cursor position made every drag delta come out zero,
-                // which is why orbiting never moved the camera.
-                if let Event::Mouse(MouseEvent::ButtonPressed(
-                    MouseButton::Left | MouseButton::Middle,
-                )) = event
-                {
-                    state.dragging = true;
-                    dirty = true;
-                }
-            }
-            if let Event::Mouse(MouseEvent::ButtonReleased(
-                MouseButton::Left | MouseButton::Middle,
-            )) = event
-                && state.dragging
-            {
-                state.dragging = false;
-                dirty = true;
-            }
             let mut needs_redraw =
                 handle_event(&mut inner.camera, state, event, cursor_inside);
-            if !state.dragging {
+            if !state.is_dragging() {
                 state.last = None;
             }
-            if !cursor_inside && !state.dragging
+            if !cursor_inside && !state.is_dragging()
                 && matches!(event, Event::Mouse(MouseEvent::CursorMoved { .. }))
             {
                 needs_redraw = false;
@@ -393,7 +399,6 @@ where
         if dirty {
             shell.request_redraw();
         }
-        let _ = Modifiers::default();
     }
 
     fn draw(
@@ -431,7 +436,7 @@ where
         if !has_scene {
             return mouse::Interaction::Idle;
         }
-        if state.dragging {
+        if state.is_dragging() {
             mouse::Interaction::Grabbing
         } else {
             mouse::Interaction::Grab
@@ -1145,6 +1150,84 @@ mod tests {
         assert!(
             yaw.abs() > 1e-4,
             "expected left-drag to orbit the camera, yaw = {yaw}"
+        );
+    }
+
+    #[test]
+    fn middle_drag_pans_camera_without_orbiting() {
+        type TestWidget = dyn Widget<(), iced::Theme, MockRenderer>;
+
+        let handle = Arc::new(SceneHandle::new());
+        let mut widget = Scene3dWidget::new(handle.clone());
+        let mut tree = Tree {
+            tag: <Scene3dWidget as Widget<(), iced::Theme, MockRenderer>>::tag(&widget),
+            state: <Scene3dWidget as Widget<(), iced::Theme, MockRenderer>>::state(&widget),
+            children: Vec::new(),
+        };
+        let node = Node::new(Size::new(200.0, 200.0));
+        let viewport = Rectangle::new(Point::ORIGIN, Size::new(200.0, 200.0));
+        let renderer = MockRenderer;
+        let mut clipboard = iced::advanced::clipboard::Null;
+        let mut messages = Vec::<()>::new();
+
+        let mut drive = |widget: &mut Scene3dWidget, event: Event, cursor: Cursor| {
+            TestWidget::update(
+                widget,
+                &mut tree,
+                &event,
+                layout::Layout::new(&node),
+                cursor,
+                &renderer,
+                &mut clipboard,
+                &mut Shell::new(&mut messages),
+                &viewport,
+            );
+        };
+
+        drive(
+            &mut widget,
+            Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Middle)),
+            Cursor::Available(Point::new(50.0, 50.0)),
+        );
+        drive(
+            &mut widget,
+            Event::Mouse(MouseEvent::CursorMoved {
+                position: Point::new(50.0, 50.0),
+            }),
+            Cursor::Available(Point::new(50.0, 50.0)),
+        );
+        drive(
+            &mut widget,
+            Event::Mouse(MouseEvent::CursorMoved {
+                position: Point::new(80.0, 70.0),
+            }),
+            Cursor::Available(Point::new(80.0, 70.0)),
+        );
+
+        let (target, yaw) = handle.with(|inner| (inner.camera.target, inner.camera.yaw));
+        assert!(
+            target.iter().any(|value| value.abs() > 1e-4),
+            "expected middle-drag to pan the camera, target = {target:?}"
+        );
+        assert!(yaw.abs() < 1e-6, "middle-drag must not orbit, yaw = {yaw}");
+
+        drive(
+            &mut widget,
+            Event::Mouse(MouseEvent::ButtonReleased(MouseButton::Middle)),
+            Cursor::Available(Point::new(80.0, 70.0)),
+        );
+        let stopped = handle.with(|inner| inner.camera.target);
+        drive(
+            &mut widget,
+            Event::Mouse(MouseEvent::CursorMoved {
+                position: Point::new(120.0, 110.0),
+            }),
+            Cursor::Available(Point::new(120.0, 110.0)),
+        );
+        assert_eq!(
+            handle.with(|inner| inner.camera.target),
+            stopped,
+            "releasing middle button must stop panning"
         );
     }
 

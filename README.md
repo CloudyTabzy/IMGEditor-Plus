@@ -43,7 +43,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 ### 🎨 Embedded 3D Model Viewer (v3.4+)
 - ✅ **In-app wgpu renderer** — same wgpu device Iced uses, no second window or thread battle
 - ✅ **Tab split in the right pane** — `Model 3D` (new) | `Texture` (TXD preview)
-- ✅ **Orbit / pan / zoom camera** — LMB drag, MMB drag, Shift+LMB drag, wheel
+- ✅ **Orbit / pan / zoom camera** — LMB drag to orbit, MMB drag to pan, wheel to zoom
 - ✅ **Lit + wireframe pipelines** — single WGSL shader, `W` cycles wireframe (toolbar)
 - ✅ **Textured paths** — DXT1/DXT5 diffuse decoded on `spawn_blocking` so the UI thread stays responsive
 - ✅ **External PLY viewer fallback** — right-click `Open in external viewer` for non-NIF formats (DFF / COL) and any user preference
