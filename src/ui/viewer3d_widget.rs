@@ -48,7 +48,7 @@ use crate::inspector::scene3d::mesh::Aabb;
 use crate::inspector::scene3d::scene::Scene;
 
 const ORBIT_SENSITIVITY: f32 = 0.010;
-const PAN_SENSITIVITY: f32 = 0.0006;
+const PAN_SENSITIVITY: f32 = 0.0005;
 const WHEEL_ZOOM_PER_PIXEL: f32 = 0.0015;
 const WHEEL_ZOOM_PER_LINE: f32 = 0.06;
 

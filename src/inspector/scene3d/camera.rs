@@ -220,11 +220,12 @@ impl OrbitCamera {
         self.pitch = (self.pitch - dy * sensitivity).clamp(-1.55, 1.55);
     }
 
-    /// Pan the target perpendicular to the view direction. `dx` and `dy`
-    /// are pixel deltas; `pan_scale` is world-units-per-pixel derived
-    /// from the current distance so pan feels consistent at any zoom.
+    /// Pan the target perpendicular to the view direction. The scene follows
+    /// the pointer in screen space, matching Blender's view-move convention.
+    /// Iced's Y delta grows downward, so the vertical component is inverted
+    /// when converted into the camera's Y-up basis.
     pub fn pan(&mut self, dx: f32, dy: f32, sensitivity: f32) {
-        let s = (self.distance * sensitivity).max(self.near);
+        let s = (self.distance * sensitivity).max(f32::EPSILON);
         // Forward vector (from eye to target); we use the camera's
         // local right and up to move the target in screen space.
         let eye: glam::Vec3 = self.eye().into();
@@ -233,9 +234,8 @@ impl OrbitCamera {
         let world_up = glam::Vec3::Y;
         let right = forward.cross(world_up).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
-        self.target[0] += (right.x * dx + up.x * dy) * s;
-        self.target[1] += (right.y * dx + up.y * dy) * s;
-        self.target[2] += (right.z * dx + up.z * dy) * s;
+        let delta = (-right * dx + up * dy) * s;
+        self.target = (target + delta).into();
     }
 
     /// Exponential zoom. `factor > 1.0` zooms out, `< 1.0` zooms in.
@@ -382,13 +382,16 @@ mod tests {
     }
 
     #[test]
-    fn pan_follows_vertical_pointer_delta() {
+    fn pan_follows_screen_pointer_delta() {
         let mut horizontal = OrbitCamera::new(Viewport {
             width: 800,
             height: 600,
         });
         horizontal.pan(10.0, 0.0, 0.01);
-        assert!(horizontal.target[0] > 0.0);
+        assert!(
+            horizontal.target[0] < 0.0,
+            "rightward drag should move the scene right"
+        );
         assert!(approx_eq(horizontal.target[1], 0.0));
         assert!(approx_eq(horizontal.target[2], 0.0));
 
@@ -401,6 +404,43 @@ mod tests {
 
         cam.pan(0.0, -20.0, 0.01);
         assert!(cam.target[1] < 0.0, "dragging up should pan the view up");
+    }
+
+    #[test]
+    fn diagonal_pan_follows_both_screen_axes() {
+        fn screen_position(camera: &OrbitCamera, point: [f32; 3]) -> [f32; 2] {
+            let ndc = camera.view_proj().project_point3(point.into());
+            [
+                (ndc.x + 1.0) * 0.5 * camera.viewport.width as f32,
+                (1.0 - ndc.y) * 0.5 * camera.viewport.height as f32,
+            ]
+        }
+
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 800,
+            height: 600,
+        });
+        let before = screen_position(&camera, [0.0, 0.0, 0.0]);
+        camera.pan(20.0, 20.0, 0.01);
+        let after = screen_position(&camera, [0.0, 0.0, 0.0]);
+
+        assert!(after[0] > before[0], "rightward drag should move scene right");
+        assert!(after[1] > before[1], "downward drag should move scene down");
+    }
+
+    #[test]
+    fn pan_sensitivity_is_not_clamped_to_near_plane() {
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 800,
+            height: 600,
+        });
+        camera.pan(1.0, 0.0, 0.0005);
+
+        assert!(
+            camera.target[0].abs() < 0.01,
+            "small pan sensitivity should remain small: target = {:?}",
+            camera.target
+        );
     }
 
     #[test]
