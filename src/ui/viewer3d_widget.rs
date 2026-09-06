@@ -693,8 +693,8 @@ impl ScenePipeline {
     /// Called from `Primitive::render`; opens its own render pass.
     /// Sequence:
     ///   1. clear color to the F3D-style dark backdrop
-    ///   2. draw the procedural infinity grid (writes color + depth)
-    ///   3. draw the model meshes (lit shader, depth-tested)
+    ///   2. draw the procedural infinity grid as a depth-neutral backdrop
+    ///   3. draw the model meshes (lit shader, depth-tested and depth-owning)
     ///   4. draw the XYZ axis gizmo in the bottom-right (overlay, no depth)
     pub fn render_to_offscreen(
         &self,
@@ -750,8 +750,9 @@ impl ScenePipeline {
         });
 
         // 2. procedural grid floor — fills the cleared color with grid
-        // lines and writes depth for the floor plane so the model
-        // sorts correctly against it.
+        // lines. It deliberately does not write depth: the floor is a
+        // reference backdrop, so it must never hide model geometry below
+        // or intersecting the world Y=0 plane.
         pass.set_pipeline(&self.render_pipelines.grid);
         pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
         pass.set_vertex_buffer(

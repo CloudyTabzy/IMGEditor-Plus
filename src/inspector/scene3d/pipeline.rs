@@ -666,8 +666,13 @@ impl ScenePipelines {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format(),
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                // The grid is a visual scale reference, not scene
+                // geometry. It must not claim depth before the model pass;
+                // otherwise surfaces below or intersecting Y=0 disappear
+                // behind the floor. The lit meshes are the sole owners of
+                // scene depth, while the grid is composited behind them.
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),

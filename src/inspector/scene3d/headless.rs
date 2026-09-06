@@ -482,6 +482,72 @@ mod tests {
     }
 
     #[test]
+    fn floor_does_not_occlude_geometry_below_world_plane() {
+        let renderer = HeadlessRenderer::new().expect("renderer");
+        let positions = [
+            [-0.8, -2.0, 0.0],
+            [0.8, -2.0, 0.0],
+            [0.0, -0.5, 0.0],
+        ];
+        let aabb = Aabb::from_points(&positions).unwrap();
+        let vertices = positions
+            .into_iter()
+            .map(|position| Vertex {
+                position,
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.5, 0.5],
+            })
+            .collect();
+        let mesh = SceneMesh {
+            name: "below-floor".into(),
+            texture_name: Some("below-floor.tga".into()),
+            vertices,
+            indices: vec![0, 1, 2],
+            diffuse: Some(crate::inspector::scene3d::mesh::SceneTexture {
+                width: 2,
+                height: 2,
+                rgba: vec![
+                    255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+                ],
+            }),
+            aabb,
+        };
+        let scene = Scene {
+            meshes: vec![mesh],
+            aabb,
+            ambient: [0.2, 0.2, 0.22],
+            key_light: [0.45, 0.75, 0.45],
+            base_orientation: crate::inspector::scene3d::camera::BaseOrientation::Yup,
+        };
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 256,
+            height: 256,
+        });
+        camera.target = [0.0, -1.25, 0.0];
+        camera.distance = 8.0;
+        camera.pitch = 0.3;
+        assert!(camera.eye()[1] > 0.0, "camera should look down through Y=0");
+        let frame = render_frame(
+            &renderer,
+            &scene,
+            &camera,
+            256,
+            256,
+            RenderFlags::HAS_TEXTURE,
+        )
+        .expect("frame");
+        let red_pixels = frame
+            .rgba
+            .chunks_exact(4)
+            .filter(|pixel| pixel[0] > 150 && pixel[1] < 80 && pixel[2] < 80)
+            .count();
+        assert!(
+            red_pixels > 100,
+            "geometry below the reference floor should remain visible (found {red_pixels} red pixels)"
+        );
+    }
+
+    #[test]
     fn zero_viewport_is_rejected() {
         let renderer = HeadlessRenderer::new().expect("renderer");
         let scene = triangle_scene();
@@ -616,6 +682,53 @@ mod tests {
             meta.len() > 200,
             "PNG suspiciously small: {} bytes",
             meta.len()
+        );
+    }
+
+    #[test]
+    fn adm_lamp_fixture_renders_when_present() {
+        let candidates = [
+            std::path::Path::new("C:/Dev/bully-nif-tools/Nif_Files/adm_lamp.nif"),
+            std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/NIF/adm_lamp.nif"),
+        ];
+        let Some(path) = candidates.iter().find(|path| path.is_file()) else {
+            return;
+        };
+        let bytes = std::fs::read(path).expect("adm_lamp fixture should be readable");
+        let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
+            &bytes,
+            crate::inspector::scene3d::camera::BaseOrientation::Zup,
+            |_| None,
+        )
+        .expect("adm_lamp should decode");
+        assert!(scene.has_geometry());
+        assert_eq!(scene.total_vertices(), 292);
+        assert_eq!(scene.total_triangles(), 168);
+
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 512,
+            height: 512,
+        });
+        camera.reset_to_aabb(&scene.aabb);
+        let renderer = HeadlessRenderer::new().expect("renderer");
+        let frame = render_frame(
+            &renderer,
+            &scene,
+            &camera,
+            512,
+            512,
+            RenderFlags::empty(),
+        )
+        .expect("adm_lamp frame rendered");
+        let out = std::path::Path::new("target").join("scene3d-adm-lamp.png");
+        if let Some(parent) = out.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        write_png(&frame, &out).expect("adm_lamp PNG written");
+        assert!(
+            std::fs::metadata(&out).expect("adm_lamp PNG exists").len() > 200,
+            "adm_lamp PNG suspiciously small: {}",
+            out.display()
         );
     }
 
