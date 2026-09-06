@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v3.11.0
+# 🎮 IMG Editor Plus v3.12.0
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 

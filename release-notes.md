@@ -1,13 +1,12 @@
-## IMG Editor Plus v3.9.0
+## IMG Editor Plus v3.12.0
 
 ### Highlights
 
-- Improved Bully NIF scene-graph traversal, parent transforms, winding, and fallback normals for more accurate model previews.
-- Resolved NIF texture references through embedded NFT pixel data and external TGA assets, including per-mesh texture selection.
-- Kept the embedded wgpu viewer's resource lifecycle, allocation guards, and device-loss recovery from v3.8.0.
-- Continued archive packing, folder import, and GUI workflow improvements from the other agent's contribution.
+- Fixed the 3D reference grid's depth handling: the Blender-like floor and axes remain useful scale guides without occluding model geometry below or intersecting the world floor.
+- Added GPU regression coverage for below-floor geometry and an `adm_lamp.nif` fixture render.
+- Continued the NIF texture/UV preview, model navigation, selection workflow, archive packing, folder import, and GUI refinements from the preceding releases.
 
 ### Credits
 
-- GUI and archive workflow improvements: the other IMGEditor agent.
-- NIF scene and texture rendering: Codex.
+- GUI, archive workflow, and selection/preview UX improvements: the other IMGEditor agent.
+- NIF parsing, texture/UV mapping, 3D viewer navigation/rendering, and the floor-depth fix: Codex.
