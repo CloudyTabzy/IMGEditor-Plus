@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{
     ImgParser, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE, decode_entry_name, export_entry_to_file,
-    import_entry, read_entry_data_with_source,
+    import_entry,
 };
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -143,41 +143,68 @@ impl PcV1Parser {
         temp_dir: &Path,
         _source_path: &Option<PathBuf>,
     ) -> Result<()> {
-        let mut img_out =
-            BufWriter::new(std::fs::File::create(temp_img).context("failed to create temp img")?);
-        let mut dir_out = std::fs::File::create(temp_dir).context("failed to create temp dir")?;
+        const WRITE_BUF: usize = 1024 * 1024;
 
-        let mut offset = 0u64;
+        let mut img_out = BufWriter::with_capacity(
+            WRITE_BUF,
+            std::fs::File::create(temp_img).context("failed to create temp img")?,
+        );
+        let mut dir_out = BufWriter::with_capacity(
+            WRITE_BUF,
+            std::fs::File::create(temp_dir).context("failed to create temp dir")?,
+        );
+
         let total = archive.entries.len();
         let source_path = archive.path.clone();
         let source_mmap = archive.source_mmap.clone();
         archive.progress.start();
 
-        for (index, entry) in archive.entries.iter_mut().enumerate() {
+        // Layout pass: sizes come from existing metadata (or an imported
+        // file's length); no entry data is read here.
+        let mut layout = Vec::with_capacity(total);
+        for entry in archive.entries.iter() {
+            layout.push(crate::parser::entry_data_size(entry, source_mmap.as_deref())?);
+        }
+
+        // Write pass: both streams advance sequentially, and archive-backed
+        // data comes straight from the source memory map (no per-entry Vec).
+        let mut offset = 0u64;
+        let mut source_file = None;
+        for (index, (entry, &size)) in archive.entries.iter().zip(layout.iter()).enumerate() {
             if archive.progress.is_cancelled() {
                 archive.progress.finish();
                 anyhow::bail!("Rebuild cancelled");
             }
 
-            let data = read_entry_data_with_source(
+            dir_out.write_all(&((offset / SECTOR_SIZE) as u32).to_le_bytes())?;
+            dir_out.write_all(&((size / SECTOR_SIZE) as u32).to_le_bytes())?;
+            dir_out.write_all(&entry.file_name_raw)?;
+
+            crate::parser::stream_entry_data(
+                &mut img_out,
                 entry,
                 source_path.as_deref(),
                 source_mmap.as_deref(),
+                &mut source_file,
             )?;
 
-            let size = data.len() as u64;
+            offset += size;
+            if index % 64 == 0 || index + 1 == total {
+                archive
+                    .progress
+                    .set_percentage((index + 1) as f32 / total as f32);
+            }
+        }
+
+        dir_out.flush()?;
+        img_out.flush()?;
+
+        // Apply the new layout to the in-memory entries.
+        let mut offset = 0u64;
+        for (entry, &size) in archive.entries.iter_mut().zip(layout.iter()) {
             entry.offset = (offset / SECTOR_SIZE) as u32;
             entry.sector = (size / SECTOR_SIZE) as u32;
-
-            dir_out.write_all(&entry.offset.to_le_bytes())?;
-            dir_out.write_all(&entry.sector.to_le_bytes())?;
-            dir_out.write_all(&entry.file_name_raw)?;
-            img_out.write_all(&data)?;
-
             offset += size;
-            archive
-                .progress
-                .set_percentage((index + 1) as f32 / total as f32);
         }
 
         archive.progress.set_percentage(1.0);

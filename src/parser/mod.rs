@@ -1,4 +1,4 @@
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use compact_str::CompactString;
@@ -197,6 +197,80 @@ fn read_entry_data_with_source(
     let mut data = vec![0u8; size as usize];
     file.read_exact(&mut data)?;
     Ok(data)
+}
+
+const ZERO_SECTOR: [u8; SECTOR_SIZE as usize] = [0; SECTOR_SIZE as usize];
+
+/// Size of the entry data as written during save, matching the clamping
+/// behavior of `read_entry_data_with_source` without copying anything.
+pub(crate) fn entry_data_size(entry: &EntryInfo, source_mmap: Option<&Mmap>) -> anyhow::Result<u64> {
+    if entry.imported {
+        let source = entry
+            .source_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
+        let actual = std::fs::metadata(source)?.len();
+        return Ok(sector_rounded_size(actual));
+    }
+    let size = u64::from(entry.sector) * SECTOR_SIZE;
+    if let Some(mmap) = source_mmap {
+        let offset = u64::from(entry.offset) * SECTOR_SIZE;
+        let end = (offset + size).min(mmap.len() as u64);
+        let start = offset.min(mmap.len() as u64);
+        return Ok(end - start);
+    }
+    Ok(size)
+}
+
+/// Streams one entry's data to `out`, reading straight from the source memory
+/// map when available instead of materializing a per-entry `Vec`. Writes
+/// exactly `entry_data_size(entry, source_mmap)` bytes.
+pub(crate) fn stream_entry_data(
+    out: &mut impl Write,
+    entry: &EntryInfo,
+    source_path: Option<&Path>,
+    source_mmap: Option<&Mmap>,
+    source_file: &mut Option<BufReader<std::fs::File>>,
+) -> anyhow::Result<()> {
+    if entry.imported {
+        let source = entry
+            .source_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
+        let actual = std::fs::metadata(source)?.len();
+        let mut file = std::fs::File::open(source)?;
+        std::io::copy(&mut file, out)?;
+        let pad = sector_rounded_size(actual) - actual;
+        if pad > 0 {
+            out.write_all(&ZERO_SECTOR[..pad as usize])?;
+        }
+        return Ok(());
+    }
+
+    let size = u64::from(entry.sector) * SECTOR_SIZE;
+    let offset = u64::from(entry.offset) * SECTOR_SIZE;
+
+    if let Some(mmap) = source_mmap {
+        let end = (offset + size).min(mmap.len() as u64) as usize;
+        let start = offset.min(mmap.len() as u64) as usize;
+        out.write_all(&mmap[start..end])?;
+        return Ok(());
+    }
+
+    let source = source_path.ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
+    if source_file.is_none() {
+        *source_file = Some(BufReader::with_capacity(
+            4 * 1024 * 1024,
+            std::fs::File::open(source)?,
+        ));
+    }
+    let reader = source_file.as_mut().expect("source file opened above");
+    reader.seek(SeekFrom::Start(offset))?;
+    let written = std::io::copy(&mut reader.take(size), out)?;
+    if written != size {
+        anyhow::bail!("entry data truncated during save");
+    }
+    Ok(())
 }
 
 fn read_imported_file(source: &std::path::Path) -> anyhow::Result<Vec<u8>> {

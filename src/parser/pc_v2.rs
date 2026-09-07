@@ -1,4 +1,4 @@
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ use memmap2::Mmap;
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{
     ENTRY_SIZE, ImgParser, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE, decode_entry_name,
-    export_entry_to_file, import_entry, read_entry_data_with_source,
+    export_entry_to_file, import_entry,
 };
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -131,46 +131,66 @@ impl PcV2Parser {
         temp_path: &Path,
         _source_path: &Option<PathBuf>,
     ) -> Result<()> {
-        let mut out = std::fs::File::create(temp_path).context("failed to create temp img")?;
+        const WRITE_BUF: usize = 1024 * 1024;
+        const DATA_START: u64 = 0x300000;
 
-        out.write_all(b"VER2")?;
-        let total = archive.entries.len() as u32;
-        out.write_all(&total.to_le_bytes())?;
+        let mut out = BufWriter::with_capacity(
+            WRITE_BUF,
+            std::fs::File::create(temp_path).context("failed to create temp img")?,
+        );
 
-        let mut data_offset = 0x300000_u64;
+        let total = archive.entries.len();
         let source_path = archive.path.clone();
         let source_mmap = archive.source_mmap.clone();
         archive.progress.start();
 
-        for (index, entry) in archive.entries.iter_mut().enumerate() {
+        // Layout pass: metadata only, no entry data reads.
+        let mut layout = Vec::with_capacity(total);
+        for entry in archive.entries.iter() {
+            layout.push(crate::parser::entry_data_size(entry, source_mmap.as_deref())?);
+        }
+
+        // Directory pass: header + all records in one sequential stream.
+        out.write_all(b"VER2")?;
+        out.write_all(&(total as u32).to_le_bytes())?;
+        let mut data_offset = DATA_START;
+        for (entry, &size) in archive.entries.iter().zip(layout.iter()) {
+            out.write_all(&((data_offset / SECTOR_SIZE) as u32).to_le_bytes())?;
+            out.write_all(&((size / SECTOR_SIZE) as u32).to_le_bytes())?;
+            out.write_all(&entry.file_name_raw)?;
+            data_offset += size;
+        }
+
+        // Data pass: BufWriter::seek flushes first, so this seeks once to the
+        // data region and then streams every entry sequentially.
+        out.seek(SeekFrom::Start(DATA_START))?;
+        let mut source_file = None;
+        for (index, entry) in archive.entries.iter().enumerate() {
             if archive.progress.is_cancelled() {
                 archive.progress.finish();
                 anyhow::bail!("Rebuild cancelled");
             }
-
-            let data = read_entry_data_with_source(
+            crate::parser::stream_entry_data(
+                &mut out,
                 entry,
                 source_path.as_deref(),
                 source_mmap.as_deref(),
+                &mut source_file,
             )?;
+            if index % 64 == 0 || index + 1 == total {
+                archive
+                    .progress
+                    .set_percentage((index + 1) as f32 / total as f32);
+            }
+        }
+        out.flush()?;
 
-            let size = data.len() as u64;
+        // Apply the new layout to the in-memory entries.
+        let mut data_offset = DATA_START;
+        for (entry, &size) in archive.entries.iter_mut().zip(layout.iter()) {
             entry.offset = (data_offset / SECTOR_SIZE) as u32;
             entry.sector = (size / SECTOR_SIZE) as u32;
-
-            let dir_offset = 0x8_u64 + (index as u64) * ENTRY_SIZE as u64;
-            out.seek(SeekFrom::Start(dir_offset))?;
-            out.write_all(&entry.offset.to_le_bytes())?;
-            out.write_all(&entry.sector.to_le_bytes())?;
-            out.write_all(&entry.file_name_raw)?;
-
-            out.seek(SeekFrom::Start(data_offset))?;
-            out.write_all(&data)?;
-
             data_offset += size;
-            archive
-                .progress
-                .set_percentage((index + 1) as f32 / total as f32);
         }
 
         archive.progress.set_percentage(1.0);
