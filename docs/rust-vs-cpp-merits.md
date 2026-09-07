@@ -2,6 +2,29 @@
 
 Date: 2026-06-18
 
+## Update — 2026-09-07: zero-copy export, measured hard limit, faster save
+
+- New default **`ZeroCopy` export engine**: writes entries directly from the
+  archive memory map (no per-entry buffers/copies), pre-resolves output paths
+  in memory, and work-steals per entry. Interleaved 4-round head-to-head
+  (alternating C++/Rust, 20 s cooldowns): **C++ 23.264 s vs Rust 22.386 s
+  median — Rust won all 4 rounds** (0.8–2.9 s per round).
+- **Measured hard limit:** the test machine globally rate-limits
+  create+write+close of new files to ~500–600 files/s after a ~1000–1500 file
+  burst budget — a ~20–22 s floor for 11,980 files that no userspace technique
+  bypasses (threads, helper processes, IOCP, direct-I/O flags, fan-out, and
+  deferred closes were all measured). See
+  `benchmark-results/limiter-investigation-2026-09-07.md`.
+- **Two-pass zero-copy save/rebuild**: layout from metadata alone, then
+  sequential buffered directory + data passes streaming from the mmap.
+  Rebuild of `World.img`: **8.6 s → 6.6 s median (~23 %)**.
+- Test suite is now **257 tests** (77 at the original writing below).
+
+The sections below are kept as the historical record of the first benchmark
+round.
+
+---
+
 ## TL;DR
 
 The Rust port is **not** dramatically faster at raw warm-cache export than the

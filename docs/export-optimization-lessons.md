@@ -295,6 +295,38 @@ custom allocators) until profiling proves they address the actual bottleneck.
 
 ---
 
+## Addendum (2026-09-07): profiling found the wall — it's the OS
+
+The speculation above was put to the test. A dedicated probe harness
+(`examples/probe_filecreate.rs`, local/gitignored) established that the test
+machine globally rate-limits create+write+close of **new** files to
+~500–600 ops/s after a ~1000–1500 file burst budget:
+
+- File creation alone: 12,000 files in 1.0 s — never the bottleneck.
+- The throttled operation is the **close of a newly written file**; deferred
+  closes, helper processes, thread count, directory fan-out, output location,
+  `FILE_ATTRIBUTE_TEMPORARY`, and `FILE_FLAG_NO_BUFFERING` were all measured
+  and none bypass it.
+- During throttled runs the disk sits at ~0.3 ms latency with an empty queue
+  and no process (including MsMpEng) burns CPU — a pure kernel-side wait,
+  consistent with a behavioral anti-ransomware filter.
+
+Consequences:
+
+1. Every export engine converges to the same ~20–22 s floor for 11,980 files.
+   The remaining wins came from deleting non-limiter work: the new default
+   **`ZeroCopy` engine** (mmap-direct writes, in-memory path resolution,
+   per-entry work stealing) beat the C++ benchmark in all 4 interleaved rounds
+   (22.4 s vs 23.3 s median).
+2. **IOCP for export is confirmed dead** — the limiter fires on close,
+   regardless of how I/O is issued.
+3. Save/rebuild dodges the limiter (one large file): the **two-pass zero-copy
+   save** landed and is ~23 % faster (8.6 s → 6.6 s median on `World.img`).
+
+Full forensic write-up: `benchmark-results/limiter-investigation-2026-09-07.md`.
+
+---
+
 ## References
 
 - Stack Overflow — "Why mmap() is faster than sequential IO?"

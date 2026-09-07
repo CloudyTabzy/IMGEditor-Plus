@@ -17,10 +17,10 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 | 🧵 **UI thread blocking on I/O** * | Tokio `async` + spawn blocking for save/export |
 | 📦 **Vendored C++ libs** (FreeType, FreeImage, GLFW, GLM, GLEW) | All dependencies via `cargo` — no manual setup |
 | 🐛 **Memory corruption in format parsers** | `Result`-based error propagation, no unsafe |
-| 🐌 **Slow exports on large archives** * | Chunked parallel export + per-worker `BufReader` reads; UI stays responsive and raw throughput is modestly faster than the reference C++ parser on our benchmark * |
+| 🐌 **Slow exports on large archives** * | Zero-copy parallel export streams entries straight from the memory-mapped archive; two-pass sequential save/rebuild; UI stays responsive |
 | 🎨 **ImGui theming limitations** | Iced 0.14 reactive UI with a full design token system |
 
-\* *A headless export benchmark on a 12,000-entry Bully `World.img` showed the optimized Rust export was roughly **1.06–1.07x** the C++ parser's throughput on the test machine when using the `Fast` engine (per-entry source open, matching the C++ benchmark). The default `Parallel` engine is also slightly faster (~1.06x) while keeping the UI responsive and supporting cancellation. See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) and [docs/export-optimization-lessons.md](docs/export-optimization-lessons.md) for the full analysis.*
+\* *On a 12,000-entry Bully `World.img` benchmark, the default `ZeroCopy` engine beat the reference C++ parser in every interleaved round (median 22.4 s vs 23.3 s). Both are pinned by a Windows rate limit on rapid small-file creation (~500–600 files/s sustained on the test machine) — a measured, documented hard limit that no export code can bypass. Save/rebuild dodges that limiter by writing one large file and gained ~23 %. See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) and [docs/export-optimization-lessons.md](docs/export-optimization-lessons.md) for the full analysis.*
 \* *The Rust port is not a magical order-of-magnitude speedup. The workload is Windows I/O-bound, and the C++ parser was already close to the practical warm-cache ceiling. Rust's reimplementation wins on throughput only modestly; its larger advantages are **safety, responsiveness, cancellation, and maintainability**. See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) for the honest breakdown.*
 \* *See [docs/cpp-codebase-analysis.md](docs/cpp-codebase-analysis.md) for a source-level review of the original C++ codebase. The null-pointer and UI-blocking issues are real, but the analysis shows they are more nuanced than the one-line summary suggests (e.g. save/export were already threaded in C++; the main remaining UI blockers were Open and Import).*
 **Result**: a portable, single-binary editor that _won't_ segfault on a 10,000-entry archive.
@@ -35,7 +35,8 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Create / Open / Save / Save As** with version selection
 - ✅ **Import files** — single, multiple, or replace mode
 - ✅ **Export all or selected entries** — async with progress bar + cancel
-- ✅ **Two export engines** — `Parallel` (default, responsive) or `Fast` (C++-like throughput); toggle via the "Fast export" checkbox in the info panel
+- ✅ **Three export engines** — `ZeroCopy` (default: mmap-direct writes, in-memory path resolution), `Parallel` (buffered chunked workers), `Fast` (C++-style sequential, via the "Fast export" checkbox)
+- ✅ **Two-pass sequential save** — rebuilds stream entry data straight from the source memory map; ~23 % faster rebuilds on large archives
 - ✅ **Memory-mapped reads** — instant open on large archives
 - ✅ **Multiple archive tabs** with dirty-file indicator
 - ✅ **Drag-and-drop** — open `.img` archives or import files from Explorer
@@ -55,27 +56,34 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Rotating view-axis gizmo** — the small XYZ widget in the corner tracks the camera as it orbits
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
-- ✅ **253 tests passing** — covers parser, save, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against real Bully fixtures
+- ✅ **257 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against real Bully fixtures
 
 ---
 
-## 🐇 Fast Export Mode
+## 🐇 Export & Save Performance
 
-By default, exports use the **`Parallel`** engine: chunk entries across Rayon
-workers with per-worker `BufReader`s so the GUI stays responsive and you can
+By default, exports use the **`ZeroCopy` engine**: entry data is written
+straight from the memory-mapped archive (no intermediate buffers, no per-entry
+allocations), output paths are pre-resolved in memory instead of per-file disk
+checks, and Rayon work-steals per entry. The GUI stays responsive and you can
 cancel mid-export.
 
-If you prefer maximum raw throughput on Windows, enable **`Fast export`** in the
-info panel. This engine mirrors the original C++ benchmark behavior: it opens
-the source archive once per entry and writes each output file with a 1 MiB
-buffer. On our warm-cache benchmark this was **~6.7 % faster than the C++
-baseline**.
+Two alternatives remain: `Parallel` (chunked buffered workers, used as the
+fallback when no mmap is available) and **`Fast`** (single-threaded, mirrors
+the original C++ benchmark), selectable via the "Fast export" checkbox in the
+info panel. The setting is persisted to `settings.ini` as `fast_export`.
 
-The setting is persisted to `settings.ini` as `fast_export`.
+**Measured on Bully `World.img` (1.93 GB, 11,980 entries):** ZeroCopy beat the
+reference C++ benchmark in every interleaved round — median **22.4 s vs
+23.3 s**. The margin is deliberately honest: Windows globally rate-limits rapid
+small-file creation (~500–600 files/s sustained on the test machine), which
+sets a ~20–22 s floor for *any* exporter on this workload. Rebuilds dodge that
+limiter entirely — the two-pass sequential save is **~23 % faster** (8.6 s →
+6.6 s median) and writes entry data with zero copies.
 
 See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) for the full
 head-to-head numbers and [docs/export-optimization-lessons.md](docs/export-optimization-lessons.md)
-for the engineering story behind the two engines.
+for the engineering story.
 ### 🔍 Entry Table
 - ✅ **Virtualised scrolling** — smooth even at 10,000+ entries
 - ✅ **Real-time search filter** with debounced input (150ms)
