@@ -123,13 +123,16 @@ impl SceneHandle {
         Self::default()
     }
 
-    pub fn set_scene(&self, scene: Scene) {
+    /// Install a scene. Accepts an `Arc<Scene>` so callers that hold a
+    /// decoded scene in a cache can share it with the widget without a deep
+    /// clone.
+    pub fn set_scene(&self, scene: std::sync::Arc<Scene>) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
         let offset = scene_display_offset(&scene, inner.origin_mode);
         inner
             .camera
             .reset_to_aabb(&translated_aabb(scene.aabb, offset));
-        inner.scene = Some(Arc::new(scene));
+        inner.scene = Some(scene);
         inner.gpu_error = None;
         inner.dirty = true;
     }
@@ -1007,7 +1010,7 @@ mod tests {
             key_light: [0.5, 0.7, 0.5],
             base_orientation: crate::inspector::scene3d::camera::BaseOrientation::Yup,
         };
-        h.set_scene(scene);
+        h.set_scene(std::sync::Arc::new(scene));
         h.with(|i| {
             assert!(i.scene.is_some());
             let c = i.camera.target;
@@ -1027,7 +1030,7 @@ mod tests {
             },
             ..Scene::empty(crate::inspector::scene3d::camera::BaseOrientation::Zup)
         };
-        h.set_scene(scene);
+        h.set_scene(std::sync::Arc::new(scene));
         h.toggle_center_origin();
         h.with(|i| {
             assert_eq!(i.origin_mode, SceneOriginMode::World);

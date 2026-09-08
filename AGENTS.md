@@ -60,6 +60,34 @@ to make those failures debuggable.
   `log::error!` AND re-emit / re-panic — the dev logger does NOT
   replace wgpu's panic path; it's purely additive.
 
+## 3D scene cache (quick_cache) + telemetry
+
+The 3D viewer caches decoded scenes so revisiting an entry is instant.
+Everything lives in `src/ui/app.rs` unless noted:
+
+- `App::scene_cache` — a byte-budgeted `quick_cache` (crate `quick_cache`,
+  feature `stats`) keyed by `(archive file name, archive generation, entry
+  index)`. Weighted by `Scene::estimated_gpu_bytes()`, soft cap
+  `SCENE_CACHE_WEIGHT_CAPACITY` (256 MiB desktop, 64 MiB mobile via `cfg`).
+  Cache hits restore the scene synchronously (`In-app 3D viewer ready
+  (cached)` in the archive log); misses take the async load path.
+- `ArchiveInfo::generation` (src/archive.rs) — bumped by
+  `invalidate_entry_caches()` on every entry add/remove/rename/import;
+  folding it into the key makes stale scenes miss. That hook also clears
+  `inspection_cache`/`texture_cache`.
+- Closing an archive evicts its scenes via
+  `App::drop_scene_cache_for_archive` (cache `retain`), since the cache
+  is app-global, not per-archive.
+- The per-game-root `IdeMap` is memoized in `App::ide_maps`; the first 3D
+  load per game root builds it, later loads reuse it.
+
+**Telemetry note (remove before "finished"):** the cache-hit breadcrumb
+(`3D cache hit: entries N (hits X, misses Y, resident Z MiB)`) and the
+`stats` feature on the `quick_cache` dependency exist as a lightweight
+benchmark/observability aid, not a user feature. The `stats` feature
+could be dropped from `Cargo.toml` and the breadcrumb removed with no
+functional impact once development stabilizes.
+
 ## 3D viewer (Phase 17) architecture constraints
 
 When modifying the scene3d pipeline, keep these invariants in mind

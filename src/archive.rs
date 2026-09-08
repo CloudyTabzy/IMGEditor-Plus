@@ -235,6 +235,11 @@ pub struct ArchiveInfo {
     /// Index of the entry currently in rename mode. Tracking this directly
     /// avoids scanning every entry to clear the rename flag on each click.
     pub rename_index: Option<usize>,
+    /// Monotonic mutation counter bumped by [`Self::invalidate_entry_caches`].
+    /// Downstream caches keyed by entry index (e.g. the 3D viewer scene
+    /// cache) fold this into their keys so a stale lookup after an
+    /// add/remove/rename/import misses instead of serving old data.
+    generation: u64,
 }
 
 impl ArchiveInfo {
@@ -263,6 +268,7 @@ impl ArchiveInfo {
             cached_file_types: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
+            generation: 0,
         };
 
         archive.add_log("Created archive".to_string());
@@ -301,6 +307,7 @@ impl ArchiveInfo {
             cached_file_types: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
+            generation: 0,
         };
 
         match version {
@@ -459,10 +466,21 @@ impl ArchiveInfo {
         self.cached_file_types.as_deref().unwrap_or_default()
     }
 
+    /// Current mutation generation. See [`Self::generation`].
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Invalidates caches that depend on the entry list or entry metadata.
-    /// Call this after add/remove/rename/import operations.
+    /// Call this after add/remove/rename/import operations. Also bumps the
+    /// `generation` counter used to key downstream caches and drops the
+    /// decoded preview caches, whose contents may reflect replaced entry
+    /// data.
     pub fn invalidate_entry_caches(&mut self) {
         self.cached_file_types = None;
+        self.inspection_cache.clear();
+        self.texture_cache.clear();
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Estimate the size produced by the format-specific sequential writer.
@@ -715,6 +733,24 @@ mod tests {
         archive.entries.push(EntryInfo::new("c.col"));
         let second = archive.unique_file_types().to_vec();
         assert_eq!(second, vec!["Collision", "Model", "Texture"]);
+    }
+
+    #[test]
+    fn invalidate_entry_caches_bumps_generation_and_clears_previews() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        assert_eq!(archive.generation(), 0);
+
+        archive
+            .texture_cache
+            .insert(0, Vec::new());
+        assert_eq!(archive.texture_cache.len(), 1);
+
+        archive.invalidate_entry_caches();
+        assert_eq!(archive.generation(), 1);
+        assert!(archive.texture_cache.is_empty());
+
+        archive.invalidate_entry_caches();
+        assert_eq!(archive.generation(), 2);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -246,6 +247,10 @@ pub enum Message {
         archive_index: usize,
         entry_index: usize,
         result: Result<crate::inspector::scene3d::Scene, String>,
+        /// An `IdeMap` freshly built by the load task, so the app can
+        /// memoize it per game root. `None` when a cached map was reused or
+        /// the archive has no game root.
+        ide_map: Option<BuiltIdeMap>,
     },
     Viewer3dSelectTab(InspectorTab),
     Viewer3dClear,
@@ -479,7 +484,51 @@ pub struct App {
     toast_pulses_remaining: u32,
     toast_pulse_target: f32,
     toast_start: Option<std::time::Instant>,
+    /// Decoded 3D scenes keyed by (archive file name, archive generation,
+    /// entry index). Lets the viewer restore a previously loaded model
+    /// instantly instead of re-reading + re-parsing the NIF. Memory bound
+    /// via a byte-budgeted `quick_cache` LRU; invalidation is driven by the
+    /// archive's `generation` counter (see `ArchiveInfo::invalidate_entry_caches`).
+    scene_cache: SceneCache,
+    /// Memoized `IdeMap` per game root directory. Building walks the game
+    /// folder on disk, so it's built at most once per archive path per
+    /// session and shared across loads by `Arc`.
+    ide_maps: HashMap<PathBuf, std::sync::Arc<crate::inspector::texture::IdeMap>>,
 }
+
+/// Cache key for [`App::scene_cache`]. Uses the archive's unique file name
+/// (see `Editor::archive_exists_by_name`) rather than the archive index, so
+/// closing an archive cannot re-key stale scenes onto a different archive.
+/// The generation counter folds in entry-list mutations.
+type SceneCacheKey = (String, u64, usize);
+type SceneCache = quick_cache::sync::Cache<SceneCacheKey, Arc<crate::inspector::scene3d::Scene>, SceneCpuWeight>;
+
+/// Weighs a cached scene by its estimated CPU memory (mesh buffers + decoded
+/// RGBA textures), reusing the same estimate the GPU admission check uses.
+#[derive(Clone)]
+struct SceneCpuWeight;
+
+impl quick_cache::Weighter<SceneCacheKey, Arc<crate::inspector::scene3d::Scene>> for SceneCpuWeight {
+    fn weight(&self, _key: &SceneCacheKey, val: &Arc<crate::inspector::scene3d::Scene>) -> u64 {
+        val.estimated_gpu_bytes().unwrap_or(0).max(1)
+    }
+}
+
+/// Soft memory budget for the scene cache. Keeps roughly the last few dozen
+/// typical game models (vertices + textures) resident. The cache is lazily
+/// filled, so this is a ceiling, not an upfront allocation. Mobile targets
+/// get a smaller ceiling: per-app memory budgets there are tight and the
+/// OS kills processes that grow too large (jetsam/LMK), so evicting and
+/// re-decoding a scene in milliseconds is the better trade.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+const SCENE_CACHE_WEIGHT_CAPACITY: u64 = 64 * 1024 * 1024;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const SCENE_CACHE_WEIGHT_CAPACITY: u64 = 256 * 1024 * 1024;
+const SCENE_CACHE_ITEM_CAPACITY: usize = 256;
+
+/// A memoized `IdeMap` paired with the game root it was built from, shipped
+/// back to the app by a 3D load task for memoization.
+type BuiltIdeMap = (PathBuf, Arc<crate::inspector::texture::IdeMap>);
 
 impl Default for App {
     fn default() -> Self {
@@ -548,6 +597,14 @@ impl App {
             toast_start: None,
             selected_inspector_tab: InspectorTab::Export,
             viewer3d_handle: std::sync::Arc::new(crate::ui::viewer3d_widget::SceneHandle::new()),
+            scene_cache: quick_cache::sync::Cache::with(
+                SCENE_CACHE_ITEM_CAPACITY,
+                SCENE_CACHE_WEIGHT_CAPACITY,
+                SceneCpuWeight,
+                Default::default(),
+                Default::default(),
+            ),
+            ide_maps: HashMap::new(),
         }
     }
 
@@ -1069,12 +1126,70 @@ impl App {
         if self.viewer_scene_matches_selection() {
             return Task::none();
         }
+        // Cache hit: the scene for this (archive, generation, entry) is
+        // already decoded — restore it instantly instead of re-reading,
+        // re-parsing, and re-resolving textures.
+        if let Some(scene) = self.cached_scene_for(archive_index, entry_index) {
+            self.store_scene_texture_previews(&scene, archive_index, entry_index);
+            self.viewer3d_handle.set_scene(scene);
+            self.active_viewer_entry = Some((archive_index, entry_index));
+            dev_logger::breadcrumb(&format!(
+                "3D cache hit: entries {} (hits {}, misses {}, resident {:.1} MiB)",
+                self.scene_cache.len(),
+                self.scene_cache.hits(),
+                self.scene_cache.misses(),
+                self.scene_cache.weight() as f64 / (1024.0 * 1024.0),
+            ));
+            if let Some(archive) = self.editor.selected_archive_mut() {
+                archive.add_log("In-app 3D viewer ready (cached)".to_string());
+            }
+            return Task::none();
+        }
         self.active_viewer_entry = None;
         self.viewer3d_handle.clear();
         Task::done(Message::Viewer3dRequestLoad {
             archive_index,
             entry_index,
         })
+    }
+
+    /// Drop the scene cache entries belonging to one archive. The scene
+    /// cache lives on `App` (not on `ArchiveInfo`), so closing an archive
+    /// would otherwise leave its decoded scenes resident until budget
+    /// pressure evicts them.
+    fn drop_scene_cache_for_archive(&self, archive_name: &str) {
+        self.scene_cache.retain(|key, _| key.0 != archive_name);
+    }
+
+    /// Look up a decoded scene for the selected entry, keyed by the
+    /// archive's stable file name + generation so stale entries miss.
+    fn cached_scene_for(
+        &mut self,
+        archive_index: usize,
+        entry_index: usize,
+    ) -> Option<Arc<crate::inspector::scene3d::Scene>> {
+        let key = {
+            let archive = self.editor.archives().get(archive_index)?;
+            (archive.file_name.clone(), archive.generation(), entry_index)
+        };
+        self.scene_cache.get(&key)
+    }
+
+    /// Derive texture previews from a decoded scene and store them in the
+    /// archive's texture cache for the texture tab. Shared by the async
+    /// load completion and the synchronous cache-hit restore.
+    fn store_scene_texture_previews(
+        &mut self,
+        scene: &crate::inspector::scene3d::Scene,
+        archive_index: usize,
+        entry_index: usize,
+    ) {
+        let texture_previews = crate::ui::texture_preview::decoded_textures_from_scene(scene);
+        if !texture_previews.is_empty()
+            && let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
+        {
+            archive.texture_cache.insert(entry_index, texture_previews);
+        }
     }
 
     fn run_save(
@@ -1352,16 +1467,32 @@ impl App {
             | Message::PackCompleted { .. } => Task::none(),
 
             Message::CloseSelectedArchive => {
+                let closed_name = self
+                    .editor
+                    .selected_archive()
+                    .and_then(|index| self.editor.archives().get(index))
+                    .map(|archive| archive.file_name.clone());
                 self.editor.close_selected_archive();
                 self.active_viewer_entry = None;
                 self.viewer3d_handle.clear();
+                if let Some(name) = closed_name {
+                    self.drop_scene_cache_for_archive(&name);
+                }
                 let task = self.refresh_inspection();
                 Task::batch(vec![task, Task::none()])
             }
             Message::CloseArchiveTab(index) => {
+                let closed_name = self
+                    .editor
+                    .archives()
+                    .get(index)
+                    .map(|archive| archive.file_name.clone());
                 self.editor.close_archive(index);
                 self.active_viewer_entry = None;
                 self.viewer3d_handle.clear();
+                if let Some(name) = closed_name {
+                    self.drop_scene_cache_for_archive(&name);
+                }
                 let task = self.refresh_inspection();
                 Task::batch(vec![task, Task::none()])
             }
@@ -2550,70 +2681,108 @@ impl App {
                     .and_then(|s| s.to_str())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| entry_clone.file_name.to_string());
+                // Reuse a memoized IdeMap for this game root when one has
+                // already been built; otherwise the background task builds
+                // one and hands it back for memoization.
+                let ide_map_hit: Option<BuiltIdeMap> = {
+                    let game_root = archive_path
+                        .as_deref()
+                        .and_then(|p| p.parent().and_then(|stream| stream.parent()))
+                        .map(|p| p.to_path_buf());
+                    match game_root {
+                        Some(root) => self
+                            .ide_maps
+                            .get(&root)
+                            .map(|map| (root, Arc::clone(map))),
+                        None => None,
+                    }
+                };
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            let bytes = crate::parser::read_entry_data_from_source(
-                                &entry_clone,
-                                archive_path.as_deref(),
-                            )
-                            .map_err(|e| format!("I/O: {e}"))?;
-                            let game_root = archive_path
-                                .as_deref()
-                                .and_then(|p| p.parent().and_then(|stream| stream.parent()))
-                                .map(|p| p.to_path_buf());
-                            let ide_map = game_root
-                                .as_ref()
-                                .map(|root| crate::inspector::texture::IdeMap::build(root));
-                            let archive_texture_index =
-                                crate::inspector::texture::ArchiveTextureIndex::from_entries(
-                                    &archive_entries,
-                                    archive_path.as_deref(),
-                                );
-                            let nft_catalog = ide_map
-                                .as_ref()
-                                .and_then(|map| {
-                                    crate::inspector::texture::resolve_textures_for_nif(
-                                        &nif_basename,
-                                        map,
-                                    )
-                                })
-                                .or_else(|| {
-                                    archive_texture_index
-                                        .resolve_textures_for_nif(&nif_basename, ide_map.as_ref())
-                                });
-                            let resolver = move |name: &str| {
-                                nft_catalog
-                                    .as_ref()
-                                    .and_then(|cat| cat.get_pixels(name))
-                                    .and_then(SceneTexture::from_tga)
-                                    .or_else(|| {
-                                        archive_texture_index
-                                            .read(name)
-                                            .and_then(|bytes| SceneTexture::from_tga(&bytes))
-                                    })
-                                    .or_else(|| {
-                                        ide_map
-                                            .as_ref()
-                                            .and_then(|map| map.locate_external_texture(name))
-                                            .and_then(|path| std::fs::read(path).ok())
-                                            .and_then(|bytes| SceneTexture::from_tga(&bytes))
-                                    })
+                            let (ide_map, ide_map_new): (
+                                Option<Arc<crate::inspector::texture::IdeMap>>,
+                                Option<BuiltIdeMap>,
+                            ) = match ide_map_hit {
+                                Some((_, map)) => (Some(map), None),
+                                None => match archive_path
+                                    .as_deref()
+                                    .and_then(|p| p.parent().and_then(|stream| stream.parent()))
+                                    .map(|p| p.to_path_buf())
+                                {
+                                    Some(root) => {
+                                        let map = Arc::new(
+                                            crate::inspector::texture::IdeMap::build(&root),
+                                        );
+                                        (Some(Arc::clone(&map)), Some((root, map)))
+                                    }
+                                    None => (None, None),
+                                },
                             };
-                            let base = crate::inspector::scene3d::camera::BaseOrientation::Zup;
-                            let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
-                                &bytes, base, resolver,
-                            )
-                            .map_err(|e| format!("scene: {e:?}"))?;
-                            Ok::<_, String>(scene)
+                            let result = (|| -> Result<crate::inspector::scene3d::Scene, String> {
+                                let bytes = crate::parser::read_entry_data_from_source(
+                                    &entry_clone,
+                                    archive_path.as_deref(),
+                                )
+                                .map_err(|e| format!("I/O: {e}"))?;
+                                let archive_texture_index =
+                                    crate::inspector::texture::ArchiveTextureIndex::from_entries(
+                                        &archive_entries,
+                                        archive_path.as_deref(),
+                                    );
+                                let nft_catalog = ide_map
+                                    .as_deref()
+                                    .and_then(|map| {
+                                        crate::inspector::texture::resolve_textures_for_nif(
+                                            &nif_basename,
+                                            map,
+                                        )
+                                    })
+                                    .or_else(|| {
+                                        archive_texture_index.resolve_textures_for_nif(
+                                            &nif_basename,
+                                            ide_map.as_deref(),
+                                        )
+                                    });
+                                let resolver = move |name: &str| {
+                                    nft_catalog
+                                        .as_ref()
+                                        .and_then(|cat| cat.get_pixels(name))
+                                        .and_then(SceneTexture::from_tga)
+                                        .or_else(|| {
+                                            archive_texture_index
+                                                .read(name)
+                                                .and_then(|bytes| SceneTexture::from_tga(&bytes))
+                                        })
+                                        .or_else(|| {
+                                            ide_map
+                                                .as_deref()
+                                                .and_then(|map| map.locate_external_texture(name))
+                                                .and_then(|path| std::fs::read(path).ok())
+                                                .and_then(|bytes| {
+                                                    SceneTexture::from_tga(&bytes)
+                                                })
+                                        })
+                                };
+                                let base =
+                                    crate::inspector::scene3d::camera::BaseOrientation::Zup;
+                                crate::inspector::scene3d::decode::parse_and_build_scene(
+                                    &bytes, base, resolver,
+                                )
+                                .map_err(|e| format!("scene: {e:?}"))
+                            })();
+                             (result, ide_map_new)
                         })
                         .await
-                        .map_err(|e| format!("join: {e}"))?
+                        .unwrap_or_else(|e| {
+                            (Err(format!("join: {e}")), None)
+                        })
                     },
-                    move |result| Message::Viewer3dLoadCompleted {
+                    move |(result, ide_map_new)| Message::Viewer3dLoadCompleted {
                         archive_index,
                         entry_index,
                         result,
+                        ide_map: ide_map_new,
                     },
                 )
             }
@@ -2621,7 +2790,11 @@ impl App {
                 archive_index,
                 entry_index,
                 result,
+                ide_map,
             } => {
+                if let Some((root, map)) = ide_map {
+                    self.ide_maps.entry(root).or_insert(map);
+                }
                 if self.editor.selected_archive() != Some(archive_index)
                     || self.editor.selected_entry() != Some(entry_index)
                 {
@@ -2635,13 +2808,16 @@ impl App {
                             scene.total_triangles(),
                             scene.textured_mesh_count()
                         ));
-                        let texture_previews =
-                            crate::ui::texture_preview::decoded_textures_from_scene(&scene);
-                        if !texture_previews.is_empty()
-                            && let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
-                        {
-                            archive.texture_cache.insert(entry_index, texture_previews);
+                        let scene = Arc::new(scene);
+                        if let Some(archive) = self.editor.archives().get(archive_index) {
+                            let key = (
+                                archive.file_name.clone(),
+                                archive.generation(),
+                                entry_index,
+                            );
+                            self.scene_cache.insert(key, Arc::clone(&scene));
                         }
+                        self.store_scene_texture_previews(&scene, archive_index, entry_index);
                         self.viewer3d_handle.set_scene(scene);
                         self.active_viewer_entry = Some((archive_index, entry_index));
                         if let Some(archive) = self.editor.selected_archive_mut() {
