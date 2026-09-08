@@ -58,7 +58,13 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
 - ✅ **290 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against real Bully fixtures
 
-**v3.15.0 viewer refinement:**
+**v3.15.0 release highlights:**
+- ✅ **Zero-copy export and two-pass save** — large archives stream directly from the memory map with a safe buffered fallback when needed
+- ✅ **Synchronized texture previews** — image, grid, and NIF UV overlays share the same full-panel zoom and pan viewport
+- ✅ **Portable mesh wire overlay** — inspect visible triangle edges in the in-app 3D viewer without changing the textured render
+- ✅ **Selection-aware previews** — switching entries updates the active 3D or texture view without requiring a manual scene reset
+- ✅ **Optional interaction feedback** — configurable row wobble, pulse, and ripple effects with theme-aware text contrast
+- ✅ **Responsive GUI polish** — adaptive context menus, repaired sorting, clearer tooltips, and a centered welcome presentation
 - ✅ **Smooth exponential camera zoom** — mouse-wheel lines and high-resolution pixel scrolling use one consistent, reversible zoom curve
 - ✅ **Refined Blender-style panning** — MMB camera movement is slightly more responsive while preserving the existing screen-space direction
 
