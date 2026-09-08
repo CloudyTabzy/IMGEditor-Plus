@@ -169,6 +169,11 @@ impl Animator {
             .is_some_and(|a| a.state == State::Running)
     }
 
+    /// Cancel an animation and discard its last value.
+    pub fn cancel(&mut self, id: AnimationId) {
+        self.animations.remove(&id);
+    }
+
     /// Reserve a unique animation ID.
     pub fn reserve_id(&mut self) -> AnimationId {
         let id = self.next_id;
@@ -228,5 +233,15 @@ mod tests {
         assert_eq!(anim.running_count(), 2);
         anim.update(Duration::from_millis(10));
         assert_eq!(anim.running_count(), 1);
+    }
+
+    #[test]
+    fn cancel_removes_animation() {
+        let mut anim = Animator::new();
+        let id = anim.animate(1, 0.0, 1.0, Duration::from_secs(1), Easing::Linear);
+        anim.cancel(id);
+        assert_eq!(anim.running_count(), 0);
+        assert!(!anim.is_running(id));
+        assert_eq!(anim.get(id), 0.0);
     }
 }

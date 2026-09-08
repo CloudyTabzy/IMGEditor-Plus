@@ -34,6 +34,7 @@ use crate::ui::fonts;
 use crate::ui::icons;
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
 use crate::ui::theme::resolve_theme;
+use crate::ui::tokens::motion::DurationPreset;
 use crate::ui::widgets as w;
 use crate::updater::{UpdateResult, UpdateState, check_updates_future};
 
@@ -44,6 +45,10 @@ const RENAME_INPUT_ID: &str = "rename_input";
 
 pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
 pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
+pub const ANIM_ENTRY_FEEDBACK: crate::ui::animator::AnimationId = 3;
+pub const ANIM_ARCHIVE_TAB_FEEDBACK: crate::ui::animator::AnimationId = 4;
+pub const ANIM_INSPECTOR_TAB_FEEDBACK: crate::ui::animator::AnimationId = 5;
+pub const ANIM_CLICK_RIPPLE: crate::ui::animator::AnimationId = 6;
 
 #[derive(Debug, Clone)]
 pub enum OpenArchiveOutcome {
@@ -166,6 +171,7 @@ pub enum Message {
     EntryContextAction(EntryAction),
     HideContextMenu,
     ModifiersChanged(Modifiers),
+    PointerMoved(Point),
     AnimationTick(std::time::Instant),
     AutoScrollStarted,
     AutoScrollStartedAtRow(usize),
@@ -214,6 +220,10 @@ pub enum Message {
     ViewTextureGridToggled(bool),
     ViewTextureRulersToggled(bool),
     ViewTextureGridSize(u32),
+    ToggleMotionEffects(bool),
+    ToggleSelectionPulse(bool),
+    ToggleClickRipple(bool),
+    ToggleIconMicroMotion(bool),
 
     ExportEmbeddedTexturesRequest {
         entry_index: usize,
@@ -370,6 +380,22 @@ pub enum InspectorTab {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RippleTarget {
+    Entry {
+        archive_index: usize,
+        entry_index: usize,
+    },
+    ArchiveTab(usize),
+    InspectorTab(InspectorTab),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RippleState {
+    target: RippleTarget,
+    origin: Option<Point>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryAction {
     CopyName,
     Rename,
@@ -452,6 +478,11 @@ pub struct App {
     viewer_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>>,
     pub animator: Animator,
     prev_tick: Option<std::time::Instant>,
+    last_pointer_position: Option<Point>,
+    entry_feedback_target: Option<(usize, usize)>,
+    archive_tab_feedback_target: Option<usize>,
+    inspector_tab_feedback_target: Option<InspectorTab>,
+    ripple: Option<RippleState>,
     toast_pulses_remaining: u32,
     toast_pulse_target: f32,
     toast_start: Option<std::time::Instant>,
@@ -518,6 +549,11 @@ impl App {
             viewer_rxs: Vec::new(),
             animator: Animator::new(),
             prev_tick: None,
+            last_pointer_position: None,
+            entry_feedback_target: None,
+            archive_tab_feedback_target: None,
+            inspector_tab_feedback_target: None,
+            ripple: None,
             toast_pulses_remaining: 0,
             toast_pulse_target: 0.0,
             toast_start: None,
@@ -755,6 +791,158 @@ impl App {
             self.editor.selected_archive()?,
             self.editor.selected_entry()?,
         ))
+    }
+
+    fn interaction_duration(&self, preset: DurationPreset) -> Duration {
+        let motion = self.design().tokens.motion.get(preset);
+        Duration::from_millis(u64::from(motion.duration_ms))
+    }
+
+    fn start_entry_feedback(&mut self, target: (usize, usize)) {
+        if self.config.motion_enabled && self.config.selection_pulse_enabled {
+            self.entry_feedback_target = Some(target);
+            self.animator.animate(
+                ANIM_ENTRY_FEEDBACK,
+                0.0,
+                1.0,
+                self.interaction_duration(DurationPreset::Normal),
+                crate::ui::easing::Easing::CubicOut,
+            );
+        } else {
+            self.entry_feedback_target = None;
+            self.animator.cancel(ANIM_ENTRY_FEEDBACK);
+        }
+    }
+
+    fn start_archive_tab_feedback(&mut self, target: usize) {
+        if self.config.motion_enabled && self.config.selection_pulse_enabled {
+            self.archive_tab_feedback_target = Some(target);
+            self.animator.animate(
+                ANIM_ARCHIVE_TAB_FEEDBACK,
+                0.0,
+                1.0,
+                self.interaction_duration(DurationPreset::Normal),
+                crate::ui::easing::Easing::CubicOut,
+            );
+        } else {
+            self.archive_tab_feedback_target = None;
+            self.animator.cancel(ANIM_ARCHIVE_TAB_FEEDBACK);
+        }
+    }
+
+    fn start_inspector_tab_feedback(&mut self, target: InspectorTab) {
+        if self.config.motion_enabled && self.config.selection_pulse_enabled {
+            self.inspector_tab_feedback_target = Some(target);
+            self.animator.animate(
+                ANIM_INSPECTOR_TAB_FEEDBACK,
+                0.0,
+                1.0,
+                self.interaction_duration(DurationPreset::Normal),
+                crate::ui::easing::Easing::CubicOut,
+            );
+        } else {
+            self.inspector_tab_feedback_target = None;
+            self.animator.cancel(ANIM_INSPECTOR_TAB_FEEDBACK);
+        }
+    }
+
+    fn start_click_ripple(&mut self, target: RippleTarget) {
+        if self.config.motion_enabled && self.config.click_ripple_enabled {
+            self.ripple = Some(RippleState {
+                target,
+                origin: self.last_pointer_position,
+            });
+            self.animator.animate(
+                ANIM_CLICK_RIPPLE,
+                0.0,
+                1.0,
+                self.interaction_duration(DurationPreset::Slow),
+                crate::ui::easing::Easing::CubicOut,
+            );
+        } else {
+            self.ripple = None;
+            self.animator.cancel(ANIM_CLICK_RIPPLE);
+        }
+    }
+
+    fn stop_interaction_animations(&mut self) {
+        self.animator.cancel(ANIM_ENTRY_FEEDBACK);
+        self.animator.cancel(ANIM_ARCHIVE_TAB_FEEDBACK);
+        self.animator.cancel(ANIM_INSPECTOR_TAB_FEEDBACK);
+        self.animator.cancel(ANIM_CLICK_RIPPLE);
+        self.entry_feedback_target = None;
+        self.archive_tab_feedback_target = None;
+        self.inspector_tab_feedback_target = None;
+        self.ripple = None;
+    }
+
+    fn pulse_value(&self, id: crate::ui::animator::AnimationId) -> f32 {
+        if !self.animator.is_running(id) {
+            return 0.0;
+        }
+        (self.animator.get(id) * std::f32::consts::PI)
+            .sin()
+            .max(0.0)
+    }
+
+    pub(crate) fn entry_selection_pulse(&self, target: (usize, usize)) -> f32 {
+        if !self.config.motion_enabled
+            || !self.config.selection_pulse_enabled
+            || self.entry_feedback_target != Some(target)
+        {
+            return 0.0;
+        }
+        self.pulse_value(ANIM_ENTRY_FEEDBACK)
+    }
+
+    pub(crate) fn entry_icon_nudge(&self, target: (usize, usize)) -> f32 {
+        if !self.config.motion_enabled
+            || !self.config.icon_micro_motion_enabled
+            || self.entry_feedback_target != Some(target)
+            || !self.animator.is_running(ANIM_ENTRY_FEEDBACK)
+        {
+            return 0.0;
+        }
+        let progress = self.animator.get(ANIM_ENTRY_FEEDBACK);
+        (progress * std::f32::consts::PI * 3.0).sin() * 1.5
+    }
+
+    pub(crate) fn archive_tab_selection_pulse(&self, target: usize) -> f32 {
+        if !self.config.motion_enabled
+            || !self.config.selection_pulse_enabled
+            || self.archive_tab_feedback_target != Some(target)
+        {
+            return 0.0;
+        }
+        self.pulse_value(ANIM_ARCHIVE_TAB_FEEDBACK)
+    }
+
+    pub(crate) fn inspector_tab_selection_pulse(&self, target: InspectorTab) -> f32 {
+        if !self.config.motion_enabled
+            || !self.config.selection_pulse_enabled
+            || self.inspector_tab_feedback_target != Some(target)
+        {
+            return 0.0;
+        }
+        self.pulse_value(ANIM_INSPECTOR_TAB_FEEDBACK)
+    }
+
+    pub(crate) fn ripple_visual(
+        &self,
+        target: RippleTarget,
+    ) -> Option<crate::ui::interaction::RippleVisual> {
+        if !self.config.motion_enabled
+            || !self.config.click_ripple_enabled
+            || !self.animator.is_running(ANIM_CLICK_RIPPLE)
+            || self.ripple.is_none_or(|ripple| ripple.target != target)
+        {
+            return None;
+        }
+        let ripple = self.ripple?;
+        Some(crate::ui::interaction::RippleVisual {
+            origin: ripple.origin,
+            progress: self.animator.get(ANIM_CLICK_RIPPLE),
+        })
     }
 
     pub(crate) fn viewer_scene_matches_selection(&self) -> bool {
@@ -1172,6 +1360,8 @@ impl App {
                 Task::batch(vec![task, Task::none()])
             }
             Message::SelectArchiveTab(index) => {
+                self.start_archive_tab_feedback(index);
+                self.start_click_ripple(RippleTarget::ArchiveTab(index));
                 self.editor.select_archive(index);
                 self.active_viewer_entry = None;
                 self.viewer3d_handle.clear();
@@ -1526,7 +1716,14 @@ impl App {
             }
 
             Message::EntryClicked(display_row) => {
-                let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
+                if let Some(entry_index) = self.display_row_to_entry(display_row) {
+                    if let Some(archive_index) = self.editor.selected_archive() {
+                        self.start_entry_feedback((archive_index, entry_index));
+                        self.start_click_ripple(RippleTarget::Entry {
+                            archive_index,
+                            entry_index,
+                        });
+                    }
                     let shift = self.modifiers.shift();
                     let ctrl = self.modifiers.command();
                     self.editor.select_entry(entry_index, shift, ctrl);
@@ -1540,8 +1737,7 @@ impl App {
                     Task::batch(vec![inspection_task, preview_task])
                 } else {
                     Task::none()
-                };
-                task
+                }
             }
             Message::EntryDoubleClicked(display_row) => {
                 let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
@@ -1882,6 +2078,19 @@ impl App {
                 }
                 self.prev_tick = Some(now);
 
+                if !self.animator.is_running(ANIM_ENTRY_FEEDBACK) {
+                    self.entry_feedback_target = None;
+                }
+                if !self.animator.is_running(ANIM_ARCHIVE_TAB_FEEDBACK) {
+                    self.archive_tab_feedback_target = None;
+                }
+                if !self.animator.is_running(ANIM_INSPECTOR_TAB_FEEDBACK) {
+                    self.inspector_tab_feedback_target = None;
+                }
+                if !self.animator.is_running(ANIM_CLICK_RIPPLE) {
+                    self.ripple = None;
+                }
+
                 // Auto-dismiss toasts after 2.5 seconds so the green status pulse
                 // does not appear to stay on indefinitely.
                 if self.toast.is_some() {
@@ -1920,6 +2129,10 @@ impl App {
             }
             Message::ModifiersChanged(mods) => {
                 self.modifiers = mods;
+                Task::none()
+            }
+            Message::PointerMoved(position) => {
+                self.last_pointer_position = Some(position);
                 Task::none()
             }
             Message::AutoScrollStarted | Message::AutoScrollStartedAtRow(_) => {
@@ -2199,6 +2412,42 @@ impl App {
                 Task::none()
             }
 
+            Message::ToggleMotionEffects(enabled) => {
+                self.config.motion_enabled = enabled;
+                if !enabled {
+                    self.stop_interaction_animations();
+                }
+                self.save_config();
+                Task::none()
+            }
+            Message::ToggleSelectionPulse(enabled) => {
+                self.config.selection_pulse_enabled = enabled;
+                if !enabled {
+                    self.animator.cancel(ANIM_ENTRY_FEEDBACK);
+                    self.animator.cancel(ANIM_ARCHIVE_TAB_FEEDBACK);
+                    self.animator.cancel(ANIM_INSPECTOR_TAB_FEEDBACK);
+                    self.entry_feedback_target = None;
+                    self.archive_tab_feedback_target = None;
+                    self.inspector_tab_feedback_target = None;
+                }
+                self.save_config();
+                Task::none()
+            }
+            Message::ToggleClickRipple(enabled) => {
+                self.config.click_ripple_enabled = enabled;
+                if !enabled {
+                    self.animator.cancel(ANIM_CLICK_RIPPLE);
+                    self.ripple = None;
+                }
+                self.save_config();
+                Task::none()
+            }
+            Message::ToggleIconMicroMotion(enabled) => {
+                self.config.icon_micro_motion_enabled = enabled;
+                self.save_config();
+                Task::none()
+            }
+
             Message::ExportEmbeddedTexturesRequest {
                 entry_index,
                 nif_basename,
@@ -2410,6 +2659,8 @@ impl App {
                 Task::none()
             }
             Message::Viewer3dSelectTab(tab) => {
+                self.start_inspector_tab_feedback(tab);
+                self.start_click_ripple(RippleTarget::InspectorTab(tab));
                 self.selected_inspector_tab = tab;
                 self.refresh_active_preview()
             }
@@ -2816,6 +3067,9 @@ impl App {
                     Message::ModifiersChanged(modifiers)
                 }
             },
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Message::PointerMoved(position)
+            }
             _ => Message::Noop,
         });
 
@@ -3014,6 +3268,31 @@ impl App {
         let view_toggle = |on: bool| if on { "● " } else { "○ " };
         let view_menu = Menu::new(
             vec![
+                Item::new(menu_button(
+                    format!("{}Motion effects", view_toggle(self.config.motion_enabled)),
+                    Message::ToggleMotionEffects(!self.config.motion_enabled),
+                )),
+                Item::new(menu_button(
+                    format!(
+                        "{}Selection pulse",
+                        view_toggle(self.config.selection_pulse_enabled)
+                    ),
+                    Message::ToggleSelectionPulse(!self.config.selection_pulse_enabled),
+                )),
+                Item::new(menu_button(
+                    format!(
+                        "{}Click ripples",
+                        view_toggle(self.config.click_ripple_enabled)
+                    ),
+                    Message::ToggleClickRipple(!self.config.click_ripple_enabled),
+                )),
+                Item::new(menu_button(
+                    format!(
+                        "{}Icon micro-motion",
+                        view_toggle(self.config.icon_micro_motion_enabled)
+                    ),
+                    Message::ToggleIconMicroMotion(!self.config.icon_micro_motion_enabled),
+                )),
                 Item::new(menu_button(
                     format!(
                         "{}Show Grid ({})",
@@ -3441,6 +3720,44 @@ mod tests {
         assert_eq!(app.editor.selected_entry(), Some(2));
         assert_eq!(app.selected_inspector_tab, InspectorTab::Model3D);
         assert_eq!(app.active_viewer_entry, None);
+    }
+
+    #[test]
+    fn clicking_entry_starts_feedback_at_last_pointer_position() {
+        let mut app = test_app_with_entries();
+        let pointer = Point::new(120.0, 240.0);
+        let _ = app.update(Message::PointerMoved(pointer));
+
+        let _ = app.update(Message::EntryClicked(0));
+
+        assert_eq!(app.editor.selected_entry(), Some(0));
+        assert!(app.animator.is_running(ANIM_ENTRY_FEEDBACK));
+        assert!(app.animator.is_running(ANIM_CLICK_RIPPLE));
+        let visual = app
+            .ripple_visual(RippleTarget::Entry {
+                archive_index: 0,
+                entry_index: 0,
+            })
+            .expect("entry click should create a ripple");
+        assert_eq!(visual.origin, Some(pointer));
+    }
+
+    #[test]
+    fn disabling_motion_prevents_new_interaction_tracks() {
+        let mut app = test_app_with_entries();
+        app.config.motion_enabled = false;
+
+        let _ = app.update(Message::EntryClicked(0));
+
+        assert!(!app.animator.is_running(ANIM_ENTRY_FEEDBACK));
+        assert!(!app.animator.is_running(ANIM_CLICK_RIPPLE));
+        assert!(
+            app.ripple_visual(RippleTarget::Entry {
+                archive_index: 0,
+                entry_index: 0,
+            })
+            .is_none()
+        );
     }
 
     #[test]

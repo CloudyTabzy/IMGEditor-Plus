@@ -10,9 +10,10 @@ use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::tasks::FolderDuplicatePolicy;
-use crate::ui::app::{ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane};
+use crate::ui::app::{ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget};
 use crate::ui::fonts;
 use crate::ui::icons;
+use crate::ui::interaction;
 use crate::ui::viewer3d_widget::SceneOriginMode;
 use crate::ui::widgets as w;
 
@@ -43,11 +44,10 @@ const OVERSCAN_ROWS: i32 = 10;
 
 impl App {
     pub(crate) fn build_entry_table(&self) -> Element<'_, Message> {
-        let Some(archive) = self
-            .editor
-            .archives()
-            .get(self.editor.selected_archive().unwrap_or(0))
-        else {
+        let Some(archive_index) = self.editor.selected_archive() else {
+            return Space::new().width(Length::Fill).height(Length::Fill).into();
+        };
+        let Some(archive) = self.editor.archives().get(archive_index) else {
             return Space::new().width(Length::Fill).height(Length::Fill).into();
         };
 
@@ -124,7 +124,8 @@ impl App {
             let Some(entry) = archive.entries.get(entry_index) else {
                 continue;
             };
-            content = content.push(self.build_entry_row(display_row, entry));
+            content =
+                content.push(self.build_entry_row(archive_index, entry_index, display_row, entry));
         }
 
         if bottom_pad_rows > 0 {
@@ -176,6 +177,8 @@ impl App {
 
     fn build_entry_row<'a>(
         &'a self,
+        archive_index: usize,
+        entry_index: usize,
         display_row: usize,
         entry: &'a crate::archive::EntryInfo,
     ) -> Element<'a, Message> {
@@ -211,8 +214,17 @@ impl App {
             label.width(Length::Fill).into()
         };
 
-        let name_cell = w::icon_label(icons::file_type(&entry.file_name).size(16), name_widget)
-            .width(Length::FillPortion(6));
+        let entry_key = (archive_index, entry_index);
+        let selection_pulse = self.entry_selection_pulse(entry_key);
+        let icon_nudge = self.entry_icon_nudge(entry_key);
+        let file_icon: Element<'_, Message> = if icon_nudge.abs() > f32::EPSILON {
+            Float::new(icons::file_type(&entry.file_name).size(16))
+                .translate(move |_, _| Vector::new(icon_nudge, 0.0))
+                .into()
+        } else {
+            icons::file_type(&entry.file_name).size(16).into()
+        };
+        let name_cell = w::icon_label(file_icon, name_widget).width(Length::FillPortion(6));
 
         let row_content: Element<'_, Message> = row![
             name_cell,
@@ -236,10 +248,15 @@ impl App {
             .style(move |theme: &iced::Theme| {
                 if is_selected {
                     let palette = theme.extended_palette();
+                    let background = iced::theme::palette::mix(
+                        palette.primary.weak.color,
+                        palette.primary.strong.color,
+                        selection_pulse * 0.28,
+                    );
                     iced::widget::container::Style {
-                        background: Some(palette.primary.weak.color.into()),
+                        background: Some(background.into()),
                         text_color: Some(w::readable_text_color(
-                            palette.primary.weak.color,
+                            background,
                             palette.primary.weak.text,
                         )),
                         ..Default::default()
@@ -248,6 +265,23 @@ impl App {
                     iced::widget::container::Style::default()
                 }
             });
+
+        let cell: Element<'_, Message> = if let Some(ripple) =
+            self.ripple_visual(RippleTarget::Entry {
+                archive_index,
+                entry_index: entry_key.1,
+            }) {
+            stack(vec![
+                cell.into(),
+                interaction::ripple_overlay::<Message>(ripple)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(ROW_HEIGHT))
+                    .into(),
+            ])
+            .into()
+        } else {
+            cell.into()
+        };
 
         // Per-row mouse_area so the click is attributed to this exact row.
         // Iced 0.14's MouseArea only carries a Message (no position), so the
@@ -273,46 +307,79 @@ impl App {
             weight: iced::font::Weight::Bold,
             ..iced::Font::default()
         };
-        let tabs: Element<'_, Message> =
-            iced_aw::widget::tabs::Tabs::new(Message::Viewer3dSelectTab)
-                .push(
-                    InspectorTab::Export,
-                    iced_aw::TabLabel::Text("Export".to_string()),
-                    export_tab,
-                )
-                .push(
-                    InspectorTab::Model3D,
-                    iced_aw::TabLabel::Text("3D view".to_string()),
-                    model_tab,
-                )
-                .push(
-                    InspectorTab::Texture,
-                    iced_aw::TabLabel::Text("Texture".to_string()),
-                    texture_tab,
-                )
-                .set_active_tab(&self.selected_inspector_tab)
-                .tab_bar_height(Length::Fixed(32.0))
-                .tab_bar_style(|theme, status| {
-                    let mut style = iced_aw::style::tab_bar::primary(theme, status);
-                    let background = match style.tab_label_background {
-                        iced::Background::Color(color) => color,
-                        _ => theme.extended_palette().background.base.color,
-                    };
-                    let foreground = w::readable_text_color(
+        let selected_tab = self.selected_inspector_tab;
+        let tab_pulse = self.inspector_tab_selection_pulse(selected_tab);
+        let tab_bar = iced_aw::widget::tab_bar::TabBar::new(Message::Viewer3dSelectTab)
+            .push(
+                InspectorTab::Export,
+                iced_aw::TabLabel::Text("Export".to_string()),
+            )
+            .push(
+                InspectorTab::Model3D,
+                iced_aw::TabLabel::Text("3D view".to_string()),
+            )
+            .push(
+                InspectorTab::Texture,
+                iced_aw::TabLabel::Text("Texture".to_string()),
+            )
+            .set_active_tab(&selected_tab)
+            .tab_width(Length::FillPortion(1))
+            .style(move |theme, status| {
+                let mut style = iced_aw::style::tab_bar::primary(theme, status);
+                let mut background = match style.tab_label_background {
+                    iced::Background::Color(color) => color,
+                    _ => theme.extended_palette().background.base.color,
+                };
+                if status == iced_aw::style::Status::Active && tab_pulse > 0.0 {
+                    background = iced::theme::palette::mix(
                         background,
-                        theme.extended_palette().background.base.text,
+                        theme.extended_palette().primary.strong.color,
+                        tab_pulse * 0.24,
                     );
-                    style.text_color = foreground;
-                    style.icon_color = foreground;
-                    style
-                })
-                .text_size(13.0)
-                .text_font(bold_text)
-                .height(Length::Fill)
-                .width(width)
-                .into();
+                    style.tab_label_background = background.into();
+                }
+                let foreground = w::readable_text_color(
+                    background,
+                    theme.extended_palette().background.base.text,
+                );
+                style.text_color = foreground;
+                style.icon_color = foreground;
+                style
+            })
+            .text_size(13.0)
+            .text_font(bold_text)
+            .height(Length::Fixed(32.0))
+            .width(width);
 
-        tabs
+        let tab_bar: Element<'_, Message> =
+            if let Some(ripple) = self.ripple_visual(RippleTarget::InspectorTab(selected_tab)) {
+                stack(vec![
+                    tab_bar.into(),
+                    interaction::ripple_overlay::<Message>(ripple)
+                        .width(width)
+                        .height(Length::Fixed(32.0))
+                        .into(),
+                ])
+                .into()
+            } else {
+                tab_bar.into()
+            };
+
+        let active_content: Element<'_, Message> = match selected_tab {
+            InspectorTab::Export => export_tab,
+            InspectorTab::Model3D => model_tab,
+            InspectorTab::Texture => texture_tab,
+        };
+
+        column![
+            tab_bar,
+            Container::new(active_content)
+                .width(width)
+                .height(Length::Fill),
+        ]
+        .width(width)
+        .height(Length::Fill)
+        .into()
     }
 
     fn build_export_tab(&self) -> Element<'_, Message> {
@@ -1125,12 +1192,28 @@ pub fn build(app: &App) -> Element<'_, Message> {
             } else {
                 archive.file_name.clone()
             };
+            let tab_pulse = app.archive_tab_selection_pulse(index);
             let tab = button(fonts::body(label))
                 .on_press(Message::SelectArchiveTab(index))
-                .style(if is_selected {
-                    button::primary
-                } else {
-                    button::secondary
+                .style(move |theme, status| {
+                    let mut style = if is_selected {
+                        button::primary(theme, status)
+                    } else {
+                        button::secondary(theme, status)
+                    };
+                    if is_selected
+                        && tab_pulse > 0.0
+                        && let Some(iced::Background::Color(background)) = style.background
+                    {
+                        let background = iced::theme::palette::mix(
+                            background,
+                            theme.extended_palette().primary.strong.color,
+                            tab_pulse * 0.24,
+                        );
+                        style.background = Some(background.into());
+                        style.text_color = w::readable_text_color(background, style.text_color);
+                    }
+                    style
                 });
             // Accent bar on the left of the active tab
             if is_selected {
@@ -1146,6 +1229,19 @@ pub fn build(app: &App) -> Element<'_, Message> {
             }
         }
         let row = Row::with_children(tab_rows).spacing(4).padding(4);
+        let row: Element<'_, Message> =
+            if let Some(ripple) = app.ripple_visual(RippleTarget::ArchiveTab(selected)) {
+                stack(vec![
+                    row.into(),
+                    interaction::ripple_overlay::<Message>(ripple)
+                        .width(Length::Fill)
+                        .height(Length::Fixed(40.0))
+                        .into(),
+                ])
+                .into()
+            } else {
+                row.into()
+            };
         Container::new(row)
             .style(move |_| iced::widget::container::Style {
                 background: Some(iced::Background::Color(tab_surface)),

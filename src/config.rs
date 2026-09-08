@@ -237,6 +237,15 @@ pub struct Config {
     pub show_texture_rulers: bool,
     /// Texture tab: grid cells per axis (see `ALLOWED_GRID_DIVISIONS`).
     pub texture_grid_divisions: u32,
+    /// Enable the interaction motion layer (selection feedback, ripples,
+    /// and icon micro-motion).
+    pub motion_enabled: bool,
+    /// Pulse the selected entry or tab after an interaction.
+    pub selection_pulse_enabled: bool,
+    /// Draw a short expanding wave at the click location.
+    pub click_ripple_enabled: bool,
+    /// Give the file icon a restrained micro-nudge during selection feedback.
+    pub icon_micro_motion_enabled: bool,
 }
 
 /// Grid divisions offered in the View menu. Kept coarse so grid lines
@@ -267,6 +276,10 @@ impl Default for Config {
             show_texture_grid: false,
             show_texture_rulers: false,
             texture_grid_divisions: 16,
+            motion_enabled: true,
+            selection_pulse_enabled: true,
+            click_ripple_enabled: true,
+            icon_micro_motion_enabled: true,
         }
     }
 }
@@ -427,6 +440,18 @@ impl Config {
                         config.texture_grid_divisions = clamp_grid_divisions(divisions);
                     }
                 }
+                "motion_enabled" => {
+                    config.motion_enabled = value.eq_ignore_ascii_case("true");
+                }
+                "selection_pulse_enabled" => {
+                    config.selection_pulse_enabled = value.eq_ignore_ascii_case("true");
+                }
+                "click_ripple_enabled" => {
+                    config.click_ripple_enabled = value.eq_ignore_ascii_case("true");
+                }
+                "icon_micro_motion_enabled" => {
+                    config.icon_micro_motion_enabled = value.eq_ignore_ascii_case("true");
+                }
                 _ => {}
             }
         }
@@ -544,6 +569,38 @@ impl Config {
             "texture_grid_divisions={}",
             self.texture_grid_divisions
         )?;
+        writeln!(
+            file,
+            "motion_enabled={}",
+            if self.motion_enabled { "true" } else { "false" }
+        )?;
+        writeln!(
+            file,
+            "selection_pulse_enabled={}",
+            if self.selection_pulse_enabled {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
+        writeln!(
+            file,
+            "click_ripple_enabled={}",
+            if self.click_ripple_enabled {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
+        writeln!(
+            file,
+            "icon_micro_motion_enabled={}",
+            if self.icon_micro_motion_enabled {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
         Ok(())
     }
 
@@ -582,6 +639,10 @@ mod tests {
         assert_eq!(config.theme, ThemeMode::System);
         assert!(config.window.size.is_none());
         assert!(config.window.position.is_none());
+        assert!(config.motion_enabled);
+        assert!(config.selection_pulse_enabled);
+        assert!(config.click_ripple_enabled);
+        assert!(config.icon_micro_motion_enabled);
     }
 
     #[test]
@@ -607,6 +668,10 @@ mod tests {
             show_texture_grid: true,
             show_texture_rulers: true,
             texture_grid_divisions: 32,
+            motion_enabled: false,
+            selection_pulse_enabled: false,
+            click_ripple_enabled: false,
+            icon_micro_motion_enabled: false,
         };
         let archive_a = temp.path().join("a.img");
         let archive_b = temp.path().join("b.img");
@@ -636,6 +701,10 @@ mod tests {
         assert!(loaded.show_texture_grid);
         assert!(loaded.show_texture_rulers);
         assert_eq!(loaded.texture_grid_divisions, 32);
+        assert!(!loaded.motion_enabled);
+        assert!(!loaded.selection_pulse_enabled);
+        assert!(!loaded.click_ripple_enabled);
+        assert!(!loaded.icon_micro_motion_enabled);
     }
 
     #[test]
