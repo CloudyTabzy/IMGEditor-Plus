@@ -902,10 +902,10 @@ impl App {
         col = col.push(
             row![
                 uv_toggle,
+                uv_status,
                 grid_toggle,
                 fonts::body("Size:"),
-                grid_size_row,
-                uv_status
+                grid_size_row
             ]
             .spacing(6)
             .align_y(Alignment::Center)
@@ -920,19 +920,27 @@ impl App {
             .handle
             .get_or_init(|| image::Handle::from_rgba(tex.width, tex.height, tex.rgba.clone()))
             .clone();
-        let preview: Element<'_, Message> =
-            canvas::Canvas::new(crate::ui::texture_preview::TextureViewport {
-                handle,
-                image_width: tex.width,
-                image_height: tex.height,
-                show_grid: self.show_texture_grid,
-                grid_divisions: self.texture_grid_divisions,
-                show_uv: self.show_texture_uv && !uv_triangles.is_empty(),
-                uv_triangles,
-            })
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into();
+        let image_viewport = crate::ui::texture_preview::TextureViewport {
+            handle,
+            image_width: tex.width,
+            image_height: tex.height,
+            render_image: true,
+            show_grid: self.show_texture_grid,
+            grid_divisions: self.texture_grid_divisions,
+            show_uv: self.show_texture_uv && !uv_triangles.is_empty(),
+            uv_triangles,
+        };
+        let overlay_viewport = crate::ui::texture_preview::TextureViewport {
+            render_image: false,
+            ..image_viewport.clone()
+        };
+        let preview: Element<'_, Message> = stack(vec![
+            canvas::Canvas::new(image_viewport).into(),
+            canvas::Canvas::new(overlay_viewport).into(),
+        ])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
         col = col.push(preview);
         col.into()
     }

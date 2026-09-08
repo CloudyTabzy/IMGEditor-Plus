@@ -12,14 +12,16 @@ use crate::parser::DecodedTexture;
 
 pub type UvTriangle = [[f32; 2]; 3];
 
-/// A texture viewport that owns image navigation and every visual layer that
-/// follows the image. Keeping these in one canvas makes zooming and panning
-/// apply identically to the texture, grid, and UV topology.
+/// A texture viewport layer that owns the shared image navigation behavior.
+/// The texture tab stacks two instances of this program: one raster layer and
+/// one overlay layer. Keeping their navigation logic identical makes zooming
+/// and panning apply identically to the texture, grid, and UV topology.
 #[derive(Debug, Clone)]
 pub struct TextureViewport {
     pub handle: image::Handle,
     pub image_width: u32,
     pub image_height: u32,
+    pub render_image: bool,
     pub show_grid: bool,
     pub grid_divisions: u32,
     pub show_uv: bool,
@@ -129,7 +131,12 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
                     );
                 }
 
-                Some(canvas::Action::request_redraw().and_capture())
+                let action = canvas::Action::request_redraw();
+                Some(if self.render_image {
+                    action.and_capture()
+                } else {
+                    action
+                })
             }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let Some(cursor_position) = cursor.position_over(bounds) else {
@@ -137,11 +144,15 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
                 };
                 state.cursor_grabbed_at = Some(cursor_position);
                 state.starting_offset = state.current_offset;
-                Some(canvas::Action::capture())
+                if self.render_image {
+                    Some(canvas::Action::capture())
+                } else {
+                    None
+                }
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 if state.cursor_grabbed_at.take().is_some() {
-                    Some(canvas::Action::capture())
+                    self.render_image.then_some(canvas::Action::capture())
                 } else {
                     None
                 }
@@ -170,7 +181,12 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
                     0.0
                 };
                 state.current_offset = Vector::new(x, y);
-                Some(canvas::Action::request_redraw().and_capture())
+                let action = canvas::Action::request_redraw();
+                Some(if self.render_image {
+                    action.and_capture()
+                } else {
+                    action
+                })
             }
             _ => None,
         }
@@ -184,7 +200,6 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        let mut image_frame = canvas::Frame::new(renderer, bounds.size());
         let default_state = TextureViewportState::default();
         let state = if state.matches(&self.handle) {
             state
@@ -199,26 +214,22 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
             state.current_offset,
         );
 
-        image_frame.draw_image(image_rect, canvas::Image::new(&self.handle).snap(true));
-
-        // Iced batches paths and images separately inside one geometry. Keep
-        // the image and overlays in consecutive geometries so paths are
-        // composited above the image on every renderer backend.
-        let mut layers = vec![image_frame.into_geometry()];
-        let mut overlay_frame = canvas::Frame::new(renderer, bounds.size());
-        if self.show_grid {
-            draw_grid(&mut overlay_frame, image_rect, self.grid_divisions);
-        } else if self.show_uv {
-            draw_image_border(&mut overlay_frame, image_rect);
+        if self.render_image {
+            let mut frame = canvas::Frame::new(renderer, bounds.size());
+            frame.draw_image(image_rect, canvas::Image::new(&self.handle).snap(true));
+            vec![frame.into_geometry()]
+        } else {
+            let mut frame = canvas::Frame::new(renderer, bounds.size());
+            if self.show_grid {
+                draw_grid(&mut frame, image_rect, self.grid_divisions);
+            } else if self.show_uv {
+                draw_image_border(&mut frame, image_rect);
+            }
+            if self.show_uv {
+                draw_uv_triangles(&mut frame, image_rect, &self.uv_triangles);
+            }
+            vec![frame.into_geometry()]
         }
-        if self.show_uv {
-            draw_uv_triangles(&mut overlay_frame, image_rect, &self.uv_triangles);
-        }
-        if self.show_grid || self.show_uv {
-            layers.push(overlay_frame.into_geometry());
-        }
-
-        layers
     }
 
     fn mouse_interaction(
@@ -227,6 +238,9 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if !self.render_image {
+            return mouse::Interaction::None;
+        }
         let is_grabbed = state.matches(&self.handle) && state.cursor_grabbed_at.is_some();
         if is_grabbed {
             mouse::Interaction::Grabbing
@@ -623,6 +637,7 @@ mod tests {
             handle,
             image_width: 400,
             image_height: 200,
+            render_image: true,
             show_grid: true,
             grid_divisions: 16,
             show_uv: true,
@@ -658,6 +673,66 @@ mod tests {
             mouse::Cursor::Available(Point::new(130.0, 100.0)),
         );
         assert_ne!(state.current_offset, Vector::default());
+    }
+
+    #[test]
+    fn overlay_viewport_updates_without_capturing_navigation_events() {
+        let viewport = TextureViewport {
+            handle: image::Handle::from_rgba(2, 2, vec![255; 16]),
+            image_width: 400,
+            image_height: 200,
+            render_image: false,
+            show_grid: true,
+            grid_divisions: 16,
+            show_uv: true,
+            uv_triangles: Vec::new(),
+        };
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(400.0, 200.0));
+        let cursor = mouse::Cursor::Available(Point::new(100.0, 100.0));
+        let mut state = TextureViewportState::default();
+        let wheel = canvas::Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        });
+
+        let action = <TextureViewport as canvas::Program<()>>::update(
+            &viewport, &mut state, &wheel, bounds, cursor,
+        )
+        .expect("overlay should request a redraw");
+        let (_, _, status) = action.into_inner();
+        assert_eq!(status, iced::event::Status::Ignored);
+
+        let press = canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        assert!(
+            <TextureViewport as canvas::Program<()>>::update(
+                &viewport, &mut state, &press, bounds, cursor,
+            )
+            .is_none()
+        );
+        assert!(state.cursor_grabbed_at.is_some());
+
+        let moved = canvas::Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::new(120.0, 130.0),
+        });
+        let action = <TextureViewport as canvas::Program<()>>::update(
+            &viewport,
+            &mut state,
+            &moved,
+            bounds,
+            mouse::Cursor::Available(Point::new(120.0, 130.0)),
+        )
+        .expect("overlay should request a redraw while panning");
+        let (_, _, status) = action.into_inner();
+        assert_eq!(status, iced::event::Status::Ignored);
+        assert_ne!(state.current_offset, Vector::default());
+
+        let release = canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+        assert!(
+            <TextureViewport as canvas::Program<()>>::update(
+                &viewport, &mut state, &release, bounds, cursor,
+            )
+            .is_none()
+        );
+        assert!(state.cursor_grabbed_at.is_none());
     }
 
     #[test]
