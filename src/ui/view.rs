@@ -845,7 +845,6 @@ impl App {
             row![fonts::header("Name:"), fonts::body(tex.name.clone())]
                 .spacing(3)
                 .align_y(Alignment::Center),
-            Space::new().width(Length::Fill),
             row![
                 fonts::header("Format:"),
                 fonts::body(format!(
@@ -903,11 +902,10 @@ impl App {
         col = col.push(
             row![
                 uv_toggle,
-                uv_status,
-                Space::new().width(Length::Fill),
                 grid_toggle,
-                fonts::caption("Size:"),
-                grid_size_row
+                fonts::body("Size:"),
+                grid_size_row,
+                uv_status
             ]
             .spacing(6)
             .align_y(Alignment::Center)

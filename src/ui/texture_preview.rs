@@ -184,7 +184,7 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let mut image_frame = canvas::Frame::new(renderer, bounds.size());
         let default_state = TextureViewportState::default();
         let state = if state.matches(&self.handle) {
             state
@@ -199,15 +199,26 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
             state.current_offset,
         );
 
-        frame.draw_image(image_rect, canvas::Image::new(&self.handle).snap(true));
+        image_frame.draw_image(image_rect, canvas::Image::new(&self.handle).snap(true));
+
+        // Iced batches paths and images separately inside one geometry. Keep
+        // the image and overlays in consecutive geometries so paths are
+        // composited above the image on every renderer backend.
+        let mut layers = vec![image_frame.into_geometry()];
+        let mut overlay_frame = canvas::Frame::new(renderer, bounds.size());
         if self.show_grid {
-            draw_grid(&mut frame, image_rect, self.grid_divisions);
+            draw_grid(&mut overlay_frame, image_rect, self.grid_divisions);
+        } else if self.show_uv {
+            draw_image_border(&mut overlay_frame, image_rect);
         }
         if self.show_uv {
-            draw_uv_triangles(&mut frame, image_rect, &self.uv_triangles);
+            draw_uv_triangles(&mut overlay_frame, image_rect, &self.uv_triangles);
+        }
+        if self.show_grid || self.show_uv {
+            layers.push(overlay_frame.into_geometry());
         }
 
-        vec![frame.into_geometry()]
+        layers
     }
 
     fn mouse_interaction(
@@ -324,6 +335,10 @@ fn draw_grid(frame: &mut canvas::Frame, rect: Rectangle, divisions: u32) {
         }
     }
 
+    draw_image_border(frame, rect);
+}
+
+fn draw_image_border(frame: &mut canvas::Frame, rect: Rectangle) {
     // Image border: one crisp outline on top of everything.
     frame.stroke_rectangle(
         Point::new(rect.x, rect.y),
