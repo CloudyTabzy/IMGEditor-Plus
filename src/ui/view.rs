@@ -731,10 +731,12 @@ impl App {
             if tex.has_alpha { "Yes" } else { "No" }.to_string(),
         ));
 
+        let scene_matches = self.viewer_scene_matches_selection();
         let uv_triangles = self.viewer3d_handle.with(|inner| {
             inner
                 .scene
                 .as_deref()
+                .filter(|_| scene_matches)
                 .map(|scene| crate::ui::texture_preview::uv_triangles_for_texture(scene, &tex.name))
                 .unwrap_or_default()
         });

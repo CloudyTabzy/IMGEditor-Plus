@@ -203,6 +203,7 @@ pub enum Message {
 
     TextureDecodeRequested,
     TextureDecoded {
+        archive_index: usize,
         index: usize,
         result: Result<Vec<DecodedTexture>, String>,
     },
@@ -764,6 +765,76 @@ impl App {
         self.show_texture_uv = false;
     }
 
+    /// Keep the active inspector tab in sync with the selected previewable
+    /// entry. This is intentionally limited to the tab the user is already
+    /// viewing, so ordinary archive browsing does not unexpectedly steal
+    /// focus from the export/info panel.
+    fn refresh_active_preview(&mut self) -> Task<Message> {
+        match self.selected_inspector_tab {
+            InspectorTab::Model3D => {
+                let is_nif = self
+                    .editor
+                    .selected_archive()
+                    .and_then(|archive_index| self.editor.archives().get(archive_index))
+                    .and_then(|archive| {
+                        self.editor
+                            .selected_entry()
+                            .and_then(|entry_index| archive.entries.get(entry_index))
+                    })
+                    .is_some_and(|entry| entry.file_name.to_ascii_lowercase().ends_with(".nif"));
+                if is_nif {
+                    self.load_selected_nif(InspectorTab::Model3D)
+                } else {
+                    Task::none()
+                }
+            }
+            InspectorTab::Texture => self.load_selected_texture(),
+            InspectorTab::Export => Task::none(),
+        }
+    }
+
+    fn load_selected_texture(&mut self) -> Task<Message> {
+        let Some(archive_index) = self.editor.selected_archive() else {
+            return Task::none();
+        };
+        let Some(entry_index) = self.editor.selected_entry() else {
+            return Task::none();
+        };
+        let Some(entry) = self
+            .editor
+            .archives()
+            .get(archive_index)
+            .and_then(|archive| archive.entries.get(entry_index))
+        else {
+            return Task::none();
+        };
+
+        let lower = entry.file_name.to_ascii_lowercase();
+        self.selected_inspector_tab = InspectorTab::Texture;
+        self.reset_texture_preview_state();
+        if lower.ends_with(".nif") {
+            // NIF textures are resolved through the scene decoder so the
+            // texture tab and UV overlay share the same source of truth.
+            if self.viewer_scene_matches_selection() {
+                return Task::none();
+            }
+            return self.load_selected_nif(InspectorTab::Texture);
+        }
+        if !lower.ends_with(".txd") && !lower.ends_with(".nft") {
+            return Task::none();
+        }
+        let cached = self
+            .editor
+            .archives()
+            .get(archive_index)
+            .is_some_and(|archive| archive.texture_cache.contains_key(&entry_index));
+        if cached {
+            Task::none()
+        } else {
+            self.decode_texture_entry(entry_index)
+        }
+    }
+
     fn load_selected_nif(&mut self, target_tab: InspectorTab) -> Task<Message> {
         let Some(archive_index) = self.editor.selected_archive() else {
             self.toast = Some("Select a NIF entry first.".into());
@@ -791,6 +862,9 @@ impl App {
         }
 
         self.selected_inspector_tab = target_tab;
+        if self.viewer_scene_matches_selection() {
+            return Task::none();
+        }
         self.active_viewer_entry = None;
         self.viewer3d_handle.clear();
         Task::done(Message::Viewer3dRequestLoad {
@@ -1455,11 +1529,17 @@ impl App {
                     let ctrl = self.modifiers.command();
                     self.editor.select_entry(entry_index, shift, ctrl);
                     self.reset_texture_preview_state();
-                    self.refresh_inspection()
+                    let inspection_task = self.refresh_inspection();
+                    let preview_task = if shift || ctrl {
+                        Task::none()
+                    } else {
+                        self.refresh_active_preview()
+                    };
+                    Task::batch(vec![inspection_task, preview_task])
                 } else {
                     Task::none()
                 };
-                Task::batch(vec![task, Task::none()])
+                task
             }
             Message::EntryDoubleClicked(display_row) => {
                 let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
@@ -1517,7 +1597,7 @@ impl App {
                         self.last_export_selected_only = true;
                         dialogs::save_folder().map(Message::ExportFolderResult)
                     }
-                    EntryAction::ViewTextures => Task::done(Message::TextureDecodeRequested),
+                    EntryAction::ViewTextures => self.load_selected_texture(),
                     EntryAction::ExportEmbeddedTextures => {
                         let Some(archive_index) = self.editor.selected_archive() else {
                             return Task::none();
@@ -1959,18 +2039,27 @@ impl App {
                 self.decode_texture_entry(entry_index)
             }
 
-            Message::TextureDecoded { index, result } => {
+            Message::TextureDecoded {
+                archive_index,
+                index,
+                result,
+            } => {
+                let is_active = self.selected_entry_key() == Some((archive_index, index));
                 match result {
                     Ok(textures) => {
-                        if let Some(archive) = self.editor.selected_archive_mut() {
+                        if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
                             let count = textures.len();
                             archive.texture_cache.insert(index, textures);
                             archive.add_log(format!("Decoded {count} texture preview(s)"));
-                            self.toast = Some(format!("Decoded {count} texture(s)"));
+                            if is_active {
+                                self.toast = Some(format!("Decoded {count} texture(s)"));
+                            }
                         }
                     }
                     Err(err) => {
-                        self.toast = Some(err);
+                        if is_active {
+                            self.toast = Some(err);
+                        }
                     }
                 }
                 Task::none()
@@ -2296,7 +2385,7 @@ impl App {
             }
             Message::Viewer3dSelectTab(tab) => {
                 self.selected_inspector_tab = tab;
-                Task::none()
+                self.refresh_active_preview()
             }
             Message::Viewer3dClear => {
                 self.active_viewer_entry = None;
@@ -2644,6 +2733,7 @@ impl App {
                 result.unwrap_or_else(|e| Err(format!("task panicked: {e}")))
             },
             move |result| Message::TextureDecoded {
+                archive_index,
                 index: entry_index,
                 result,
             },
@@ -3215,6 +3305,57 @@ mod tests {
 
         assert_eq!(app.editor.archives()[0].entries.len(), 1);
         assert_eq!(app.editor.archives()[0].entries[0].file_name, "first.dff");
+    }
+
+    #[test]
+    fn open_3d_action_selects_model_tab_and_clears_stale_scene_target() {
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0]
+            .entries
+            .push(EntryInfo::new("model.nif"));
+        app.editor.archives_mut()[0].update_selected_list("");
+        app.editor.select_entry(2, false, false);
+        app.active_viewer_entry = Some((0, 0));
+
+        let _ = app.update(Message::EntryContextAction(EntryAction::Render));
+
+        assert_eq!(app.selected_inspector_tab, InspectorTab::Model3D);
+        assert_eq!(app.active_viewer_entry, None);
+        assert!(app.viewer3d_handle.with(|inner| inner.scene.is_none()));
+    }
+
+    #[test]
+    fn open_texture_action_selects_texture_tab() {
+        let mut app = test_app_with_entries();
+        app.editor.select_entry(1, false, false);
+
+        let _ = app.update(Message::EntryContextAction(EntryAction::ViewTextures));
+
+        assert_eq!(app.selected_inspector_tab, InspectorTab::Texture);
+        assert_eq!(app.selected_texture, 0);
+        assert!(!app.show_texture_uv);
+    }
+
+    #[test]
+    fn clicking_nif_while_viewing_3d_starts_the_selected_scene() {
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0]
+            .entries
+            .push(EntryInfo::new("model.nif"));
+        app.editor.archives_mut()[0].update_selected_list("");
+        app.selected_inspector_tab = InspectorTab::Model3D;
+        app.active_viewer_entry = Some((0, 0));
+        let row = app.editor.archives()[0]
+            .selected_indices
+            .iter()
+            .position(|&index| index == 2)
+            .expect("model row");
+
+        let _ = app.update(Message::EntryClicked(row));
+
+        assert_eq!(app.editor.selected_entry(), Some(2));
+        assert_eq!(app.selected_inspector_tab, InspectorTab::Model3D);
+        assert_eq!(app.active_viewer_entry, None);
     }
 
     #[test]
