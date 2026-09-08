@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v3.12.0
+# 🎮 IMG Editor Plus v3.15.0
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -56,7 +56,11 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Rotating view-axis gizmo** — the small XYZ widget in the corner tracks the camera as it orbits
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
-- ✅ **288 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against real Bully fixtures
+- ✅ **290 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against real Bully fixtures
+
+**v3.15.0 viewer refinement:**
+- ✅ **Smooth exponential camera zoom** — mouse-wheel lines and high-resolution pixel scrolling use one consistent, reversible zoom curve
+- ✅ **Refined Blender-style panning** — MMB camera movement is slightly more responsive while preserving the existing screen-space direction
 
 ---
 

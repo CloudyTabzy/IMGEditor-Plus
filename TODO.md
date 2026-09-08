@@ -1,6 +1,6 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v3.12.0** (3D reference-grid depth fix, Bully NIF texture resolution, and safer textured 3D previews). 253 tests passing.
+Last shipped: **v3.15.0** (smoother 3D camera zoom/panning, synchronized texture overlays, and continued archive/UI refinements). 290 tests passing.
 
 Next phase: **supporting other game formats**.
 

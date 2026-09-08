@@ -2,6 +2,16 @@
 
 Date: 2026-06-18
 
+## Update — 2026-09-09: smoother 3D navigation
+
+- The 3D viewer now uses a symmetric exponential wheel-zoom curve, making
+  positive and negative scroll steps reversible and keeping line and pixel
+  deltas at the same nominal rate.
+- Blender-style MMB panning is modestly more responsive while preserving the
+  existing screen-space movement convention.
+- The Rust test suite is now **290 tests**, including scene3d camera and
+  renderer regressions.
+
 ## Update — 2026-09-07: zero-copy export, measured hard limit, faster save
 
 - New default **`ZeroCopy` export engine**: writes entries directly from the
@@ -18,7 +28,7 @@ Date: 2026-06-18
 - **Two-pass zero-copy save/rebuild**: layout from metadata alone, then
   sequential buffered directory + data passes streaming from the mmap.
   Rebuild of `World.img`: **8.6 s → 6.6 s median (~23 %)**.
-- Test suite is now **288 tests** (77 at the original writing below).
+- The suite was **288 tests** at this update (77 at the original writing below).
 
 The sections below are kept as the historical record of the first benchmark
 round.
