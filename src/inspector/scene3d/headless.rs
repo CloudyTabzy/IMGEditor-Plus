@@ -192,24 +192,23 @@ pub fn render_frame(
             occlusion_query_set: None,
         });
 
-        pass.set_pipeline(&pipelines.grid);
-        pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
-        pass.set_index_buffer(
-            pipelines.quad_index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
-        pass.draw_indexed(0..6, 0, 0..1);
+        if flags.contains(RenderFlags::SHOW_GRID) {
+            pass.set_pipeline(&pipelines.grid);
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                pipelines.quad_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..6, 0, 0..1);
+        }
 
-        pass.set_pipeline(
-            match (
-                flags.contains(RenderFlags::WIREFRAME),
-                pipelines.wireframe.as_ref(),
-            ) {
-                (true, Some(wf)) => wf,
-                _ => &pipelines.lit,
-            },
-        );
+        let lit_pipeline = if flags.contains(RenderFlags::CULL_BACK) {
+            &pipelines.lit_cull_back
+        } else {
+            &pipelines.lit
+        };
+        pass.set_pipeline(lit_pipeline);
         pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
 
         for (gpu_mesh, tex) in &mesh_gpus {
@@ -221,6 +220,23 @@ pub fn render_frame(
             pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
             pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+        }
+
+        if flags.contains(RenderFlags::WIREFRAME)
+            && let Some(wireframe) = pipelines.wireframe.as_ref()
+        {
+            pass.set_pipeline(wireframe);
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+            for (gpu_mesh, tex) in &mesh_gpus {
+                let bg: &wgpu::BindGroup = match tex {
+                    Some(t) => &t.bind_group,
+                    None => &pipelines.default_diffuse.bind_group,
+                };
+                pass.set_bind_group(1, bg, &[]);
+                pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+            }
         }
 
         pass.set_pipeline(&pipelines.gizmo);
@@ -369,6 +385,24 @@ mod tests {
     }
 
     #[test]
+    fn grid_visibility_flag_changes_rendered_frame() {
+        let renderer = HeadlessRenderer::new().expect("renderer");
+        let scene = triangle_scene();
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 128,
+            height: 128,
+        });
+        camera.reset_to_aabb(&scene.aabb);
+
+        let with_grid = render_frame(&renderer, &scene, &camera, 128, 128, RenderFlags::SHOW_GRID)
+            .expect("grid frame");
+        let without_grid = render_frame(&renderer, &scene, &camera, 128, 128, RenderFlags::empty())
+            .expect("plain frame");
+
+        assert_ne!(with_grid.rgba, without_grid.rgba);
+    }
+
+    #[test]
     fn render_wireframe_flag_changes_pipeline() {
         let renderer = HeadlessRenderer::new().expect("renderer");
         let scene = triangle_scene();
@@ -425,7 +459,7 @@ mod tests {
         cam.pitch = -1.2; // eye well below the plane, looking up
         assert!(cam.eye()[1] < 0.0);
         let f =
-            render_frame(&renderer, &scene, &cam, 256, 256, RenderFlags::empty()).expect("frame");
+            render_frame(&renderer, &scene, &cam, 256, 256, RenderFlags::SHOW_GRID).expect("frame");
         let matches = |i: usize, (r, g, b): (i32, i32, i32)| {
             (f.rgba[i] as i32 - r).abs() < 8
                 && (f.rgba[i + 1] as i32 - g).abs() < 8
@@ -494,7 +528,7 @@ mod tests {
             &camera,
             256,
             256,
-            RenderFlags::HAS_TEXTURE,
+            RenderFlags::HAS_TEXTURE | RenderFlags::SHOW_GRID,
         )
         .expect("frame");
         let red_pixels = frame
@@ -826,7 +860,7 @@ mod tests {
             &camera,
             scene.key_light,
             scene.ambient,
-            RenderFlags::empty(),
+            RenderFlags::SHOW_GRID,
         );
 
         let mesh_gpus: Vec<_> = scene

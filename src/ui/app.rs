@@ -244,6 +244,7 @@ pub enum Message {
     Viewer3dReset,
     Viewer3dToggleCenterOrigin,
     Viewer3dToggleWireframe,
+    Viewer3dToggleGrid,
     Viewer3dToggleCullBackfaces,
     Viewer3dToggleTextured,
 
@@ -2312,6 +2313,10 @@ impl App {
             }
             Message::Viewer3dToggleWireframe => {
                 self.viewer3d_handle.toggle_wireframe();
+                Task::none()
+            }
+            Message::Viewer3dToggleGrid => {
+                self.viewer3d_handle.toggle_grid();
                 Task::none()
             }
             Message::Viewer3dToggleCullBackfaces => {

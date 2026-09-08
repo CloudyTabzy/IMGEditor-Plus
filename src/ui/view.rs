@@ -683,6 +683,7 @@ impl App {
             let mut sel_row = Row::new()
                 .spacing(4)
                 .width(Length::Shrink)
+                .height(Length::Fixed(32.0))
                 .align_y(Alignment::Center);
             for (i, _) in textures.iter().enumerate() {
                 let label = if i == tex_idx {
@@ -691,16 +692,24 @@ impl App {
                     format!("○ {}", i + 1)
                 };
                 sel_row = sel_row.push(
-                    button(fonts::caption(label))
-                        .width(Length::Fixed(38.0))
-                        .height(Length::Fixed(28.0))
-                        .on_press(Message::TextureSelect(i))
-                        .style(button::text),
+                    button(
+                        fonts::caption(label)
+                            .width(Length::Fill)
+                            .align_x(Alignment::Center),
+                    )
+                    // Keep the slot label in one line even for slots 10+.
+                    // The default button padding leaves too little content
+                    // width inside a compact fixed-width button.
+                    .width(Length::Fixed(42.0))
+                    .height(Length::Fixed(32.0))
+                    .padding([4.0, 5.0])
+                    .on_press(Message::TextureSelect(i))
+                    .style(button::text),
                 );
             }
             let slot_rail = Scrollable::new(sel_row)
                 .width(Length::Fill)
-                .height(Length::Fixed(32.0))
+                .height(Length::Fixed(38.0))
                 .direction(iced::widget::scrollable::Direction::Horizontal(
                     iced::widget::scrollable::Scrollbar::new().scroller_width(10.0),
                 ));
@@ -858,7 +867,7 @@ impl App {
         ));
         row = row.push(
             checkbox(flags.contains(RenderFlags::WIREFRAME))
-                .label("Wireframe")
+                .label("Wire overlay")
                 .on_toggle(|_| Message::Viewer3dToggleWireframe),
         );
         row = row.push(
@@ -875,6 +884,11 @@ impl App {
             checkbox(origin_mode == SceneOriginMode::Centered)
                 .label("Center origin")
                 .on_toggle(|_| Message::Viewer3dToggleCenterOrigin),
+        );
+        row = row.push(
+            checkbox(flags.contains(RenderFlags::SHOW_GRID))
+                .label("Grid floor")
+                .on_toggle(|_| Message::Viewer3dToggleGrid),
         );
         row.wrap().vertical_spacing(4).into()
     }

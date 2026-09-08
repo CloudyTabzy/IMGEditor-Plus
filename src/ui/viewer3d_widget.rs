@@ -93,7 +93,7 @@ pub struct SceneHandle {
     inner: Mutex<SceneHandleInner>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SceneHandleInner {
     pub scene: Option<Arc<Scene>>,
     pub camera: OrbitCamera,
@@ -101,6 +101,21 @@ pub struct SceneHandleInner {
     pub(crate) origin_mode: SceneOriginMode,
     pub dirty: bool,
     pub gpu_error: Option<String>,
+}
+
+impl Default for SceneHandleInner {
+    fn default() -> Self {
+        Self {
+            scene: None,
+            camera: OrbitCamera::default(),
+            // The reference floor is part of the established viewer
+            // presentation; the toolbar lets users hide it per session.
+            flags: RenderFlags::SHOW_GRID,
+            origin_mode: SceneOriginMode::default(),
+            dirty: false,
+            gpu_error: None,
+        }
+    }
 }
 
 impl SceneHandle {
@@ -159,6 +174,12 @@ impl SceneHandle {
     pub fn toggle_wireframe(&self) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
         inner.flags ^= crate::inspector::scene3d::pipeline::RenderFlags::WIREFRAME;
+        inner.dirty = true;
+    }
+
+    pub fn toggle_grid(&self) {
+        let mut inner = self.inner.lock().expect("scene handle mutex");
+        inner.flags ^= crate::inspector::scene3d::pipeline::RenderFlags::SHOW_GRID;
         inner.dirty = true;
     }
 
@@ -683,9 +704,10 @@ impl ScenePipeline {
     /// Called from `Primitive::render`; opens its own render pass.
     /// Sequence:
     ///   1. clear color to the F3D-style dark backdrop
-    ///   2. draw the procedural infinity grid as a depth-neutral backdrop
+    ///   2. draw the optional procedural infinity grid as a depth-neutral backdrop
     ///   3. draw the model meshes (lit shader, depth-tested and depth-owning)
-    ///   4. draw the XYZ axis gizmo in the bottom-right (overlay, no depth)
+    ///   4. draw optional polygon edges over the solid model
+    ///   5. draw the XYZ axis gizmo in the bottom-right (overlay, no depth)
     pub fn render_to_offscreen(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -739,33 +761,28 @@ impl ScenePipeline {
             occlusion_query_set: None,
         });
 
-        // 2. procedural grid floor — fills the cleared color with grid
-        // lines. It deliberately does not write depth: the floor is a
+        // 2. optional procedural grid floor — fills the cleared color with
+        // grid lines. It deliberately does not write depth: the floor is a
         // reference backdrop, so it must never hide model geometry below
         // or intersecting the world Y=0 plane.
-        pass.set_pipeline(&self.render_pipelines.grid);
-        pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
-        pass.set_index_buffer(
-            self.render_pipelines.quad_index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
-        pass.draw_indexed(0..6, 0, 0..1);
+        if flags.contains(RenderFlags::SHOW_GRID) {
+            pass.set_pipeline(&self.render_pipelines.grid);
+            pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                self.render_pipelines.quad_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..6, 0, 0..1);
+        }
 
         // 3. the model
-        let use_wireframe =
-            flags.contains(RenderFlags::WIREFRAME) && self.render_pipelines.wireframe.is_some();
         let lit_pipeline = if flags.contains(RenderFlags::CULL_BACK) {
             &self.render_pipelines.lit_cull_back
         } else {
             &self.render_pipelines.lit
         };
-        pass.set_pipeline(
-            match (use_wireframe, self.render_pipelines.wireframe.as_ref()) {
-                (true, Some(wf)) => wf,
-                _ => lit_pipeline,
-            },
-        );
+        pass.set_pipeline(lit_pipeline);
         pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
 
         for (gpu_mesh, tex) in &self.mesh_cache {
@@ -779,7 +796,27 @@ impl ScenePipeline {
             pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
         }
 
-        // 4. the XYZ axis gizmo in the bottom-right of the pane.
+        // 4. optional wire overlay. The overlay pipeline reads the solid
+        // model's depth without writing it, so hidden edges stay hidden and
+        // visible edges remain legible without z-fighting the surface.
+        if flags.contains(RenderFlags::WIREFRAME)
+            && let Some(wireframe) = self.render_pipelines.wireframe.as_ref()
+        {
+            pass.set_pipeline(wireframe);
+            pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
+            for (gpu_mesh, tex) in &self.mesh_cache {
+                let bg: &wgpu::BindGroup = match tex {
+                    Some(t) => &t.bind_group,
+                    None => &self.render_pipelines.default_diffuse.bind_group,
+                };
+                pass.set_bind_group(1, bg, &[]);
+                pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+            }
+        }
+
+        // 5. the XYZ axis gizmo in the bottom-right of the pane.
         pass.set_pipeline(&self.render_pipelines.gizmo);
         pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
         pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
@@ -936,6 +973,18 @@ mod tests {
     fn handle_creates_with_no_scene() {
         let h = SceneHandle::new();
         assert!(h.with(|i| i.scene.is_none()));
+    }
+
+    #[test]
+    fn grid_floor_is_enabled_by_default_and_toggleable() {
+        let h = SceneHandle::new();
+        assert!(h.with(|i| i.flags.contains(RenderFlags::SHOW_GRID)));
+
+        h.toggle_grid();
+        assert!(!h.with(|i| i.flags.contains(RenderFlags::SHOW_GRID)));
+
+        h.toggle_grid();
+        assert!(h.with(|i| i.flags.contains(RenderFlags::SHOW_GRID)));
     }
 
     #[test]

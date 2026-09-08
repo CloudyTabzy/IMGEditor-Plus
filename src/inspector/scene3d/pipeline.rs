@@ -7,7 +7,8 @@
 //!   diffuse texture selected at draw time by a flag in the camera UBO.
 //!   Renders to a private `scene_color_target`, never to the surface.
 //!   Has a real depth attachment so triangle ordering is correct.
-//! - **Wireframe** — same vertex stage, line-list rasteriser, no depth.
+//! - **Wireframe** — same vertex stage, line-list rasteriser, depth-tested
+//!   overlay drawn after the solid model.
 //! - **Compositor** — a separate pipeline with no depth and a one-line
 //!   fragment shader that samples the `scene_color_target`. The widget
 //!   uses this in `Primitive::draw` to blit the offscreen texture into
@@ -512,6 +513,9 @@ impl ScenePipelines {
             scene_color_format(),
             wgpu::PolygonMode::Fill,
             None,
+            true,
+            wgpu::CompareFunction::Less,
+            wgpu::BlendState::REPLACE,
             "imgeditor-scene3d/lit_pipeline",
         );
         let lit_cull_back = build_lit_pipeline(
@@ -521,6 +525,9 @@ impl ScenePipelines {
             scene_color_format(),
             wgpu::PolygonMode::Fill,
             Some(wgpu::Face::Back),
+            true,
+            wgpu::CompareFunction::Less,
+            wgpu::BlendState::REPLACE,
             "imgeditor-scene3d/lit_cull_back_pipeline",
         );
 
@@ -535,6 +542,9 @@ impl ScenePipelines {
                 scene_color_format(),
                 wgpu::PolygonMode::Line,
                 None,
+                false,
+                wgpu::CompareFunction::LessEqual,
+                wgpu::BlendState::ALPHA_BLENDING,
                 "imgeditor-scene3d/wireframe_pipeline",
             ))
         } else {
@@ -893,6 +903,9 @@ fn build_lit_pipeline(
     format: wgpu::TextureFormat,
     polygon_mode: wgpu::PolygonMode,
     cull_mode: Option<wgpu::Face>,
+    depth_write_enabled: bool,
+    depth_compare: wgpu::CompareFunction,
+    blend: wgpu::BlendState,
     label: &str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -910,7 +923,7 @@ fn build_lit_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: Some(wgpu::BlendState::REPLACE),
+                blend: Some(blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -925,8 +938,8 @@ fn build_lit_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: depth_format(),
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
+            depth_write_enabled,
+            depth_compare,
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -988,8 +1001,11 @@ bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct RenderFlags: u32 {
         const HAS_TEXTURE       = 1 << 0;
+        /// Draw polygon edges over the solid model when enabled.
         const WIREFRAME         = 1 << 1;
         const CULL_BACK         = 1 << 2;
+        /// Draw the procedural world-Y=0 reference grid.
+        const SHOW_GRID         = 1 << 3;
     }
 }
 
@@ -1060,5 +1076,6 @@ mod tests {
         assert_eq!(RenderFlags::HAS_TEXTURE.bits(), 1 << 0);
         assert_eq!(RenderFlags::WIREFRAME.bits(), 1 << 1);
         assert_eq!(RenderFlags::CULL_BACK.bits(), 1 << 2);
+        assert_eq!(RenderFlags::SHOW_GRID.bits(), 1 << 3);
     }
 }
