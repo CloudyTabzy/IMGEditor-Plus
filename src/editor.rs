@@ -77,6 +77,8 @@ impl Editor {
         }
 
         archive.sort_chain = self.default_sort_chain.clone();
+        archive.sync_sort_state_from_chain();
+        archive.update_selected_list("");
         self.add_archive(archive);
         true
     }
@@ -85,6 +87,7 @@ impl Editor {
         let name = unique_archive_name(&self.archives, "Untitled");
         let mut archive = ArchiveInfo::new(name, true, ImgVersion::One);
         archive.sort_chain = self.default_sort_chain.clone();
+        archive.sync_sort_state_from_chain();
         self.add_archive(archive);
     }
 
@@ -107,6 +110,8 @@ impl Editor {
 
         let mut archive = ArchiveInfo::open(path).map_err(OpenArchiveError::OpenFailed)?;
         archive.sort_chain = self.default_sort_chain.clone();
+        archive.sync_sort_state_from_chain();
+        archive.update_selected_list("");
         self.add_archive(archive);
         Ok(())
     }

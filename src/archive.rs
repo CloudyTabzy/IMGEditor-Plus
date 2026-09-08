@@ -12,7 +12,7 @@ use crate::parser::{
     DecodedTexture, EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE,
     encode_entry_name, sector_rounded_size,
 };
-use crate::sort::SortChain;
+use crate::sort::{SortChain, SortDirection, SortKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportStatus {
@@ -313,12 +313,37 @@ impl ArchiveInfo {
         Ok(archive)
     }
 
+    /// Keep the compact table-header state aligned with the first enabled
+    /// priority in the authoritative multi-key sort chain.
+    pub fn sync_sort_state_from_chain(&mut self) {
+        let previous_column = self.sort.column;
+        let Some(priority) = self.sort_chain.iter().find(|priority| priority.enabled) else {
+            self.sort.column = SortColumn::Name;
+            self.sort.direction = SortDirection::Ascending;
+            self.sort.type_index = 0;
+            return;
+        };
+
+        let column = match priority.key {
+            SortKey::Name | SortKey::IdeFile | SortKey::ColFile => SortColumn::Name,
+            SortKey::Extension | SortKey::Type => SortColumn::Type,
+            SortKey::Size | SortKey::Offset => SortColumn::Size,
+        };
+
+        if column != SortColumn::Type || previous_column != SortColumn::Type {
+            self.sort.type_index = 0;
+        }
+        self.sort.column = column;
+        self.sort.direction = priority.direction;
+    }
+
     pub fn add_log(&mut self, message: String) {
         let now = chrono::Local::now().format("%H:%M:%S");
         self.logs.push(format!("[{}] {}", now, message));
     }
 
     pub fn update_selected_list(&mut self, filter: &str) {
+        self.sync_sort_state_from_chain();
         let filter = filter.to_lowercase();
         self.selected_indices.clear();
         self.selected_lookup.clear();
@@ -373,7 +398,11 @@ impl ArchiveInfo {
                 .get(self.sort.type_index % unique_types.len().max(1))
                 .map(|s| s.as_str())
                 .unwrap_or("");
-            format!("Type ↑ {}", primary)
+            let arrow = match self.sort.direction {
+                SortDirection::Ascending => '↑',
+                SortDirection::Descending => '↓',
+            };
+            format!("Type {arrow} {primary}")
         } else {
             "Type".to_string()
         };
@@ -547,6 +576,7 @@ pub fn infer_file_type(file_name: &str) -> CompactString {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sort::SortPriority;
 
     #[test]
     fn infer_known_types() {
@@ -601,6 +631,45 @@ mod tests {
 
         archive.update_selected_list("txd");
         assert_eq!(archive.selected_indices.as_slice(), &[1]);
+    }
+
+    #[test]
+    fn archive_update_selected_list_uses_chain_for_size_order() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("small.dff"));
+        archive.entries.push(EntryInfo::new("large.dff"));
+        archive.entries.push(EntryInfo::new("middle.dff"));
+        archive.entries[0].sector = 1;
+        archive.entries[1].sector = 9;
+        archive.entries[2].sector = 4;
+        archive.sort_chain = SortChain::new(vec![SortPriority::new(
+            SortKey::Size,
+            SortDirection::Descending,
+        )]);
+
+        archive.update_selected_list("");
+
+        assert_eq!(archive.selected_indices.as_slice(), &[1, 2, 0]);
+        assert_eq!(archive.sort.column, SortColumn::Size);
+        assert_eq!(archive.sort.direction, SortDirection::Descending);
+    }
+
+    #[test]
+    fn archive_type_chain_bubbles_selected_type() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("texture.nft"));
+        archive.entries.push(EntryInfo::new("model.dff"));
+        archive.entries.push(EntryInfo::new("another.txd"));
+        archive.sort_chain = SortChain::new(vec![
+            SortPriority::new(SortKey::Type, SortDirection::Ascending),
+            SortPriority::new(SortKey::Name, SortDirection::Ascending),
+        ]);
+
+        archive.update_selected_list("");
+
+        assert_eq!(archive.selected_indices.as_slice(), &[1, 2, 0]);
+        assert_eq!(archive.sort.column, SortColumn::Type);
+        assert_eq!(archive.sort.type_header_label, "Type ↑ Model");
     }
 
     #[test]

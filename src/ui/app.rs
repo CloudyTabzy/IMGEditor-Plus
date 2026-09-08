@@ -12,7 +12,7 @@ use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn};
 use crate::dev_logger;
-use crate::sort::SortDirection;
+use crate::sort::{SortChain, SortDirection, SortKey, SortPriority};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{Config, ThemeMode};
@@ -467,6 +467,8 @@ impl App {
     pub fn new(config: Config) -> Self {
         let show_welcome = !config.first_run_complete;
         let fast_export = config.fast_export;
+        let mut editor = Editor::new();
+        editor.set_default_sort_chain(config.default_sort_chain.clone());
         // View preferences are mirrored onto App fields so the view
         // builder doesn't reach through `self.config` for hot UI state.
         let show_texture_grid = config.show_texture_grid;
@@ -477,7 +479,7 @@ impl App {
         panes.split(pane_grid::Axis::Vertical, pane, Pane::Info);
 
         Self {
-            editor: Editor::new(),
+            editor,
             config,
             sort_draft: None,
             show_sort_manager: false,
@@ -1968,7 +1970,7 @@ impl App {
                 Task::none()
             }
             Message::SortBy(column) => {
-                if let Some(archive) = self.editor.selected_archive_mut() {
+                let updated_chain = if let Some(archive) = self.editor.selected_archive_mut() {
                     let unique_types = archive.unique_file_types().to_vec();
                     match column {
                         SortColumn::Name => {
@@ -1989,6 +1991,7 @@ impl App {
                             } else {
                                 archive.sort.column = SortColumn::Type;
                                 archive.sort.type_index = 0;
+                                archive.sort.direction = SortDirection::Ascending;
                             }
                         }
                         SortColumn::Size => {
@@ -2003,12 +2006,35 @@ impl App {
                             }
                         }
                     }
+
+                    archive.sort_chain = match archive.sort.column {
+                        SortColumn::Name => SortChain::new(vec![SortPriority::new(
+                            SortKey::Name,
+                            archive.sort.direction,
+                        )]),
+                        SortColumn::Type => SortChain::new(vec![
+                            SortPriority::new(SortKey::Type, SortDirection::Ascending),
+                            SortPriority::new(SortKey::Name, SortDirection::Ascending),
+                        ]),
+                        SortColumn::Size => SortChain::new(vec![SortPriority::new(
+                            SortKey::Size,
+                            archive.sort.direction,
+                        )]),
+                    };
+                    archive.sync_sort_state_from_chain();
                     let filter = self.search.clone();
                     archive.update_selected_list(&filter);
+                    Some(archive.sort_chain.clone())
+                } else {
+                    None
+                };
+
+                if let Some(updated_chain) = updated_chain {
                     // Promote the current chain to the global default
                     // so the next archive opened inherits this sort.
                     // Cheap, since the chain is at most 10 priorities.
-                    self.config.default_sort_chain = archive.sort_chain.clone();
+                    self.config.default_sort_chain = updated_chain.clone();
+                    self.editor.set_default_sort_chain(updated_chain);
                     self.save_config();
                 }
                 Task::none()
@@ -2462,6 +2488,7 @@ impl App {
                         && let Some(a) = self.editor.archives_mut().get_mut(i)
                     {
                         a.sort_chain = draft.clone();
+                        a.sync_sort_state_from_chain();
                         let filter = self.search.clone();
                         a.update_selected_list(&filter);
                     }
@@ -3334,6 +3361,55 @@ mod tests {
         assert_eq!(app.selected_inspector_tab, InspectorTab::Texture);
         assert_eq!(app.selected_texture, 0);
         assert!(!app.show_texture_uv);
+    }
+
+    #[test]
+    fn sort_header_updates_chain_and_visible_order() {
+        let mut app = test_app();
+        app.editor.new_archive();
+        let archive = app.editor.archives_mut().first_mut().unwrap();
+        archive.entries.push(EntryInfo::new("small.dff"));
+        archive.entries.push(EntryInfo::new("large.dff"));
+        archive.entries.push(EntryInfo::new("middle.dff"));
+        archive.entries[0].sector = 1;
+        archive.entries[1].sector = 9;
+        archive.entries[2].sector = 4;
+        archive.update_selected_list("");
+
+        let _ = app.update(Message::SortBy(SortColumn::Size));
+        let archive = &app.editor.archives()[0];
+        assert_eq!(archive.sort_chain.iter().next().unwrap().key, SortKey::Size);
+        assert_eq!(archive.selected_indices.as_slice(), &[1, 2, 0]);
+
+        let _ = app.update(Message::SortBy(SortColumn::Size));
+        let archive = &app.editor.archives()[0];
+        assert_eq!(
+            archive.sort_chain.iter().next().unwrap().direction,
+            SortDirection::Ascending
+        );
+        assert_eq!(archive.selected_indices.as_slice(), &[0, 2, 1]);
+
+        let _ = app.update(Message::SortBy(SortColumn::Name));
+        let archive = &app.editor.archives()[0];
+        assert_eq!(archive.sort_chain.iter().next().unwrap().key, SortKey::Name);
+        assert_eq!(archive.selected_indices.as_slice(), &[1, 2, 0]);
+        assert_eq!(app.config.default_sort_chain, archive.sort_chain);
+    }
+
+    #[test]
+    fn configured_sort_chain_is_inherited_by_new_archives() {
+        let mut config = Config::default();
+        config.default_sort_chain = SortChain::new(vec![SortPriority::new(
+            SortKey::Size,
+            SortDirection::Descending,
+        )]);
+        let mut app = App::new(config);
+
+        app.editor.new_archive();
+
+        let archive = &app.editor.archives()[0];
+        assert_eq!(archive.sort_chain.iter().next().unwrap().key, SortKey::Size);
+        assert_eq!(archive.sort.column, SortColumn::Size);
     }
 
     #[test]
