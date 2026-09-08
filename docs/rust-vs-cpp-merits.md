@@ -18,7 +18,7 @@ Date: 2026-06-18
 - **Two-pass zero-copy save/rebuild**: layout from metadata alone, then
   sequential buffered directory + data passes streaming from the mmap.
   Rebuild of `World.img`: **8.6 s → 6.6 s median (~23 %)**.
-- Test suite is now **284 tests** (77 at the original writing below).
+- Test suite is now **287 tests** (77 at the original writing below).
 
 The sections below are kept as the historical record of the first benchmark
 round.

@@ -776,8 +776,12 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(8);
+        let mut action_row = Row::new()
+            .spacing(6)
+            .width(Length::Fill)
+            .align_y(Alignment::Center);
         if is_nif && !self.viewer_scene_matches_selection() {
-            col = col.push(
+            action_row = action_row.push(
                 button(w::icon_label(
                     icons::model().size(14),
                     fonts::body("Load selected NIF"),
@@ -785,13 +789,14 @@ impl App {
                 .on_press(Message::Viewer3dLoadSelected),
             );
         }
-        col = col.push(
+        action_row = action_row.push(
             button(w::icon_label(
                 icons::export().size(14),
                 fonts::body(format!("Export textures ({})", textures.len())),
             ))
             .on_press(Message::TextureExport),
         );
+        col = col.push(action_row);
         if textures.len() > 1 {
             let mut sel_row = Row::new()
                 .spacing(4)
@@ -827,22 +832,41 @@ impl App {
                     iced::widget::scrollable::Scrollbar::new().scroller_width(10.0),
                 ));
             col = col.push(
-                column![
+                row![
                     fonts::caption(format!("Texture {}/{}", tex_idx + 1, textures.len())),
                     slot_rail,
                 ]
-                .spacing(2),
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .width(Length::Fill),
             );
         }
-        col = col.push(label_value_owned("Name", tex.name.clone()));
-        col = col.push(label_value_owned(
-            "Format",
-            format!("{} ({}×{})", tex.format_name, tex.width, tex.height),
-        ));
-        col = col.push(label_value_owned(
-            "Alpha",
-            if tex.has_alpha { "Yes" } else { "No" }.to_string(),
-        ));
+        let texture_meta = row![
+            row![fonts::header("Name:"), fonts::body(tex.name.clone())]
+                .spacing(3)
+                .align_y(Alignment::Center),
+            Space::new().width(Length::Fill),
+            row![
+                fonts::header("Format:"),
+                fonts::body(format!(
+                    "{} ({}×{})",
+                    tex.format_name, tex.width, tex.height
+                )),
+            ]
+            .spacing(3)
+            .align_y(Alignment::Center),
+            row![
+                fonts::header("Alpha:"),
+                fonts::body(if tex.has_alpha { "Yes" } else { "No" }),
+            ]
+            .spacing(3)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .width(Length::Fill)
+        .wrap();
+        col = col.push(texture_meta);
 
         let scene_matches = self.viewer_scene_matches_selection();
         let uv_triangles = self.viewer3d_handle.with(|inner| {
@@ -856,21 +880,13 @@ impl App {
         let uv_toggle = checkbox(self.show_texture_uv && !uv_triangles.is_empty())
             .label("Show UV map")
             .on_toggle_maybe((!uv_triangles.is_empty()).then_some(Message::TextureUvToggled));
-        col = col.push(
-            row![
-                uv_toggle,
-                if uv_triangles.is_empty() {
-                    fonts::caption("Load matching NIF geometry in the 3D view to enable UVs")
-                } else {
-                    fonts::caption(format!("{} triangles", uv_triangles.len()))
-                },
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-        );
-
+        let uv_status = if uv_triangles.is_empty() {
+            fonts::caption("Load matching NIF geometry to enable UVs")
+        } else {
+            fonts::caption(format!("{} triangles", uv_triangles.len()))
+        };
         let grid_toggle = checkbox(self.show_texture_grid)
-            .label("Show grid")
+            .label("Grid")
             .on_toggle(Message::ViewTextureGridToggled);
         let mut grid_size_row = Row::new().spacing(3).align_y(Alignment::Center);
         for divisions in crate::config::ALLOWED_GRID_DIVISIONS {
@@ -885,10 +901,18 @@ impl App {
             grid_size_row = grid_size_row.push(size_button);
         }
         col = col.push(
-            row![grid_toggle, fonts::caption("Grid size:"), grid_size_row]
-                .spacing(6)
-                .align_y(Alignment::Center)
-                .wrap(),
+            row![
+                uv_toggle,
+                uv_status,
+                Space::new().width(Length::Fill),
+                grid_toggle,
+                fonts::caption("Size:"),
+                grid_size_row
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .width(Length::Fill)
+            .wrap(),
         );
 
         // Lazily build the Iced image handle once per texture and cache it on
@@ -898,59 +922,19 @@ impl App {
             .handle
             .get_or_init(|| image::Handle::from_rgba(tex.width, tex.height, tex.rgba.clone()))
             .clone();
-        let show_view_overlay = self.show_texture_grid;
-        let view_overlay = canvas::Canvas::new(crate::ui::texture_preview::TextureViewOverlay {
-            image_width: tex.width,
-            image_height: tex.height,
-            show_grid: self.show_texture_grid,
-            grid_divisions: self.texture_grid_divisions,
-        })
-        .width(Length::Fill)
-        .height(Length::Fill);
-        let preview: Element<'_, Message> = if self.show_texture_uv && !uv_triangles.is_empty() {
-            let image_layer = image(handle)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .content_fit(iced::ContentFit::Contain)
-                .into();
-            let uv_layer = canvas::Canvas::new(crate::ui::texture_preview::TextureUvOverlay {
+        let preview: Element<'_, Message> =
+            canvas::Canvas::new(crate::ui::texture_preview::TextureViewport {
+                handle,
                 image_width: tex.width,
                 image_height: tex.height,
-                triangles: uv_triangles,
+                show_grid: self.show_texture_grid,
+                grid_divisions: self.texture_grid_divisions,
+                show_uv: self.show_texture_uv && !uv_triangles.is_empty(),
+                uv_triangles,
             })
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
-            if show_view_overlay {
-                stack(vec![image_layer, uv_layer, view_overlay.into()])
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into()
-            } else {
-                stack(vec![image_layer, uv_layer])
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into()
-            }
-        } else if show_view_overlay {
-            // The overlay canvas ignores events, so scroll-to-zoom on the
-            // Viewer underneath keeps working.
-            let viewer_layer = image::Viewer::new(handle)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .content_fit(iced::ContentFit::Contain)
-                .into();
-            stack(vec![viewer_layer, view_overlay.into()])
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-        } else {
-            image::Viewer::new(handle)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .content_fit(iced::ContentFit::Contain)
-                .into()
-        };
         col = col.push(preview);
         col.into()
     }

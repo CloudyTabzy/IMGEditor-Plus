@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use iced::widget::canvas;
-use iced::{Color, Point, Rectangle, Size, Theme, mouse};
+use iced::widget::{canvas, image};
+use iced::{Color, Point, Rectangle, Size, Theme, Vector, mouse};
 
 use crate::inspector::scene3d::mesh::SceneMesh;
 use crate::inspector::scene3d::scene::Scene;
@@ -12,66 +12,269 @@ use crate::parser::DecodedTexture;
 
 pub type UvTriangle = [[f32; 2]; 3];
 
-/// A fit-to-preview UV overlay. It intentionally has no interaction state:
-/// the image and the overlay use the same contain rectangle, so the mapping
-/// stays aligned instead of drifting with a separate zoom/pan state.
+/// A texture viewport that owns image navigation and every visual layer that
+/// follows the image. Keeping these in one canvas makes zooming and panning
+/// apply identically to the texture, grid, and UV topology.
 #[derive(Debug, Clone)]
-pub struct TextureUvOverlay {
+pub struct TextureViewport {
+    pub handle: image::Handle,
     pub image_width: u32,
     pub image_height: u32,
-    pub triangles: Vec<UvTriangle>,
+    pub show_grid: bool,
+    pub grid_divisions: u32,
+    pub show_uv: bool,
+    pub uv_triangles: Vec<UvTriangle>,
 }
 
-impl<Message> canvas::Program<Message> for TextureUvOverlay {
-    type State = ();
+/// Local interaction state for [`TextureViewport`]. The handle is retained so
+/// a newly selected texture starts with a clean fit instead of inheriting the
+/// previous texture's zoom and pan.
+#[derive(Debug, Clone)]
+pub struct TextureViewportState {
+    scale: f32,
+    starting_offset: Vector,
+    current_offset: Vector,
+    cursor_grabbed_at: Option<Point>,
+    handle: Option<image::Handle>,
+}
+
+impl Default for TextureViewportState {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            starting_offset: Vector::default(),
+            current_offset: Vector::default(),
+            cursor_grabbed_at: None,
+            handle: None,
+        }
+    }
+}
+
+impl TextureViewportState {
+    fn reset_for(&mut self, handle: &image::Handle) {
+        if self.handle.as_ref() == Some(handle) {
+            return;
+        }
+        self.scale = 1.0;
+        self.starting_offset = Vector::default();
+        self.current_offset = Vector::default();
+        self.cursor_grabbed_at = None;
+        self.handle = Some(handle.clone());
+    }
+
+    fn matches(&self, handle: &image::Handle) -> bool {
+        self.handle.as_ref() == Some(handle)
+    }
+}
+
+const TEXTURE_MIN_SCALE: f32 = 0.25;
+const TEXTURE_MAX_SCALE: f32 = 10.0;
+const TEXTURE_SCALE_STEP: f32 = 0.10;
+
+impl<Message: 'static> canvas::Program<Message> for TextureViewport {
+    type State = TextureViewportState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        state.reset_for(&self.handle);
+
+        match event {
+            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                let Some(cursor_position) = cursor.position_over(bounds) else {
+                    return None;
+                };
+                let y = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => {
+                        *y
+                    }
+                };
+                let previous_scale = state.scale;
+                let can_zoom = (y < 0.0 && previous_scale > TEXTURE_MIN_SCALE)
+                    || (y > 0.0 && previous_scale < TEXTURE_MAX_SCALE);
+
+                if can_zoom {
+                    state.scale = (if y > 0.0 {
+                        state.scale * (1.0 + TEXTURE_SCALE_STEP)
+                    } else {
+                        state.scale / (1.0 + TEXTURE_SCALE_STEP)
+                    })
+                    .clamp(TEXTURE_MIN_SCALE, TEXTURE_MAX_SCALE);
+
+                    let scaled_size = texture_image_size(
+                        self.image_width,
+                        self.image_height,
+                        bounds.size(),
+                        state.scale,
+                    );
+                    let factor = state.scale / previous_scale - 1.0;
+                    let cursor_to_center = cursor_position - bounds.center();
+                    let adjustment = cursor_to_center * factor + state.current_offset * factor;
+
+                    state.current_offset = Vector::new(
+                        if scaled_size.width > bounds.width {
+                            state.current_offset.x + adjustment.x
+                        } else {
+                            0.0
+                        },
+                        if scaled_size.height > bounds.height {
+                            state.current_offset.y + adjustment.y
+                        } else {
+                            0.0
+                        },
+                    );
+                }
+
+                Some(canvas::Action::request_redraw().and_capture())
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let Some(cursor_position) = cursor.position_over(bounds) else {
+                    return None;
+                };
+                state.cursor_grabbed_at = Some(cursor_position);
+                state.starting_offset = state.current_offset;
+                Some(canvas::Action::capture())
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                if state.cursor_grabbed_at.take().is_some() {
+                    Some(canvas::Action::capture())
+                } else {
+                    None
+                }
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                let Some(origin) = state.cursor_grabbed_at else {
+                    return None;
+                };
+                let scaled_size = texture_image_size(
+                    self.image_width,
+                    self.image_height,
+                    bounds.size(),
+                    state.scale,
+                );
+                let hidden_width = (scaled_size.width - bounds.width / 2.0).max(0.0).round();
+                let hidden_height = (scaled_size.height - bounds.height / 2.0).max(0.0).round();
+                let delta = *position - origin;
+                let x = if bounds.width < scaled_size.width {
+                    (state.starting_offset.x - delta.x).clamp(-hidden_width, hidden_width)
+                } else {
+                    0.0
+                };
+                let y = if bounds.height < scaled_size.height {
+                    (state.starting_offset.y - delta.y).clamp(-hidden_height, hidden_height)
+                } else {
+                    0.0
+                };
+                state.current_offset = Vector::new(x, y);
+                Some(canvas::Action::request_redraw().and_capture())
+            }
+            _ => None,
+        }
+    }
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &iced::Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let image_rect = contain_rect(self.image_width, self.image_height, bounds.size());
-
-        frame.stroke_rectangle(
-            Point::new(image_rect.x, image_rect.y),
-            image_rect.size(),
-            canvas::Stroke::default()
-                .with_color(Color::from_rgba(0.35, 0.9, 0.95, 0.7))
-                .with_width(1.0),
+        let default_state = TextureViewportState::default();
+        let state = if state.matches(&self.handle) {
+            state
+        } else {
+            &default_state
+        };
+        let image_rect = texture_image_rect(
+            self.image_width,
+            self.image_height,
+            bounds.size(),
+            state.scale,
+            state.current_offset,
         );
 
-        let stroke = canvas::Stroke::default()
-            .with_color(Color::from_rgba(1.0, 0.84, 0.22, 0.95))
-            .with_width(1.2)
-            .with_line_join(canvas::LineJoin::Round)
-            .with_line_cap(canvas::LineCap::Round);
-        for triangle in &self.triangles {
-            for edge in [(0, 1), (1, 2), (2, 0)] {
-                for segment in wrapped_uv_edge(triangle[edge.0], triangle[edge.1]) {
-                    let points = segment.map(|uv| uv_to_point(image_rect, uv));
-                    frame.stroke(&canvas::Path::line(points[0], points[1]), stroke);
-                }
-            }
+        frame.draw_image(image_rect, canvas::Image::new(&self.handle).snap(true));
+        if self.show_grid {
+            draw_grid(&mut frame, image_rect, self.grid_divisions);
+        }
+        if self.show_uv {
+            draw_uv_triangles(&mut frame, image_rect, &self.uv_triangles);
         }
 
         vec![frame.into_geometry()]
     }
+
+    fn mouse_interaction(
+        &self,
+        state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        let is_grabbed = state.matches(&self.handle) && state.cursor_grabbed_at.is_some();
+        if is_grabbed {
+            mouse::Interaction::Grabbing
+        } else if cursor.is_over(bounds) {
+            mouse::Interaction::Grab
+        } else {
+            mouse::Interaction::None
+        }
+    }
 }
 
-/// Optional grid overlay over the texture preview, drawn on the same
-/// `Contain` rectangle the image is displayed in so lines stay aligned with
-/// the texture regardless of the preview pane size.
-#[derive(Debug, Clone)]
-pub struct TextureViewOverlay {
-    pub image_width: u32,
-    pub image_height: u32,
-    pub show_grid: bool,
-    /// Number of grid cells per axis. Only honored when `show_grid`.
-    pub grid_divisions: u32,
+fn texture_image_size(image_width: u32, image_height: u32, available: Size, scale: f32) -> Size {
+    let base = contain_rect(image_width, image_height, available);
+    Size::new(base.width * scale, base.height * scale)
+}
+
+fn clamp_offset(offset: Vector, image_size: Size, available: Size) -> Vector {
+    let hidden_width = (image_size.width - available.width / 2.0).max(0.0).round();
+    let hidden_height = (image_size.height - available.height / 2.0)
+        .max(0.0)
+        .round();
+    Vector::new(
+        offset.x.clamp(-hidden_width, hidden_width),
+        offset.y.clamp(-hidden_height, hidden_height),
+    )
+}
+
+fn texture_image_rect(
+    image_width: u32,
+    image_height: u32,
+    available: Size,
+    scale: f32,
+    offset: Vector,
+) -> Rectangle {
+    let image_size = texture_image_size(image_width, image_height, available, scale);
+    let offset = clamp_offset(offset, image_size, available);
+    Rectangle::new(
+        Point::new(
+            (available.width - image_size.width) * 0.5 - offset.x,
+            (available.height - image_size.height) * 0.5 - offset.y,
+        ),
+        image_size,
+    )
+}
+
+fn draw_uv_triangles(frame: &mut canvas::Frame, image_rect: Rectangle, triangles: &[UvTriangle]) {
+    let stroke = canvas::Stroke::default()
+        .with_color(Color::from_rgba(1.0, 0.84, 0.22, 0.95))
+        .with_width(1.2)
+        .with_line_join(canvas::LineJoin::Round)
+        .with_line_cap(canvas::LineCap::Round);
+    for triangle in triangles {
+        for edge in [(0, 1), (1, 2), (2, 0)] {
+            for segment in wrapped_uv_edge(triangle[edge.0], triangle[edge.1]) {
+                let points = segment.map(|uv| uv_to_point(image_rect, uv));
+                frame.stroke(&canvas::Path::line(points[0], points[1]), stroke);
+            }
+        }
+    }
 }
 
 /// Every Nth internal grid line renders as a major line.
@@ -84,31 +287,6 @@ const GRID_MINOR_DARK: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.25);
 const GRID_MINOR_LIGHT: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.28);
 const GRID_MAJOR_DARK: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.45);
 const GRID_MAJOR_LIGHT: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.45);
-
-impl<Message: 'static> canvas::Program<Message> for TextureViewOverlay {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &iced::Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<canvas::Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let image_rect = contain_rect(self.image_width, self.image_height, bounds.size());
-        if image_rect.width <= 0.0 || image_rect.height <= 0.0 {
-            return vec![frame.into_geometry()];
-        }
-
-        if self.show_grid {
-            draw_grid(&mut frame, image_rect, self.grid_divisions);
-        }
-
-        vec![frame.into_geometry()]
-    }
-}
 
 fn draw_grid(frame: &mut canvas::Frame, rect: Rectangle, divisions: u32) {
     let divisions = divisions.max(1);
@@ -387,6 +565,84 @@ mod tests {
         let rect = contain_rect(100, 50, Size::new(300.0, 300.0));
         assert_eq!(rect.size(), Size::new(300.0, 150.0));
         assert_eq!(rect.position(), Point::new(0.0, 75.0));
+    }
+
+    #[test]
+    fn viewport_transform_is_shared_by_image_grid_and_uv_layers() {
+        let rect = texture_image_rect(
+            100,
+            100,
+            Size::new(400.0, 200.0),
+            2.0,
+            Vector::new(25.0, -10.0),
+        );
+        assert_eq!(rect.size(), Size::new(400.0, 400.0));
+        assert_eq!(rect.position(), Point::new(-25.0, -90.0));
+        assert_eq!(uv_to_point(rect, [0.0, 0.0]), rect.position());
+        assert_eq!(uv_to_point(rect, [1.0, 1.0]), Point::new(375.0, 310.0));
+    }
+
+    #[test]
+    fn viewport_state_resets_when_texture_changes() {
+        let first = image::Handle::from_rgba(1, 1, vec![255, 0, 0, 255]);
+        let second = image::Handle::from_rgba(1, 1, vec![0, 255, 0, 255]);
+        let mut state = TextureViewportState::default();
+
+        state.reset_for(&first);
+        state.scale = 3.0;
+        state.current_offset = Vector::new(12.0, -8.0);
+        state.reset_for(&first);
+        assert_eq!(state.scale, 3.0);
+        assert_eq!(state.current_offset, Vector::new(12.0, -8.0));
+
+        state.reset_for(&second);
+        assert_eq!(state.scale, 1.0);
+        assert_eq!(state.current_offset, Vector::default());
+        assert!(state.cursor_grabbed_at.is_none());
+    }
+
+    #[test]
+    fn viewport_zoom_and_pan_capture_events() {
+        let handle = image::Handle::from_rgba(2, 2, vec![255; 16]);
+        let viewport = TextureViewport {
+            handle,
+            image_width: 400,
+            image_height: 200,
+            show_grid: true,
+            grid_divisions: 16,
+            show_uv: true,
+            uv_triangles: Vec::new(),
+        };
+        let bounds = Rectangle::new(Point::new(10.0, 20.0), Size::new(400.0, 200.0));
+        let cursor = mouse::Cursor::Available(Point::new(110.0, 70.0));
+        let wheel = canvas::Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        });
+        let mut state = TextureViewportState::default();
+
+        assert!(
+            <TextureViewport as canvas::Program<()>>::update(
+                &viewport, &mut state, &wheel, bounds, cursor,
+            )
+            .is_some()
+        );
+        assert!(state.scale > 1.0);
+
+        let press = canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        <TextureViewport as canvas::Program<()>>::update(
+            &viewport, &mut state, &press, bounds, cursor,
+        );
+        let moved = canvas::Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::new(130.0, 100.0),
+        });
+        <TextureViewport as canvas::Program<()>>::update(
+            &viewport,
+            &mut state,
+            &moved,
+            bounds,
+            mouse::Cursor::Available(Point::new(130.0, 100.0)),
+        );
+        assert_ne!(state.current_offset, Vector::default());
     }
 
     #[test]

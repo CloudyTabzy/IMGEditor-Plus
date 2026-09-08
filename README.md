@@ -56,7 +56,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Rotating view-axis gizmo** — the small XYZ widget in the corner tracks the camera as it orbits
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
-- ✅ **284 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against real Bully fixtures
+- ✅ **287 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against real Bully fixtures
 
 ---
 
