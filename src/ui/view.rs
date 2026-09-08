@@ -1588,11 +1588,10 @@ fn build_context_menu(
         iced::widget::Column::with_children(items)
             .spacing(4)
             .padding(8)
-            // A shrink-width column measures the icon before its Fill label,
-            // which leaves long context actions with almost no text width.
-            .width(Length::Fill)
-            .max_width(CONTEXT_MENU_WIDTH),
+            .width(Length::Fill),
     )
+    // Keep the outer card compact while giving its Fill labels a real width to use.
+    .width(Length::Fixed(CONTEXT_MENU_WIDTH))
     .style(|theme: &iced::Theme| iced::widget::container::Style {
         background: Some(theme.extended_palette().background.base.color.into()),
         border: Border {
