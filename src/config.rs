@@ -230,11 +230,8 @@ pub struct Config {
     pub default_sort_chain: SortChain,
     pub update_check_enabled: bool,
     pub update_notify_disabled: bool,
-    pub fast_export: bool,
     /// Texture tab: show the proportional grid overlay.
     pub show_texture_grid: bool,
-    /// Texture tab: show Photoshop-style pixel rulers + cursor readout.
-    pub show_texture_rulers: bool,
     /// Texture tab: grid cells per axis (see `ALLOWED_GRID_DIVISIONS`).
     pub texture_grid_divisions: u32,
     /// Enable the interaction motion layer (selection feedback, ripples,
@@ -248,8 +245,8 @@ pub struct Config {
     pub icon_micro_motion_enabled: bool,
 }
 
-/// Grid divisions offered in the View menu. Kept coarse so grid lines
-/// stay readable across the small texture-tab preview.
+/// Grid divisions offered in the texture preview controls. Kept coarse so
+/// grid lines stay readable across the small texture-tab preview.
 pub const ALLOWED_GRID_DIVISIONS: [u32; 3] = [8, 16, 32];
 
 fn clamp_grid_divisions(v: u32) -> u32 {
@@ -272,9 +269,7 @@ impl Default for Config {
             default_sort_chain: SortChain::default(),
             update_check_enabled: true,
             update_notify_disabled: false,
-            fast_export: false,
             show_texture_grid: false,
-            show_texture_rulers: false,
             texture_grid_divisions: 16,
             motion_enabled: true,
             selection_pulse_enabled: true,
@@ -426,14 +421,8 @@ impl Config {
                 "update_notify_disabled" => {
                     config.update_notify_disabled = value.eq_ignore_ascii_case("true");
                 }
-                "fast_export" => {
-                    config.fast_export = value.eq_ignore_ascii_case("true");
-                }
                 "show_texture_grid" => {
                     config.show_texture_grid = value.eq_ignore_ascii_case("true");
-                }
-                "show_texture_rulers" => {
-                    config.show_texture_rulers = value.eq_ignore_ascii_case("true");
                 }
                 "texture_grid_divisions" => {
                     if let Ok(divisions) = value.parse::<u32>() {
@@ -543,22 +532,8 @@ impl Config {
         )?;
         writeln!(
             file,
-            "fast_export={}",
-            if self.fast_export { "true" } else { "false" }
-        )?;
-        writeln!(
-            file,
             "show_texture_grid={}",
             if self.show_texture_grid {
-                "true"
-            } else {
-                "false"
-            }
-        )?;
-        writeln!(
-            file,
-            "show_texture_rulers={}",
-            if self.show_texture_rulers {
                 "true"
             } else {
                 "false"
@@ -664,9 +639,7 @@ mod tests {
             default_sort_chain: SortChain::default(),
             update_check_enabled: false,
             update_notify_disabled: true,
-            fast_export: true,
             show_texture_grid: true,
-            show_texture_rulers: true,
             texture_grid_divisions: 32,
             motion_enabled: false,
             selection_pulse_enabled: false,
@@ -697,9 +670,7 @@ mod tests {
             &canonical_b
         );
         assert!(!loaded.update_check_enabled);
-        assert!(loaded.fast_export);
         assert!(loaded.show_texture_grid);
-        assert!(loaded.show_texture_rulers);
         assert_eq!(loaded.texture_grid_divisions, 32);
         assert!(!loaded.motion_enabled);
         assert!(!loaded.selection_pulse_enabled);
@@ -727,6 +698,26 @@ mod tests {
 
         let loaded = Config::load_from_path(&path);
         assert_eq!(loaded.theme, ThemeMode::Light);
+    }
+
+    #[test]
+    fn removed_preferences_are_not_persisted() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("legacy-settings.ini");
+        fs::write(
+            &path,
+            "fast_export=true\nshow_texture_rulers=true\nshow_texture_grid=true\n",
+        )
+        .unwrap();
+
+        let loaded = Config::load_from_path(&path);
+        assert!(loaded.show_texture_grid);
+
+        let saved_path = temp.path().join("current-settings.ini");
+        loaded.save_to_path(&saved_path).unwrap();
+        let saved = fs::read_to_string(saved_path).unwrap();
+        assert!(!saved.contains("fast_export="));
+        assert!(!saved.contains("show_texture_rulers="));
     }
 
     #[test]

@@ -924,10 +924,9 @@ mod tests {
         let out_dir = dir.path().join("export-zc");
         std::fs::create_dir_all(&out_dir).unwrap();
 
-        let (count, _) = ExportTask::new(archive, out_dir.clone(), ExportMode::All)
-            .engine(ExportEngine::ZeroCopy)
-            .run_blocking()
-            .unwrap();
+        let task = ExportTask::new(archive, out_dir.clone(), ExportMode::All);
+        assert_eq!(task.engine, ExportEngine::ZeroCopy);
+        let (count, _) = task.run_blocking().unwrap();
 
         assert_eq!(count, 2);
         assert_eq!(

@@ -35,7 +35,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Create / Open / Save / Save As** with version selection
 - ✅ **Import files** — single, multiple, or replace mode
 - ✅ **Export all or selected entries** — async with progress bar + cancel
-- ✅ **Three export engines** — `ZeroCopy` (default: mmap-direct writes, in-memory path resolution), `Parallel` (buffered chunked workers), `Fast` (C++-style sequential, via the "Fast export" checkbox)
+- ✅ **Zero-copy exports** — mmap-direct writes with in-memory path resolution and a buffered parallel fallback when a memory map is unavailable
 - ✅ **Two-pass sequential save** — rebuilds stream entry data straight from the source memory map; ~23 % faster rebuilds on large archives
 - ✅ **Memory-mapped reads** — instant open on large archives
 - ✅ **Multiple archive tabs** with dirty-file indicator
@@ -56,7 +56,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Rotating view-axis gizmo** — the small XYZ widget in the corner tracks the camera as it orbits
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
-- ✅ **257 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against real Bully fixtures
+- ✅ **284 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, and headless wgpu against real Bully fixtures
 
 ---
 
@@ -66,12 +66,9 @@ By default, exports use the **`ZeroCopy` engine**: entry data is written
 straight from the memory-mapped archive (no intermediate buffers, no per-entry
 allocations), output paths are pre-resolved in memory instead of per-file disk
 checks, and Rayon work-steals per entry. The GUI stays responsive and you can
-cancel mid-export.
-
-Two alternatives remain: `Parallel` (chunked buffered workers, used as the
-fallback when no mmap is available) and **`Fast`** (single-threaded, mirrors
-the original C++ benchmark), selectable via the "Fast export" checkbox in the
-info panel. The setting is persisted to `settings.ini` as `fast_export`.
+cancel mid-export. When a memory map is unavailable, the implementation
+automatically falls back to buffered parallel workers. There is no separate
+speed toggle to configure or persist.
 
 **Measured on Bully `World.img` (1.93 GB, 11,980 entries):** ZeroCopy beat the
 reference C++ benchmark in every interleaved round — median **22.4 s vs

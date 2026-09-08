@@ -18,7 +18,7 @@ Date: 2026-06-18
 - **Two-pass zero-copy save/rebuild**: layout from metadata alone, then
   sequential buffered directory + data passes streaming from the mmap.
   Rebuild of `World.img`: **8.6 s → 6.6 s median (~23 %)**.
-- Test suite is now **257 tests** (77 at the original writing below).
+- Test suite is now **284 tests** (77 at the original writing below).
 
 The sections below are kept as the historical record of the first benchmark
 round.
@@ -36,7 +36,7 @@ architecture.
 | Metric | C++ | Rust | Winner |
 |---|---|---|---|
 | Warm-cache export (median) | 24.650 s | **23.093 s** (Fast engine) | Rust (+6.7 %) |
-| Warm-cache export (default) | 24.650 s | 23.204 s (Parallel engine) | Rust (+5.9 %) |
+| Warm-cache export (historical Parallel default) | 24.650 s | 23.204 s (Parallel engine) | Rust (+5.9 %) |
 | Export cancellation | Not implemented | **< 2 s stop time** | Rust |
 | UI responsiveness during export | Blocks main thread | **Stays interactive** | Rust |
 | Memory safety | Manual (`new`/`delete`) | **Compile-time guarantees** | Rust |
@@ -79,8 +79,10 @@ archive once per entry, reads the bytes, and writes the output with a 1 MiB
 - Cheaper string/error handling (`CompactString`, `anyhow`)
 - No virtual-function overhead from `std::streambuf`
 
-The `Parallel` engine keeps per-worker source handles and remains the default
-because it should perform better when the archive is not already in RAM.
+The `Parallel` engine keeps per-worker source handles and is retained as the
+automatic fallback when a memory map is unavailable. `ZeroCopy` is the GUI's
+default; the legacy `Fast` path remains available internally for benchmark and
+regression comparisons, but is no longer exposed as a user setting.
 
 ---
 

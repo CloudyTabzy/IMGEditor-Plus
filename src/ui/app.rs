@@ -23,9 +23,8 @@ use crate::parser::{
     DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
 };
 use crate::tasks::{
-    ExportEngine, ExportMode, ExportTask, FolderDuplicatePolicy, FolderImportOutcome,
-    FolderImportPlan, FolderImportSummary, FolderImportTask, PackOutcome, PackTask, SaveTask,
-    scan_import_folder,
+    ExportMode, ExportTask, FolderDuplicatePolicy, FolderImportOutcome, FolderImportPlan,
+    FolderImportSummary, FolderImportTask, PackOutcome, PackTask, SaveTask, scan_import_folder,
 };
 use crate::ui::animator::Animator;
 use crate::ui::design::Design;
@@ -144,7 +143,6 @@ pub enum Message {
         index: usize,
         result: Result<(usize, Vec<String>), String>,
     },
-    FastExportToggled(bool),
 
     SelectAll,
     InvertSelection,
@@ -218,7 +216,6 @@ pub enum Message {
     TextureExportFolderResult(Option<PathBuf>),
     TextureUvToggled(bool),
     ViewTextureGridToggled(bool),
-    ViewTextureRulersToggled(bool),
     ViewTextureGridSize(u32),
     ToggleMotionEffects(bool),
     ToggleSelectionPulse(bool),
@@ -447,7 +444,6 @@ pub struct App {
     /// value without committing cleanly resets the UI.
     pub drag_state: Option<crate::ui::drag::DragState>,
     pub last_export_selected_only: bool,
-    pub fast_export: bool,
     pub panes: pane_grid::State<Pane>,
     pub context_menu: Option<(usize, usize)>,
     pub inspected_entry: Option<(usize, EntryInspection)>,
@@ -455,11 +451,8 @@ pub struct App {
     pub selected_texture: usize,
     /// Whether the texture tab should draw the matching NIF UV layout.
     pub show_texture_uv: bool,
-    /// Texture tab: Photoshop-style grid overlay (View → Show Grid).
+    /// Texture tab: Photoshop-style grid overlay.
     pub show_texture_grid: bool,
-    /// Texture tab: pixel rulers + cursor coordinate readout
-    /// (View → Show Rulers).
-    pub show_texture_rulers: bool,
     /// Grid cells per axis for the texture grid overlay.
     pub texture_grid_divisions: u32,
     /// Archive/entry identity of the scene currently shown in the 3D viewer.
@@ -497,13 +490,11 @@ impl Default for App {
 impl App {
     pub fn new(config: Config) -> Self {
         let show_welcome = !config.first_run_complete;
-        let fast_export = config.fast_export;
         let mut editor = Editor::new();
         editor.set_default_sort_chain(config.default_sort_chain.clone());
         // View preferences are mirrored onto App fields so the view
         // builder doesn't reach through `self.config` for hot UI state.
         let show_texture_grid = config.show_texture_grid;
-        let show_texture_rulers = config.show_texture_rulers;
         let texture_grid_divisions = config.texture_grid_divisions;
         let (panes, pane) = pane_grid::State::new(Pane::Table);
         let mut panes = panes;
@@ -532,14 +523,12 @@ impl App {
             update_check_manual: false,
             toast: None,
             pending_folder_import: None,
-            fast_export,
             panes,
             context_menu: None,
             inspected_entry: None,
             selected_texture: 0,
             show_texture_uv: false,
             show_texture_grid,
-            show_texture_rulers,
             texture_grid_divisions,
             active_viewer_entry: None,
             scroll_y: 0.0,
@@ -1188,14 +1177,6 @@ impl App {
                 iced::widget::operation::focus(iced::widget::Id::new(SEARCH_INPUT_ID))
             }
             Shortcut::CheckUpdates => Task::done(Message::CheckUpdatesManual),
-            Shortcut::ShowTextureGrid => {
-                let show = !self.show_texture_grid;
-                Task::done(Message::ViewTextureGridToggled(show))
-            }
-            Shortcut::ShowTextureRulers => {
-                let show = !self.show_texture_rulers;
-                Task::done(Message::ViewTextureRulersToggled(show))
-            }
         }
     }
 }
@@ -1544,11 +1525,7 @@ impl App {
                 if let Some(archive) = self.editor.selected_archive_mut() {
                     archive.last_export_folder = Some(folder.clone());
                 }
-                let task = ExportTask::new(archive, folder, mode).engine(if self.fast_export {
-                    ExportEngine::Fast
-                } else {
-                    ExportEngine::ZeroCopy
-                });
+                let task = ExportTask::new(archive, folder, mode);
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || task.run_blocking())
@@ -1560,13 +1537,6 @@ impl App {
                 )
             }
             Message::ExportFolderResult(None) => Task::none(),
-
-            Message::FastExportToggled(enabled) => {
-                self.fast_export = enabled;
-                self.config.fast_export = enabled;
-                self.save_config();
-                Task::none()
-            }
 
             Message::ExportCompleted { index, result } => {
                 if let Some(archive) = self.editor.archives_mut().get_mut(index) {
@@ -2432,13 +2402,6 @@ impl App {
                 Task::none()
             }
 
-            Message::ViewTextureRulersToggled(show) => {
-                self.show_texture_rulers = show;
-                self.config.show_texture_rulers = show;
-                self.save_config();
-                Task::none()
-            }
-
             Message::ViewTextureGridSize(divisions) => {
                 self.texture_grid_divisions = divisions;
                 self.config.texture_grid_divisions = divisions;
@@ -3296,73 +3259,35 @@ impl App {
 
         let option_menu = Menu::new(option_items).max_width(220.0);
 
-        // Photoshop-style View menu: toggles for the texture preview's
-        // grid + rulers, plus the grid density. The ●/○ markers mirror
-        // the Themes menu's selected-state convention.
+        // The View menu contains application-wide interaction preferences.
         let view_toggle = |on: bool| if on { "● " } else { "○ " };
-        let view_menu = Menu::new(
-            vec![
-                Item::new(menu_button(
-                    format!("{}Motion effects", view_toggle(self.config.motion_enabled)),
-                    Message::ToggleMotionEffects(!self.config.motion_enabled),
-                )),
-                Item::new(menu_button(
-                    format!(
-                        "{}Selection pulse",
-                        view_toggle(self.config.selection_pulse_enabled)
-                    ),
-                    Message::ToggleSelectionPulse(!self.config.selection_pulse_enabled),
-                )),
-                Item::new(menu_button(
-                    format!(
-                        "{}Click ripples",
-                        view_toggle(self.config.click_ripple_enabled)
-                    ),
-                    Message::ToggleClickRipple(!self.config.click_ripple_enabled),
-                )),
-                Item::new(menu_button(
-                    format!(
-                        "{}Icon micro-motion",
-                        view_toggle(self.config.icon_micro_motion_enabled)
-                    ),
-                    Message::ToggleIconMicroMotion(!self.config.icon_micro_motion_enabled),
-                )),
-                Item::new(menu_button(
-                    format!(
-                        "{}Show Grid ({})",
-                        view_toggle(self.show_texture_grid),
-                        shortcut_display(Shortcut::ShowTextureGrid)
-                    ),
-                    Message::ViewTextureGridToggled(!self.show_texture_grid),
-                )),
-                Item::new(menu_button(
-                    format!(
-                        "{}Show Rulers ({})",
-                        view_toggle(self.show_texture_rulers),
-                        shortcut_display(Shortcut::ShowTextureRulers)
-                    ),
-                    Message::ViewTextureRulersToggled(!self.show_texture_rulers),
-                )),
-                Item::new(menu_button("Grid divisions".to_string(), Message::Noop)),
-            ]
-            .into_iter()
-            .chain(
-                crate::config::ALLOWED_GRID_DIVISIONS
-                    .iter()
-                    .map(|divisions| {
-                        Item::new(menu_button(
-                            format!(
-                                "{}{} × {}",
-                                view_toggle(*divisions == self.texture_grid_divisions),
-                                divisions,
-                                divisions
-                            ),
-                            Message::ViewTextureGridSize(*divisions),
-                        ))
-                    }),
-            )
-            .collect(),
-        )
+        let view_menu = Menu::new(vec![
+            Item::new(menu_button(
+                format!("{}Motion effects", view_toggle(self.config.motion_enabled)),
+                Message::ToggleMotionEffects(!self.config.motion_enabled),
+            )),
+            Item::new(menu_button(
+                format!(
+                    "{}Selection pulse",
+                    view_toggle(self.config.selection_pulse_enabled)
+                ),
+                Message::ToggleSelectionPulse(!self.config.selection_pulse_enabled),
+            )),
+            Item::new(menu_button(
+                format!(
+                    "{}Click ripples",
+                    view_toggle(self.config.click_ripple_enabled)
+                ),
+                Message::ToggleClickRipple(!self.config.click_ripple_enabled),
+            )),
+            Item::new(menu_button(
+                format!(
+                    "{}Icon micro-motion",
+                    view_toggle(self.config.icon_micro_motion_enabled)
+                ),
+                Message::ToggleIconMicroMotion(!self.config.icon_micro_motion_enabled),
+            )),
+        ])
         .max_width(220.0);
 
         let help_menu = Menu::new(vec![

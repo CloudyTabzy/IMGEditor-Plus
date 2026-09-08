@@ -478,12 +478,6 @@ impl App {
             );
         }
 
-        col = col.push(
-            checkbox(self.fast_export)
-                .label("Fast export (C++ speed)")
-                .on_toggle(Message::FastExportToggled),
-        );
-
         col = col.push(rule::horizontal(1));
 
         if let Some((index, inspection)) = self.inspected_entry.as_ref()
@@ -875,6 +869,28 @@ impl App {
             .align_y(Alignment::Center),
         );
 
+        let grid_toggle = checkbox(self.show_texture_grid)
+            .label("Show grid")
+            .on_toggle(Message::ViewTextureGridToggled);
+        let mut grid_size_row = Row::new().spacing(3).align_y(Alignment::Center);
+        for divisions in crate::config::ALLOWED_GRID_DIVISIONS {
+            let size_button = button(fonts::caption(format!("{divisions}×{divisions}")))
+                .on_press(Message::ViewTextureGridSize(divisions))
+                .padding([3.0, 6.0]);
+            let size_button = if divisions == self.texture_grid_divisions {
+                size_button.style(button::primary)
+            } else {
+                size_button.style(button::text)
+            };
+            grid_size_row = grid_size_row.push(size_button);
+        }
+        col = col.push(
+            row![grid_toggle, fonts::caption("Grid size:"), grid_size_row]
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .wrap(),
+        );
+
         // Lazily build the Iced image handle once per texture and cache it on
         // the decoded texture. This avoids cloning the full RGBA buffer on every
         // frame while the texture tab is open.
@@ -882,12 +898,11 @@ impl App {
             .handle
             .get_or_init(|| image::Handle::from_rgba(tex.width, tex.height, tex.rgba.clone()))
             .clone();
-        let show_view_overlay = self.show_texture_grid || self.show_texture_rulers;
+        let show_view_overlay = self.show_texture_grid;
         let view_overlay = canvas::Canvas::new(crate::ui::texture_preview::TextureViewOverlay {
             image_width: tex.width,
             image_height: tex.height,
             show_grid: self.show_texture_grid,
-            show_rulers: self.show_texture_rulers,
             grid_divisions: self.texture_grid_divisions,
         })
         .width(Length::Fill)

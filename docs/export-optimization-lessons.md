@@ -241,17 +241,18 @@ bottleneck.
 
 ---
 
-## Design Decision: Offer Both Paths
+## Design Decision: ZeroCopy by Default
 
-To preserve the Rust port's safety and concurrency features while giving users
-a way to match C++ throughput, IMGEditor provides two export modes:
+IMGEditor now uses one user-facing export path. `ZeroCopy` is the default:
+entry data is written directly from the archive memory map, output paths are
+resolved in memory, and Rayon work-steals per entry. If a memory map is not
+available, the implementation automatically falls back to buffered parallel
+workers with per-worker readers and buffered writers. Both paths preserve UI
+responsiveness and cancellation support.
 
-- **Default (`Parallel`)**: chunked parallel export with `Rayon` + per-worker
-  4 MiB `BufReader` + 1 MiB `BufWriter`. Chosen for UI responsiveness and
-  cancellation support; throughput is within ~5 % of C++ on the test machine.
-- **Fast (`Fast`)**: a sequential export path that opens the source archive
-  **once per entry**, exactly like the C++ benchmark, plus a 1 MiB output
-  `BufWriter`. This is the fastest warm-cache configuration.
+The sequential `Fast` path is retained internally for benchmark and regression
+comparisons with the original C++ implementation. It is not exposed in the GUI
+or persisted as a user preference.
 
 Measured head-to-head (warm cache, 3 iterations):
 
@@ -261,11 +262,8 @@ Measured head-to-head (warm cache, 3 iterations):
 | Rust `Parallel` | 23.204 s | ~5.9 % faster |
 | Rust `Fast` | **23.093 s** | **~6.7 % faster** |
 
-The fast path does not remove or replace the default path. It is an option for
-users who want the fastest warm-cache export and C++-like predictability. The
-parallel path remains the default because it keeps the source file open per
-worker, which is expected to perform better on cold cache (archive not already
-in RAM).
+These benchmark rows are historical measurements; the GUI now selects
+`ZeroCopy` automatically and uses the buffered parallel path only when needed.
 
 ---
 
