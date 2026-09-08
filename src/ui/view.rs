@@ -32,6 +32,26 @@ fn logo_element() -> Element<'static, Message> {
     .into()
 }
 
+fn viewer_tooltip_content(label: &'static str) -> Element<'static, Message> {
+    container(fonts::caption(label))
+        .padding([6, 8])
+        .max_width(230.0)
+        .style(|theme: &iced::Theme| {
+            let palette = theme.extended_palette();
+            iced::widget::container::Style {
+                background: Some(palette.background.strong.color.into()),
+                text_color: Some(palette.background.strong.text),
+                border: Border {
+                    color: palette.primary.weak.color,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
 /// Height (px) of a single entry row. Must stay in sync with the `height(Length::Fixed(ROW_HEIGHT))`
 /// applied in `build_entry_row`; virtualization math depends on it.
 const ROW_HEIGHT: f32 = 32.0;
@@ -854,8 +874,8 @@ impl App {
             ))
             .on_press(Message::Viewer3dReset)
             .height(button_height),
-            fonts::caption("Re-fit the camera to the model. Shortcut: R"),
-            tooltip::Position::Bottom,
+            viewer_tooltip_content("Re-fit the camera to the model. Shortcut: R"),
+            tooltip::Position::Right,
         ));
         row = row.push(tooltip(
             button(w::icon_label(
@@ -864,8 +884,8 @@ impl App {
             ))
             .on_press(Message::Viewer3dClear)
             .height(button_height),
-            fonts::caption("Drop the loaded scene"),
-            tooltip::Position::Bottom,
+            viewer_tooltip_content("Drop the loaded scene"),
+            tooltip::Position::Right,
         ));
         row = row.push(
             checkbox(flags.contains(RenderFlags::WIREFRAME))
