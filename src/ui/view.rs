@@ -1588,7 +1588,10 @@ fn build_context_menu(
         iced::widget::Column::with_children(items)
             .spacing(4)
             .padding(8)
-            .width(Length::Shrink),
+            // A shrink-width column measures the icon before its Fill label,
+            // which leaves long context actions with almost no text width.
+            .width(Length::Fill)
+            .max_width(CONTEXT_MENU_WIDTH),
     )
     .style(|theme: &iced::Theme| iced::widget::container::Style {
         background: Some(theme.extended_palette().background.base.color.into()),
@@ -1622,6 +1625,7 @@ fn build_context_menu(
 
 const CONTEXT_MENU_EDGE_GAP: f32 = 8.0;
 const CONTEXT_MENU_LEFT_OFFSET: f32 = 12.0;
+const CONTEXT_MENU_WIDTH: f32 = 260.0;
 
 fn context_menu_translation(bounds: Rectangle, viewport: Rectangle, row_y: f32) -> Vector {
     let anchor_x = bounds.x + CONTEXT_MENU_LEFT_OFFSET;
