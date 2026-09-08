@@ -238,7 +238,10 @@ impl App {
                     let palette = theme.extended_palette();
                     iced::widget::container::Style {
                         background: Some(palette.primary.weak.color.into()),
-                        text_color: Some(palette.primary.weak.text),
+                        text_color: Some(w::readable_text_color(
+                            palette.primary.weak.color,
+                            palette.primary.weak.text,
+                        )),
                         ..Default::default()
                     }
                 } else {
@@ -289,6 +292,20 @@ impl App {
                 )
                 .set_active_tab(&self.selected_inspector_tab)
                 .tab_bar_height(Length::Fixed(32.0))
+                .tab_bar_style(|theme, status| {
+                    let mut style = iced_aw::style::tab_bar::primary(theme, status);
+                    let background = match style.tab_label_background {
+                        iced::Background::Color(color) => color,
+                        _ => theme.extended_palette().background.base.color,
+                    };
+                    let foreground = w::readable_text_color(
+                        background,
+                        theme.extended_palette().background.base.text,
+                    );
+                    style.text_color = foreground;
+                    style.icon_color = foreground;
+                    style
+                })
                 .text_size(13.0)
                 .text_font(bold_text)
                 .height(Length::Fill)
@@ -1256,7 +1273,7 @@ fn build_welcome(app: &App) -> Option<Element<'_, Message>> {
         "Welcome",
         column![
             container(logo_element())
-                .width(Length::Fill)
+                .width(Length::Fixed(350.0))
                 .align_x(iced::alignment::Horizontal::Center),
             Space::new().height(Length::Fixed(8.0)),
             fonts::display(format!(
@@ -1755,13 +1772,20 @@ fn sort_label(name: &str, active: bool, direction: SortDirection) -> String {
 }
 
 pub fn menu_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let highlighted = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    let highlight = palette.background.strong.color;
     button::Style {
-        background: if matches!(status, button::Status::Hovered | button::Status::Pressed) {
-            Some(theme.extended_palette().background.strong.color.into())
+        background: if highlighted {
+            Some(highlight.into())
         } else {
             None
         },
-        text_color: theme.extended_palette().background.base.text,
+        text_color: if highlighted {
+            w::readable_text_color(highlight, palette.background.base.text)
+        } else {
+            palette.background.base.text
+        },
         ..button::Style::default()
     }
 }

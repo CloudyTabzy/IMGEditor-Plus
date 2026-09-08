@@ -143,6 +143,18 @@ pub fn styled_tooltip<'a, Message: 'a>(
     iced::widget::tooltip(content, tooltip_card(hint), position)
 }
 
+/// Choose a foreground that remains readable on a solid background while
+/// retaining the theme's preferred color whenever it already has sufficient
+/// contrast.
+///
+/// Iced's palette helper uses the same contrast-aware logic as its built-in
+/// widget styles. Keeping this at the widget boundary prevents custom styles
+/// from accidentally pairing a light accent with light text.
+#[inline]
+pub fn readable_text_color(background: Color, preferred: Color) -> Color {
+    iced::theme::palette::readable(background, preferred)
+}
+
 /// Shared tooltip surface for all view-level hints.
 pub fn tooltip_card<'a, Message: 'a>(
     content: impl Into<Element<'a, Message>>,
@@ -152,9 +164,13 @@ pub fn tooltip_card<'a, Message: 'a>(
         .max_width(230.0)
         .style(|theme: &iced::Theme| {
             let palette = theme.extended_palette();
+            let background = palette.background.strong.color;
             iced::widget::container::Style {
-                background: Some(palette.background.strong.color.into()),
-                text_color: Some(palette.background.strong.text),
+                background: Some(background.into()),
+                text_color: Some(readable_text_color(
+                    background,
+                    palette.background.strong.text,
+                )),
                 border: Border {
                     color: palette.primary.weak.color,
                     width: 1.0,
@@ -311,4 +327,24 @@ pub fn root_column<'a, Message: 'a>() -> Column<'a, Message> {
         .spacing(0)
         .width(Length::Fill)
         .height(Length::Fill)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readable_text_color;
+    use iced::Color;
+
+    #[test]
+    fn readable_text_color_handles_light_and_dark_highlights() {
+        let light_highlight = Color::from_rgb(0.65, 0.75, 0.50);
+        let dark_highlight = Color::from_rgb(0.16, 0.20, 0.18);
+
+        let light_text = readable_text_color(light_highlight, Color::WHITE);
+        let dark_text = readable_text_color(dark_highlight, Color::WHITE);
+
+        assert!(light_text.is_readable_on(light_highlight));
+        assert!(dark_text.is_readable_on(dark_highlight));
+        assert_ne!(light_text, Color::WHITE);
+        assert_eq!(dark_text, Color::WHITE);
+    }
 }

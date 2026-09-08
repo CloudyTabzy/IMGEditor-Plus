@@ -3169,17 +3169,26 @@ fn menu_button_with_icon<'a>(
     .on_press(message)
     .width(iced::Length::Fill)
     .style(
-        |theme: &iced::Theme, status: iced::widget::button::Status| iced::widget::button::Style {
-            background: if matches!(
+        |theme: &iced::Theme, status: iced::widget::button::Status| {
+            let palette = theme.extended_palette();
+            let highlighted = matches!(
                 status,
                 iced::widget::button::Status::Hovered | iced::widget::button::Status::Pressed
-            ) {
-                Some(theme.extended_palette().background.strong.color.into())
-            } else {
-                None
-            },
-            text_color: theme.extended_palette().background.base.text,
-            ..iced::widget::button::Style::default()
+            );
+            let highlight = palette.background.strong.color;
+            iced::widget::button::Style {
+                background: if highlighted {
+                    Some(highlight.into())
+                } else {
+                    None
+                },
+                text_color: if highlighted {
+                    w::readable_text_color(highlight, palette.background.base.text)
+                } else {
+                    palette.background.base.text
+                },
+                ..iced::widget::button::Style::default()
+            }
         },
     )
     .into()
