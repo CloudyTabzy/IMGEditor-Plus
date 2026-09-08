@@ -278,6 +278,8 @@ impl App {
                     .height(Length::Fixed(ROW_HEIGHT))
                     .into(),
             ])
+            .width(Length::Fill)
+            .height(Length::Fixed(ROW_HEIGHT))
             .into()
         } else {
             cell.into()
@@ -296,7 +298,10 @@ impl App {
     }
 
     pub(crate) fn build_info_panel(&self) -> Element<'_, Message> {
-        let width = Length::Fixed(300.0);
+        // The pane grid owns the inspector width. Keeping this adaptive lets
+        // the preview use the entire pane instead of leaving a fixed-width
+        // column stranded on the left with a large blank region beside it.
+        let width = Length::Fill;
 
         let export_tab = self.build_export_tab();
         let model_tab = self.build_model_tab();
@@ -360,6 +365,8 @@ impl App {
                         .height(Length::Fixed(32.0))
                         .into(),
                 ])
+                .width(width)
+                .height(Length::Fixed(32.0))
                 .into()
             } else {
                 tab_bar.into()
@@ -1238,11 +1245,15 @@ pub fn build(app: &App) -> Element<'_, Message> {
                         .height(Length::Fixed(40.0))
                         .into(),
                 ])
+                .width(Length::Fill)
+                .height(Length::Fixed(40.0))
                 .into()
             } else {
                 row.into()
             };
         Container::new(row)
+            .width(Length::Fill)
+            .height(Length::Fixed(40.0))
             .style(move |_| iced::widget::container::Style {
                 background: Some(iced::Background::Color(tab_surface)),
                 ..Default::default()

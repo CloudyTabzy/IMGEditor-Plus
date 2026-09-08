@@ -798,8 +798,18 @@ impl App {
         Duration::from_millis(u64::from(motion.duration_ms))
     }
 
+    fn prepare_interaction_animation(&mut self) {
+        // The animation subscription is intentionally stopped while idle. Do
+        // not let the first tick of a new effect inherit the elapsed wall time
+        // from the previous subscription.
+        if self.animator.running_count() == 0 && self.toast.is_none() {
+            self.prev_tick = None;
+        }
+    }
+
     fn start_entry_feedback(&mut self, target: (usize, usize)) {
         if self.config.motion_enabled && self.config.selection_pulse_enabled {
+            self.prepare_interaction_animation();
             self.entry_feedback_target = Some(target);
             self.animator.animate(
                 ANIM_ENTRY_FEEDBACK,
@@ -816,6 +826,7 @@ impl App {
 
     fn start_archive_tab_feedback(&mut self, target: usize) {
         if self.config.motion_enabled && self.config.selection_pulse_enabled {
+            self.prepare_interaction_animation();
             self.archive_tab_feedback_target = Some(target);
             self.animator.animate(
                 ANIM_ARCHIVE_TAB_FEEDBACK,
@@ -832,6 +843,7 @@ impl App {
 
     fn start_inspector_tab_feedback(&mut self, target: InspectorTab) {
         if self.config.motion_enabled && self.config.selection_pulse_enabled {
+            self.prepare_interaction_animation();
             self.inspector_tab_feedback_target = Some(target);
             self.animator.animate(
                 ANIM_INSPECTOR_TAB_FEEDBACK,
@@ -848,6 +860,7 @@ impl App {
 
     fn start_click_ripple(&mut self, target: RippleTarget) {
         if self.config.motion_enabled && self.config.click_ripple_enabled {
+            self.prepare_interaction_animation();
             self.ripple = Some(RippleState {
                 target,
                 origin: self.last_pointer_position,
@@ -2069,11 +2082,18 @@ impl App {
                 }
                 // Reap finished animations to keep the animator lean.
                 self.animator.reap_finished();
+                self.prepare_interaction_animation();
                 Task::none()
             }
             Message::AnimationTick(now) => {
                 if let Some(prev) = self.prev_tick {
-                    let dt = now.duration_since(prev);
+                    // A window can be suspended or the subscription can be
+                    // restarted after a long idle period. Cap one frame so a
+                    // short interaction remains visible instead of completing
+                    // instantly after resume.
+                    let dt = now
+                        .saturating_duration_since(prev)
+                        .min(Duration::from_millis(50));
                     self.animator.update(dt);
                 }
                 self.prev_tick = Some(now);
@@ -2106,6 +2126,8 @@ impl App {
                 } else {
                     self.toast_start = None;
                 }
+
+                self.prepare_interaction_animation();
 
                 Task::none()
             }
@@ -3740,6 +3762,40 @@ mod tests {
             })
             .expect("entry click should create a ripple");
         assert_eq!(visual.origin, Some(pointer));
+    }
+
+    #[test]
+    fn clicking_another_entry_after_idle_restarts_visible_feedback() {
+        let mut app = test_app_with_entries();
+        let first_tick = std::time::Instant::now();
+
+        let _ = app.update(Message::EntryClicked(0));
+        let _ = app.update(Message::AnimationTick(first_tick));
+        for step in 1..=7 {
+            let _ = app.update(Message::AnimationTick(
+                first_tick + Duration::from_millis(50 * step),
+            ));
+        }
+        assert!(!app.animator.is_running(ANIM_ENTRY_FEEDBACK));
+        assert!(!app.animator.is_running(ANIM_CLICK_RIPPLE));
+
+        let _ = app.update(Message::EntryClicked(1));
+        let second_tick = first_tick + Duration::from_secs(5);
+        let _ = app.update(Message::AnimationTick(second_tick));
+        let _ = app.update(Message::AnimationTick(
+            second_tick + Duration::from_millis(50),
+        ));
+
+        assert!(app.animator.is_running(ANIM_ENTRY_FEEDBACK));
+        assert!(app.animator.is_running(ANIM_CLICK_RIPPLE));
+        assert!(app.entry_selection_pulse((0, 1)) > 0.0);
+        assert!(
+            app.ripple_visual(RippleTarget::Entry {
+                archive_index: 0,
+                entry_index: 1,
+            })
+            .is_some()
+        );
     }
 
     #[test]
