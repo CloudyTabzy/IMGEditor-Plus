@@ -133,6 +133,38 @@ pub fn floating_card<'a, Message: 'a>(
         })
 }
 
+/// Tooltip with a bounded, themed card so hints stay readable over compact
+/// panes and inherit the active light/dark palette.
+pub fn styled_tooltip<'a, Message: 'a>(
+    content: impl Into<Element<'a, Message>>,
+    hint: impl Into<Element<'a, Message>>,
+    position: iced::widget::tooltip::Position,
+) -> iced::widget::Tooltip<'a, Message> {
+    iced::widget::tooltip(content, tooltip_card(hint), position)
+}
+
+/// Shared tooltip surface for all view-level hints.
+pub fn tooltip_card<'a, Message: 'a>(
+    content: impl Into<Element<'a, Message>>,
+) -> Container<'a, Message> {
+    Container::new(content)
+        .padding([6, 8])
+        .max_width(230.0)
+        .style(|theme: &iced::Theme| {
+            let palette = theme.extended_palette();
+            iced::widget::container::Style {
+                background: Some(palette.background.strong.color.into()),
+                text_color: Some(palette.background.strong.text),
+                border: Border {
+                    color: palette.primary.weak.color,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            }
+        })
+}
+
 /// 3-pixel-wide left accent bar — used to mark the active archive tab.
 pub fn accent_bar<'a, Message: 'a>(color: Color, height: f32) -> Container<'a, Message> {
     Container::new(

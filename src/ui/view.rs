@@ -32,26 +32,6 @@ fn logo_element() -> Element<'static, Message> {
     .into()
 }
 
-fn viewer_tooltip_content(label: &'static str) -> Element<'static, Message> {
-    container(fonts::caption(label))
-        .padding([6, 8])
-        .max_width(230.0)
-        .style(|theme: &iced::Theme| {
-            let palette = theme.extended_palette();
-            iced::widget::container::Style {
-                background: Some(palette.background.strong.color.into()),
-                text_color: Some(palette.background.strong.text),
-                border: Border {
-                    color: palette.primary.weak.color,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..Default::default()
-            }
-        })
-        .into()
-}
-
 /// Height (px) of a single entry row. Must stay in sync with the `height(Length::Fixed(ROW_HEIGHT))`
 /// applied in `build_entry_row`; virtualization math depends on it.
 const ROW_HEIGHT: f32 = 32.0;
@@ -867,24 +847,24 @@ impl App {
             icons::model().size(14),
             fonts::caption("3D:"),
         ));
-        row = row.push(tooltip(
+        row = row.push(w::styled_tooltip(
             button(w::icon_label(
                 icons::refresh().size(14),
                 fonts::caption("Reset view"),
             ))
             .on_press(Message::Viewer3dReset)
             .height(button_height),
-            viewer_tooltip_content("Re-fit the camera to the model. Shortcut: R"),
+            fonts::caption("Re-fit the camera to the model. Shortcut: R"),
             tooltip::Position::Right,
         ));
-        row = row.push(tooltip(
+        row = row.push(w::styled_tooltip(
             button(w::icon_label(
                 icons::close().size(14),
                 fonts::caption("Clear"),
             ))
             .on_press(Message::Viewer3dClear)
             .height(button_height),
-            viewer_tooltip_content("Drop the loaded scene"),
+            fonts::caption("Drop the loaded scene"),
             tooltip::Position::Right,
         ));
         row = row.push(
@@ -1046,44 +1026,44 @@ fn toolbar_button(
 
 fn build_toolbar(accent: Color, bg: Color) -> Element<'static, Message> {
     let toolbar = row![
-        tooltip(
+        w::styled_tooltip(
             toolbar_button(icons::new_archive().size(18).into(), Message::NewArchive),
             fonts::body("New"),
             tooltip::Position::Bottom,
         ),
-        tooltip(
+        w::styled_tooltip(
             toolbar_button(icons::open_archive().size(18).into(), Message::OpenArchive),
             fonts::body("Open"),
             tooltip::Position::Bottom,
         ),
-        tooltip(
+        w::styled_tooltip(
             toolbar_button(icons::save().size(18).into(), Message::SaveArchive),
             fonts::body("Save"),
             tooltip::Position::Bottom,
         ),
-        tooltip(
+        w::styled_tooltip(
             toolbar_button(icons::pack().size(18).into(), Message::PackArchive),
             fonts::body("Pack archive"),
             tooltip::Position::Bottom,
         ),
         rule::vertical(1),
-        tooltip(
+        w::styled_tooltip(
             toolbar_button(icons::import().size(18).into(), Message::ImportFiles),
             fonts::body("Import"),
             tooltip::Position::Bottom,
         ),
-        tooltip(
+        w::styled_tooltip(
             toolbar_button(icons::open_archive().size(18).into(), Message::ImportFolder),
             fonts::body("Import folder"),
             tooltip::Position::Bottom,
         ),
-        tooltip(
+        w::styled_tooltip(
             toolbar_button(icons::export().size(18).into(), Message::ExportSelected),
             fonts::body("Export selected"),
             tooltip::Position::Bottom,
         ),
         rule::vertical(1),
-        tooltip(
+        w::styled_tooltip(
             toolbar_button(icons::delete().size(18).into(), Message::DeleteSelected),
             fonts::body("Delete selected"),
             tooltip::Position::Bottom,
@@ -1275,7 +1255,9 @@ fn build_welcome(app: &App) -> Option<Element<'_, Message>> {
     Some(modal_box(
         "Welcome",
         column![
-            logo_element(),
+            container(logo_element())
+                .width(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Center),
             Space::new().height(Length::Fixed(8.0)),
             fonts::display(format!(
                 "Welcome to {} v{}",
