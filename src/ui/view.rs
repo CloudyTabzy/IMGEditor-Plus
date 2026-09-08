@@ -934,13 +934,19 @@ impl App {
             render_image: false,
             ..image_viewport.clone()
         };
-        let preview: Element<'_, Message> = stack(vec![
-            canvas::Canvas::new(image_viewport).into(),
-            canvas::Canvas::new(overlay_viewport).into(),
-        ])
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into();
+        // Both layers must occupy the exact same panel bounds. `Canvas` uses
+        // a fixed intrinsic size by default, so constraining only the parent
+        // stack would leave the image and overlay in a small corner.
+        let image_layer = canvas::Canvas::new(image_viewport)
+            .width(Length::Fill)
+            .height(Length::Fill);
+        let overlay_layer = canvas::Canvas::new(overlay_viewport)
+            .width(Length::Fill)
+            .height(Length::Fill);
+        let preview: Element<'_, Message> = stack(vec![image_layer.into(), overlay_layer.into()])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
         col = col.push(preview);
         col.into()
     }
