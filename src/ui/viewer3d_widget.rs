@@ -799,10 +799,8 @@ impl ScenePipeline {
         // 4. optional wire overlay. The overlay pipeline reads the solid
         // model's depth without writing it, so hidden edges stay hidden and
         // visible edges remain legible without z-fighting the surface.
-        if flags.contains(RenderFlags::WIREFRAME)
-            && let Some(wireframe) = self.render_pipelines.wireframe.as_ref()
-        {
-            pass.set_pipeline(wireframe);
+        if flags.contains(RenderFlags::WIREFRAME) {
+            pass.set_pipeline(&self.render_pipelines.wireframe);
             pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
             for (gpu_mesh, tex) in &self.mesh_cache {
                 let bg: &wgpu::BindGroup = match tex {
@@ -811,8 +809,11 @@ impl ScenePipeline {
                 };
                 pass.set_bind_group(1, bg, &[]);
                 pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-                pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                pass.set_index_buffer(
+                    gpu_mesh.wire_index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..gpu_mesh.wire_index_count, 0, 0..1);
             }
         }
 

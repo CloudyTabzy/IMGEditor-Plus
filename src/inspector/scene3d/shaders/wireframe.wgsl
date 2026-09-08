@@ -37,5 +37,8 @@ fn vs_main(input: VertexIn) -> VertexOut {
 
 @fragment
 fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.65, 0.78, 0.92, 1.0);
+    // A dark, nearly opaque overlay keeps the topology readable over the
+    // viewer's light untextured fallback while remaining unobtrusive over
+    // saturated game textures.
+    return vec4<f32>(0.035, 0.045, 0.065, 0.95);
 }

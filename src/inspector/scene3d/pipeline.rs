@@ -24,6 +24,7 @@
 //! owned here and rebuilt only when the scene changes or the viewport
 //! resizes.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bytemuck::{Pod, Zeroable};
@@ -169,6 +170,11 @@ pub struct GpuMesh {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub index_count: u32,
+    /// Explicit line-list indices for the mesh edges. This is deliberately
+    /// separate from the triangle index buffer: wgpu's optional
+    /// `PolygonMode::Line` feature is not available on every backend.
+    pub wire_index_buffer: wgpu::Buffer,
+    pub wire_index_count: u32,
 }
 
 impl GpuMesh {
@@ -213,13 +219,60 @@ impl GpuMesh {
             contents: bytemuck::cast_slice(&mesh.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
+        let wire_indices = build_wire_indices(&mesh.indices);
+        let wire_index_count = wire_indices.len() as u32;
+        // wgpu rejects zero-sized buffers. Keep a valid placeholder for
+        // meshes without complete triangles, while leaving the draw count at
+        // zero so it cannot issue an out-of-bounds draw.
+        let wire_indices = if wire_indices.is_empty() {
+            vec![0_u32, 0]
+        } else {
+            wire_indices
+        };
+        let wire_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("imgeditor-scene3d/wire_index"),
+            contents: bytemuck::cast_slice(&wire_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
         let _ = queue;
         Self {
             vertex_buffer,
             index_buffer,
             index_count: mesh.indices.len() as u32,
+            wire_index_buffer,
+            wire_index_count,
         }
     }
+}
+
+/// Convert triangle-list indices into a deduplicated line-list index buffer.
+///
+/// The explicit edge list keeps the wire overlay portable: unlike
+/// `PolygonMode::Line`, it does not require an optional native-only device
+/// feature and it shows the actual triangle topology (including diagonal
+/// edges introduced when a polygon is triangulated).
+pub fn build_wire_indices(indices: &[u32]) -> Vec<u32> {
+    let mut seen = HashSet::with_capacity(indices.len());
+    let mut wire = Vec::with_capacity(indices.len().saturating_mul(2));
+
+    for triangle in indices.chunks_exact(3) {
+        let [a, b, c] = [triangle[0], triangle[1], triangle[2]];
+        if a == b || b == c || c == a {
+            continue;
+        }
+        for (first, second) in [(a, b), (b, c), (c, a)] {
+            let edge = if first < second {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            if seen.insert(edge) {
+                wire.extend_from_slice(&[edge.0, edge.1]);
+            }
+        }
+    }
+
+    wire
 }
 
 pub fn vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -393,7 +446,10 @@ pub fn default_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 pub struct ScenePipelines {
     pub lit: wgpu::RenderPipeline,
     pub lit_cull_back: wgpu::RenderPipeline,
-    pub wireframe: Option<wgpu::RenderPipeline>,
+    /// Portable explicit-edge pipeline. It uses `LineList` geometry and
+    /// `PolygonMode::Fill`, so it works even when `POLYGON_MODE_LINE` is not
+    /// exposed by the active graphics backend.
+    pub wireframe: wgpu::RenderPipeline,
     pub grid: wgpu::RenderPipeline,
     pub gizmo: wgpu::RenderPipeline,
     pub compositor: wgpu::RenderPipeline,
@@ -511,6 +567,7 @@ impl ScenePipelines {
             &lit_module,
             &pipeline_layout,
             scene_color_format(),
+            wgpu::PrimitiveTopology::TriangleList,
             wgpu::PolygonMode::Fill,
             None,
             true,
@@ -523,6 +580,7 @@ impl ScenePipelines {
             &lit_module,
             &pipeline_layout,
             scene_color_format(),
+            wgpu::PrimitiveTopology::TriangleList,
             wgpu::PolygonMode::Fill,
             Some(wgpu::Face::Back),
             true,
@@ -531,25 +589,19 @@ impl ScenePipelines {
             "imgeditor-scene3d/lit_cull_back_pipeline",
         );
 
-        let wireframe = if device
-            .features()
-            .contains(wgpu::Features::POLYGON_MODE_LINE)
-        {
-            Some(build_lit_pipeline(
-                device,
-                &wire_module,
-                &pipeline_layout,
-                scene_color_format(),
-                wgpu::PolygonMode::Line,
-                None,
-                false,
-                wgpu::CompareFunction::LessEqual,
-                wgpu::BlendState::ALPHA_BLENDING,
-                "imgeditor-scene3d/wireframe_pipeline",
-            ))
-        } else {
-            None
-        };
+        let wireframe = build_lit_pipeline(
+            device,
+            &wire_module,
+            &pipeline_layout,
+            scene_color_format(),
+            wgpu::PrimitiveTopology::LineList,
+            wgpu::PolygonMode::Fill,
+            None,
+            false,
+            wgpu::CompareFunction::LessEqual,
+            wgpu::BlendState::ALPHA_BLENDING,
+            "imgeditor-scene3d/wireframe_pipeline",
+        );
 
         let compositor = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("imgeditor-scene3d/compositor_pipeline"),
@@ -901,6 +953,7 @@ fn build_lit_pipeline(
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
+    topology: wgpu::PrimitiveTopology,
     polygon_mode: wgpu::PolygonMode,
     cull_mode: Option<wgpu::Face>,
     depth_write_enabled: bool,
@@ -928,7 +981,7 @@ fn build_lit_pipeline(
             })],
         }),
         primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
+            topology,
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
             cull_mode,
@@ -1077,5 +1130,19 @@ mod tests {
         assert_eq!(RenderFlags::WIREFRAME.bits(), 1 << 1);
         assert_eq!(RenderFlags::CULL_BACK.bits(), 1 << 2);
         assert_eq!(RenderFlags::SHOW_GRID.bits(), 1 << 3);
+    }
+
+    #[test]
+    fn wire_indices_deduplicate_shared_edges_and_keep_triangle_diagonals() {
+        let indices = [0, 1, 2, 2, 1, 3];
+        assert_eq!(
+            build_wire_indices(&indices),
+            vec![0, 1, 1, 2, 0, 2, 1, 3, 2, 3]
+        );
+    }
+
+    #[test]
+    fn wire_indices_skip_degenerate_and_incomplete_triangles() {
+        assert_eq!(build_wire_indices(&[0, 0, 1, 1]), Vec::<u32>::new());
     }
 }

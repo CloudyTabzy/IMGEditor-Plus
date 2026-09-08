@@ -40,17 +40,12 @@ impl HeadlessRenderer {
             ..Default::default()
         }))
         .map_err(|e| format!("adapter request failed: {e}"))?;
-        let required_features = if adapter
-            .features()
-            .contains(wgpu::Features::POLYGON_MODE_LINE)
-        {
-            wgpu::Features::POLYGON_MODE_LINE
-        } else {
-            wgpu::Features::empty()
-        };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("imgeditor-scene3d-headless"),
-            required_features,
+            // The wire overlay is built from explicit line-list indices, so
+            // the headless renderer does not need the optional native-only
+            // POLYGON_MODE_LINE feature.
+            required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::downlevel_defaults(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::Performance,
@@ -222,10 +217,8 @@ pub fn render_frame(
             pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
         }
 
-        if flags.contains(RenderFlags::WIREFRAME)
-            && let Some(wireframe) = pipelines.wireframe.as_ref()
-        {
-            pass.set_pipeline(wireframe);
+        if flags.contains(RenderFlags::WIREFRAME) {
+            pass.set_pipeline(&pipelines.wireframe);
             pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
             for (gpu_mesh, tex) in &mesh_gpus {
                 let bg: &wgpu::BindGroup = match tex {
@@ -234,8 +227,11 @@ pub fn render_frame(
                 };
                 pass.set_bind_group(1, bg, &[]);
                 pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-                pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                pass.set_index_buffer(
+                    gpu_mesh.wire_index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..gpu_mesh.wire_index_count, 0, 0..1);
             }
         }
 

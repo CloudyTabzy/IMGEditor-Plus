@@ -82,14 +82,20 @@ impl Scene {
 
     /// Estimate the persistent GPU resources required for the scene.
     ///
-    /// The estimate intentionally covers only buffers and decoded RGBA
-    /// textures. Render targets are accounted for separately by the widget,
-    /// since their size follows the current viewport.
+    /// The estimate intentionally covers only mesh buffers (including the
+    /// explicit wire-edge index buffer) and decoded RGBA textures. Render
+    /// targets are accounted for separately by the widget, since their size
+    /// follows the current viewport.
     pub fn estimated_gpu_bytes(&self) -> Option<u64> {
         self.meshes.iter().try_fold(0_u64, |total, mesh| {
             let vertices = (mesh.vertices.len() as u64).checked_mul(VERTEX_STRIDE as u64)?;
             let indices =
                 (mesh.indices.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64)?;
+            // A disconnected triangle can contribute three unique edges,
+            // so the line-list index buffer can be up to twice the size of
+            // the triangle-list index buffer. Use that upper bound for the
+            // admission check rather than undercounting future GPU memory.
+            let wire_indices = indices.checked_mul(2)?;
             let texture = mesh.diffuse.as_ref().map_or(Some(0), |texture| {
                 (texture.width as u64)
                     .checked_mul(texture.height as u64)?
@@ -98,6 +104,7 @@ impl Scene {
             total
                 .checked_add(vertices)?
                 .checked_add(indices)?
+                .checked_add(wire_indices)?
                 .checked_add(texture)
         })
     }
@@ -207,7 +214,7 @@ mod tests {
 
         assert_eq!(
             scene.estimated_gpu_bytes(),
-            Some(2 * VERTEX_STRIDE as u64 + 3 * 4 + 24)
+            Some(2 * VERTEX_STRIDE as u64 + 3 * 4 + 6 * 4 + 24)
         );
     }
 
