@@ -29,9 +29,7 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::inspector::scene3d::camera::OrbitCamera;
 use crate::inspector::scene3d::mesh::{SceneMesh, SceneTexture, VERTEX_STRIDE};
-use crate::inspector::scene3d::scene::{
-    MAX_VIEWPORT_PIXELS, Scene, validate_scene_data,
-};
+use crate::inspector::scene3d::scene::{MAX_VIEWPORT_PIXELS, Scene, validate_scene_data};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
@@ -295,22 +293,20 @@ impl GpuTexture {
             },
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(
-            &wgpu::BindGroupDescriptor {
-                label: Some("imgeditor-scene3d/diffuse_bind_group"),
-                layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    },
-                ],
-            },
-        );
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("imgeditor-scene3d/diffuse_bind_group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
         Self {
             texture,
             view,
@@ -358,22 +354,20 @@ impl GpuTexture {
             },
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(
-            &wgpu::BindGroupDescriptor {
-                label: Some("imgeditor-scene3d/diffuse_default_bind_group"),
-                layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    },
-                ],
-            },
-        );
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("imgeditor-scene3d/diffuse_default_bind_group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
         Self {
             texture,
             view,
@@ -530,7 +524,10 @@ impl ScenePipelines {
             "imgeditor-scene3d/lit_cull_back_pipeline",
         );
 
-        let wireframe = if device.features().contains(wgpu::Features::POLYGON_MODE_LINE) {
+        let wireframe = if device
+            .features()
+            .contains(wgpu::Features::POLYGON_MODE_LINE)
+        {
             Some(build_lit_pipeline(
                 device,
                 &wire_module,
@@ -599,12 +596,8 @@ impl ScenePipelines {
         });
 
         let texture_sampler = default_sampler(device);
-        let default_diffuse = GpuTexture::default_white(
-            device,
-            queue,
-            &texture_layout,
-            &texture_sampler,
-        );
+        let default_diffuse =
+            GpuTexture::default_white(device, queue, &texture_layout, &texture_sampler);
 
         let compositor_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("imgeditor-scene3d/compositor_sampler"),
@@ -778,12 +771,7 @@ impl ScenePipelines {
         queue.write_buffer(&self.camera_buffer, 0, &bytes);
     }
 
-    pub fn ensure_scene_color(
-        &mut self,
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-    ) {
+    pub fn ensure_scene_color(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if self.scene_color_view.is_some()
             && let Some(tex) = self.scene_color_tex.as_ref()
             && tex.width() == width
@@ -873,9 +861,7 @@ fn record_gpu_error(slot: &Mutex<Option<String>>, message: String) {
     }
 }
 
-pub(crate) fn register_gpu_error_handlers(
-    device: &wgpu::Device,
-) -> Arc<Mutex<Option<String>>> {
+pub(crate) fn register_gpu_error_handlers(device: &wgpu::Device) -> Arc<Mutex<Option<String>>> {
     let slot = Arc::new(Mutex::new(None));
     let uncaptured_slot = Arc::clone(&slot);
     device.on_uncaptured_error(Arc::new(move |error| {

@@ -82,7 +82,11 @@ impl<'a> DbEntry<'a> {
     /// 1252 — usually only happens for entries the modding tool
     /// stored as raw bytes rather than text.
     pub fn name_windows1252(&self) -> Option<String> {
-        self.name.iter().map(|&b| b as char).collect::<String>().pipe(Some)
+        self.name
+            .iter()
+            .map(|&b| b as char)
+            .collect::<String>()
+            .pipe(Some)
     }
 
     /// Byte length of the name. Same as `self.name.len()` but
@@ -97,9 +101,7 @@ impl fmt::Display for DbEntry<'_> {
         write!(
             f,
             "{} (size={}, crc={:08x}, has_issue={})",
-            self.name_windows1252()
-                .as_deref()
-                .unwrap_or("<binary>"),
+            self.name_windows1252().as_deref().unwrap_or("<binary>"),
             self.size_bytes,
             self.data_crc,
             self.has_issue
@@ -140,7 +142,9 @@ impl VerifyResult {
 pub enum DbError {
     #[error("DB file is shorter than the 8-byte header (got {got} bytes)")]
     TruncatedHeader { got: usize },
-    #[error("DB entry {index} has a name length of {got} which exceeds the file's remaining bytes ({remaining})")]
+    #[error(
+        "DB entry {index} has a name length of {got} which exceeds the file's remaining bytes ({remaining})"
+    )]
     BadNameLength {
         index: u32,
         got: u32,
@@ -183,9 +187,8 @@ impl<'a> DbFile<'a> {
             if cursor + 4 > bytes.len() {
                 return Err(DbError::TruncatedHeader { got: bytes.len() });
             }
-            let name_len = u32::from_le_bytes(
-                bytes[cursor..cursor + 4].try_into().unwrap(),
-            ) as usize;
+            let name_len =
+                u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
             cursor += 4;
 
             // name_len bytes for the name.
@@ -203,14 +206,11 @@ impl<'a> DbFile<'a> {
             if cursor + 13 > bytes.len() {
                 return Err(DbError::TruncatedHeader { got: bytes.len() });
             }
-            let size_bytes =
-                u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
+            let size_bytes = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
             cursor += 4;
-            let data_crc =
-                u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
+            let data_crc = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
             cursor += 4;
-            let creation_date =
-                u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
+            let creation_date = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
             cursor += 4;
             let flags = bytes[cursor];
             cursor += 1;
@@ -454,8 +454,14 @@ mod tests {
     fn verify_returns_modified_on_crc_mismatch() {
         // IMGF collapses this into a bool; we keep the 3-state enum
         // so the UI can show different messages.
-        assert!(matches!(DbFile::verify(0xAABB, 0xAABB), VerifyResult::Match));
-        assert!(matches!(DbFile::verify(0xAABB, 0xCCDD), VerifyResult::Modified));
+        assert!(matches!(
+            DbFile::verify(0xAABB, 0xAABB),
+            VerifyResult::Match
+        ));
+        assert!(matches!(
+            DbFile::verify(0xAABB, 0xCCDD),
+            VerifyResult::Modified
+        ));
     }
 
     #[test]
@@ -484,10 +490,7 @@ mod tests {
     fn verify_against_returns_crc_mismatch_error() {
         // Pre-build an entry, then call verify_against with a
         // different live data — should get a structured error.
-        let bytes = build_db(
-            1,
-            &[(b"hello.nif" as &[u8], 1024, 0xDEADBEEF, 0, false)],
-        );
+        let bytes = build_db(1, &[(b"hello.nif" as &[u8], 1024, 0xDEADBEEF, 0, false)]);
         let db = DbFile::parse(&bytes).unwrap();
         let err = db.verify_against(0, b"world.nif").unwrap_err();
         match err {

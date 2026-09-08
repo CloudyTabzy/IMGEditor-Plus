@@ -116,54 +116,42 @@ fn dxt5_block(block: &[u8]) -> [[u8; 4]; 16] {
         match idx {
             0 => alpha0,
             1 => alpha1,
-            2 => {
-                if alpha0 > alpha1 {
-                    (6 * alpha0 as u16 + 1 * alpha1 as u16 + 3) / 7
-                } else {
-                    (4 * alpha0 as u16 + 1 * alpha1 as u16 + 2) / 5
-                }
-                .min(255) as u8
+            2 => if alpha0 > alpha1 {
+                (6 * alpha0 as u16 + 1 * alpha1 as u16 + 3) / 7
+            } else {
+                (4 * alpha0 as u16 + 1 * alpha1 as u16 + 2) / 5
             }
-            3 => {
-                if alpha0 > alpha1 {
-                    (5 * alpha0 as u16 + 2 * alpha1 as u16 + 3) / 7
-                } else {
-                    (3 * alpha0 as u16 + 2 * alpha1 as u16 + 2) / 5
-                }
-                .min(255) as u8
+            .min(255) as u8,
+            3 => if alpha0 > alpha1 {
+                (5 * alpha0 as u16 + 2 * alpha1 as u16 + 3) / 7
+            } else {
+                (3 * alpha0 as u16 + 2 * alpha1 as u16 + 2) / 5
             }
-            4 => {
-                if alpha0 > alpha1 {
-                    (4 * alpha0 as u16 + 3 * alpha1 as u16 + 3) / 7
-                } else {
-                    (2 * alpha0 as u16 + 3 * alpha1 as u16 + 2) / 5
-                }
-                .min(255) as u8
+            .min(255) as u8,
+            4 => if alpha0 > alpha1 {
+                (4 * alpha0 as u16 + 3 * alpha1 as u16 + 3) / 7
+            } else {
+                (2 * alpha0 as u16 + 3 * alpha1 as u16 + 2) / 5
             }
-            5 => {
-                if alpha0 > alpha1 {
-                    (3 * alpha0 as u16 + 4 * alpha1 as u16 + 3) / 7
-                } else {
-                    (1 * alpha0 as u16 + 4 * alpha1 as u16 + 2) / 5
-                }
-                .min(255) as u8
+            .min(255) as u8,
+            5 => if alpha0 > alpha1 {
+                (3 * alpha0 as u16 + 4 * alpha1 as u16 + 3) / 7
+            } else {
+                (1 * alpha0 as u16 + 4 * alpha1 as u16 + 2) / 5
             }
-            6 => {
-                if alpha0 > alpha1 {
-                    (2 * alpha0 as u16 + 5 * alpha1 as u16 + 3) / 7
-                } else {
-                    (0 * alpha0 as u16 + 5 * alpha1 as u16 + 2) / 5
-                }
-                .min(255) as u8
+            .min(255) as u8,
+            6 => if alpha0 > alpha1 {
+                (2 * alpha0 as u16 + 5 * alpha1 as u16 + 3) / 7
+            } else {
+                (0 * alpha0 as u16 + 5 * alpha1 as u16 + 2) / 5
             }
-            7 => {
-                if alpha0 > alpha1 {
-                    (1 * alpha0 as u16 + 6 * alpha1 as u16 + 3) / 7
-                } else {
-                    0
-                }
-                .min(255) as u8
+            .min(255) as u8,
+            7 => if alpha0 > alpha1 {
+                (1 * alpha0 as u16 + 6 * alpha1 as u16 + 3) / 7
+            } else {
+                0
             }
+            .min(255) as u8,
             _ => 0,
         }
     };
@@ -472,7 +460,11 @@ pub mod format {
     }
 
     pub fn mipmap_count(raster_format: u32) -> u32 {
-        if (raster_format & EXT_MIPMAP) != 0 { 0 } else { 1 }
+        if (raster_format & EXT_MIPMAP) != 0 {
+            0
+        } else {
+            1
+        }
     }
 
     pub fn format_name(raster_format: u32) -> &'static str {

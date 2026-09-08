@@ -210,10 +210,7 @@ mod tests {
         assert_eq!(drag_indicator_text(&state), "↗ 3 entries");
         // Hovering a valid target adds the "→ archive #N" hint.
         state.hover_target = Some(2);
-        assert_eq!(
-            drag_indicator_text(&state),
-            "↗ 3 entries → archive #3"
-        );
+        assert_eq!(drag_indicator_text(&state), "↗ 3 entries → archive #3");
         // Hovering the source archive itself is a no-op (drop here
         // doesn't move anything) so we hide the hint.
         state.hover_target = Some(0);

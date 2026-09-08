@@ -88,13 +88,17 @@ impl Scene {
     pub fn estimated_gpu_bytes(&self) -> Option<u64> {
         self.meshes.iter().try_fold(0_u64, |total, mesh| {
             let vertices = (mesh.vertices.len() as u64).checked_mul(VERTEX_STRIDE as u64)?;
-            let indices = (mesh.indices.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64)?;
+            let indices =
+                (mesh.indices.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64)?;
             let texture = mesh.diffuse.as_ref().map_or(Some(0), |texture| {
                 (texture.width as u64)
                     .checked_mul(texture.height as u64)?
                     .checked_mul(4)
             })?;
-            total.checked_add(vertices)?.checked_add(indices)?.checked_add(texture)
+            total
+                .checked_add(vertices)?
+                .checked_add(indices)?
+                .checked_add(texture)
         })
     }
 }
@@ -117,9 +121,11 @@ pub fn validate_scene_data(scene: &Scene) -> Result<(), String> {
     }
 
     for mesh in &scene.meshes {
-        if let Some(&index) = mesh.indices.iter().find(|&&index| {
-            index as usize >= mesh.vertices.len()
-        }) {
+        if let Some(&index) = mesh
+            .indices
+            .iter()
+            .find(|&&index| index as usize >= mesh.vertices.len())
+        {
             return Err(format!(
                 "mesh '{}' contains index {} outside its {} vertices",
                 mesh.name,
@@ -207,7 +213,10 @@ mod tests {
 
     #[test]
     fn empty_scene_has_zero_gpu_estimate() {
-        assert_eq!(Scene::empty(BaseOrientation::Yup).estimated_gpu_bytes(), Some(0));
+        assert_eq!(
+            Scene::empty(BaseOrientation::Yup).estimated_gpu_bytes(),
+            Some(0)
+        );
     }
 
     #[test]

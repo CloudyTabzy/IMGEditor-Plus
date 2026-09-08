@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::archive::EntryInfo;
-use crate::inspector::nif::{BlockPayload, NifFile, NiPixelDataPayload};
+use crate::inspector::nif::{BlockPayload, NiPixelDataPayload, NifFile};
 use crate::inspector::scene3d::mesh::SceneTexture;
 use crate::parser::DecodedTexture;
 
@@ -75,7 +75,9 @@ impl IdeMap {
 
     /// Look up a NIF basename (case-insensitive) to get the NFT name.
     pub fn nft_name_for(&self, nif_basename: &str) -> Option<&str> {
-        self.inner.get(&nif_basename.to_lowercase()).map(|s| s.as_str())
+        self.inner
+            .get(&nif_basename.to_lowercase())
+            .map(|s| s.as_str())
     }
 
     /// Locate the `.nft` file on disk for a given txd name.
@@ -255,8 +257,9 @@ pub fn decode_nft_textures_with_resolver<F>(
 where
     F: FnMut(&str) -> Option<Vec<u8>>,
 {
-    let catalog = parse_nft_catalog_bytes(bytes)
-        .ok_or_else(|| "NFT parse failed: unsupported or malformed Gamebryo texture catalog".to_string())?;
+    let catalog = parse_nft_catalog_bytes(bytes).ok_or_else(|| {
+        "NFT parse failed: unsupported or malformed Gamebryo texture catalog".to_string()
+    })?;
     let catalog_count = catalog.entries.len();
     let mut decoded = Vec::new();
 
@@ -318,10 +321,7 @@ fn decode_texture_payload(bytes: &[u8]) -> Option<(SceneTexture, &'static str)> 
     // used by the application and is compiled with PNG support.
     let decoded = image::load_from_memory(bytes).ok()?.to_rgba8();
     let (width, height) = decoded.dimensions();
-    if width == 0
-        || height == 0
-        || width > MAX_TEXTURE_DIMENSION
-        || height > MAX_TEXTURE_DIMENSION
+    if width == 0 || height == 0 || width > MAX_TEXTURE_DIMENSION || height > MAX_TEXTURE_DIMENSION
     {
         return None;
     }
@@ -341,10 +341,7 @@ fn decode_dds_payload(bytes: &[u8]) -> Option<SceneTexture> {
     }
     let height = u32::from_le_bytes(bytes[12..16].try_into().ok()?);
     let width = u32::from_le_bytes(bytes[16..20].try_into().ok()?);
-    if width == 0
-        || height == 0
-        || width > MAX_TEXTURE_DIMENSION
-        || height > MAX_TEXTURE_DIMENSION
+    if width == 0 || height == 0 || width > MAX_TEXTURE_DIMENSION || height > MAX_TEXTURE_DIMENSION
     {
         return None;
     }
@@ -388,13 +385,19 @@ fn extract_embedded_pixels(nft: &NifFile, nft_bytes: &[u8], block_idx: usize) ->
     // Manually walk the fields to find where pixel data starts,
     // matching exactly what read_ni_source_texture does.
     // 1. name (NiFixedString = u32)
-    if raw.len() < 4 { return None; }
+    if raw.len() < 4 {
+        return None;
+    }
     // 2. num_extra_data (u32)
-    if raw.len() < 8 { return None; }
+    if raw.len() < 8 {
+        return None;
+    }
     let num_extra = u32::from_le_bytes(raw[4..8].try_into().ok()?) as usize;
     // 3. extra_data (i32 × num_extra)
     let after_extra = 8 + num_extra * 4;
-    if raw.len() < after_extra + 4 { return None; }
+    if raw.len() < after_extra + 4 {
+        return None;
+    }
     // 4. controller (i32)
     // 5. use_external (u8) = already checked as 0
     // 6. file_name_index (u32)
@@ -414,42 +417,37 @@ fn extract_embedded_pixels(nft: &NifFile, nft_bytes: &[u8], block_idx: usize) ->
     let pixel_bytes = &raw[header_end..];
 
     // The first 8 bytes of pixel data are usually width(u32) + height(u32).
-    if pixel_bytes.len() < 8 { return None; }
+    if pixel_bytes.len() < 8 {
+        return None;
+    }
     let pw = u32::from_le_bytes(pixel_bytes[0..4].try_into().ok()?);
     let ph = u32::from_le_bytes(pixel_bytes[4..8].try_into().ok()?);
-    if pw == 0
-        || pw > MAX_TEXTURE_DIMENSION
-        || ph == 0
-        || ph > MAX_TEXTURE_DIMENSION
-    {
+    if pw == 0 || pw > MAX_TEXTURE_DIMENSION || ph == 0 || ph > MAX_TEXTURE_DIMENSION {
         return None;
     }
 
-    let expected = (pw as usize)
-        .checked_mul(ph as usize)?
-        .checked_mul(4)?;
+    let expected = (pw as usize).checked_mul(ph as usize)?.checked_mul(4)?;
     let data_start = 8;
-    let available = pixel_bytes
-        .len()
-        .saturating_sub(data_start)
-        .min(expected)
-        / 4
-        * 4;
+    let available = pixel_bytes.len().saturating_sub(data_start).min(expected) / 4 * 4;
     if available < 4 {
         return None;
     }
 
     let mut tga = Vec::with_capacity(18 + available);
-    tga.push(0); tga.push(0); tga.push(2);
+    tga.push(0);
+    tga.push(0);
+    tga.push(2);
     tga.extend_from_slice(&[0, 0, 0, 0, 0]);
-    tga.extend_from_slice(&[0, 0]); tga.extend_from_slice(&[0, 0]);
+    tga.extend_from_slice(&[0, 0]);
+    tga.extend_from_slice(&[0, 0]);
     tga.extend_from_slice(&(pw as u16).to_le_bytes());
     tga.extend_from_slice(&(ph as u16).to_le_bytes());
-    tga.push(32); tga.push(0x20);
+    tga.push(32);
+    tga.push(0x20);
     for i in (0..available).step_by(4) {
         tga.push(pixel_bytes[data_start + i + 2]); // B
         tga.push(pixel_bytes[data_start + i + 1]); // G
-        tga.push(pixel_bytes[data_start + i]);     // R
+        tga.push(pixel_bytes[data_start + i]); // R
         tga.push(pixel_bytes[data_start + i + 3]); // A
     }
     Some(tga)
@@ -459,10 +457,7 @@ fn extract_embedded_pixels(nft: &NifFile, nft_bytes: &[u8], block_idx: usize) ->
 
 /// Full pipeline: given a NIF basename, look up the NFT via IDE,
 /// parse the NFT, and return the catalog.
-pub fn resolve_textures_for_nif(
-    nif_basename: &str,
-    ide_map: &IdeMap,
-) -> Option<NftCatalog> {
+pub fn resolve_textures_for_nif(nif_basename: &str, ide_map: &IdeMap) -> Option<NftCatalog> {
     let nft_path = ide_map.resolve_nft_path(nif_basename)?;
     let nft_bytes = fs::read(&nft_path).ok()?;
     parse_nft_catalog_bytes(&nft_bytes)
@@ -490,7 +485,7 @@ fn parse_nft_catalog_bytes(nft_bytes: &[u8]) -> Option<NftCatalog> {
         let Some(key) = base_name else {
             continue;
         };
-        let pixel_data = extract_pixels_for_nft(&nft, &nft_bytes, idx);
+        let pixel_data = extract_pixels_for_nft(&nft, nft_bytes, idx);
         entries.insert(
             key,
             TextureEntry {
@@ -547,9 +542,13 @@ fn build_dds_header(w: u32, h: u32, fourcc: &[u8; 4], mip_count: u32) -> Vec<u8>
     let bpb: u32 = if fourcc == b"DXT1" { 8 } else { 16 };
     let pitch = w.div_ceil(4).max(1) * h.div_ceil(4).max(1) * bpb;
     let mut flags = 0x0008_1007u32; // CAPS|HEIGHT|WIDTH|PIXELFORMAT|LINEARSIZE
-    if mip_count > 1 { flags |= 0x0002_0000; }
+    if mip_count > 1 {
+        flags |= 0x0002_0000;
+    }
     let mut caps = 0x0000_1000u32; // TEXTURE
-    if mip_count > 1 { caps |= 0x0040_0008; } // COMPLEX|MIPMAP
+    if mip_count > 1 {
+        caps |= 0x0040_0008;
+    } // COMPLEX|MIPMAP
 
     let mut hdr = vec![0u8; 128];
     hdr[0..4].copy_from_slice(b"DDS ");
@@ -560,8 +559,8 @@ fn build_dds_header(w: u32, h: u32, fourcc: &[u8; 4], mip_count: u32) -> Vec<u8>
     hdr[20..24].copy_from_slice(&pitch.to_le_bytes());
     hdr[28..32].copy_from_slice(&mip_count.to_le_bytes());
     hdr[76..80].copy_from_slice(&32u32.to_le_bytes()); // pfSize
-    hdr[80..84].copy_from_slice(&4u32.to_le_bytes());   // DDPF_FOURCC
-    hdr[84..88].copy_from_slice(fourcc);                 // dwFourCC
+    hdr[80..84].copy_from_slice(&4u32.to_le_bytes()); // DDPF_FOURCC
+    hdr[84..88].copy_from_slice(fourcc); // dwFourCC
     hdr[108..112].copy_from_slice(&caps.to_le_bytes());
     hdr
 }
@@ -599,7 +598,9 @@ fn dxt_chain_size(w: u32, h: u32, fourcc: &[u8; 4]) -> (u32, u32) {
     loop {
         total += tw.div_ceil(4).max(1) * th.div_ceil(4).max(1) * bpb;
         mips += 1;
-        if tw == 1 && th == 1 { break; }
+        if tw == 1 && th == 1 {
+            break;
+        }
         tw = (tw / 2).max(1);
         th = (th / 2).max(1);
     }
@@ -615,7 +616,12 @@ fn dxt1_block_to_rgba(block: &[u8]) -> [[u8; 4]; 16] {
         let r5 = ((c >> 11) & 0x1F) as u8;
         let g6 = ((c >> 5) & 0x3F) as u8;
         let b5 = (c & 0x1F) as u8;
-        [(r5 << 3) | (r5 >> 2), (g6 << 2) | (g6 >> 4), (b5 << 3) | (b5 >> 2), 255]
+        [
+            (r5 << 3) | (r5 >> 2),
+            (g6 << 2) | (g6 >> 4),
+            (b5 << 3) | (b5 >> 2),
+            255,
+        ]
     };
     let col0 = expand(c0);
     let col1 = expand(c1);
@@ -640,7 +646,12 @@ fn dxt1_block_to_rgba(block: &[u8]) -> [[u8; 4]; 16] {
             }
             (false, 2) => {
                 let avg = |a: u8, b: u8| ((a as u16 + b as u16) / 2) as u8;
-                [avg(col0[0], col1[0]), avg(col0[1], col1[1]), avg(col0[2], col1[2]), 255]
+                [
+                    avg(col0[0], col1[0]),
+                    avg(col0[1], col1[1]),
+                    avg(col0[2], col1[2]),
+                    255,
+                ]
             }
             (false, 3) => [0, 0, 0, 0],
             _ => unreachable!(),
@@ -664,16 +675,20 @@ fn dxt1_to_tga(data: &[u8], w: u32, h: u32) -> Vec<u8> {
     for by in 0..bh {
         for bx in 0..bw {
             let src = (by * bw + bx) * 8;
-            if src + 8 > data.len() { continue; }
-            block_px = dxt1_block_to_rgba(&data[src..src+8]);
+            if src + 8 > data.len() {
+                continue;
+            }
+            block_px = dxt1_block_to_rgba(&data[src..src + 8]);
             for row in 0..4 {
                 for col in 0..4 {
                     let img_y = by * 4 + row;
                     let img_x = bx * 4 + col;
-                    if img_y >= h as usize || img_x >= w as usize { continue; }
+                    if img_y >= h as usize || img_x >= w as usize {
+                        continue;
+                    }
                     let px = block_px[row * 4 + col];
                     let dst = 18 + (img_y * w as usize + img_x) * 4;
-                    tga[dst..dst+4].copy_from_slice(&[px[2], px[1], px[0], px[3]]); // BGRA
+                    tga[dst..dst + 4].copy_from_slice(&[px[2], px[1], px[0], px[3]]); // BGRA
                 }
             }
         }
@@ -1005,17 +1020,40 @@ fn extract_dds_from_nipixeldata(pd: &NiPixelDataPayload) -> Option<Vec<u8>> {
     // largest-first to make the (chain + hdr_sz) arithmetic unique.
     let block_size = raw.len() as u32;
     let candidates: [(u32, u32); 34] = [
-        (1024, 1024), (1024, 512), (512, 1024),
-        (1024, 256), (256, 1024), (1024, 128), (128, 1024),
-        (512, 512), (512, 256), (256, 512),
-        (512, 128), (128, 512),
-        (256, 256), (256, 128), (128, 256),
-        (256, 64), (64, 256),
-        (256, 32), (32, 256),
-        (128, 128), (128, 64), (64, 128),
-        (128, 32), (32, 128), (128, 16), (16, 128),
-        (64, 64), (64, 32), (32, 64), (64, 16), (16, 64),
-        (32, 32), (16, 16), (8, 8),
+        (1024, 1024),
+        (1024, 512),
+        (512, 1024),
+        (1024, 256),
+        (256, 1024),
+        (1024, 128),
+        (128, 1024),
+        (512, 512),
+        (512, 256),
+        (256, 512),
+        (512, 128),
+        (128, 512),
+        (256, 256),
+        (256, 128),
+        (128, 256),
+        (256, 64),
+        (64, 256),
+        (256, 32),
+        (32, 256),
+        (128, 128),
+        (128, 64),
+        (64, 128),
+        (128, 32),
+        (32, 128),
+        (128, 16),
+        (16, 128),
+        (64, 64),
+        (64, 32),
+        (32, 64),
+        (64, 16),
+        (16, 64),
+        (32, 32),
+        (16, 16),
+        (8, 8),
     ];
     let fourcc = nif_dxt_fourcc(pd.pixel_format)?;
 
@@ -1181,7 +1219,8 @@ mod tests {
         }
         // Num Pixels = total DXT chain size.
         let num_pixels_pos = 67 + 12 * n;
-        raw[num_pixels_pos..num_pixels_pos + 4].copy_from_slice(&(dxt_data.len() as u32).to_le_bytes());
+        raw[num_pixels_pos..num_pixels_pos + 4]
+            .copy_from_slice(&(dxt_data.len() as u32).to_le_bytes());
         // Num Faces = 1.
         raw[num_pixels_pos + 4..num_pixels_pos + 8].copy_from_slice(&1u32.to_le_bytes());
         // Append DXT data.
@@ -1241,8 +1280,7 @@ mod tests {
         // DXT3 stores one 4-bit alpha value per pixel. The first pixel uses
         // alpha nibble 1 (17/255); DXT5 would interpret this block differently.
         let dxt_data = [
-            0xF1, 0, 0, 0, 0, 0, 0, 0,
-            0x00, 0xF8, // red RGB565 endpoint
+            0xF1, 0, 0, 0, 0, 0, 0, 0, 0x00, 0xF8, // red RGB565 endpoint
             0xE0, 0x07, // green RGB565 endpoint
             0, 0, 0, 0, // all pixels use endpoint 0
         ];
@@ -1412,8 +1450,8 @@ mod tests {
         // 4×4 DXT1 = 1 block × 8 bytes (all white)
         let dxt_data: Vec<u8> = vec![0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let mips = [
-            (4, 4, 0),    // mip 0: 4x4 @ 0
-            (2, 2, 8),    // mip 1: 2x2 @ 8
+            (4, 4, 0), // mip 0: 4x4 @ 0
+            (2, 2, 8), // mip 1: 2x2 @ 8
         ];
         let raw = build_test_nipixeldata(4, &mips, &dxt_data);
         let pd = NiPixelDataPayload {
@@ -1439,7 +1477,11 @@ mod tests {
             assert_eq!(r, 255, "pixel {i} R should be 255 (mip 0 is white)");
             assert_eq!(g, 255, "pixel {i} G should be 255 (mip 0 is white)");
             assert_eq!(b, 255, "pixel {i} B should be 255 (mip 0 is white)");
-            assert_eq!(out[pixels_offset + i * 4 + 3], 255, "alpha should be opaque");
+            assert_eq!(
+                out[pixels_offset + i * 4 + 3],
+                255,
+                "alpha should be opaque"
+            );
         }
     }
 
@@ -1453,8 +1495,7 @@ mod tests {
     /// must have identical block counts and string tables.
     #[test]
     fn nft_parse_accepts_crlf_header() {
-        let lf_path =
-            "C:/Games/Bully - Scholarship Edition/Stream/Test/EXTwinradar029.nft";
+        let lf_path = "C:/Games/Bully - Scholarship Edition/Stream/Test/EXTwinradar029.nft";
         let lf_bytes = match std::fs::read(lf_path) {
             Ok(b) => b,
             Err(_) => return,
@@ -1467,8 +1508,8 @@ mod tests {
             .expect("LF NFT must contain a 0x0A in its header");
         let mut crlf_bytes = lf_bytes.clone();
         crlf_bytes.insert(newline, 0x0D);
-        let crlf = NifFile::parse(&crlf_bytes)
-            .expect("CRLF NFT should parse identically to LF NFT");
+        let crlf =
+            NifFile::parse(&crlf_bytes).expect("CRLF NFT should parse identically to LF NFT");
 
         assert_eq!(lf.blocks.len(), crlf.blocks.len());
         assert_eq!(lf.footer.roots, crlf.footer.roots);
@@ -1534,7 +1575,11 @@ mod tests {
         let mut tris = vec![];
         for j in 0..points.len() - 2 {
             let (i0, i1, i2) = (points[j] as u32, points[j + 1] as u32, points[j + 2] as u32);
-            let (a, b, c) = if j % 2 == 0 { (i0, i1, i2) } else { (i1, i0, i2) };
+            let (a, b, c) = if j % 2 == 0 {
+                (i0, i1, i2)
+            } else {
+                (i1, i0, i2)
+            };
             if a == b || a == c || b == c {
                 continue;
             }
@@ -1547,9 +1592,7 @@ mod tests {
     /// without needing a full NifFile. Mirrors the parser logic
     /// exactly so the regression test catches any future regression
     /// of the u16-vs-i32 fix.
-    fn read_strips_footer_for_test(
-        bytes: &[u8],
-    ) -> (u16, u16, Vec<u16>, bool, Vec<u16>) {
+    fn read_strips_footer_for_test(bytes: &[u8]) -> (u16, u16, Vec<u16>, bool, Vec<u16>) {
         // Bully is little-endian. The reader is a tiny shim that
         // matches the production code's contract.
         let mut pos = 0;
@@ -1625,12 +1668,12 @@ mod tests {
             tex.bump_map.is_some(),
             "slot 5 (bump) must hold the normal map"
         );
-        assert!(tex.decal[0].is_some(), "slot 8 (decal 0) must hold the specular map");
-        assert!(tex.decal[1].is_none());
         assert!(
-            tex.decal[2].is_none(),
-            "slot 10 should be empty"
+            tex.decal[0].is_some(),
+            "slot 8 (decal 0) must hold the specular map"
         );
+        assert!(tex.decal[1].is_none());
+        assert!(tex.decal[2].is_none(), "slot 10 should be empty");
         assert!(tex.decal[3].is_none());
 
         // Source refs must point at real NiSourceTexture blocks
@@ -1654,7 +1697,10 @@ mod tests {
             },
         );
         let catalog = NftCatalog { entries };
-        assert_eq!(catalog.get_pixels("models\\chair_d.tga"), Some(&[1, 2, 3][..]));
+        assert_eq!(
+            catalog.get_pixels("models\\chair_d.tga"),
+            Some(&[1, 2, 3][..])
+        );
     }
 
     #[test]
@@ -1687,31 +1733,32 @@ mod tests {
         };
         assert!(!catalog.entries.is_empty());
         assert!(
-            catalog.entries.values().any(|entry| entry.pixel_data.is_some()),
+            catalog
+                .entries
+                .values()
+                .any(|entry| entry.pixel_data.is_some()),
             "at least one source texture should resolve its NiPixelData reference"
         );
     }
 
     #[test]
     fn bully_archive_catalog_resolves_player_mascot_pixels_when_present() {
-        let archive_path = Path::new(
-            "C:/Games/Bully - Scholarship Edition/Stream/World.img",
-        );
+        let archive_path = Path::new("C:/Games/Bully - Scholarship Edition/Stream/World.img");
         if !archive_path.is_file() {
             return;
         }
-        let archive = crate::archive::ArchiveInfo::open(archive_path)
-            .expect("World.img should open");
-        let index = ArchiveTextureIndex::from_entries(
-            &archive.entries,
-            archive.path.as_deref(),
-        );
+        let archive =
+            crate::archive::ArchiveInfo::open(archive_path).expect("World.img should open");
+        let index = ArchiveTextureIndex::from_entries(&archive.entries, archive.path.as_deref());
         let catalog = index
             .resolve_textures_for_nif("Player_Mascot", None)
             .expect("Player_Mascot.nft should be found in World.img");
         assert!(!catalog.entries.is_empty());
         assert!(
-            catalog.entries.values().any(|entry| entry.pixel_data.is_some()),
+            catalog
+                .entries
+                .values()
+                .any(|entry| entry.pixel_data.is_some()),
             "Player_Mascot.nft should expose at least one decoded pixel payload"
         );
         let nft_bytes = index

@@ -1,20 +1,20 @@
-use iced::widget::{
-    canvas, checkbox, Column, Container, Row, Scrollable, Space, button, column, container, image,
-    mouse_area, pane_grid, progress_bar, rule, row, stack, text_input, tooltip,
-};
-use iced::{Alignment, Border, Color, Element, Length};
 use crate::archive::{ExportStatus, SortColumn};
 use crate::sort::SortDirection;
+use iced::widget::{
+    Column, Container, Row, Scrollable, Space, button, canvas, checkbox, column, container, image,
+    mouse_area, pane_grid, progress_bar, row, rule, stack, text_input, tooltip,
+};
+use iced::{Alignment, Border, Color, Element, Length};
 
 use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::tasks::FolderDuplicatePolicy;
-use crate::ui::app::{App, EntryAction, InspectorTab, Message, Pane, ABOUT_TEXT};
+use crate::ui::app::{ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane};
 use crate::ui::fonts;
 use crate::ui::icons;
-use crate::ui::widgets as w;
 use crate::ui::viewer3d_widget::SceneOriginMode;
+use crate::ui::widgets as w;
 
 static LOGO_HANDLE: std::sync::LazyLock<image::Handle> = std::sync::LazyLock::new(|| {
     image::Handle::from_bytes(include_bytes!("../../asset/logo/IMGEditorLogo.png").to_vec())
@@ -51,9 +51,17 @@ impl App {
             return Space::new().width(Length::Fill).height(Length::Fill).into();
         };
 
-        let name_label = sort_label("Name", archive.sort.column == SortColumn::Name, archive.sort.direction);
+        let name_label = sort_label(
+            "Name",
+            archive.sort.column == SortColumn::Name,
+            archive.sort.direction,
+        );
         let type_label = archive.sort.type_header_label.clone();
-        let size_label = sort_label("Size", archive.sort.column == SortColumn::Size, archive.sort.direction);
+        let size_label = sort_label(
+            "Size",
+            archive.sort.column == SortColumn::Size,
+            archive.sort.direction,
+        );
 
         let headers = row![
             button(fonts::header(name_label))
@@ -203,11 +211,8 @@ impl App {
             label.width(Length::Fill).into()
         };
 
-        let name_cell = w::icon_label(
-            icons::file_type(&entry.file_name).size(16),
-            name_widget,
-        )
-        .width(Length::FillPortion(6));
+        let name_cell = w::icon_label(icons::file_type(&entry.file_name).size(16), name_widget)
+            .width(Length::FillPortion(6));
 
         let row_content: Element<'_, Message> = row![
             name_cell,
@@ -265,31 +270,30 @@ impl App {
             weight: iced::font::Weight::Bold,
             ..iced::Font::default()
         };
-        let tabs: Element<'_, Message> = iced_aw::widget::tabs::Tabs::new(
-            Message::Viewer3dSelectTab,
-        )
-        .push(
-            InspectorTab::Export,
-            iced_aw::TabLabel::Text("Export".to_string()),
-            export_tab,
-        )
-        .push(
-            InspectorTab::Model3D,
-            iced_aw::TabLabel::Text("3D view".to_string()),
-            model_tab,
-        )
-        .push(
-            InspectorTab::Texture,
-            iced_aw::TabLabel::Text("Texture".to_string()),
-            texture_tab,
-        )
-        .set_active_tab(&self.selected_inspector_tab)
-        .tab_bar_height(Length::Fixed(32.0))
-        .text_size(13.0)
-        .text_font(bold_text)
-        .height(Length::Fill)
-        .width(width)
-        .into();
+        let tabs: Element<'_, Message> =
+            iced_aw::widget::tabs::Tabs::new(Message::Viewer3dSelectTab)
+                .push(
+                    InspectorTab::Export,
+                    iced_aw::TabLabel::Text("Export".to_string()),
+                    export_tab,
+                )
+                .push(
+                    InspectorTab::Model3D,
+                    iced_aw::TabLabel::Text("3D view".to_string()),
+                    model_tab,
+                )
+                .push(
+                    InspectorTab::Texture,
+                    iced_aw::TabLabel::Text("Texture".to_string()),
+                    texture_tab,
+                )
+                .set_active_tab(&self.selected_inspector_tab)
+                .tab_bar_height(Length::Fixed(32.0))
+                .text_size(13.0)
+                .text_font(bold_text)
+                .height(Length::Fill)
+                .width(width)
+                .into();
 
         tabs
     }
@@ -308,7 +312,9 @@ impl App {
         let visible = archive.selected_indices.len();
         let raw_progress = archive.progress.percentage();
         let in_use = archive.progress.in_use();
-        let progress = self.animator.get_or(crate::ui::app::ANIM_PROGRESS, raw_progress);
+        let progress = self
+            .animator
+            .get_or(crate::ui::app::ANIM_PROGRESS, raw_progress);
         let display_progress = if in_use { progress } else { raw_progress };
         let (progress_label, percent_text) = if in_use {
             ("Progress", format!("{:.0}%", display_progress * 100.0))
@@ -333,8 +339,11 @@ impl App {
 
         if in_use {
             col = col.push(
-                button(w::icon_label(icons::close().size(14), fonts::body("Cancel")))
-                    .on_press(Message::CancelActive),
+                button(w::icon_label(
+                    icons::close().size(14),
+                    fonts::body("Cancel"),
+                ))
+                .on_press(Message::CancelActive),
             );
         }
 
@@ -346,7 +355,7 @@ impl App {
                     icons::open_archive().size(14),
                     fonts::body("Open export folder"),
                 ))
-                    .on_press(Message::OpenLastExportFolder),
+                .on_press(Message::OpenLastExportFolder),
             );
         }
 
@@ -377,18 +386,21 @@ impl App {
         ]);
 
         let logs: Vec<String> = archive.logs.iter().rev().take(50).cloned().collect();
-        let log_widget = Column::with_children(
-            logs.into_iter().map(|m| fonts::caption(m).into()),
-        );
+        let log_widget = Column::with_children(logs.into_iter().map(|m| fonts::caption(m).into()));
         col = col.push(log_widget);
 
         if !archive.recent_exports.is_empty() {
             col = col.push(rule::horizontal(1));
             col = col.push(fonts::header("Recent exports:"));
-            let exports: Vec<String> = archive.recent_exports.iter().rev().take(8).cloned().collect();
-            let exports_widget = Column::with_children(
-                exports.into_iter().map(|m| fonts::caption(m).into()),
-            );
+            let exports: Vec<String> = archive
+                .recent_exports
+                .iter()
+                .rev()
+                .take(8)
+                .cloned()
+                .collect();
+            let exports_widget =
+                Column::with_children(exports.into_iter().map(|m| fonts::caption(m).into()));
             col = col.push(exports_widget);
         }
 
@@ -443,8 +455,7 @@ impl App {
                     fonts::header("GPU viewer unavailable"),
                     fonts::caption(error),
                     fonts::caption("Try clearing the preview or selecting a smaller model."),
-                    button(fonts::body("Clear viewer error"))
-                        .on_press(Message::Viewer3dClear),
+                    button(fonts::body("Clear viewer error")).on_press(Message::Viewer3dClear),
                 ]
                 .spacing(8)
                 .align_x(Alignment::Center),
@@ -456,9 +467,8 @@ impl App {
             .padding(16)
             .into()
         } else if scene_matches {
-            let widget = crate::ui::viewer3d_widget::Scene3dWidget::new(
-                self.viewer3d_handle.clone(),
-            );
+            let widget =
+                crate::ui::viewer3d_widget::Scene3dWidget::new(self.viewer3d_handle.clone());
             widget.into()
         } else if is_nif {
             container(fonts::caption(
@@ -502,9 +512,8 @@ impl App {
     }
 
     fn build_viewer3d_stats(&self, scene_matches: bool) -> Element<'_, Message> {
-        let (triangles, vertices, textures, has_scene, w, h, orientation, origin_mode) = self
-            .viewer3d_handle
-            .with(|i| {
+        let (triangles, vertices, textures, has_scene, w, h, orientation, origin_mode) =
+            self.viewer3d_handle.with(|i| {
                 let w = i.camera.viewport.width.max(1);
                 let h = i.camera.viewport.height.max(1);
                 let orient = i
@@ -574,20 +583,24 @@ impl App {
                 .into();
         };
         let Some(entry_index) = self.editor.selected_entry() else {
-            return container(fonts::caption("Select a TXD, NFT, or NIF entry to preview textures."))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
-                .into();
+            return container(fonts::caption(
+                "Select a TXD, NFT, or NIF entry to preview textures.",
+            ))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .into();
         };
         let Some(entry) = archive.entries.get(entry_index) else {
-            return container(fonts::caption("Select a .txd or .nft entry to preview textures."))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
-                .into();
+            return container(fonts::caption(
+                "Select a .txd or .nft entry to preview textures.",
+            ))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .into();
         };
         let entry_name = entry.file_name.to_string();
         let lower = entry_name.to_ascii_lowercase();
@@ -645,7 +658,8 @@ impl App {
         }
         let tex_idx = self.selected_texture.min(textures.len() - 1);
         let tex = &textures[tex_idx];
-        let mut col = Column::new().spacing(6)
+        let mut col = Column::new()
+            .spacing(6)
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(8);
@@ -692,11 +706,7 @@ impl App {
                 ));
             col = col.push(
                 column![
-                    fonts::caption(format!(
-                        "Texture {}/{}",
-                        tex_idx + 1,
-                        textures.len()
-                    )),
+                    fonts::caption(format!("Texture {}/{}", tex_idx + 1, textures.len())),
                     slot_rail,
                 ]
                 .spacing(2),
@@ -721,10 +731,7 @@ impl App {
         });
         let uv_toggle = checkbox(self.show_texture_uv && !uv_triangles.is_empty())
             .label("Show UV map")
-            .on_toggle_maybe(
-                (!uv_triangles.is_empty())
-                    .then_some(|show| Message::TextureUvToggled(show)),
-            );
+            .on_toggle_maybe((!uv_triangles.is_empty()).then_some(Message::TextureUvToggled));
         col = col.push(
             row![
                 uv_toggle,
@@ -745,13 +752,23 @@ impl App {
             .handle
             .get_or_init(|| image::Handle::from_rgba(tex.width, tex.height, tex.rgba.clone()))
             .clone();
+        let show_view_overlay = self.show_texture_grid || self.show_texture_rulers;
+        let view_overlay = canvas::Canvas::new(crate::ui::texture_preview::TextureViewOverlay {
+            image_width: tex.width,
+            image_height: tex.height,
+            show_grid: self.show_texture_grid,
+            show_rulers: self.show_texture_rulers,
+            grid_divisions: self.texture_grid_divisions,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill);
         let preview: Element<'_, Message> = if self.show_texture_uv && !uv_triangles.is_empty() {
             let image_layer = image(handle)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .content_fit(iced::ContentFit::Contain)
                 .into();
-            let overlay = canvas::Canvas::new(crate::ui::texture_preview::TextureUvOverlay {
+            let uv_layer = canvas::Canvas::new(crate::ui::texture_preview::TextureUvOverlay {
                 image_width: tex.width,
                 image_height: tex.height,
                 triangles: uv_triangles,
@@ -759,7 +776,29 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
-            stack(vec![image_layer, overlay]).width(Length::Fill).height(Length::Fill).into()
+            if show_view_overlay {
+                stack(vec![image_layer, uv_layer, view_overlay.into()])
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            } else {
+                stack(vec![image_layer, uv_layer])
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            }
+        } else if show_view_overlay {
+            // The overlay canvas ignores events, so scroll-to-zoom on the
+            // Viewer underneath keeps working.
+            let viewer_layer = image::Viewer::new(handle)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .content_fit(iced::ContentFit::Contain)
+                .into();
+            stack(vec![viewer_layer, view_overlay.into()])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         } else {
             image::Viewer::new(handle)
                 .width(Length::Fill)
@@ -790,36 +829,33 @@ impl App {
             .width(Length::Fill)
             .into();
         }
-        let (flags, origin_mode) = self
-            .viewer3d_handle
-            .with(|i| (i.flags, i.origin_mode));
+        let (flags, origin_mode) = self.viewer3d_handle.with(|i| (i.flags, i.origin_mode));
         let button_height = Length::Fixed(28.0);
-        let mut row = Row::new()
-            .spacing(4)
-            .padding(2)
-            .width(Length::Fill);
-        row = row.push(w::icon_label(icons::model().size(14), fonts::caption("3D:")));
-        row = row.push(
-            tooltip(
-                button(w::icon_label(
-                    icons::refresh().size(14),
-                    fonts::caption("Reset view"),
-                ))
-                    .on_press(Message::Viewer3dReset)
-                    .height(button_height),
-                fonts::caption("Re-fit the camera to the model. Shortcut: R"),
-                tooltip::Position::Bottom,
-            ),
-        );
-        row = row.push(
-            tooltip(
-                button(w::icon_label(icons::close().size(14), fonts::caption("Clear")))
-                    .on_press(Message::Viewer3dClear)
-                    .height(button_height),
-                fonts::caption("Drop the loaded scene"),
-                tooltip::Position::Bottom,
-            ),
-        );
+        let mut row = Row::new().spacing(4).padding(2).width(Length::Fill);
+        row = row.push(w::icon_label(
+            icons::model().size(14),
+            fonts::caption("3D:"),
+        ));
+        row = row.push(tooltip(
+            button(w::icon_label(
+                icons::refresh().size(14),
+                fonts::caption("Reset view"),
+            ))
+            .on_press(Message::Viewer3dReset)
+            .height(button_height),
+            fonts::caption("Re-fit the camera to the model. Shortcut: R"),
+            tooltip::Position::Bottom,
+        ));
+        row = row.push(tooltip(
+            button(w::icon_label(
+                icons::close().size(14),
+                fonts::caption("Clear"),
+            ))
+            .on_press(Message::Viewer3dClear)
+            .height(button_height),
+            fonts::caption("Drop the loaded scene"),
+            tooltip::Position::Bottom,
+        ));
         row = row.push(
             checkbox(flags.contains(RenderFlags::WIREFRAME))
                 .label("Wireframe")
@@ -879,14 +915,22 @@ impl App {
         panel = panel.push(label_value_owned("Source", inspection.source.to_string()));
 
         if !inspection.summary.is_empty() {
-            panel = panel.push(Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(6.0)));
+            panel = panel.push(
+                Space::new()
+                    .width(Length::Fixed(0.0))
+                    .height(Length::Fixed(6.0)),
+            );
             for (key, value) in &inspection.summary {
                 panel = panel.push(label_value_owned(key, value.to_string()));
             }
         }
 
         if let Some(preview) = &inspection.preview_hex {
-            panel = panel.push(Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(6.0)));
+            panel = panel.push(
+                Space::new()
+                    .width(Length::Fixed(0.0))
+                    .height(Length::Fixed(6.0)),
+            );
             panel = panel.push(fonts::body("Preview (hex):"));
             panel = panel.push(
                 Scrollable::new(fonts::body_monospace(preview.clone()))
@@ -905,9 +949,10 @@ impl App {
 
         // Build the status text: left side.
         let selected_count = self.editor.selected_archive().map_or(0, |idx| {
-            self.editor.archives().get(idx).map_or(0, |a| {
-                a.entries.iter().filter(|e| e.selected).count()
-            })
+            self.editor
+                .archives()
+                .get(idx)
+                .map_or(0, |a| a.entries.iter().filter(|e| e.selected).count())
         });
 
         let left_text = if self.toast.is_some() {
@@ -915,14 +960,21 @@ impl App {
         } else if selected_count > 0 {
             format!("Selected: {selected_count}")
         } else {
-            format!("{} v{}", crate::ui::theme::APP_NAME, env!("CARGO_PKG_VERSION"))
+            format!(
+                "{} v{}",
+                crate::ui::theme::APP_NAME,
+                env!("CARGO_PKG_VERSION")
+            )
         };
 
         // Animate a smooth transition between the normal surface color
         // and a success-green tint when a toast is active.
         let normal_bg = design.surface_subtle();
         let toast_bg = design.success_gradient().0;
-        let mix = self.animator.get(crate::ui::app::ANIM_TOAST_OPACITY).clamp(0.0, 1.0);
+        let mix = self
+            .animator
+            .get(crate::ui::app::ANIM_TOAST_OPACITY)
+            .clamp(0.0, 1.0);
         let bg = Color {
             r: normal_bg.r + (toast_bg.r - normal_bg.r) * mix,
             g: normal_bg.g + (toast_bg.g - normal_bg.g) * mix,
@@ -1042,7 +1094,11 @@ pub fn build(app: &App) -> Element<'_, Message> {
             };
             let tab = button(fonts::body(label))
                 .on_press(Message::SelectArchiveTab(index))
-                .style(if is_selected { button::primary } else { button::secondary });
+                .style(if is_selected {
+                    button::primary
+                } else {
+                    button::secondary
+                });
             // Accent bar on the left of the active tab
             if is_selected {
                 tab_rows.push(
@@ -1050,17 +1106,19 @@ pub fn build(app: &App) -> Element<'_, Message> {
                         .push(w::accent_bar(design.accent(), 32.0))
                         .push(tab)
                         .align_y(Alignment::Center)
-                        .into()
+                        .into(),
                 );
             } else {
                 tab_rows.push(tab.into());
             }
         }
         let row = Row::with_children(tab_rows).spacing(4).padding(4);
-        Container::new(row).style(move |_| iced::widget::container::Style {
-            background: Some(iced::Background::Color(tab_surface)),
-            ..Default::default()
-        }).into()
+        Container::new(row)
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(tab_surface)),
+                ..Default::default()
+            })
+            .into()
     };
 
     let body: Element<'_, Message> = if app.editor.archives().is_empty() {
@@ -1127,8 +1185,12 @@ pub fn build(app: &App) -> Element<'_, Message> {
             .into();
     }
 
-    let mut layers: Vec<Element<'_, Message>> =
-        vec![Container::new(base).width(Length::Fill).height(Length::Fill).into()];
+    let mut layers: Vec<Element<'_, Message>> = vec![
+        Container::new(base)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+    ];
     layers.extend(overlays);
     stack(layers).into()
 }
@@ -1235,26 +1297,22 @@ fn build_folder_import(app: &App) -> Option<Element<'_, Message>> {
         ))
     };
 
-    let mut actions = Row::new()
-        .spacing(8)
-        .push(
-            button(fonts::body(if plan.duplicate_count == 0 {
-                "Import files"
-            } else {
-                "Import (skip duplicates)"
-            }))
-            .on_press(Message::ConfirmFolderImport(FolderDuplicatePolicy::Skip))
-            .style(button::primary),
-        );
+    let mut actions = Row::new().spacing(8).push(
+        button(fonts::body(if plan.duplicate_count == 0 {
+            "Import files"
+        } else {
+            "Import (skip duplicates)"
+        }))
+        .on_press(Message::ConfirmFolderImport(FolderDuplicatePolicy::Skip))
+        .style(button::primary),
+    );
     if plan.duplicate_count > 0 {
         actions = actions.push(
             button(fonts::body("Replace duplicates"))
                 .on_press(Message::ConfirmFolderImport(FolderDuplicatePolicy::Replace)),
         );
     }
-    actions = actions.push(
-        button(fonts::body("Cancel")).on_press(Message::CancelFolderImport),
-    );
+    actions = actions.push(button(fonts::body("Cancel")).on_press(Message::CancelFolderImport));
 
     let mut content = column![
         fonts::body(format!("Folder: {}", plan.folder.display())),
@@ -1263,14 +1321,18 @@ fn build_folder_import(app: &App) -> Option<Element<'_, Message>> {
             plan.files.len(),
             crate::ui::app::format_byte_count(plan.total_bytes)
         )),
-        fonts::caption("Only files directly inside this folder are included; subfolders are not scanned."),
+        fonts::caption(
+            "Only files directly inside this folder are included; subfolders are not scanned."
+        ),
         fonts::caption(duplicate_text),
     ]
     .spacing(6);
     if let Some(scan_text) = scan_text {
         content = content.push(fonts::caption(scan_text));
     }
-    content = content.push(Space::new().height(Length::Fixed(8.0))).push(actions);
+    content = content
+        .push(Space::new().height(Length::Fixed(8.0)))
+        .push(actions);
 
     Some(modal_box("Import folder", content))
 }
@@ -1332,9 +1394,8 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
     // Empty-slice leak shared across all "no archive" invocations
     // so we never allocate just to leak a 0-byte slice. Same cost
     // model as the static HashMaps above.
-    static EMPTY_ENTRIES: std::sync::LazyLock<
-        Box<[crate::archive::EntryInfo]>,
-    > = std::sync::LazyLock::new(|| Box::new([]));
+    static EMPTY_ENTRIES: std::sync::LazyLock<Box<[crate::archive::EntryInfo]>> =
+        std::sync::LazyLock::new(|| Box::new([]));
 
     let leaked: &'static [crate::archive::EntryInfo] = app
         .editor
@@ -1374,9 +1435,7 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
     Some(
         Container::new(dialog)
             .style(|_| iced::widget::container::Style {
-                background: Some(iced::Background::Color(
-                    Color::from_rgb(0.10, 0.11, 0.13),
-                )),
+                background: Some(iced::Background::Color(Color::from_rgb(0.10, 0.11, 0.13))),
                 text_color: Some(Color::WHITE),
                 border: iced::Border {
                     color: Color::from_rgb(0.30, 0.32, 0.36),
@@ -1389,10 +1448,7 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
     )
 }
 
-fn modal_box<'a>(
-    title: &'a str,
-    content: impl Into<Element<'a, Message>>,
-) -> Element<'a, Message> {
+fn modal_box<'a>(title: &'a str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     let content: Element<'a, Message> = content.into();
     let content = column![
         fonts::display(title)
@@ -1400,17 +1456,17 @@ fn modal_box<'a>(
             .width(Length::Fill),
         content,
     ]
-        .spacing(8)
-        .padding(16)
-        .max_width(480)
-        .width(Length::Shrink)
-        .align_x(Alignment::Center);
+    .spacing(8)
+    .padding(16)
+    .max_width(480)
+    .width(Length::Shrink)
+    .align_x(Alignment::Center);
     // Build a floating card with the design-system colors.
     // We use static defaults here because modal_box is called from a
     // non-App context (Element builder). The design system colors tied
     // to a live App would need App::design() passed in.
-    let card = Container::new(content)
-        .style(move |theme: &iced::Theme| iced::widget::container::Style {
+    let card =
+        Container::new(content).style(move |theme: &iced::Theme| iced::widget::container::Style {
             background: Some(theme.extended_palette().background.base.color.into()),
             border: Border {
                 color: theme.extended_palette().background.strong.color,
@@ -1473,8 +1529,11 @@ fn build_context_menu(
 
     if lower.ends_with(".txd") || lower.ends_with(".nft") {
         items.push(
-            context_button("View textures",
-                Message::EntryContextAction(EntryAction::ViewTextures)).into(),
+            context_button(
+                "View textures",
+                Message::EntryContextAction(EntryAction::ViewTextures),
+            )
+            .into(),
         );
     }
 
@@ -1482,30 +1541,34 @@ fn build_context_menu(
         // A NIF's textures live in its companion NFT; the action
         // resolves the basename and exports the NFT's contents.
         items.push(
-            context_button("Export companion NFT textures",
-                Message::EntryContextAction(EntryAction::ExportEmbeddedTextures)).into(),
+            context_button(
+                "Export companion NFT textures",
+                Message::EntryContextAction(EntryAction::ExportEmbeddedTextures),
+            )
+            .into(),
         );
     } else if lower.ends_with(".nft") {
         // An NFT is itself a texture library; the action walks its
         // NiPixelData blocks directly.
         items.push(
-            context_button("Export Embedded Textures",
-                Message::EntryContextAction(EntryAction::ExportEmbeddedTextures)).into(),
+            context_button(
+                "Export Embedded Textures",
+                Message::EntryContextAction(EntryAction::ExportEmbeddedTextures),
+            )
+            .into(),
         );
     }
 
+    items.push(context_button("Export", Message::EntryContextAction(EntryAction::Export)).into());
+    items.push(context_button("Rename", Message::EntryContextAction(EntryAction::Rename)).into());
     items.push(
-        context_button("Export", Message::EntryContextAction(EntryAction::Export)).into(),
+        context_button(
+            "Copy name",
+            Message::EntryContextAction(EntryAction::CopyName),
+        )
+        .into(),
     );
-    items.push(
-        context_button("Rename", Message::EntryContextAction(EntryAction::Rename)).into(),
-    );
-    items.push(
-        context_button("Copy name", Message::EntryContextAction(EntryAction::CopyName)).into(),
-    );
-    items.push(
-        context_button("Delete", Message::EntryContextAction(EntryAction::Delete)).into(),
-    );
+    items.push(context_button("Delete", Message::EntryContextAction(EntryAction::Delete)).into());
 
     let card = container(
         iced::widget::Column::with_children(items)
@@ -1628,10 +1691,10 @@ fn copy_button(label: &str, message: Message) -> Element<'_, Message> {
         icons::copy().size(13),
         fonts::caption(label).align_x(iced::alignment::Horizontal::Center),
     ))
-        .on_press(message)
-        .width(Length::Shrink)
-        .style(menu_button_style)
-        .into()
+    .on_press(message)
+    .width(Length::Shrink)
+    .style(menu_button_style)
+    .into()
 }
 
 pub fn version_label(version: ImgVersion) -> &'static str {
@@ -1655,10 +1718,7 @@ fn sort_label(name: &str, active: bool, direction: SortDirection) -> String {
 
 pub fn menu_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
     button::Style {
-        background: if matches!(
-            status,
-            button::Status::Hovered | button::Status::Pressed
-        ) {
+        background: if matches!(status, button::Status::Hovered | button::Status::Pressed) {
             Some(theme.extended_palette().background.strong.color.into())
         } else {
             None

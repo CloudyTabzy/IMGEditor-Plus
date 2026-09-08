@@ -1,13 +1,13 @@
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::panic;
+use std::path::{Path, PathBuf};
 use std::thread;
 
 use tokio::sync::mpsc;
 
 use crate::inspector::nif::{
-    self, BlockPayload, NifFile, NiTriShapeDataPayload, NiTriStripsDataPayload,
+    self, BlockPayload, NiTriShapeDataPayload, NiTriStripsDataPayload, NifFile,
 };
 use crate::inspector::texture::{IdeMap, resolve_textures_for_nif};
 use crate::parser::col::ColFile;
@@ -103,14 +103,26 @@ fn export_viewer(
     let _ = fs::create_dir_all(&temp_dir);
 
     // Resolve texture via IDE → NFT pipeline.
-    let nif_basename = Path::new(&name).file_stem().and_then(|s| s.to_str()).unwrap_or(stem);
+    let nif_basename = Path::new(&name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(stem);
     eprintln!("[IMGEditor] viewer: nif basename = {nif_basename}, game_root = {game_root:?}");
     let ide_map = game_root.as_ref().map(|root| IdeMap::build(root));
-    let nft_catalog = ide_map.as_ref().and_then(|map| resolve_textures_for_nif(nif_basename, map));
+    let nft_catalog = ide_map
+        .as_ref()
+        .and_then(|map| resolve_textures_for_nif(nif_basename, map));
     if let Some(ref cat) = nft_catalog {
-        eprintln!("[IMGEditor] viewer: NFT catalog has {} entries", cat.entries.len());
+        eprintln!(
+            "[IMGEditor] viewer: NFT catalog has {} entries",
+            cat.entries.len()
+        );
         for (k, v) in &cat.entries {
-            eprintln!("  {k}: {} bytes, source={}", v.pixel_data.as_ref().map_or(0, |d| d.len()), v.source_path);
+            eprintln!(
+                "  {k}: {} bytes, source={}",
+                v.pixel_data.as_ref().map_or(0, |d| d.len()),
+                v.source_path
+            );
         }
     } else {
         eprintln!("[IMGEditor] viewer: no NFT catalog resolved");
@@ -118,7 +130,9 @@ fn export_viewer(
 
     // Try exporting textured OBJ when texture data is available.
     let used_obj = if let Some(ref tex_name) = diffuse_texture {
-        let tex_data = nft_catalog.as_ref().and_then(|cat| cat.get_pixels(tex_name));
+        let tex_data = nft_catalog
+            .as_ref()
+            .and_then(|cat| cat.get_pixels(tex_name));
         if let Some(data) = tex_data {
             match write_obj_with_texture(&temp_dir, stem, &mesh_data, tex_name, data) {
                 Ok(out_path) => {
@@ -131,7 +145,9 @@ fn export_viewer(
                 }
             }
         } else {
-            eprintln!("[IMGEditor] viewer: texture {tex_name} not found in NFT, falling back to PLY");
+            eprintln!(
+                "[IMGEditor] viewer: texture {tex_name} not found in NFT, falling back to PLY"
+            );
             false
         }
     } else {
@@ -175,7 +191,11 @@ fn write_obj_with_texture(
     tex_bytes: &[u8],
 ) -> std::io::Result<PathBuf> {
     // Detect format: DDS files start with b"DDS ", TGA otherwise.
-    let ext = if tex_bytes.starts_with(b"DDS ") { "dds" } else { "tga" };
+    let ext = if tex_bytes.starts_with(b"DDS ") {
+        "dds"
+    } else {
+        "tga"
+    };
     let tex_filename = format!("{stem}.{ext}");
     let tex_dst = dir.join(&tex_filename);
     fs::write(&tex_dst, tex_bytes)?;
@@ -323,11 +343,7 @@ pub fn spawn_dff_render_window(
     rx
 }
 
-fn export_dff_viewer(
-    dff_data: Vec<u8>,
-    name: String,
-    tx: mpsc::UnboundedSender<ViewerEvent>,
-) {
+fn export_dff_viewer(dff_data: Vec<u8>, name: String, tx: mpsc::UnboundedSender<ViewerEvent>) {
     let meshes = match crate::parser::dff::parse_dff(&dff_data) {
         Ok(m) => m,
         Err(e) => {
@@ -399,7 +415,13 @@ fn write_ply_from_meshes(
     for mesh in meshes {
         for chunk in mesh.indices.chunks(3) {
             if chunk.len() == 3 {
-                writeln!(f, "3 {} {} {}", base + chunk[0], base + chunk[1], base + chunk[2])?;
+                writeln!(
+                    f,
+                    "3 {} {} {}",
+                    base + chunk[0],
+                    base + chunk[1],
+                    base + chunk[2]
+                )?;
             }
         }
         base += mesh.positions.len() as u32;
@@ -439,11 +461,7 @@ pub fn spawn_col_render_window(
     rx
 }
 
-fn export_col_viewer(
-    col_data: Vec<u8>,
-    name: String,
-    tx: mpsc::UnboundedSender<ViewerEvent>,
-) {
+fn export_col_viewer(col_data: Vec<u8>, name: String, tx: mpsc::UnboundedSender<ViewerEvent>) {
     let col = match crate::parser::col::parse_col(&col_data) {
         Ok(c) => c,
         Err(e) => {
@@ -509,7 +527,13 @@ fn write_ply_from_col(path: &Path, col: &ColFile) -> std::io::Result<()> {
     for entry in &col.entries {
         for chunk in entry.indices.chunks(3) {
             if chunk.len() == 3 {
-                writeln!(f, "3 {} {} {}", base + chunk[0], base + chunk[1], base + chunk[2])?;
+                writeln!(
+                    f,
+                    "3 {} {} {}",
+                    base + chunk[0],
+                    base + chunk[1],
+                    base + chunk[2]
+                )?;
             }
         }
         base += entry.vertices.len() as u32;
@@ -608,10 +632,8 @@ impl Transform3d {
 
     fn compose(parent: Self, local: Self) -> Self {
         let rotation = multiply_mat3(parent.rotation, local.rotation);
-        let local_translation = multiply_vec3(
-            parent.rotation,
-            scale_vec3(local.translation, parent.scale),
-        );
+        let local_translation =
+            multiply_vec3(parent.rotation, scale_vec3(local.translation, parent.scale));
         Self {
             rotation,
             translation: add_vec3(parent.translation, local_translation),
@@ -622,8 +644,12 @@ impl Transform3d {
     fn point(self, point: nif::Vector3) -> [f32; 3] {
         add_vec3(
             multiply_vec3(
-            self.rotation,
-            [point.x * self.scale, point.y * self.scale, point.z * self.scale],
+                self.rotation,
+                [
+                    point.x * self.scale,
+                    point.y * self.scale,
+                    point.z * self.scale,
+                ],
             ),
             self.translation,
         )
@@ -648,7 +674,11 @@ impl Transform3d {
             matrix * input
         };
         let sign = if self.scale < 0.0 { -1.0 } else { 1.0 };
-        [transformed.x * sign, transformed.y * sign, transformed.z * sign]
+        [
+            transformed.x * sign,
+            transformed.y * sign,
+            transformed.z * sign,
+        ]
     }
 }
 
@@ -773,9 +803,7 @@ fn source_texture_name(nif: &NifFile, desc: &nif::TexDesc) -> Option<String> {
 }
 
 fn texture_basename(name: &str) -> &str {
-    name.rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name)
+    name.rsplit(['/', '\\']).next().unwrap_or(name)
 }
 
 fn looks_like_diffuse_texture(name: &str) -> bool {
@@ -784,7 +812,10 @@ fn looks_like_diffuse_texture(name: &str) -> bool {
         .map_or(texture_basename(name), |(stem, _)| stem)
         .to_ascii_lowercase();
     let suffix = stem.rsplit('_').next().unwrap_or(stem.as_str());
-    !matches!(suffix, "n" | "nm" | "normal" | "s" | "spec" | "specular" | "h" | "height")
+    !matches!(
+        suffix,
+        "n" | "nm" | "normal" | "s" | "spec" | "specular" | "h" | "height"
+    )
 }
 
 fn diffuse_texture_for_properties(nif: &NifFile, properties: &[i32]) -> Option<String> {
@@ -793,11 +824,16 @@ fn diffuse_texture_for_properties(nif: &NifFile, properties: &[i32]) -> Option<S
         let Some(property_idx) = usize::try_from(property_ref).ok() else {
             continue;
         };
-        let Some(Some(BlockPayload::NiTexturingProperty(texturing))) = nif.payloads.get(property_idx)
+        let Some(Some(BlockPayload::NiTexturingProperty(texturing))) =
+            nif.payloads.get(property_idx)
         else {
             continue;
         };
-        if let Some(base) = texturing.base.as_ref().and_then(|desc| source_texture_name(nif, desc)) {
+        if let Some(base) = texturing
+            .base
+            .as_ref()
+            .and_then(|desc| source_texture_name(nif, desc))
+        {
             return Some(base);
         }
         if detail_fallback.is_none() {
@@ -831,7 +867,11 @@ fn geometry_mesh(
         return None;
     }
 
-    let positions: Vec<_> = data.vertices.iter().map(|point| world.point(*point)).collect();
+    let positions: Vec<_> = data
+        .vertices
+        .iter()
+        .map(|point| world.point(*point))
+        .collect();
     let mut indices = triangle_indices(data, strips);
     if world.scale < 0.0 {
         for triangle in indices.chunks_exact_mut(3) {
@@ -1018,8 +1058,8 @@ pub(crate) fn collect_mesh(nif: &NifFile) -> Option<MeshData> {
 mod tests {
     use super::*;
     use crate::inspector::nif::{
-        BlockMeta, Endian, Footer, Matrix33, NiSourceTextureData,
-        NiTexturingPropertyData, NifFile, TexDesc, Triangle, Vector3,
+        BlockMeta, Endian, Footer, Matrix33, NiSourceTextureData, NiTexturingPropertyData, NifFile,
+        TexDesc, Triangle, Vector3,
     };
 
     fn identity_transform(translation: [f32; 3], scale: f32) -> Transform3d {
@@ -1058,7 +1098,13 @@ mod tests {
         let parent = identity_transform([10.0, 0.0, 0.0], 2.0);
         let child = identity_transform([1.0, 0.0, 0.0], 3.0);
         let world = Transform3d::compose(parent, child);
-        assert_eq!(world.point(Vector3 { x: 1.0, ..Vector3::default() }), [18.0, 0.0, 0.0]);
+        assert_eq!(
+            world.point(Vector3 {
+                x: 1.0,
+                ..Vector3::default()
+            }),
+            [18.0, 0.0, 0.0]
+        );
     }
 
     #[test]
@@ -1111,8 +1157,8 @@ mod tests {
             "Player_Mascot_nh.nif",
             "Player_Mascot_W.nif",
         ] {
-            let path = std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/NIF")
-                .join(name);
+            let path =
+                std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/NIF").join(name);
             let Ok(bytes) = std::fs::read(path) else {
                 continue;
             };
@@ -1140,10 +1186,20 @@ mod tests {
             num_vertices: 3,
             vertices: vec![
                 Vector3::default(),
-                Vector3 { x: 1.0, ..Vector3::default() },
-                Vector3 { y: 1.0, ..Vector3::default() },
+                Vector3 {
+                    x: 1.0,
+                    ..Vector3::default()
+                },
+                Vector3 {
+                    y: 1.0,
+                    ..Vector3::default()
+                },
             ],
-            triangles: vec![Triangle { v0: 0, v1: 1, v2: 2 }],
+            triangles: vec![Triangle {
+                v0: 0,
+                v1: 1,
+                v2: 2,
+            }],
             ..Default::default()
         };
         let nif = fake_nif(vec![Some(BlockPayload::NiTriShapeData(data))], Vec::new());

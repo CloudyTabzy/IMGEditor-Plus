@@ -118,8 +118,8 @@ impl ImgParser for PcV1Parser {
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Untitled".to_string());
         archive.version = crate::parser::ImgVersion::One;
-        let img_file = std::fs::File::open(output_path)
-            .context("failed to reopen packed IMG v1 archive")?;
+        let img_file =
+            std::fs::File::open(output_path).context("failed to reopen packed IMG v1 archive")?;
         archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
         archive.add_log("Archive saved".to_string());
         Ok(())
@@ -163,7 +163,10 @@ impl PcV1Parser {
         // file's length); no entry data is read here.
         let mut layout = Vec::with_capacity(total);
         for entry in archive.entries.iter() {
-            layout.push(crate::parser::entry_data_size(entry, source_mmap.as_deref())?);
+            layout.push(crate::parser::entry_data_size(
+                entry,
+                source_mmap.as_deref(),
+            )?);
         }
 
         // Write pass: both streams advance sequentially, and archive-backed

@@ -16,8 +16,8 @@
 use iced::Color;
 
 use crate::ui::tokens::{
-    radius::RadiusScale, spacing::SpacingScale, Color as TokenColor, ColorPalette, Elevation,
-    Shade, Shadow, ThemeTokens,
+    Color as TokenColor, ColorPalette, Elevation, Shade, Shadow, ThemeTokens, radius::RadiusScale,
+    spacing::SpacingScale,
 };
 
 /// Convert a design-token [`TokenColor`] to an [`iced::Color`].
@@ -47,15 +47,25 @@ impl Design {
     }
 
     /// Light variant.
-    pub fn light() -> Self { Self::from_tokens(ThemeTokens::light(), false) }
+    pub fn light() -> Self {
+        Self::from_tokens(ThemeTokens::light(), false)
+    }
     /// Dark variant.
-    pub fn dark() -> Self { Self::from_tokens(ThemeTokens::dark(), true) }
+    pub fn dark() -> Self {
+        Self::from_tokens(ThemeTokens::dark(), true)
+    }
 
     // ----- Colors -------------------------------------------------------
 
-    pub fn palette(&self) -> &ColorPalette { &self.tokens.colors }
-    pub fn spacing(&self) -> &SpacingScale { &self.tokens.spacing }
-    pub fn radius(&self) -> &RadiusScale { &self.tokens.radius }
+    pub fn palette(&self) -> &ColorPalette {
+        &self.tokens.colors
+    }
+    pub fn spacing(&self) -> &SpacingScale {
+        &self.tokens.spacing
+    }
+    pub fn radius(&self) -> &RadiusScale {
+        &self.tokens.radius
+    }
 
     /// Page background — neutral 50 (light) or 50 (dark).
     pub fn page(&self) -> Color {
@@ -104,19 +114,35 @@ impl Design {
     }
 
     /// Strong accent (menubar hover, active tab, primary button).
-    pub fn accent(&self) -> Color { to_iced(self.palette().primary.get(Shade::S500)) }
-    pub fn accent_hover(&self) -> Color { to_iced(self.palette().primary.get(Shade::S600)) }
-    pub fn accent_pressed(&self) -> Color { to_iced(self.palette().primary.get(Shade::S700)) }
-    pub fn accent_weak(&self) -> Color { to_iced(self.palette().primary.get(Shade::S100)) }
+    pub fn accent(&self) -> Color {
+        to_iced(self.palette().primary.get(Shade::S500))
+    }
+    pub fn accent_hover(&self) -> Color {
+        to_iced(self.palette().primary.get(Shade::S600))
+    }
+    pub fn accent_pressed(&self) -> Color {
+        to_iced(self.palette().primary.get(Shade::S700))
+    }
+    pub fn accent_weak(&self) -> Color {
+        to_iced(self.palette().primary.get(Shade::S100))
+    }
     pub fn accent_text(&self) -> Color {
         // Text-on-accent should be near-white in both modes.
         TokenColor::WHITE.into_iced()
     }
 
-    pub fn success(&self) -> Color { to_iced(self.palette().semantic.success.get(Shade::S500)) }
-    pub fn warning(&self) -> Color { to_iced(self.palette().semantic.warning.get(Shade::S500)) }
-    pub fn destructive(&self) -> Color { to_iced(self.palette().semantic.destructive.get(Shade::S500)) }
-    pub fn info(&self) -> Color { to_iced(self.palette().semantic.info.get(Shade::S500)) }
+    pub fn success(&self) -> Color {
+        to_iced(self.palette().semantic.success.get(Shade::S500))
+    }
+    pub fn warning(&self) -> Color {
+        to_iced(self.palette().semantic.warning.get(Shade::S500))
+    }
+    pub fn destructive(&self) -> Color {
+        to_iced(self.palette().semantic.destructive.get(Shade::S500))
+    }
+    pub fn info(&self) -> Color {
+        to_iced(self.palette().semantic.info.get(Shade::S500))
+    }
 
     /// Selection row background (translucent accent).
     pub fn selection_bg(&self) -> Color {
@@ -194,7 +220,9 @@ impl Design {
 impl TokenColor {
     /// Convert to `iced::Color` via the bridge.
     #[inline]
-    pub fn into_iced(self) -> Color { to_iced(self) }
+    pub fn into_iced(self) -> Color {
+        to_iced(self)
+    }
 }
 
 // ----- Convenience: pick design from an iced Theme ----------------------

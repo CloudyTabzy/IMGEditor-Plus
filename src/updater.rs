@@ -72,9 +72,7 @@ pub fn fetch_tags_blocking(url: &str, current_version: &str, repo: &str) -> Upda
 
     let current = match parse_version(current_version) {
         Some(version) => version,
-        None => return UpdateResult::Error(format!(
-            "invalid current version: {current_version}"
-        )),
+        None => return UpdateResult::Error(format!("invalid current version: {current_version}")),
     };
 
     if latest > current {

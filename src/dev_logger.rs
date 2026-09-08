@@ -91,11 +91,11 @@ pub fn init_dev_log() {
     if cfg!(debug_assertions) {
         // Force a backtrace even when launched without
         // RUST_BACKTRACE=1. set_var is racy in general, but this runs
-// at startup before any other thread is spawned.
-    unsafe {
-        std::env::set_var("RUST_BACKTRACE", "full");
+        // at startup before any other thread is spawned.
+        unsafe {
+            std::env::set_var("RUST_BACKTRACE", "full");
+        }
     }
-}
 
     log::info!(
         target: "imgeditor",
@@ -130,7 +130,11 @@ fn write_header(path: &PathBuf) -> std::io::Result<()> {
         f,
         "\n--- imgeditor {} {} ({}) boot @ {} ---",
         env!("CARGO_PKG_VERSION"),
-        if cfg!(debug_assertions) { "debug" } else { "release" },
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
         std::env::consts::ARCH,
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     )
@@ -207,8 +211,22 @@ pub fn write_crash_report(info: &std::panic::PanicInfo<'_>) -> std::io::Result<P
         .unwrap_or_else(std::env::temp_dir)
         .join("imgeditor-panic.log");
     let mut f = OpenOptions::new().create(true).append(true).open(&path)?;
-    writeln!(f, "[panic at {}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"), info)?;
-    writeln!(f, "version: {} ({})", env!("CARGO_PKG_VERSION"), if cfg!(debug_assertions) { "debug" } else { "release" })?;
+    writeln!(
+        f,
+        "[panic at {}] {}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+        info
+    )?;
+    writeln!(
+        f,
+        "version: {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+    )?;
     writeln!(f, "os: {} {}", std::env::consts::OS, std::env::consts::ARCH)?;
     writeln!(f, "backtrace:")?;
     writeln!(f, "{}", std::backtrace::Backtrace::capture())?;

@@ -23,7 +23,9 @@ impl DurationPreset {
     }
 
     #[inline]
-    pub const fn seconds(self) -> f32 { self.ms() as f32 / 1000.0 }
+    pub const fn seconds(self) -> f32 {
+        self.ms() as f32 / 1000.0
+    }
 }
 
 /// Easing function identifiers (for use in cubic-bezier strings).
@@ -44,7 +46,9 @@ impl Easing {
 }
 
 impl Default for Easing {
-    fn default() -> Self { Self::STANDARD }
+    fn default() -> Self {
+        Self::STANDARD
+    }
 }
 
 /// A complete motion definition combining duration and easing.
@@ -57,7 +61,10 @@ pub struct Motion {
 impl Motion {
     #[inline]
     pub const fn new(duration_ms: u32, easing: Easing) -> Self {
-        Self { duration_ms, easing }
+        Self {
+            duration_ms,
+            easing,
+        }
     }
 
     #[inline]
@@ -66,13 +73,17 @@ impl Motion {
     }
 
     #[inline]
-    pub const fn duration_seconds(&self) -> f32 { self.duration_ms as f32 / 1000.0 }
+    pub const fn duration_seconds(&self) -> f32 {
+        self.duration_ms as f32 / 1000.0
+    }
 
     pub const NONE: Self = Self::new(0, Easing::Linear);
 }
 
 impl Default for Motion {
-    fn default() -> Self { Self::new(200, Easing::STANDARD) }
+    fn default() -> Self {
+        Self::new(200, Easing::STANDARD)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

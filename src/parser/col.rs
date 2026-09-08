@@ -12,9 +12,9 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColVersion {
-    V1,  // COLL
-    V2,  // COL2
-    V3,  // COL3
+    V1, // COLL
+    V2, // COL2
+    V3, // COL3
 }
 
 #[derive(Debug, Error)]
@@ -78,7 +78,10 @@ pub fn parse_col(bytes: &[u8]) -> Result<ColFile, ColError> {
 
         // Total entry size (including header) — skip past it to find next entry.
         let entry_total = u32::from_le_bytes([
-            bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7],
+            bytes[pos + 4],
+            bytes[pos + 5],
+            bytes[pos + 6],
+            bytes[pos + 7],
         ]) as usize;
 
         let _entry_start = pos;
@@ -147,28 +150,40 @@ pub fn parse_col(bytes: &[u8]) -> Result<ColFile, ColError> {
         // Read counts in order: num_spheres, num_boxes, num_vertices, num_faces,
         // num_face_groups, num_cones
         let num_spheres = u32::from_le_bytes([
-            bytes[counts_offset], bytes[counts_offset + 1],
-            bytes[counts_offset + 2], bytes[counts_offset + 3],
+            bytes[counts_offset],
+            bytes[counts_offset + 1],
+            bytes[counts_offset + 2],
+            bytes[counts_offset + 3],
         ]);
         let num_boxes = u32::from_le_bytes([
-            bytes[counts_offset + 4], bytes[counts_offset + 5],
-            bytes[counts_offset + 6], bytes[counts_offset + 7],
+            bytes[counts_offset + 4],
+            bytes[counts_offset + 5],
+            bytes[counts_offset + 6],
+            bytes[counts_offset + 7],
         ]);
         let num_vertices = u32::from_le_bytes([
-            bytes[counts_offset + 8], bytes[counts_offset + 9],
-            bytes[counts_offset + 10], bytes[counts_offset + 11],
+            bytes[counts_offset + 8],
+            bytes[counts_offset + 9],
+            bytes[counts_offset + 10],
+            bytes[counts_offset + 11],
         ]);
         let num_faces = u32::from_le_bytes([
-            bytes[counts_offset + 12], bytes[counts_offset + 13],
-            bytes[counts_offset + 14], bytes[counts_offset + 15],
+            bytes[counts_offset + 12],
+            bytes[counts_offset + 13],
+            bytes[counts_offset + 14],
+            bytes[counts_offset + 15],
         ]);
         let _num_face_groups = u32::from_le_bytes([
-            bytes[counts_offset + 16], bytes[counts_offset + 17],
-            bytes[counts_offset + 18], bytes[counts_offset + 19],
+            bytes[counts_offset + 16],
+            bytes[counts_offset + 17],
+            bytes[counts_offset + 18],
+            bytes[counts_offset + 19],
         ]);
         let _num_cones = u32::from_le_bytes([
-            bytes[counts_offset + 20], bytes[counts_offset + 21],
-            bytes[counts_offset + 22], bytes[counts_offset + 23],
+            bytes[counts_offset + 20],
+            bytes[counts_offset + 21],
+            bytes[counts_offset + 22],
+            bytes[counts_offset + 23],
         ]);
 
         let shadow_verts_offset = counts_offset + 24;
@@ -177,12 +192,16 @@ pub fn parse_col(bytes: &[u8]) -> Result<ColFile, ColError> {
         let shadow_num_v = if version != ColVersion::V1 {
             if shadow_counts_offset + 8 <= entry_end {
                 let sv = u32::from_le_bytes([
-                    bytes[shadow_counts_offset], bytes[shadow_counts_offset + 1],
-                    bytes[shadow_counts_offset + 2], bytes[shadow_counts_offset + 3],
+                    bytes[shadow_counts_offset],
+                    bytes[shadow_counts_offset + 1],
+                    bytes[shadow_counts_offset + 2],
+                    bytes[shadow_counts_offset + 3],
                 ]);
                 let _sf = u32::from_le_bytes([
-                    bytes[shadow_counts_offset + 4], bytes[shadow_counts_offset + 5],
-                    bytes[shadow_counts_offset + 6], bytes[shadow_counts_offset + 7],
+                    bytes[shadow_counts_offset + 4],
+                    bytes[shadow_counts_offset + 5],
+                    bytes[shadow_counts_offset + 6],
+                    bytes[shadow_counts_offset + 7],
                 ]);
                 sv
             } else {
@@ -225,20 +244,29 @@ pub fn parse_col(bytes: &[u8]) -> Result<ColFile, ColError> {
                         let (x, y, z) = if vert_size == 12 {
                             // Uncompressed float32 × 3
                             let x = f32::from_le_bytes([
-                                bytes[vp], bytes[vp+1], bytes[vp+2], bytes[vp+3],
+                                bytes[vp],
+                                bytes[vp + 1],
+                                bytes[vp + 2],
+                                bytes[vp + 3],
                             ]);
                             let y = f32::from_le_bytes([
-                                bytes[vp+4], bytes[vp+5], bytes[vp+6], bytes[vp+7],
+                                bytes[vp + 4],
+                                bytes[vp + 5],
+                                bytes[vp + 6],
+                                bytes[vp + 7],
                             ]);
                             let z = f32::from_le_bytes([
-                                bytes[vp+8], bytes[vp+9], bytes[vp+10], bytes[vp+11],
+                                bytes[vp + 8],
+                                bytes[vp + 9],
+                                bytes[vp + 10],
+                                bytes[vp + 11],
                             ]);
                             (x, y, z)
                         } else {
                             // Compressed int16 × 3
-                            let x = i16::from_le_bytes([bytes[vp], bytes[vp+1]]) as f32;
-                            let y = i16::from_le_bytes([bytes[vp+2], bytes[vp+3]]) as f32;
-                            let z = i16::from_le_bytes([bytes[vp+4], bytes[vp+5]]) as f32;
+                            let x = i16::from_le_bytes([bytes[vp], bytes[vp + 1]]) as f32;
+                            let y = i16::from_le_bytes([bytes[vp + 2], bytes[vp + 3]]) as f32;
+                            let z = i16::from_le_bytes([bytes[vp + 4], bytes[vp + 5]]) as f32;
                             (x, y, z)
                         };
                         vertices.push([x, y, z]);
@@ -274,20 +302,29 @@ pub fn parse_col(bytes: &[u8]) -> Result<ColFile, ColError> {
                         let (v0, v1, v2) = if face_size == 16 {
                             // COL1: 3 × uint32 + surface
                             let v0 = u32::from_le_bytes([
-                                bytes[fp], bytes[fp+1], bytes[fp+2], bytes[fp+3],
+                                bytes[fp],
+                                bytes[fp + 1],
+                                bytes[fp + 2],
+                                bytes[fp + 3],
                             ]);
                             let v1 = u32::from_le_bytes([
-                                bytes[fp+4], bytes[fp+5], bytes[fp+6], bytes[fp+7],
+                                bytes[fp + 4],
+                                bytes[fp + 5],
+                                bytes[fp + 6],
+                                bytes[fp + 7],
                             ]);
                             let v2 = u32::from_le_bytes([
-                                bytes[fp+8], bytes[fp+9], bytes[fp+10], bytes[fp+11],
+                                bytes[fp + 8],
+                                bytes[fp + 9],
+                                bytes[fp + 10],
+                                bytes[fp + 11],
                             ]);
                             (v0, v1, v2)
                         } else {
                             // COL2/COL3: 3 × uint16 + surface
-                            let v0 = u16::from_le_bytes([bytes[fp], bytes[fp+1]]) as u32;
-                            let v1 = u16::from_le_bytes([bytes[fp+2], bytes[fp+3]]) as u32;
-                            let v2 = u16::from_le_bytes([bytes[fp+4], bytes[fp+5]]) as u32;
+                            let v0 = u16::from_le_bytes([bytes[fp], bytes[fp + 1]]) as u32;
+                            let v1 = u16::from_le_bytes([bytes[fp + 2], bytes[fp + 3]]) as u32;
+                            let v2 = u16::from_le_bytes([bytes[fp + 4], bytes[fp + 5]]) as u32;
                             (v0, v1, v2)
                         };
                         indices.push(v0);

@@ -31,8 +31,8 @@
 //! the app layer inserts into its view.
 
 use iced::widget::{
-    Column, Container, PickList, Row, Scrollable, Space, button, checkbox, container,
-    pick_list, text,
+    Column, Container, PickList, Row, Scrollable, Space, button, checkbox, container, pick_list,
+    text,
 };
 use iced::{Alignment, Color, Element, Length, Padding};
 
@@ -151,9 +151,7 @@ pub fn build<'a>(
             .padding(Padding::from(16)),
     )
     .style(|_| iced::widget::container::Style {
-        background: Some(iced::Background::Color(Color::from_rgb(
-            0.10, 0.11, 0.13,
-        ))),
+        background: Some(iced::Background::Color(Color::from_rgb(0.10, 0.11, 0.13))),
         text_color: Some(Color::WHITE),
         ..Default::default()
     })
@@ -174,11 +172,9 @@ pub fn build<'a>(
 /// preserved when they re-enable.
 fn slot_row<'a>(index: usize, prio: &'a SortPriority) -> Element<'a, Message> {
     let slot_idx = SortSlotIndex(index);
-    let key_picker = pick_list(
-        SortKey::ALL,
-        Some(prio.key),
-        move |new_key: SortKey| Message::SortSetSlotKey(slot_idx, new_key),
-    )
+    let key_picker = pick_list(SortKey::ALL, Some(prio.key), move |new_key: SortKey| {
+        Message::SortSetSlotKey(slot_idx, new_key)
+    })
     .placeholder("Select key…")
     .text_size(13)
     .width(LEN_FIXED_140);
@@ -270,15 +266,11 @@ fn controls_row<'a>(draft: &'a SortChain) -> Element<'a, Message> {
         .padding(Padding::from([4, 12]));
 
     let enabled_count = draft.enabled_count();
-    let summary = text(format!(
-        "{} of {} keys active",
-        enabled_count,
-        draft.len()
-    ))
-    .size(12)
-    .style(|_| iced::widget::text::Style {
-        color: Some(SECONDARY_COLOR),
-    });
+    let summary = text(format!("{} of {} keys active", enabled_count, draft.len()))
+        .size(12)
+        .style(|_| iced::widget::text::Style {
+            color: Some(SECONDARY_COLOR),
+        });
 
     Row::new()
         .push(add_btn)
@@ -381,9 +373,7 @@ fn preview_pane<'a>(
         col = col.push(
             text(format!("{:>2}. {name}", i + 1))
                 .size(12)
-                .style(move |_| iced::widget::text::Style {
-                    color: Some(color),
-                }),
+                .style(move |_| iced::widget::text::Style { color: Some(color) }),
         );
     }
     if sorted.len() > max {
@@ -407,22 +397,18 @@ fn preset_picker<'a>() -> Element<'a, Message> {
         .iter()
         .map(|p| p.display_name().to_string())
         .collect();
-    PickList::new(
-        options,
-        None::<String>,
-        move |selected: String| {
-            // Map the selected display name back to the preset
-            // variant. Fall back to NameAZ on mismatch so a
-            // stale `settings.ini` round-trip doesn't silently
-            // change behavior.
-            let preset = SortPreset::ALL
-                .iter()
-                .copied()
-                .find(|p| p.display_name() == selected)
-                .unwrap_or(SortPreset::NameAZ);
-            Message::SortSelectPreset(preset)
-        },
-    )
+    PickList::new(options, None::<String>, move |selected: String| {
+        // Map the selected display name back to the preset
+        // variant. Fall back to NameAZ on mismatch so a
+        // stale `settings.ini` round-trip doesn't silently
+        // change behavior.
+        let preset = SortPreset::ALL
+            .iter()
+            .copied()
+            .find(|p| p.display_name() == selected)
+            .unwrap_or(SortPreset::NameAZ);
+        Message::SortSelectPreset(preset)
+    })
     .placeholder("Apply preset…")
     .text_size(12)
     .into()

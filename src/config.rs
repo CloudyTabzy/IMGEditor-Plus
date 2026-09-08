@@ -25,18 +25,12 @@ impl RecentFile {
 
     /// Filename without the directory, suitable for a menu label.
     pub fn display_name(&self) -> &str {
-        self.path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
+        self.path.file_name().and_then(|n| n.to_str()).unwrap_or("")
     }
 
     /// Directory containing the file, for the menu's secondary line.
     pub fn display_dir(&self) -> &str {
-        self.path
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or("")
+        self.path.parent().and_then(|p| p.to_str()).unwrap_or("")
     }
 }
 
@@ -237,6 +231,24 @@ pub struct Config {
     pub update_check_enabled: bool,
     pub update_notify_disabled: bool,
     pub fast_export: bool,
+    /// Texture tab: show the proportional grid overlay.
+    pub show_texture_grid: bool,
+    /// Texture tab: show Photoshop-style pixel rulers + cursor readout.
+    pub show_texture_rulers: bool,
+    /// Texture tab: grid cells per axis (see `ALLOWED_GRID_DIVISIONS`).
+    pub texture_grid_divisions: u32,
+}
+
+/// Grid divisions offered in the View menu. Kept coarse so grid lines
+/// stay readable across the small texture-tab preview.
+pub const ALLOWED_GRID_DIVISIONS: [u32; 3] = [8, 16, 32];
+
+fn clamp_grid_divisions(v: u32) -> u32 {
+    if ALLOWED_GRID_DIVISIONS.contains(&v) {
+        v
+    } else {
+        16
+    }
 }
 
 impl Default for Config {
@@ -252,6 +264,9 @@ impl Default for Config {
             update_check_enabled: true,
             update_notify_disabled: false,
             fast_export: false,
+            show_texture_grid: false,
+            show_texture_rulers: false,
+            texture_grid_divisions: 16,
         }
     }
 }
@@ -387,8 +402,7 @@ impl Config {
                     {
                         // Sparse vec; grow as needed.
                         while pending_sort_priorities.len() <= index {
-                            pending_sort_priorities
-                                .push(SortPriority::disabled());
+                            pending_sort_priorities.push(SortPriority::disabled());
                         }
                         pending_sort_priorities[index] = prio;
                     }
@@ -401,6 +415,17 @@ impl Config {
                 }
                 "fast_export" => {
                     config.fast_export = value.eq_ignore_ascii_case("true");
+                }
+                "show_texture_grid" => {
+                    config.show_texture_grid = value.eq_ignore_ascii_case("true");
+                }
+                "show_texture_rulers" => {
+                    config.show_texture_rulers = value.eq_ignore_ascii_case("true");
+                }
+                "texture_grid_divisions" => {
+                    if let Ok(divisions) = value.parse::<u32>() {
+                        config.texture_grid_divisions = clamp_grid_divisions(divisions);
+                    }
                 }
                 _ => {}
             }
@@ -496,6 +521,29 @@ impl Config {
             "fast_export={}",
             if self.fast_export { "true" } else { "false" }
         )?;
+        writeln!(
+            file,
+            "show_texture_grid={}",
+            if self.show_texture_grid {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
+        writeln!(
+            file,
+            "show_texture_rulers={}",
+            if self.show_texture_rulers {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
+        writeln!(
+            file,
+            "texture_grid_divisions={}",
+            self.texture_grid_divisions
+        )?;
         Ok(())
     }
 
@@ -556,6 +604,9 @@ mod tests {
             update_check_enabled: false,
             update_notify_disabled: true,
             fast_export: true,
+            show_texture_grid: true,
+            show_texture_rulers: true,
+            texture_grid_divisions: 32,
         };
         let archive_a = temp.path().join("a.img");
         let archive_b = temp.path().join("b.img");
@@ -582,6 +633,18 @@ mod tests {
         );
         assert!(!loaded.update_check_enabled);
         assert!(loaded.fast_export);
+        assert!(loaded.show_texture_grid);
+        assert!(loaded.show_texture_rulers);
+        assert_eq!(loaded.texture_grid_divisions, 32);
+    }
+
+    #[test]
+    fn config_clamps_grid_divisions() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("settings.ini");
+        fs::write(&path, "texture_grid_divisions=13").unwrap();
+        let loaded = Config::load_from_path(&path);
+        assert_eq!(loaded.texture_grid_divisions, 16);
     }
 
     #[test]
@@ -610,7 +673,10 @@ mod tests {
         let mut r = RecentFiles::new();
         r.touch("/tmp/a.img");
         r.touch("/tmp/b.img");
-        let labels: Vec<_> = r.iter().map(|(_, e)| e.display_name().to_string()).collect();
+        let labels: Vec<_> = r
+            .iter()
+            .map(|(_, e)| e.display_name().to_string())
+            .collect();
         // display_name is just the file_name component
         assert_eq!(labels, vec!["b.img", "a.img"]);
     }
@@ -623,7 +689,10 @@ mod tests {
         r.touch("/tmp/c.img");
         r.touch("/tmp/a.img"); // re-touch
         assert_eq!(r.len(), 3);
-        let names: Vec<_> = r.iter().map(|(_, e)| e.display_name().to_string()).collect();
+        let names: Vec<_> = r
+            .iter()
+            .map(|(_, e)| e.display_name().to_string())
+            .collect();
         assert_eq!(names, vec!["a.img", "c.img", "b.img"]);
     }
 
@@ -643,7 +712,10 @@ mod tests {
         r.touch("/tmp/b.img");
         r.touch("/tmp/c.img");
         r.remove("/tmp/b.img");
-        let names: Vec<_> = r.iter().map(|(_, e)| e.display_name().to_string()).collect();
+        let names: Vec<_> = r
+            .iter()
+            .map(|(_, e)| e.display_name().to_string())
+            .collect();
         assert_eq!(names, vec!["c.img", "a.img"]);
     }
 
@@ -660,10 +732,7 @@ mod tests {
         // path.exists() returns false.
         let missing = temp.path().join("does_not_exist_subdir/missing.img");
         r.touch(&missing);
-        let existing_only: Vec<_> = r
-            .iter_existing()
-            .map(|(_, e)| e.path.clone())
-            .collect();
+        let existing_only: Vec<_> = r.iter_existing().map(|(_, e)| e.path.clone()).collect();
         assert_eq!(existing_only.len(), 1);
         // touch() canonicalizes the path (\\?\ prefix on Windows), so
         // compare against the canonicalized form.
@@ -682,7 +751,9 @@ mod tests {
     #[test]
     fn recent_files_menu_label_truncates_long_paths() {
         let mut r = RecentFiles::new();
-        r.touch("/very/long/path/that/exceeds/the/typical/width/allowed/for/menu/items/cool_game.img");
+        r.touch(
+            "/very/long/path/that/exceeds/the/typical/width/allowed/for/menu/items/cool_game.img",
+        );
         let label = r.menu_label(0, 30);
         // Must contain the filename
         assert!(label.contains("cool_game.img"));
@@ -743,7 +814,14 @@ mod tests {
             .collect();
         // touch() canonicalizes the path; compare against canonicalized
         // versions of the original inputs.
-        assert_eq!(names, vec![a.canonicalize().unwrap(), b.canonicalize().unwrap(), c.canonicalize().unwrap()]);
+        assert_eq!(
+            names,
+            vec![
+                a.canonicalize().unwrap(),
+                b.canonicalize().unwrap(),
+                c.canonicalize().unwrap()
+            ]
+        );
     }
 
     #[test]
@@ -756,6 +834,9 @@ mod tests {
             "TokyoNight".parse::<ThemeMode>().unwrap(),
             ThemeMode::DarkTokyoNight
         );
-        assert_eq!("Gruvbox".parse::<ThemeMode>().unwrap(), ThemeMode::DarkGruvbox);
+        assert_eq!(
+            "Gruvbox".parse::<ThemeMode>().unwrap(),
+            ThemeMode::DarkGruvbox
+        );
     }
 }

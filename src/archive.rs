@@ -8,7 +8,10 @@ use compact_str::CompactString;
 use memmap2::Mmap;
 use smallvec::SmallVec;
 
-use crate::parser::{DecodedTexture, EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE, encode_entry_name, sector_rounded_size};
+use crate::parser::{
+    DecodedTexture, EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE,
+    encode_entry_name, sector_rounded_size,
+};
 use crate::sort::SortChain;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,7 +31,11 @@ pub struct PackStats {
 
 impl PackStats {
     pub(crate) fn from_sizes(entry_count: usize, original_bytes: u64, packed_bytes: u64) -> Self {
-        Self { entry_count, original_bytes, packed_bytes }
+        Self {
+            entry_count,
+            original_bytes,
+            packed_bytes,
+        }
     }
 
     pub fn reclaimed_bytes(self) -> u64 {
@@ -44,8 +51,6 @@ impl PackStats {
 pub struct ProgressInfo {
     inner: Arc<ProgressInner>,
 }
-
-
 
 #[derive(Debug)]
 struct ProgressInner {
@@ -76,7 +81,9 @@ impl ProgressInfo {
     pub fn finish(&self) {
         self.inner.in_use.store(false, Ordering::Release);
         self.inner.cancel.store(false, Ordering::Release);
-        self.inner.percentage.store(f32::to_bits(1.0), Ordering::Release);
+        self.inner
+            .percentage
+            .store(f32::to_bits(1.0), Ordering::Release);
     }
 
     pub fn reset(&self) {
@@ -433,26 +440,37 @@ impl ArchiveInfo {
     /// Imported files are measured at call time so the result reflects files
     /// that may have changed since they were added to the archive.
     pub fn pack_stats(&self) -> anyhow::Result<PackStats> {
-        let original_bytes = self.path.as_ref().map(|path| {
-            std::fs::metadata(path)
-                .with_context(|| format!("failed to inspect archive: {}", path.display()))
-                .map(|metadata| metadata.len())
-        }).transpose()?.unwrap_or_default();
+        let original_bytes = self
+            .path
+            .as_ref()
+            .map(|path| {
+                std::fs::metadata(path)
+                    .with_context(|| format!("failed to inspect archive: {}", path.display()))
+                    .map(|metadata| metadata.len())
+            })
+            .transpose()?
+            .unwrap_or_default();
 
         let data_bytes = self.entries.iter().try_fold(0_u64, |total, entry| {
             let entry_bytes = if entry.imported {
-                let source = entry.source_path.as_ref()
+                let source = entry
+                    .source_path
+                    .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
                 let size = std::fs::metadata(source)
-                    .with_context(|| format!("failed to inspect imported file: {}", source.display()))?
+                    .with_context(|| {
+                        format!("failed to inspect imported file: {}", source.display())
+                    })?
                     .len();
                 sector_rounded_size(size)
             } else {
-                u64::from(entry.sector).checked_mul(SECTOR_SIZE)
+                u64::from(entry.sector)
+                    .checked_mul(SECTOR_SIZE)
                     .ok_or_else(|| anyhow::anyhow!("entry sector count is too large"))?
             };
 
-            total.checked_add(entry_bytes)
+            total
+                .checked_add(entry_bytes)
                 .ok_or_else(|| anyhow::anyhow!("packed archive size is too large"))
         })?;
 
@@ -462,10 +480,15 @@ impl ArchiveInfo {
             ImgVersion::Two => 0x300000,
             ImgVersion::Unknown => anyhow::bail!("cannot pack unknown archive format"),
         };
-        let packed_bytes = header_bytes.checked_add(data_bytes)
+        let packed_bytes = header_bytes
+            .checked_add(data_bytes)
             .ok_or_else(|| anyhow::anyhow!("packed archive size is too large"))?;
 
-        Ok(PackStats::from_sizes(self.entries.len(), original_bytes, packed_bytes))
+        Ok(PackStats::from_sizes(
+            self.entries.len(),
+            original_bytes,
+            packed_bytes,
+        ))
     }
 
     /// O(1) lookup from entry index to its display row in the current filter/sort.
@@ -642,7 +665,11 @@ mod tests {
     fn pack_stats_accounts_for_v2_header_and_imported_files() {
         let dir = tempfile::tempdir().unwrap();
         let archive_path = dir.path().join("fragmented.img");
-        std::fs::write(&archive_path, vec![0_u8; 0x300000 + (3 * SECTOR_SIZE) as usize]).unwrap();
+        std::fs::write(
+            &archive_path,
+            vec![0_u8; 0x300000 + (3 * SECTOR_SIZE) as usize],
+        )
+        .unwrap();
         let imported_path = dir.path().join("new.txd");
         std::fs::write(&imported_path, vec![0_u8; SECTOR_SIZE as usize + 1]).unwrap();
 

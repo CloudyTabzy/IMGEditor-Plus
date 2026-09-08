@@ -103,7 +103,10 @@ pub fn save_archive(default_path: PathBuf, version: ImgVersion) -> Task<Option<S
 }
 
 #[cfg(not(feature = "native-dialogs"))]
-pub fn save_archive(_default_path: PathBuf, _version: ImgVersion) -> Task<Option<SaveArchiveChoice>> {
+pub fn save_archive(
+    _default_path: PathBuf,
+    _version: ImgVersion,
+) -> Task<Option<SaveArchiveChoice>> {
     Task::none()
 }
 

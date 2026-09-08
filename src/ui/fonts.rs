@@ -3,7 +3,8 @@ use std::borrow::Cow;
 use iced::font::{Family, Weight};
 use iced::widget::Text;
 
-pub const INTER_FONT_BYTES: &[u8] = include_bytes!("../../asset/inter/Inter-VariableFont_opsz,wght.ttf");
+pub const INTER_FONT_BYTES: &[u8] =
+    include_bytes!("../../asset/inter/Inter-VariableFont_opsz,wght.ttf");
 
 pub const BRICOLAGE_DISPLAY_FONT_BYTES: &[u8] =
     include_bytes!("../../asset/Bricolage_Grotesque/static/BricolageGrotesque-ExtraBold.ttf");

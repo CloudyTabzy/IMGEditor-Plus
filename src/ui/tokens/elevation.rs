@@ -14,14 +14,22 @@ pub struct Shadow {
 impl Shadow {
     #[inline]
     pub const fn new(offset_x: f32, offset_y: f32, blur: f32, spread: f32, color: Color) -> Self {
-        Self { offset_x, offset_y, blur, spread, color }
+        Self {
+            offset_x,
+            offset_y,
+            blur,
+            spread,
+            color,
+        }
     }
 
     pub const NONE: Self = Self::new(0.0, 0.0, 0.0, 0.0, Color::TRANSPARENT);
 }
 
 impl Default for Shadow {
-    fn default() -> Self { Self::NONE }
+    fn default() -> Self {
+        Self::NONE
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -35,7 +43,9 @@ pub enum ElevationLevel {
 
 impl ElevationLevel {
     #[inline]
-    pub const fn index(self) -> usize { self as usize }
+    pub const fn index(self) -> usize {
+        self as usize
+    }
 
     #[inline]
     pub const fn z_index(self) -> u32 {
@@ -60,19 +70,31 @@ pub struct Elevation {
 impl Elevation {
     #[inline]
     pub const fn new(shadow: Shadow) -> Self {
-        Self { shadow, shadow_secondary: None, border_width: 0.0, border_color: Color::TRANSPARENT }
+        Self {
+            shadow,
+            shadow_secondary: None,
+            border_width: 0.0,
+            border_color: Color::TRANSPARENT,
+        }
     }
 
     #[inline]
     pub const fn with_border(border_width: f32, border_color: Color) -> Self {
-        Self { shadow: Shadow::NONE, shadow_secondary: None, border_width, border_color }
+        Self {
+            shadow: Shadow::NONE,
+            shadow_secondary: None,
+            border_width,
+            border_color,
+        }
     }
 
     pub const FLAT: Self = Self::new(Shadow::NONE);
 }
 
 impl Default for Elevation {
-    fn default() -> Self { Self::FLAT }
+    fn default() -> Self {
+        Self::FLAT
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

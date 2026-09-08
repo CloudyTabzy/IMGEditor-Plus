@@ -14,7 +14,9 @@ pub enum RadiusSize {
 
 impl RadiusSize {
     #[inline]
-    pub const fn index(self) -> usize { self as usize }
+    pub const fn index(self) -> usize {
+        self as usize
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,21 +30,51 @@ impl RadiusScale {
     };
 
     #[inline]
-    pub const fn new(values: [f32; 8]) -> Self { Self { values } }
+    pub const fn new(values: [f32; 8]) -> Self {
+        Self { values }
+    }
 
     #[inline]
-    pub const fn get(&self, size: RadiusSize) -> f32 { self.values[size.index()] }
+    pub const fn get(&self, size: RadiusSize) -> f32 {
+        self.values[size.index()]
+    }
 
-    #[inline] pub const fn none(&self) -> f32 { self.values[0] }
-    #[inline] pub const fn xs(&self) -> f32 { self.values[1] }
-    #[inline] pub const fn sm(&self) -> f32 { self.values[2] }
-    #[inline] pub const fn md(&self) -> f32 { self.values[3] }
-    #[inline] pub const fn lg(&self) -> f32 { self.values[4] }
-    #[inline] pub const fn xl(&self) -> f32 { self.values[5] }
-    #[inline] pub const fn xl2(&self) -> f32 { self.values[6] }
-    #[inline] pub const fn full(&self) -> f32 { self.values[7] }
+    #[inline]
+    pub const fn none(&self) -> f32 {
+        self.values[0]
+    }
+    #[inline]
+    pub const fn xs(&self) -> f32 {
+        self.values[1]
+    }
+    #[inline]
+    pub const fn sm(&self) -> f32 {
+        self.values[2]
+    }
+    #[inline]
+    pub const fn md(&self) -> f32 {
+        self.values[3]
+    }
+    #[inline]
+    pub const fn lg(&self) -> f32 {
+        self.values[4]
+    }
+    #[inline]
+    pub const fn xl(&self) -> f32 {
+        self.values[5]
+    }
+    #[inline]
+    pub const fn xl2(&self) -> f32 {
+        self.values[6]
+    }
+    #[inline]
+    pub const fn full(&self) -> f32 {
+        self.values[7]
+    }
 }
 
 impl Default for RadiusScale {
-    fn default() -> Self { Self::DEFAULT }
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }

@@ -22,7 +22,7 @@ use crate::inspector::nif::NifFile;
 use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::mesh::{Aabb, SceneMesh, SceneTexture, Vertex};
 use crate::inspector::scene3d::scene::Scene;
-use crate::inspector::viewer3d::{collect_meshes, MeshData};
+use crate::inspector::viewer3d::{MeshData, collect_meshes};
 
 #[derive(Debug, Error)]
 pub enum DecodeError {
@@ -116,8 +116,7 @@ fn mesh_from_data(
         let n_in: glam::Vec4 = glam::Vec4::new(n[0], n[1], n[2], 0.0);
         let n_out = xform_inv_transpose * n_in;
         let mut normal = [n_out.x, n_out.y, n_out.z];
-        let len =
-            (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+        let len = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
         if len > 1e-6 {
             normal = [normal[0] / len, normal[1] / len, normal[2] / len];
         } else {
@@ -241,10 +240,16 @@ mod tests {
         })
         .expect("1950Fridge should decode");
         assert!(
-            names.borrow().iter().any(|name| name.to_ascii_lowercase().contains(".tga")),
+            names
+                .borrow()
+                .iter()
+                .any(|name| name.to_ascii_lowercase().contains(".tga")),
             "the scene graph should expose a diffuse texture reference"
         );
-        assert!(scene.textured_mesh_count() > 0, "the fixture diffuse texture should render");
+        assert!(
+            scene.textured_mesh_count() > 0,
+            "the fixture diffuse texture should render"
+        );
     }
 
     #[test]
@@ -264,7 +269,11 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(strips.len(), 2, "the bottle should contain two strip meshes");
+        assert_eq!(
+            strips.len(),
+            2,
+            "the bottle should contain two strip meshes"
+        );
         assert!(strips.iter().all(|data| data.base.triangles.is_empty()));
         assert_eq!(
             strips

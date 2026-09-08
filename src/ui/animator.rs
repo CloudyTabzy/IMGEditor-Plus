@@ -156,12 +156,17 @@ impl Animator {
 
     /// How many animations are currently running.
     pub fn running_count(&self) -> usize {
-        self.animations.values().filter(|a| a.state == State::Running).count()
+        self.animations
+            .values()
+            .filter(|a| a.state == State::Running)
+            .count()
     }
 
     /// Check if a specific animation is still running.
     pub fn is_running(&self, id: AnimationId) -> bool {
-        self.animations.get(&id).is_some_and(|a| a.state == State::Running)
+        self.animations
+            .get(&id)
+            .is_some_and(|a| a.state == State::Running)
     }
 
     /// Reserve a unique animation ID.
@@ -173,7 +178,9 @@ impl Animator {
 }
 
 impl Default for Animator {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

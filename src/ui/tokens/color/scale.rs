@@ -54,7 +54,10 @@ impl Color {
     /// Multiply alpha (for hover/focus overlays).
     #[inline]
     pub fn fade(self, factor: f32) -> Self {
-        Self { a: (self.a * factor).clamp(0.0, 1.0), ..self }
+        Self {
+            a: (self.a * factor).clamp(0.0, 1.0),
+            ..self
+        }
     }
 
     pub const TRANSPARENT: Self = Self::new(0.0, 0.0, 0.0, 0.0);
@@ -86,21 +89,38 @@ pub enum Shade {
 
 impl Shade {
     pub const ALL: [Self; 10] = [
-        Self::S50, Self::S100, Self::S200, Self::S300, Self::S400,
-        Self::S500, Self::S600, Self::S700, Self::S800, Self::S900,
+        Self::S50,
+        Self::S100,
+        Self::S200,
+        Self::S300,
+        Self::S400,
+        Self::S500,
+        Self::S600,
+        Self::S700,
+        Self::S800,
+        Self::S900,
     ];
 
     #[inline]
     pub const fn value(self) -> u16 {
         match self {
-            Self::S50 => 50, Self::S100 => 100, Self::S200 => 200, Self::S300 => 300,
-            Self::S400 => 400, Self::S500 => 500, Self::S600 => 600, Self::S700 => 700,
-            Self::S800 => 800, Self::S900 => 900,
+            Self::S50 => 50,
+            Self::S100 => 100,
+            Self::S200 => 200,
+            Self::S300 => 300,
+            Self::S400 => 400,
+            Self::S500 => 500,
+            Self::S600 => 600,
+            Self::S700 => 700,
+            Self::S800 => 800,
+            Self::S900 => 900,
         }
     }
 
     #[inline]
-    pub const fn index(self) -> usize { self as usize }
+    pub const fn index(self) -> usize {
+        self as usize
+    }
 }
 
 /// A 10-step color scale from light (50) to dark (900).
@@ -122,52 +142,98 @@ impl ColorScale {
     #[inline]
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
-        s50: Color, s100: Color, s200: Color, s300: Color, s400: Color,
-        s500: Color, s600: Color, s700: Color, s800: Color, s900: Color,
+        s50: Color,
+        s100: Color,
+        s200: Color,
+        s300: Color,
+        s400: Color,
+        s500: Color,
+        s600: Color,
+        s700: Color,
+        s800: Color,
+        s900: Color,
     ) -> Self {
-        Self { s50, s100, s200, s300, s400, s500, s600, s700, s800, s900 }
+        Self {
+            s50,
+            s100,
+            s200,
+            s300,
+            s400,
+            s500,
+            s600,
+            s700,
+            s800,
+            s900,
+        }
     }
 
     #[inline]
     pub const fn from_array(colors: [Color; 10]) -> Self {
         Self {
-            s50: colors[0], s100: colors[1], s200: colors[2], s300: colors[3], s400: colors[4],
-            s500: colors[5], s600: colors[6], s700: colors[7], s800: colors[8], s900: colors[9],
+            s50: colors[0],
+            s100: colors[1],
+            s200: colors[2],
+            s300: colors[3],
+            s400: colors[4],
+            s500: colors[5],
+            s600: colors[6],
+            s700: colors[7],
+            s800: colors[8],
+            s900: colors[9],
         }
     }
 
     #[inline]
     pub const fn get(&self, shade: Shade) -> Color {
         match shade {
-            Shade::S50 => self.s50, Shade::S100 => self.s100, Shade::S200 => self.s200,
-            Shade::S300 => self.s300, Shade::S400 => self.s400, Shade::S500 => self.s500,
-            Shade::S600 => self.s600, Shade::S700 => self.s700, Shade::S800 => self.s800,
+            Shade::S50 => self.s50,
+            Shade::S100 => self.s100,
+            Shade::S200 => self.s200,
+            Shade::S300 => self.s300,
+            Shade::S400 => self.s400,
+            Shade::S500 => self.s500,
+            Shade::S600 => self.s600,
+            Shade::S700 => self.s700,
+            Shade::S800 => self.s800,
             Shade::S900 => self.s900,
         }
     }
 
     #[inline]
-    pub const fn base(&self) -> Color { self.s500 }
+    pub const fn base(&self) -> Color {
+        self.s500
+    }
     #[inline]
-    pub const fn light(&self) -> Color { self.s100 }
+    pub const fn light(&self) -> Color {
+        self.s100
+    }
     #[inline]
-    pub const fn dark(&self) -> Color { self.s700 }
+    pub const fn dark(&self) -> Color {
+        self.s700
+    }
 
     #[inline]
     pub const fn to_array(self) -> [Color; 10] {
-        [self.s50, self.s100, self.s200, self.s300, self.s400,
-         self.s500, self.s600, self.s700, self.s800, self.s900]
+        [
+            self.s50, self.s100, self.s200, self.s300, self.s400, self.s500, self.s600, self.s700,
+            self.s800, self.s900,
+        ]
     }
 }
 
 impl Default for ColorScale {
     fn default() -> Self {
         Self::new(
-            Color::from_hex(0xFAFAFA), Color::from_hex(0xF5F5F5),
-            Color::from_hex(0xE5E5E5), Color::from_hex(0xD4D4D4),
-            Color::from_hex(0xA3A3A3), Color::from_hex(0x737373),
-            Color::from_hex(0x525252), Color::from_hex(0x404040),
-            Color::from_hex(0x262626), Color::from_hex(0x171717),
+            Color::from_hex(0xFAFAFA),
+            Color::from_hex(0xF5F5F5),
+            Color::from_hex(0xE5E5E5),
+            Color::from_hex(0xD4D4D4),
+            Color::from_hex(0xA3A3A3),
+            Color::from_hex(0x737373),
+            Color::from_hex(0x525252),
+            Color::from_hex(0x404040),
+            Color::from_hex(0x262626),
+            Color::from_hex(0x171717),
         )
     }
 }

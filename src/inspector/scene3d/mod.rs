@@ -33,8 +33,8 @@ pub mod scene;
 #[allow(unused_imports)]
 pub use camera::{BaseOrientation, OrbitCamera, Viewport};
 #[allow(unused_imports)]
-pub use decode::{build_scene_from_nif, parse_and_build_scene, DecodeError};
+pub use decode::{DecodeError, build_scene_from_nif, parse_and_build_scene};
 #[allow(unused_imports)]
-pub use mesh::{Aabb, SceneMesh, SceneTexture, Vertex, VERTEX_STRIDE};
+pub use mesh::{Aabb, SceneMesh, SceneTexture, VERTEX_STRIDE, Vertex};
 #[allow(unused_imports)]
 pub use scene::Scene;

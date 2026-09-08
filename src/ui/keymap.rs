@@ -19,6 +19,8 @@ pub enum Shortcut {
     Delete,
     FocusSearch,
     CheckUpdates,
+    ShowTextureGrid,
+    ShowTextureRulers,
 }
 
 impl Shortcut {
@@ -39,6 +41,8 @@ impl Shortcut {
             Shortcut::Delete => "Delete selected",
             Shortcut::FocusSearch => "Focus search",
             Shortcut::CheckUpdates => "Check for updates",
+            Shortcut::ShowTextureGrid => "Show texture grid",
+            Shortcut::ShowTextureRulers => "Show texture rulers",
         }
     }
 }
@@ -63,18 +67,33 @@ pub fn shortcut_chord(shortcut: Shortcut) -> KeyChord {
         Shortcut::New => (Physical::Code(Code::KeyN), Modifiers::CTRL),
         Shortcut::Open => (Physical::Code(Code::KeyO), Modifiers::CTRL),
         Shortcut::Save => (Physical::Code(Code::KeyS), Modifiers::CTRL),
-        Shortcut::SaveAs => (Physical::Code(Code::KeyS), Modifiers::CTRL | Modifiers::SHIFT),
+        Shortcut::SaveAs => (
+            Physical::Code(Code::KeyS),
+            Modifiers::CTRL | Modifiers::SHIFT,
+        ),
         Shortcut::Close => (Physical::Code(Code::KeyX), Modifiers::SHIFT),
         Shortcut::Import => (Physical::Code(Code::KeyI), Modifiers::CTRL),
-        Shortcut::ImportReplace => (Physical::Code(Code::KeyI), Modifiers::CTRL | Modifiers::SHIFT),
+        Shortcut::ImportReplace => (
+            Physical::Code(Code::KeyI),
+            Modifiers::CTRL | Modifiers::SHIFT,
+        ),
         Shortcut::ExportAll => (Physical::Code(Code::KeyE), Modifiers::CTRL),
-        Shortcut::ExportSelected => (Physical::Code(Code::KeyE), Modifiers::CTRL | Modifiers::SHIFT),
+        Shortcut::ExportSelected => (
+            Physical::Code(Code::KeyE),
+            Modifiers::CTRL | Modifiers::SHIFT,
+        ),
         Shortcut::SelectAll => (Physical::Code(Code::KeyA), Modifiers::CTRL),
-        Shortcut::InvertSelection => (Physical::Code(Code::KeyA), Modifiers::CTRL | Modifiers::SHIFT),
+        Shortcut::InvertSelection => (
+            Physical::Code(Code::KeyA),
+            Modifiers::CTRL | Modifiers::SHIFT,
+        ),
         Shortcut::ClearSelection => (Physical::Code(Code::Escape), Modifiers::empty()),
         Shortcut::Delete => (Physical::Code(Code::Delete), Modifiers::empty()),
         Shortcut::FocusSearch => (Physical::Code(Code::KeyF), Modifiers::CTRL),
         Shortcut::CheckUpdates => (Physical::Code(Code::KeyU), Modifiers::CTRL),
+        // Photoshop's chords: Ctrl+' toggles the grid, Ctrl+R the rulers.
+        Shortcut::ShowTextureGrid => (Physical::Code(Code::Quote), Modifiers::CTRL),
+        Shortcut::ShowTextureRulers => (Physical::Code(Code::KeyR), Modifiers::CTRL),
     };
     KeyChord::new(physical, mods)
 }
@@ -113,6 +132,8 @@ pub fn detect_pressed(pressed_physical: Physical, pressed_mods: Modifiers) -> Op
         Shortcut::Delete,
         Shortcut::FocusSearch,
         Shortcut::CheckUpdates,
+        Shortcut::ShowTextureGrid,
+        Shortcut::ShowTextureRulers,
     ];
     all.into_iter()
         .find(|s| chord_matches(shortcut_chord(*s), pressed_physical, pressed_mods))
@@ -166,6 +187,7 @@ fn label_for_physical(physical: Physical) -> String {
         Physical::Code(Code::Enter) => "Enter".into(),
         Physical::Code(Code::Escape) => "Esc".into(),
         Physical::Code(Code::Space) => "Space".into(),
+        Physical::Code(Code::Quote) => "'".into(),
         other => format!("{other:?}"),
     }
 }
@@ -198,6 +220,8 @@ pub fn all_shortcuts() -> Vec<Shortcut> {
         Shortcut::Delete,
         Shortcut::FocusSearch,
         Shortcut::CheckUpdates,
+        Shortcut::ShowTextureGrid,
+        Shortcut::ShowTextureRulers,
     ]
 }
 
@@ -243,5 +267,17 @@ mod tests {
         let display = shortcut_display(Shortcut::Save);
         assert!(display.contains("Ctrl"));
         assert!(display.contains("S"));
+    }
+
+    #[test]
+    fn detect_ctrl_quote_toggles_grid() {
+        let detected = detect_pressed(Physical::Code(Code::Quote), Modifiers::CTRL);
+        assert_eq!(detected, Some(Shortcut::ShowTextureGrid));
+    }
+
+    #[test]
+    fn detect_ctrl_r_toggles_rulers() {
+        let detected = detect_pressed(Physical::Code(Code::KeyR), Modifiers::CTRL);
+        assert_eq!(detected, Some(Shortcut::ShowTextureRulers));
     }
 }

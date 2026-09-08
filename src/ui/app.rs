@@ -11,8 +11,8 @@ use iced_fonts::LUCIDE_FONT_BYTES;
 use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn};
-use crate::sort::SortDirection;
 use crate::dev_logger;
+use crate::sort::SortDirection;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{Config, ThemeMode};
@@ -210,14 +210,35 @@ pub enum Message {
     TextureExport,
     TextureExportFolderResult(Option<PathBuf>),
     TextureUvToggled(bool),
+    ViewTextureGridToggled(bool),
+    ViewTextureRulersToggled(bool),
+    ViewTextureGridSize(u32),
 
-    ExportEmbeddedTexturesRequest { entry_index: usize, nif_basename: String },
-    ExportEmbeddedTexturesFolderResult { entry_index: usize, nif_basename: String, folder: Option<PathBuf> },
-    ExportEmbeddedTexturesCompleted { entry_index: usize, nif_basename: String, result: Result<crate::inspector::texture_export::ExportReport, String> },
+    ExportEmbeddedTexturesRequest {
+        entry_index: usize,
+        nif_basename: String,
+    },
+    ExportEmbeddedTexturesFolderResult {
+        entry_index: usize,
+        nif_basename: String,
+        folder: Option<PathBuf>,
+    },
+    ExportEmbeddedTexturesCompleted {
+        entry_index: usize,
+        nif_basename: String,
+        result: Result<crate::inspector::texture_export::ExportReport, String>,
+    },
 
-    Viewer3dRequestLoad { archive_index: usize, entry_index: usize },
+    Viewer3dRequestLoad {
+        archive_index: usize,
+        entry_index: usize,
+    },
     Viewer3dLoadSelected,
-    Viewer3dLoadCompleted { archive_index: usize, entry_index: usize, result: Result<crate::inspector::scene3d::Scene, String> },
+    Viewer3dLoadCompleted {
+        archive_index: usize,
+        entry_index: usize,
+        result: Result<crate::inspector::scene3d::Scene, String>,
+    },
     Viewer3dSelectTab(InspectorTab),
     Viewer3dClear,
     Viewer3dReset,
@@ -248,12 +269,16 @@ pub enum Message {
     /// User started dragging selected entries from a source archive
     /// tab. The App's `drag_state` is updated to remember the source
     /// archive + the entry indices being moved.
-    ArchiveDragStarted { source: usize },
+    ArchiveDragStarted {
+        source: usize,
+    },
     /// Mouse moved while dragging. The optional `over` argument is
     /// the archive index the cursor is currently over (from
     /// `on_enter` / `on_exit` events on the tab strip). `None` means
     /// the cursor is over empty space.
-    ArchiveDragMoved { over: Option<usize> },
+    ArchiveDragMoved {
+        over: Option<usize>,
+    },
     /// User released the mouse. If `over` is set, the entries are
     /// moved from the source to that archive; otherwise the drag is
     /// cancelled. The source is in the App's drag_state, not in the
@@ -303,8 +328,12 @@ impl SortPreset {
                 p(SortKey::Type, SortDirection::Ascending),
                 p(SortKey::Name, SortDirection::Ascending),
             ]),
-            SortPreset::SizeDesc => SortChain::new(vec![p(SortKey::Size, SortDirection::Descending)]),
-            SortPreset::OffsetAsc => SortChain::new(vec![p(SortKey::Offset, SortDirection::Ascending)]),
+            SortPreset::SizeDesc => {
+                SortChain::new(vec![p(SortKey::Size, SortDirection::Descending)])
+            }
+            SortPreset::OffsetAsc => {
+                SortChain::new(vec![p(SortKey::Offset, SortDirection::Ascending)])
+            }
         }
     }
 
@@ -398,6 +427,13 @@ pub struct App {
     pub selected_texture: usize,
     /// Whether the texture tab should draw the matching NIF UV layout.
     pub show_texture_uv: bool,
+    /// Texture tab: Photoshop-style grid overlay (View → Show Grid).
+    pub show_texture_grid: bool,
+    /// Texture tab: pixel rulers + cursor coordinate readout
+    /// (View → Show Rulers).
+    pub show_texture_rulers: bool,
+    /// Grid cells per axis for the texture grid overlay.
+    pub texture_grid_divisions: u32,
     /// Archive/entry identity of the scene currently shown in the 3D viewer.
     /// Selection can change without destroying the current scene, so the UI
     /// uses this identity to avoid presenting a stale model as the new one.
@@ -429,6 +465,11 @@ impl App {
     pub fn new(config: Config) -> Self {
         let show_welcome = !config.first_run_complete;
         let fast_export = config.fast_export;
+        // View preferences are mirrored onto App fields so the view
+        // builder doesn't reach through `self.config` for hot UI state.
+        let show_texture_grid = config.show_texture_grid;
+        let show_texture_rulers = config.show_texture_rulers;
+        let texture_grid_divisions = config.texture_grid_divisions;
         let (panes, pane) = pane_grid::State::new(Pane::Table);
         let mut panes = panes;
         panes.split(pane_grid::Axis::Vertical, pane, Pane::Info);
@@ -462,6 +503,9 @@ impl App {
             inspected_entry: None,
             selected_texture: 0,
             show_texture_uv: false,
+            show_texture_grid,
+            show_texture_rulers,
+            texture_grid_divisions,
             active_viewer_entry: None,
             scroll_y: 0.0,
             filter_pending: false,
@@ -474,9 +518,7 @@ impl App {
             toast_pulse_target: 0.0,
             toast_start: None,
             selected_inspector_tab: InspectorTab::Export,
-            viewer3d_handle: std::sync::Arc::new(
-                crate::ui::viewer3d_widget::SceneHandle::new(),
-            ),
+            viewer3d_handle: std::sync::Arc::new(crate::ui::viewer3d_widget::SceneHandle::new()),
         }
     }
 
@@ -493,16 +535,11 @@ impl App {
         } else {
             crate::ui::tokens::ThemeTokens::light()
         };
-        Design::from_tokens(
-            tokens,
-            self.theme().extended_palette().is_dark,
-        )
+        Design::from_tokens(tokens, self.theme().extended_palette().is_dark)
     }
 
     pub fn startup_task(config: &Config) -> Task<Message> {
-        let mut tasks = vec![
-            iced::font::load(LUCIDE_FONT_BYTES).map(|_| Message::Noop),
-        ];
+        let mut tasks = vec![iced::font::load(LUCIDE_FONT_BYTES).map(|_| Message::Noop)];
         if config.update_check_enabled {
             tasks.push(Task::perform(
                 check_updates_future(
@@ -547,7 +584,11 @@ impl App {
         )
     }
 
-    fn import_archive_task(index: usize, archive: ArchiveInfo, paths: Vec<PathBuf>) -> Task<Message> {
+    fn import_archive_task(
+        index: usize,
+        archive: ArchiveInfo,
+        paths: Vec<PathBuf>,
+    ) -> Task<Message> {
         let count = paths.len();
         Task::perform(
             async move {
@@ -654,7 +695,11 @@ impl App {
     fn display_row_to_entry(&self, display_row: usize) -> Option<usize> {
         self.editor
             .selected_archive()
-            .and_then(|_| self.editor.archives().get(self.editor.selected_archive().unwrap_or(0)))
+            .and_then(|_| {
+                self.editor
+                    .archives()
+                    .get(self.editor.selected_archive().unwrap_or(0))
+            })
             .and_then(|a| a.selected_indices.get(display_row).copied())
     }
 
@@ -702,7 +747,10 @@ impl App {
     }
 
     pub(crate) fn selected_entry_key(&self) -> Option<(usize, usize)> {
-        Some((self.editor.selected_archive()?, self.editor.selected_entry()?))
+        Some((
+            self.editor.selected_archive()?,
+            self.editor.selected_entry()?,
+        ))
     }
 
     pub(crate) fn viewer_scene_matches_selection(&self) -> bool {
@@ -811,20 +859,12 @@ impl App {
         target_name: &str,
         target_path: Option<&PathBuf>,
     ) -> bool {
-        self.editor
-            .archives()
-            .get(index)
-            .is_some_and(|archive| {
-                archive.file_name == target_name && archive.path.as_ref() == target_path
-            })
+        self.editor.archives().get(index).is_some_and(|archive| {
+            archive.file_name == target_name && archive.path.as_ref() == target_path
+        })
     }
 
-    fn run_pack(
-        &self,
-        archive: ArchiveInfo,
-        path: PathBuf,
-        version: ImgVersion,
-    ) -> Task<Message> {
+    fn run_pack(&self, archive: ArchiveInfo, path: PathBuf, version: ImgVersion) -> Task<Message> {
         let index = self.editor.selected_archive().unwrap_or(0);
         let task = PackTask::new(archive, path, version);
         Task::perform(
@@ -858,6 +898,14 @@ impl App {
                 iced::widget::operation::focus(iced::widget::Id::new(SEARCH_INPUT_ID))
             }
             Shortcut::CheckUpdates => Task::done(Message::CheckUpdatesManual),
+            Shortcut::ShowTextureGrid => {
+                let show = !self.show_texture_grid;
+                Task::done(Message::ViewTextureGridToggled(show))
+            }
+            Shortcut::ShowTextureRulers => {
+                let show = !self.show_texture_rulers;
+                Task::done(Message::ViewTextureRulersToggled(show))
+            }
         }
     }
 }
@@ -867,9 +915,7 @@ impl App {
         match message {
             Message::Noop => Task::none(),
 
-            Message::ShortcutPressed(shortcut) => {
-                self.begin_shortcut_focus_check(shortcut)
-            }
+            Message::ShortcutPressed(shortcut) => self.begin_shortcut_focus_check(shortcut),
 
             Message::NewArchive => {
                 self.editor.new_archive();
@@ -883,9 +929,7 @@ impl App {
                 dialogs::open_file().map(Message::OpenArchiveResult)
             }
 
-            Message::OpenArchiveResult(Some(path)) => {
-                self.open_archive_path(path)
-            }
+            Message::OpenArchiveResult(Some(path)) => self.open_archive_path(path),
             Message::OpenArchiveResult(None) => Task::none(),
             Message::ArchiveOpenCompleted { path, outcome } => {
                 match outcome {
@@ -913,10 +957,7 @@ impl App {
                 if !path.exists() {
                     self.config.recent_files.remove(&path);
                     self.save_config();
-                    self.toast = Some(format!(
-                        "File no longer exists: {}",
-                        path.display()
-                    ));
+                    self.toast = Some(format!("File no longer exists: {}", path.display()));
                     return Task::none();
                 }
                 self.open_archive_path(path)
@@ -987,7 +1028,8 @@ impl App {
                     return Task::none();
                 };
                 if !path.exists() {
-                    self.toast = Some("The archive file no longer exists. Use Save as… first.".into());
+                    self.toast =
+                        Some("The archive file no longer exists. Use Save as… first.".into());
                     return Task::none();
                 }
                 let version = archive.version;
@@ -1074,7 +1116,11 @@ impl App {
                 };
                 Self::import_archive_task(index, archive, paths)
             }
-            Message::ImportCompleted { index, count, result } => {
+            Message::ImportCompleted {
+                index,
+                count,
+                result,
+            } => {
                 match result {
                     Ok(archive) => {
                         self.editor.replace_archive(index, archive);
@@ -1206,12 +1252,11 @@ impl App {
                 if let Some(archive) = self.editor.selected_archive_mut() {
                     archive.last_export_folder = Some(folder.clone());
                 }
-                let task = ExportTask::new(archive, folder, mode)
-                    .engine(if self.fast_export {
-                        ExportEngine::Fast
-                    } else {
-                        ExportEngine::ZeroCopy
-                    });
+                let task = ExportTask::new(archive, folder, mode).engine(if self.fast_export {
+                    ExportEngine::Fast
+                } else {
+                    ExportEngine::ZeroCopy
+                });
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || task.run_blocking())
@@ -1239,7 +1284,10 @@ impl App {
                             archive.last_export_count = count;
                             let now = chrono::Local::now().format("%H:%M:%S");
                             let summary = if count == 1 {
-                                names.first().cloned().unwrap_or_else(|| "1 file".to_string())
+                                names
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| "1 file".to_string())
                             } else {
                                 format!("{count} files")
                             };
@@ -1388,7 +1436,11 @@ impl App {
                 iced::clipboard::write::<Message>(text)
             }
             Message::CopyLogs => {
-                let Some(archive) = self.editor.archives().get(self.editor.selected_archive().unwrap_or(0)) else {
+                let Some(archive) = self
+                    .editor
+                    .archives()
+                    .get(self.editor.selected_archive().unwrap_or(0))
+                else {
                     return Task::none();
                 };
                 let text = archive.logs.join("\n");
@@ -1443,116 +1495,122 @@ impl App {
             Message::EntryContextAction(action) => {
                 self.context_menu = None;
                 match action {
-                EntryAction::CopyName => {
-                    if let Some(archive_index) = self.editor.selected_archive()
-                        && let Some(entry_index) = self.editor.selected_entry()
-                        && let Some(archive) = self.editor.archives().get(archive_index)
-                        && let Some(entry) = archive.entries.get(entry_index)
-                    {
-                        let name = entry.file_name.to_string();
-                        self.toast = Some(format!("Copied name: {}", name));
-                        return iced::clipboard::write::<Message>(name);
+                    EntryAction::CopyName => {
+                        if let Some(archive_index) = self.editor.selected_archive()
+                            && let Some(entry_index) = self.editor.selected_entry()
+                            && let Some(archive) = self.editor.archives().get(archive_index)
+                            && let Some(entry) = archive.entries.get(entry_index)
+                        {
+                            let name = entry.file_name.to_string();
+                            self.toast = Some(format!("Copied name: {}", name));
+                            return iced::clipboard::write::<Message>(name);
+                        }
+                        Task::none()
                     }
-                    Task::none()
-                }
-                EntryAction::Rename => Task::done(Message::StartRename),
-                EntryAction::Delete => {
-                    self.editor.delete_selected();
-                    Task::batch(vec![self.refresh_inspection(), Task::none()])
-                }
-                EntryAction::Export => {
-                    self.last_export_selected_only = true;
-                    dialogs::save_folder().map(Message::ExportFolderResult)
-                }
-                EntryAction::ViewTextures => {
-                    Task::done(Message::TextureDecodeRequested)
-                }
-                EntryAction::ExportEmbeddedTextures => {
-                    let Some(archive_index) = self.editor.selected_archive() else {
-                        return Task::none();
-                    };
-                    let Some(entry_index) = self.editor.selected_entry() else {
-                        return Task::none();
-                    };
-                    let (nif_basename, archive_path) = {
-                        let Some(archive) = self.editor.archives().get(archive_index) else {
+                    EntryAction::Rename => Task::done(Message::StartRename),
+                    EntryAction::Delete => {
+                        self.editor.delete_selected();
+                        Task::batch(vec![self.refresh_inspection(), Task::none()])
+                    }
+                    EntryAction::Export => {
+                        self.last_export_selected_only = true;
+                        dialogs::save_folder().map(Message::ExportFolderResult)
+                    }
+                    EntryAction::ViewTextures => Task::done(Message::TextureDecodeRequested),
+                    EntryAction::ExportEmbeddedTextures => {
+                        let Some(archive_index) = self.editor.selected_archive() else {
                             return Task::none();
                         };
-                        let Some(entry) = archive.entries.get(entry_index) else {
+                        let Some(entry_index) = self.editor.selected_entry() else {
                             return Task::none();
                         };
-                        let stem = std::path::Path::new(&entry.file_name)
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .map(|s| s.to_string());
-                        let stem = match stem {
-                            Some(s) => s,
-                            None => {
-                                self.toast =
-                                    Some(format!("Cannot determine basename of {}", entry.file_name));
+                        let (nif_basename, archive_path) = {
+                            let Some(archive) = self.editor.archives().get(archive_index) else {
+                                return Task::none();
+                            };
+                            let Some(entry) = archive.entries.get(entry_index) else {
+                                return Task::none();
+                            };
+                            let stem = std::path::Path::new(&entry.file_name)
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .map(|s| s.to_string());
+                            let stem = match stem {
+                                Some(s) => s,
+                                None => {
+                                    self.toast = Some(format!(
+                                        "Cannot determine basename of {}",
+                                        entry.file_name
+                                    ));
+                                    return Task::none();
+                                }
+                            };
+                            (stem, archive.path.clone())
+                        };
+                        let _ = archive_path;
+                        Task::done(Message::ExportEmbeddedTexturesRequest {
+                            entry_index,
+                            nif_basename,
+                        })
+                    }
+                    EntryAction::Render => {
+                        dev_logger::breadcrumb("user: open in 3D viewer (in-app)");
+                        self.load_selected_nif(InspectorTab::Model3D)
+                    }
+                    EntryAction::RenderExternal => {
+                        dev_logger::breadcrumb("user: open in external viewer (PLY)");
+                        let Some(archive_index) = self.editor.selected_archive() else {
+                            return Task::none();
+                        };
+                        let Some(entry_index) = self.editor.selected_entry() else {
+                            return Task::none();
+                        };
+                        let (entry_clone, archive_path, name) = {
+                            let Some(archive) = self.editor.archives().get(archive_index) else {
+                                return Task::none();
+                            };
+                            let Some(entry) = archive.entries.get(entry_index) else {
+                                return Task::none();
+                            };
+                            (
+                                entry.clone(),
+                                archive.path.clone(),
+                                entry.file_name.to_string(),
+                            )
+                        };
+                        let data = match crate::parser::read_entry_data_from_source(
+                            &entry_clone,
+                            archive_path.as_deref(),
+                        ) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                self.toast = Some(format!("Failed to read {name}: {e}"));
                                 return Task::none();
                             }
                         };
-                        (stem, archive.path.clone())
-                    };
-                    let _ = archive_path;
-                    Task::done(Message::ExportEmbeddedTexturesRequest {
-                        entry_index,
-                        nif_basename,
-                    })
-                }
-                EntryAction::Render => {
-                    dev_logger::breadcrumb("user: open in 3D viewer (in-app)");
-                    self.load_selected_nif(InspectorTab::Model3D)
-                }
-                EntryAction::RenderExternal => {
-                    dev_logger::breadcrumb("user: open in external viewer (PLY)");
-                    let Some(archive_index) = self.editor.selected_archive() else {
-                        return Task::none();
-                    };
-                    let Some(entry_index) = self.editor.selected_entry() else {
-                        return Task::none();
-                    };
-                    let (entry_clone, archive_path, name) = {
-                        let Some(archive) = self.editor.archives().get(archive_index) else {
-                            return Task::none();
-                        };
-                        let Some(entry) = archive.entries.get(entry_index) else {
-                            return Task::none();
-                        };
-                        (entry.clone(), archive.path.clone(), entry.file_name.to_string())
-                    };
-                    let data = match crate::parser::read_entry_data_from_source(
-                        &entry_clone,
-                        archive_path.as_deref(),
-                    ) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            self.toast = Some(format!("Failed to read {name}: {e}"));
-                            return Task::none();
+
+                        if name.to_lowercase().ends_with(".dff") {
+                            let rx = viewer3d::spawn_dff_render_window(data, name.clone());
+                            self.viewer_rxs.push(rx);
+                        } else if name.to_lowercase().ends_with(".col") {
+                            let rx = viewer3d::spawn_col_render_window(data, name.clone());
+                            self.viewer_rxs.push(rx);
+                        } else {
+                            let game_root = archive_path
+                                .as_ref()
+                                .and_then(|p| p.parent().and_then(|stream| stream.parent()))
+                                .map(|p| p.to_path_buf());
+                            let rx = viewer3d::spawn_render_window(data, name.clone(), game_root);
+                            self.viewer_rxs.push(rx);
                         }
-                    };
 
-                    if name.to_lowercase().ends_with(".dff") {
-                        let rx = viewer3d::spawn_dff_render_window(data, name.clone());
-                        self.viewer_rxs.push(rx);
-                    } else if name.to_lowercase().ends_with(".col") {
-                        let rx = viewer3d::spawn_col_render_window(data, name.clone());
-                        self.viewer_rxs.push(rx);
-                    } else {
-                        let game_root = archive_path.as_ref().and_then(|p| {
-                            p.parent().and_then(|stream| stream.parent())
-                        }).map(|p| p.to_path_buf());
-                        let rx = viewer3d::spawn_render_window(data, name.clone(), game_root);
-                        self.viewer_rxs.push(rx);
+                        if let Some(archive) = self.editor.selected_archive_mut() {
+                            archive.add_log(format!("Opening external 3D viewer for {name}"));
+                        }
+                        Task::none()
                     }
-
-                    if let Some(archive) = self.editor.selected_archive_mut() {
-                        archive.add_log(format!("Opening external 3D viewer for {name}"));
-                    }
-                    Task::none()
                 }
-            }},
+            }
 
             Message::ShowAbout => {
                 self.show_about = true;
@@ -1610,7 +1668,10 @@ impl App {
                 self.update_state = UpdateState::Checking;
                 let repo = UPDATER_REPO.to_string();
                 let current = env!("CARGO_PKG_VERSION").to_string();
-                Task::perform(check_updates_future(repo, current), Message::UpdateResultReceived)
+                Task::perform(
+                    check_updates_future(repo, current),
+                    Message::UpdateResultReceived,
+                )
             }
             Message::UpdateResultReceived(result) => {
                 let was_manual = self.update_check_manual;
@@ -1629,7 +1690,8 @@ impl App {
                     UpdateResult::UpToDate => {
                         self.update_state = UpdateState::UpToDate;
                         if !suppressed {
-                            self.show_update_status = Some("You are using the latest version.".into());
+                            self.show_update_status =
+                                Some("You are using the latest version.".into());
                         }
                     }
                     UpdateResult::Error(err) => {
@@ -1655,7 +1717,8 @@ impl App {
                 self.poll_viewer_rxs();
                 // Animate the progress bar smoothly towards the current value.
                 if let Some(archive_idx) = self.editor.selected_archive() {
-                    let current_progress = self.editor.archives()[archive_idx].progress.percentage();
+                    let current_progress =
+                        self.editor.archives()[archive_idx].progress.percentage();
                     let visual = self.animator.get(ANIM_PROGRESS);
                     if (visual - current_progress).abs() > 0.005 {
                         self.animator.animate_from_current(
@@ -1690,7 +1753,11 @@ impl App {
                         self.toast_pulses_remaining -= 1;
                         if self.toast_pulses_remaining > 0 {
                             // Toggle target: 1.0 → 0.0 → 1.0 → 0.0 → ...
-                            self.toast_pulse_target = if self.toast_pulse_target > 0.5 { 0.0 } else { 1.0 };
+                            self.toast_pulse_target = if self.toast_pulse_target > 0.5 {
+                                0.0
+                            } else {
+                                1.0
+                            };
                             self.animator.animate(
                                 ANIM_TOAST_OPACITY,
                                 self.animator.get(ANIM_TOAST_OPACITY),
@@ -1800,7 +1867,10 @@ impl App {
                 let new_y = (state.initial_scroll_y + delta_y * SENSITIVITY).max(0.0);
                 iced::advanced::widget::operate(scroll_to(
                     iced::widget::Id::new("entry_table"),
-                    AbsoluteOffset { x: None, y: Some(new_y) },
+                    AbsoluteOffset {
+                        x: None,
+                        y: Some(new_y),
+                    },
                 ))
             }
             Message::AutoScrollEnded => {
@@ -1864,13 +1934,15 @@ impl App {
             }
 
             Message::FilesDropped(path) => {
-                if path.extension().is_some_and(|ext| {
-                    ext.eq_ignore_ascii_case("img")
-                }) {
+                if path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("img"))
+                {
                     return self.open_archive_path(path);
                 }
                 let Some((index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast = Some("Open an archive first to drop non-IMG files into it.".into());
+                    self.toast =
+                        Some("Open an archive first to drop non-IMG files into it.".into());
                     return Task::none();
                 };
                 Self::import_archive_task(index, archive, vec![path])
@@ -1939,7 +2011,13 @@ impl App {
                                 let safe_name: String = tex
                                     .name
                                     .chars()
-                                    .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                                    .map(|c| {
+                                        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                            c
+                                        } else {
+                                            '_'
+                                        }
+                                    })
                                     .collect();
                                 let path = folder.join(format!("{}.tga", safe_name));
                                 let mut tga = Vec::with_capacity(18 + tex.rgba.len());
@@ -1959,8 +2037,9 @@ impl App {
                                     tga.push(chunk[0]);
                                     tga.push(chunk[3]);
                                 }
-                                std::fs::write(&path, tga)
-                                    .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+                                std::fs::write(&path, tga).map_err(|e| {
+                                    format!("Failed to write {}: {e}", path.display())
+                                })?;
                             }
                             Ok(())
                         })
@@ -1983,9 +2062,35 @@ impl App {
                 Task::none()
             }
 
-            Message::ExportEmbeddedTexturesRequest { entry_index, nif_basename } => {
+            Message::ViewTextureGridToggled(show) => {
+                self.show_texture_grid = show;
+                self.config.show_texture_grid = show;
+                self.save_config();
+                Task::none()
+            }
+
+            Message::ViewTextureRulersToggled(show) => {
+                self.show_texture_rulers = show;
+                self.config.show_texture_rulers = show;
+                self.save_config();
+                Task::none()
+            }
+
+            Message::ViewTextureGridSize(divisions) => {
+                self.texture_grid_divisions = divisions;
+                self.config.texture_grid_divisions = divisions;
+                self.save_config();
+                Task::none()
+            }
+
+            Message::ExportEmbeddedTexturesRequest {
+                entry_index,
+                nif_basename,
+            } => {
                 let _ = entry_index;
-                self.toast = Some(format!("Pick a folder to export embedded textures from {nif_basename}"));
+                self.toast = Some(format!(
+                    "Pick a folder to export embedded textures from {nif_basename}"
+                ));
                 let nb = nif_basename.clone();
                 dialogs::save_folder().map(move |folder| {
                     Message::ExportEmbeddedTexturesFolderResult {
@@ -1995,7 +2100,11 @@ impl App {
                     }
                 })
             }
-            Message::ExportEmbeddedTexturesFolderResult { entry_index, nif_basename, folder: Some(folder) } => {
+            Message::ExportEmbeddedTexturesFolderResult {
+                entry_index,
+                nif_basename,
+                folder: Some(folder),
+            } => {
                 let archive_path = self
                     .editor
                     .selected_archive()
@@ -2006,7 +2115,8 @@ impl App {
                     .and_then(|p| p.parent().and_then(|stream| stream.parent()))
                     .map(|p| p.to_path_buf());
                 let Some(game_root) = game_root else {
-                    self.toast = Some("Could not determine game root from archive path".to_string());
+                    self.toast =
+                        Some("Could not determine game root from archive path".to_string());
                     return Task::none();
                 };
                 let nb_for_callback = nif_basename.clone();
@@ -2031,7 +2141,11 @@ impl App {
                 )
             }
             Message::ExportEmbeddedTexturesFolderResult { folder: None, .. } => Task::none(),
-            Message::ExportEmbeddedTexturesCompleted { entry_index, nif_basename, result } => {
+            Message::ExportEmbeddedTexturesCompleted {
+                entry_index,
+                nif_basename,
+                result,
+            } => {
                 let _ = entry_index;
                 let now = chrono::Local::now().format("%H:%M:%S");
                 let archive_index = self.editor.selected_archive().unwrap_or(0);
@@ -2103,10 +2217,8 @@ impl App {
                                     )
                                 })
                                 .or_else(|| {
-                                    archive_texture_index.resolve_textures_for_nif(
-                                        &nif_basename,
-                                        ide_map.as_ref(),
-                                    )
+                                    archive_texture_index
+                                        .resolve_textures_for_nif(&nif_basename, ide_map.as_ref())
                                 });
                             let resolver = move |name: &str| {
                                 nft_catalog
@@ -2128,9 +2240,7 @@ impl App {
                             };
                             let base = crate::inspector::scene3d::camera::BaseOrientation::Zup;
                             let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
-                                &bytes,
-                                base,
-                                resolver,
+                                &bytes, base, resolver,
                             )
                             .map_err(|e| format!("scene: {e:?}"))?;
                             Ok::<_, String>(scene)
@@ -2349,8 +2459,7 @@ impl App {
                         .filter(|&i| i < archive.entries.len())
                         .collect();
                     if !selected.is_empty() {
-                        self.drag_state =
-                            Some(crate::ui::drag::DragState::new(source, &selected));
+                        self.drag_state = Some(crate::ui::drag::DragState::new(source, &selected));
                     }
                 }
                 Task::none()
@@ -2425,9 +2534,8 @@ impl App {
                     // Append ".bak" to disambiguate. We could
                     // prompt the user, but the IMGF behaviour
                     // is "just do it", so we follow that lead.
-                    entry.file_name = compact_str::CompactString::from(
-                        format!("{}.bak", entry.file_name),
-                    );
+                    entry.file_name =
+                        compact_str::CompactString::from(format!("{}.bak", entry.file_name));
                     entry.file_name_lower = entry.file_name.to_ascii_lowercase();
                 }
                 target_archive.entries.push(entry);
@@ -2546,20 +2654,22 @@ impl App {
     fn poll_viewer_rxs(&mut self) {
         let mut logs: Vec<String> = Vec::new();
         let mut toast: Option<String> = None;
-        self.viewer_rxs.retain_mut(|rx| loop {
-            match rx.try_recv() {
-                Ok(ViewerEvent::Opened { name }) => {
-                    logs.push(format!("3D viewer opened: {name}"));
+        self.viewer_rxs.retain_mut(|rx| {
+            loop {
+                match rx.try_recv() {
+                    Ok(ViewerEvent::Opened { name }) => {
+                        logs.push(format!("3D viewer opened: {name}"));
+                    }
+                    Ok(ViewerEvent::Failed { reason }) => {
+                        toast = Some(reason.clone());
+                        logs.push(format!("3D viewer failed: {reason}"));
+                    }
+                    Ok(ViewerEvent::Closed) => {
+                        logs.push("3D viewer closed".to_string());
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break true,
                 }
-                Ok(ViewerEvent::Failed { reason }) => {
-                    toast = Some(reason.clone());
-                    logs.push(format!("3D viewer failed: {reason}"));
-                }
-                Ok(ViewerEvent::Closed) => {
-                    logs.push("3D viewer closed".to_string());
-                }
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break true,
             }
         });
         if let Some(msg) = toast {
@@ -2633,7 +2743,15 @@ impl App {
             Subscription::none()
         };
 
-        Subscription::batch([mod_tracker, key, tick, anim_tick, debounce, window, autoscroll])
+        Subscription::batch([
+            mod_tracker,
+            key,
+            tick,
+            anim_tick,
+            debounce,
+            window,
+            autoscroll,
+        ])
     }
 }
 
@@ -2647,30 +2765,22 @@ impl App {
         // dead links vanish without mutating the stored MRU list.
         // An empty list renders a single disabled "No recent files"
         // item so the user can see why the menu is empty.
-        let recent_menu_items: Vec<Item<'_, Message, _, _>> = if self
-            .config
-            .recent_files
-            .iter_existing()
-            .next()
-            .is_none()
-        {
-            vec![Item::new(iced::Element::from(
-                iced::widget::text("No recent files").size(13),
-            ))]
-        } else {
-            self.config
-                .recent_files
-                .iter()
-                .map(|(index, entry)| {
-                    let label = self
-                        .config
-                        .recent_files
-                        .menu_label(index, 60);
-                    let path = entry.path.clone();
-                    Item::new(menu_button(label, Message::OpenRecent(path)))
-                })
-                .collect()
-        };
+        let recent_menu_items: Vec<Item<'_, Message, _, _>> =
+            if self.config.recent_files.iter_existing().next().is_none() {
+                vec![Item::new(iced::Element::from(
+                    iced::widget::text("No recent files").size(13),
+                ))]
+            } else {
+                self.config
+                    .recent_files
+                    .iter()
+                    .map(|(index, entry)| {
+                        let label = self.config.recent_files.menu_label(index, 60);
+                        let path = entry.path.clone();
+                        Item::new(menu_button(label, Message::OpenRecent(path)))
+                    })
+                    .collect()
+            };
         let recent_menu = Menu::new(recent_menu_items).max_width(320.0);
 
         let file_menu = Menu::new(vec![
@@ -2756,10 +2866,7 @@ impl App {
                 Message::ClearSelection,
             )),
             Item::new(menu_button(
-                format!(
-                    "Delete selected ({})",
-                    shortcut_display(Shortcut::Delete)
-                ),
+                format!("Delete selected ({})", shortcut_display(Shortcut::Delete)),
                 Message::DeleteSelected,
             )),
         ])
@@ -2777,8 +2884,51 @@ impl App {
             })
             .collect();
 
-        let option_menu = Menu::new(option_items)
-            .max_width(220.0);
+        let option_menu = Menu::new(option_items).max_width(220.0);
+
+        // Photoshop-style View menu: toggles for the texture preview's
+        // grid + rulers, plus the grid density. The ●/○ markers mirror
+        // the Themes menu's selected-state convention.
+        let view_toggle = |on: bool| if on { "● " } else { "○ " };
+        let view_menu = Menu::new(
+            vec![
+                Item::new(menu_button(
+                    format!(
+                        "{}Show Grid ({})",
+                        view_toggle(self.show_texture_grid),
+                        shortcut_display(Shortcut::ShowTextureGrid)
+                    ),
+                    Message::ViewTextureGridToggled(!self.show_texture_grid),
+                )),
+                Item::new(menu_button(
+                    format!(
+                        "{}Show Rulers ({})",
+                        view_toggle(self.show_texture_rulers),
+                        shortcut_display(Shortcut::ShowTextureRulers)
+                    ),
+                    Message::ViewTextureRulersToggled(!self.show_texture_rulers),
+                )),
+                Item::new(menu_button("Grid divisions".to_string(), Message::Noop)),
+            ]
+            .into_iter()
+            .chain(
+                crate::config::ALLOWED_GRID_DIVISIONS
+                    .iter()
+                    .map(|divisions| {
+                        Item::new(menu_button(
+                            format!(
+                                "{}{} × {}",
+                                view_toggle(*divisions == self.texture_grid_divisions),
+                                divisions,
+                                divisions
+                            ),
+                            Message::ViewTextureGridSize(*divisions),
+                        ))
+                    }),
+            )
+            .collect(),
+        )
+        .max_width(220.0);
 
         let help_menu = Menu::new(vec![
             Item::new(menu_button(
@@ -2797,15 +2947,14 @@ impl App {
         .max_width(220.0);
 
         fn menu_label(label: &'static str) -> iced::Element<'static, Message> {
-            container(fonts::header(label))
-                .padding([4, 12])
-                .into()
+            container(fonts::header(label)).padding([4, 12]).into()
         }
 
         let bar = MenuBar::new(vec![
             Item::with_menu(menu_label("File"), file_menu),
             Item::with_menu(menu_label("Edit"), edit_menu),
             Item::with_menu(menu_label("Selection"), selection_menu),
+            Item::with_menu(menu_label("View"), view_menu),
             Item::with_menu(menu_label("Themes"), option_menu),
             Item::with_menu(menu_label("Help"), help_menu),
         ]);
@@ -2816,13 +2965,11 @@ impl App {
         iced::widget::Container::new(bar)
             .width(iced::Length::Fill)
             .style(move |_| iced::widget::container::Style {
-                background: Some(iced::Background::Gradient(
-                    iced::Gradient::Linear(
-                        iced::gradient::Linear::new(0.0)
-                            .add_stop(0.0, top)
-                            .add_stop(1.0, bottom)
-                    )
-                )),
+                background: Some(iced::Background::Gradient(iced::Gradient::Linear(
+                    iced::gradient::Linear::new(0.0)
+                        .add_stop(0.0, top)
+                        .add_stop(1.0, bottom),
+                ))),
                 border: iced::Border {
                     color: border,
                     width: 0.0,
@@ -2899,7 +3046,8 @@ fn menu_button_with_icon<'a>(
     ))
     .on_press(message)
     .width(iced::Length::Fill)
-    .style(|theme: &iced::Theme, status: iced::widget::button::Status| iced::widget::button::Style {
+    .style(
+        |theme: &iced::Theme, status: iced::widget::button::Status| iced::widget::button::Style {
             background: if matches!(
                 status,
                 iced::widget::button::Status::Hovered | iced::widget::button::Status::Pressed
@@ -2910,8 +3058,9 @@ fn menu_button_with_icon<'a>(
             },
             text_color: theme.extended_palette().background.base.text,
             ..iced::widget::button::Style::default()
-        })
-        .into()
+        },
+    )
+    .into()
 }
 
 fn menu_icon(message: &Message) -> Element<'static, Message> {
@@ -2940,11 +3089,7 @@ fn menu_icon(message: &Message) -> Element<'static, Message> {
 }
 
 pub fn run_app(config: Config) -> iced::Result {
-    let size: iced::Size = config
-        .window
-        .size
-        .unwrap_or([1100.0, 720.0])
-        .into();
+    let size: iced::Size = config.window.size.unwrap_or([1100.0, 720.0]).into();
 
     let boot_config = Arc::new(config);
     let boot_config_for_boot = Arc::clone(&boot_config);
@@ -3079,7 +3224,12 @@ mod tests {
         let _ = app.update(Message::ClearSelection);
 
         assert_eq!(app.editor.selected_entry(), None);
-        assert!(app.editor.archives()[0].entries.iter().all(|entry| !entry.selected));
+        assert!(
+            app.editor.archives()[0]
+                .entries
+                .iter()
+                .all(|entry| !entry.selected)
+        );
         assert_eq!(app.active_viewer_entry, None);
         assert_eq!(app.selected_texture, 0);
         assert!(!app.show_texture_uv);

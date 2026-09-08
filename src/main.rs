@@ -16,7 +16,6 @@ fn main() -> anyhow::Result<()> {
                 println!();
                 println!("Options:");
 
-
                 println!("  -h, --help    Print help");
                 return Ok(());
             }

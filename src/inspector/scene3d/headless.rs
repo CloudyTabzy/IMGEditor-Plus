@@ -11,9 +11,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::inspector::scene3d::camera::{OrbitCamera, Viewport};
-use crate::inspector::scene3d::pipeline::{
-    self, GpuMesh, GpuTexture, RenderFlags, ScenePipelines,
-};
+use crate::inspector::scene3d::pipeline::{self, GpuMesh, GpuTexture, RenderFlags, ScenePipelines};
 use crate::inspector::scene3d::scene::Scene;
 
 pub struct HeadlessRenderer {
@@ -50,16 +48,14 @@ impl HeadlessRenderer {
         } else {
             wgpu::Features::empty()
         };
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("imgeditor-scene3d-headless"),
-                required_features,
-                required_limits: wgpu::Limits::downlevel_defaults(),
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                memory_hints: wgpu::MemoryHints::Performance,
-                trace: wgpu::Trace::Off,
-            },
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("imgeditor-scene3d-headless"),
+            required_features,
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        }))
         .map_err(|e| format!("device request failed: {e}"))?;
         let pipelines = ScenePipelines::new(&device, &queue, color_format);
         Ok(Self {
@@ -87,160 +83,155 @@ pub struct RenderedFrame {
     pub submit_info: wgpu::SubmissionIndex,
 }
 
-    pub fn render_frame(
-        renderer: &HeadlessRenderer,
-        scene: &Scene,
-        camera: &OrbitCamera,
-        width: u32,
-        height: u32,
-        flags: RenderFlags,
-    ) -> Result<RenderedFrame, String> {
-        let device = &renderer.device;
-        let queue = &renderer.queue;
-        let pipelines = &renderer.pipelines;
-        let color_format = renderer.color_format;
+pub fn render_frame(
+    renderer: &HeadlessRenderer,
+    scene: &Scene,
+    camera: &OrbitCamera,
+    width: u32,
+    height: u32,
+    flags: RenderFlags,
+) -> Result<RenderedFrame, String> {
+    let device = &renderer.device;
+    let queue = &renderer.queue;
+    let pipelines = &renderer.pipelines;
+    let color_format = renderer.color_format;
 
-        if width == 0 || height == 0 {
-            return Err("zero-area render".into());
-        }
-        pipeline::validate_scene_for_device(device, scene, width, height)?;
-        let unpadded_bytes_per_row = width
-            .checked_mul(4)
-            .ok_or_else(|| "readback row size overflowed".to_string())?;
-        let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bytes_per_row = unpadded_bytes_per_row
-            .checked_add(alignment - 1)
-            .ok_or_else(|| "aligned readback row size overflowed".to_string())?
-            / alignment
-            * alignment;
-        let readback_size = (padded_bytes_per_row as u64)
-            .checked_mul(height as u64)
-            .ok_or_else(|| "readback buffer size overflowed".to_string())?;
+    if width == 0 || height == 0 {
+        return Err("zero-area render".into());
+    }
+    pipeline::validate_scene_for_device(device, scene, width, height)?;
+    let unpadded_bytes_per_row = width
+        .checked_mul(4)
+        .ok_or_else(|| "readback row size overflowed".to_string())?;
+    let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded_bytes_per_row = unpadded_bytes_per_row
+        .checked_add(alignment - 1)
+        .ok_or_else(|| "aligned readback row size overflowed".to_string())?
+        / alignment
+        * alignment;
+    let readback_size = (padded_bytes_per_row as u64)
+        .checked_mul(height as u64)
+        .ok_or_else(|| "readback buffer size overflowed".to_string())?;
 
-        let color_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("imgeditor-scene3d-headless/color"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: color_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
+    let color_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("imgeditor-scene3d-headless/color"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: color_format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let color_view = color_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let (_depth_tex, depth_view) = pipeline::create_depth_texture(device, width, height, 1);
+
+    let read_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("imgeditor-scene3d-headless/readback"),
+        size: readback_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let mut frustum_cam = camera.clone();
+    frustum_cam.set_viewport(Viewport { width, height });
+
+    renderer
+        .pipelines
+        .update_camera(queue, &frustum_cam, scene.key_light, scene.ambient, flags);
+
+    let mut mesh_gpus = Vec::with_capacity(scene.meshes.len());
+    for mesh in &scene.meshes {
+        let gpu = GpuMesh::from_scene_mesh(device, queue, mesh);
+        let tex = mesh.diffuse.as_ref().map(|t| {
+            GpuTexture::from_scene_texture(
+                device,
+                queue,
+                t,
+                &pipelines.texture_layout,
+                &pipelines.texture_sampler,
+            )
         });
-        let color_view = color_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let (_depth_tex, depth_view) = pipeline::create_depth_texture(device, width, height, 1);
+        mesh_gpus.push((gpu, tex));
+    }
 
-        let read_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("imgeditor-scene3d-headless/readback"),
-            size: readback_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("imgeditor-scene3d-headless/encoder"),
+    });
 
-        let mut frustum_cam = camera.clone();
-        frustum_cam.set_viewport(Viewport { width, height });
-
-        renderer.pipelines.update_camera(
-            queue,
-            &frustum_cam,
-            scene.key_light,
-            scene.ambient,
-            flags,
-        );
-
-        let mut mesh_gpus = Vec::with_capacity(scene.meshes.len());
-        for mesh in &scene.meshes {
-            let gpu = GpuMesh::from_scene_mesh(device, queue, mesh);
-            let tex = mesh
-                .diffuse
-                .as_ref()
-                .map(|t| {
-                    GpuTexture::from_scene_texture(
-                        device,
-                        queue,
-                        t,
-                        &pipelines.texture_layout,
-                        &pipelines.texture_sampler,
-                    )
-                });
-            mesh_gpus.push((gpu, tex));
-        }
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("imgeditor-scene3d-headless/encoder"),
-        });
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("imgeditor-scene3d-headless/pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.06,
-                            g: 0.07,
-                            b: 0.09,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("imgeditor-scene3d-headless/pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &color_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.06,
+                        g: 0.07,
+                        b: 0.09,
+                        a: 1.0,
                     }),
-                    stencil_ops: None,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
                 }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
 
-            pass.set_pipeline(&pipelines.grid);
-            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
-            pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
-            pass.set_index_buffer(
-                pipelines.quad_index_buffer.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            pass.draw_indexed(0..6, 0, 0..1);
+        pass.set_pipeline(&pipelines.grid);
+        pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+        pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
+        pass.set_index_buffer(
+            pipelines.quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
+        pass.draw_indexed(0..6, 0, 0..1);
 
-            pass.set_pipeline(match (
+        pass.set_pipeline(
+            match (
                 flags.contains(RenderFlags::WIREFRAME),
                 pipelines.wireframe.as_ref(),
             ) {
                 (true, Some(wf)) => wf,
                 _ => &pipelines.lit,
-            });
-            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+            },
+        );
+        pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
 
-            for (gpu_mesh, tex) in &mesh_gpus {
-                let bg: &wgpu::BindGroup = match tex {
-                    Some(t) => &t.bind_group,
-                    None => &pipelines.default_diffuse.bind_group,
-                };
-                pass.set_bind_group(1, bg, &[]);
-                pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-                pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
-            }
-
-            pass.set_pipeline(&pipelines.gizmo);
-            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
-            pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
-            pass.set_index_buffer(
-                pipelines.quad_index_buffer.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            pass.draw_indexed(0..6, 0, 0..1);
+        for (gpu_mesh, tex) in &mesh_gpus {
+            let bg: &wgpu::BindGroup = match tex {
+                Some(t) => &t.bind_group,
+                None => &pipelines.default_diffuse.bind_group,
+            };
+            pass.set_bind_group(1, bg, &[]);
+            pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
+            pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
         }
+
+        pass.set_pipeline(&pipelines.gizmo);
+        pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+        pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
+        pass.set_index_buffer(
+            pipelines.quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
+        pass.draw_indexed(0..6, 0, 0..1);
+    }
 
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
@@ -291,10 +282,7 @@ pub struct RenderedFrame {
     })
 }
 
-pub fn write_png<P: AsRef<Path>>(
-    frame: &RenderedFrame,
-    path: P,
-) -> Result<(), String> {
+pub fn write_png<P: AsRef<Path>>(frame: &RenderedFrame, path: P) -> Result<(), String> {
     let bytes = frame.rgba.as_slice();
     let img = image::RgbaImage::from_raw(frame.width, frame.height, bytes.to_vec())
         .ok_or_else(|| "rgba buffer did not match dimensions".to_string())?;
@@ -315,11 +303,7 @@ mod tests {
     use crate::inspector::scene3d::scene::Scene;
 
     fn triangle_scene() -> Scene {
-        let positions = [
-            [-1.0, -1.0, 0.0],
-            [1.0, -1.0, 0.0],
-            [0.0, 1.0, 0.0],
-        ];
+        let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
         let normals = [[0.0, 0.0, 1.0]; 3];
         let uvs = [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]];
         let vertices: Vec<Vertex> = positions
@@ -393,24 +377,10 @@ mod tests {
             height: 128,
         });
         camera.reset_to_aabb(&scene.aabb);
-        let frame_lit = render_frame(
-            &renderer,
-            &scene,
-            &camera,
-            128,
-            128,
-            RenderFlags::empty(),
-        )
-        .expect("lit");
-        let frame_wire = render_frame(
-            &renderer,
-            &scene,
-            &camera,
-            128,
-            128,
-            RenderFlags::WIREFRAME,
-        )
-        .expect("wireframe");
+        let frame_lit =
+            render_frame(&renderer, &scene, &camera, 128, 128, RenderFlags::empty()).expect("lit");
+        let frame_wire = render_frame(&renderer, &scene, &camera, 128, 128, RenderFlags::WIREFRAME)
+            .expect("wireframe");
         assert_eq!(frame_lit.rgba.len(), frame_wire.rgba.len());
         // Lit and wireframe should differ somewhere.
         assert_ne!(frame_lit.rgba, frame_wire.rgba);
@@ -424,22 +394,17 @@ mod tests {
         scene.meshes[0].diffuse = Some(crate::inspector::scene3d::mesh::SceneTexture {
             width: 2,
             height: 2,
-            rgba: vec![255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255],
+            rgba: vec![
+                255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+            ],
         });
         let mut camera = OrbitCamera::new(Viewport {
             width: 64,
             height: 64,
         });
         camera.reset_to_aabb(&scene.aabb);
-        let _ = render_frame(
-            &renderer,
-            &scene,
-            &camera,
-            64,
-            64,
-            RenderFlags::HAS_TEXTURE,
-        )
-        .expect("textured render");
+        let _ = render_frame(&renderer, &scene, &camera, 64, 64, RenderFlags::HAS_TEXTURE)
+            .expect("textured render");
     }
 
     #[test]
@@ -459,8 +424,8 @@ mod tests {
         cam.reset_to_aabb(&scene.aabb);
         cam.pitch = -1.2; // eye well below the plane, looking up
         assert!(cam.eye()[1] < 0.0);
-        let f = render_frame(&renderer, &scene, &cam, 256, 256, RenderFlags::empty())
-            .expect("frame");
+        let f =
+            render_frame(&renderer, &scene, &cam, 256, 256, RenderFlags::empty()).expect("frame");
         let matches = |i: usize, (r, g, b): (i32, i32, i32)| {
             (f.rgba[i] as i32 - r).abs() < 8
                 && (f.rgba[i + 1] as i32 - g).abs() < 8
@@ -484,11 +449,7 @@ mod tests {
     #[test]
     fn floor_does_not_occlude_geometry_below_world_plane() {
         let renderer = HeadlessRenderer::new().expect("renderer");
-        let positions = [
-            [-0.8, -2.0, 0.0],
-            [0.8, -2.0, 0.0],
-            [0.0, -0.5, 0.0],
-        ];
+        let positions = [[-0.8, -2.0, 0.0], [0.8, -2.0, 0.0], [0.0, -0.5, 0.0]];
         let aabb = Aabb::from_points(&positions).unwrap();
         let vertices = positions
             .into_iter()
@@ -663,15 +624,8 @@ mod tests {
         });
         camera.reset_to_aabb(&scene.aabb);
         let renderer = HeadlessRenderer::new().expect("renderer");
-        let frame = render_frame(
-            &renderer,
-            &scene,
-            &camera,
-            512,
-            512,
-            RenderFlags::empty(),
-        )
-        .expect("frame");
+        let frame = render_frame(&renderer, &scene, &camera, 512, 512, RenderFlags::empty())
+            .expect("frame");
         let out = std::path::Path::new("target").join("scene3d-bully-1950fridge.png");
         if let Some(parent) = out.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -711,15 +665,8 @@ mod tests {
         });
         camera.reset_to_aabb(&scene.aabb);
         let renderer = HeadlessRenderer::new().expect("renderer");
-        let frame = render_frame(
-            &renderer,
-            &scene,
-            &camera,
-            512,
-            512,
-            RenderFlags::empty(),
-        )
-        .expect("adm_lamp frame rendered");
+        let frame = render_frame(&renderer, &scene, &camera, 512, 512, RenderFlags::empty())
+            .expect("adm_lamp frame rendered");
         let out = std::path::Path::new("target").join("scene3d-adm-lamp.png");
         if let Some(parent) = out.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -735,18 +682,14 @@ mod tests {
     #[test]
     fn mascot_fixtures_render_to_png_when_present() {
         let root = std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/NIF");
-        let archive_path = std::path::Path::new(
-            "C:/Games/Bully - Scholarship Edition/Stream/World.img",
-        );
+        let archive_path =
+            std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/World.img");
         let names = [
             "Player_Mascot.nif",
             "Player_Mascot_nh.nif",
             "Player_Mascot_W.nif",
         ];
-        let existing = names
-            .iter()
-            .filter(|name| root.join(name).exists())
-            .count();
+        let existing = names.iter().filter(|name| root.join(name).exists()).count();
         if existing == 0 || !archive_path.is_file() {
             return;
         }
@@ -776,13 +719,9 @@ mod tests {
                         .get_pixels(texture_name)
                         .and_then(crate::inspector::scene3d::mesh::SceneTexture::from_tga)
                         .or_else(|| {
-                            archive_index
-                                .read(texture_name)
-                                .and_then(|bytes| {
-                                    crate::inspector::scene3d::mesh::SceneTexture::from_tga(
-                                        &bytes,
-                                    )
-                                })
+                            archive_index.read(texture_name).and_then(|bytes| {
+                                crate::inspector::scene3d::mesh::SceneTexture::from_tga(&bytes)
+                            })
                         })
                 },
             )
@@ -809,8 +748,7 @@ mod tests {
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .unwrap_or("mascot");
-            let out = std::path::Path::new("target")
-                .join(format!("scene3d-{stem}.png"));
+            let out = std::path::Path::new("target").join(format!("scene3d-{stem}.png"));
             if let Some(parent) = out.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -833,7 +771,9 @@ mod tests {
         let path = std::path::Path::new(
             "C:/Games/Bully - Scholarship Edition/Stream/test1/1950Fridge.nif",
         );
-        let Ok(bytes) = std::fs::read(path) else { return };
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
         let scene = crate::inspector::scene3d::decode::parse_and_build_scene(
             &bytes,
             crate::inspector::scene3d::camera::BaseOrientation::Zup,
@@ -878,10 +818,8 @@ mod tests {
             mapped_at_creation: false,
         });
 
-        let mut camera = OrbitCamera::new(crate::inspector::scene3d::camera::Viewport {
-            width,
-            height,
-        });
+        let mut camera =
+            OrbitCamera::new(crate::inspector::scene3d::camera::Viewport { width, height });
         camera.reset_to_aabb(&scene.aabb);
         pipelines.update_camera(
             queue,
@@ -961,10 +899,7 @@ mod tests {
                 };
                 pass.set_bind_group(1, bg, &[]);
                 pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-                pass.set_index_buffer(
-                    gpu_mesh.index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
+                pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
             }
 
@@ -1029,6 +964,10 @@ mod tests {
         }
         write_png(&frame, &out).expect("png write");
         let meta = std::fs::metadata(&out).expect("file exists");
-        assert!(meta.len() > 200, "PNG suspiciously small: {} bytes", meta.len());
+        assert!(
+            meta.len() > 200,
+            "PNG suspiciously small: {} bytes",
+            meta.len()
+        );
     }
 }

@@ -16,12 +16,22 @@ pub enum SpacingSize {
 
 impl SpacingSize {
     pub const ALL: [Self; 10] = [
-        Self::Xxs, Self::Xs, Self::Sm, Self::Md, Self::Lg,
-        Self::Xl, Self::Xl2, Self::Xl3, Self::Xl4, Self::Xl5,
+        Self::Xxs,
+        Self::Xs,
+        Self::Sm,
+        Self::Md,
+        Self::Lg,
+        Self::Xl,
+        Self::Xl2,
+        Self::Xl3,
+        Self::Xl4,
+        Self::Xl5,
     ];
 
     #[inline]
-    pub const fn index(self) -> usize { self as usize }
+    pub const fn index(self) -> usize {
+        self as usize
+    }
 }
 
 /// A modular spacing scale with 10 predefined values.
@@ -36,28 +46,64 @@ impl SpacingScale {
     };
 
     #[inline]
-    pub const fn new(values: [f32; 10]) -> Self { Self { values } }
+    pub const fn new(values: [f32; 10]) -> Self {
+        Self { values }
+    }
 
     #[inline]
     pub const fn get(&self, size: SpacingSize) -> f32 {
         self.values[size.index()]
     }
 
-    #[inline] pub const fn xxs(&self) -> f32 { self.values[0] }
-    #[inline] pub const fn xs(&self) -> f32 { self.values[1] }
-    #[inline] pub const fn sm(&self) -> f32 { self.values[2] }
-    #[inline] pub const fn md(&self) -> f32 { self.values[3] }
-    #[inline] pub const fn lg(&self) -> f32 { self.values[4] }
-    #[inline] pub const fn xl(&self) -> f32 { self.values[5] }
-    #[inline] pub const fn xl2(&self) -> f32 { self.values[6] }
-    #[inline] pub const fn xl3(&self) -> f32 { self.values[7] }
-    #[inline] pub const fn xl4(&self) -> f32 { self.values[8] }
-    #[inline] pub const fn xl5(&self) -> f32 { self.values[9] }
+    #[inline]
+    pub const fn xxs(&self) -> f32 {
+        self.values[0]
+    }
+    #[inline]
+    pub const fn xs(&self) -> f32 {
+        self.values[1]
+    }
+    #[inline]
+    pub const fn sm(&self) -> f32 {
+        self.values[2]
+    }
+    #[inline]
+    pub const fn md(&self) -> f32 {
+        self.values[3]
+    }
+    #[inline]
+    pub const fn lg(&self) -> f32 {
+        self.values[4]
+    }
+    #[inline]
+    pub const fn xl(&self) -> f32 {
+        self.values[5]
+    }
+    #[inline]
+    pub const fn xl2(&self) -> f32 {
+        self.values[6]
+    }
+    #[inline]
+    pub const fn xl3(&self) -> f32 {
+        self.values[7]
+    }
+    #[inline]
+    pub const fn xl4(&self) -> f32 {
+        self.values[8]
+    }
+    #[inline]
+    pub const fn xl5(&self) -> f32 {
+        self.values[9]
+    }
 
     #[inline]
-    pub const fn values(&self) -> &[f32; 10] { &self.values }
+    pub const fn values(&self) -> &[f32; 10] {
+        &self.values
+    }
 }
 
 impl Default for SpacingScale {
-    fn default() -> Self { Self::DEFAULT }
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }

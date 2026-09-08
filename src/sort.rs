@@ -154,10 +154,7 @@ impl Default for SortChain {
         // IMGF's default: Name AZ. Stable, predictable, and matches
         // what most modders expect when nothing has been configured.
         Self {
-            priorities: vec![SortPriority::new(
-                SortKey::Name,
-                SortDirection::Ascending,
-            )],
+            priorities: vec![SortPriority::new(SortKey::Name, SortDirection::Ascending)],
         }
     }
 }
@@ -313,10 +310,12 @@ impl<'a> Default for SortContext<'a> {
         // doesn't implement Default for the local `HashMap::new()`
         // pattern that derive generates. Hand-written default keeps
         // the empty-map behaviour explicit.
-        static EMPTY_IDE: std::sync::OnceLock<std::collections::HashMap<CompactString, CompactString>> =
-            std::sync::OnceLock::new();
-        static EMPTY_COL: std::sync::OnceLock<std::collections::HashMap<CompactString, CompactString>> =
-            std::sync::OnceLock::new();
+        static EMPTY_IDE: std::sync::OnceLock<
+            std::collections::HashMap<CompactString, CompactString>,
+        > = std::sync::OnceLock::new();
+        static EMPTY_COL: std::sync::OnceLock<
+            std::collections::HashMap<CompactString, CompactString>,
+        > = std::sync::OnceLock::new();
         let ide = EMPTY_IDE.get_or_init(std::collections::HashMap::new);
         let col = EMPTY_COL.get_or_init(std::collections::HashMap::new);
         Self {
@@ -391,9 +390,9 @@ impl SortByKey for SortKey {
                 Some(primary) => {
                     let a_primary = a.file_type == *primary;
                     let b_primary = b.file_type == *primary;
-                    b_primary.cmp(&a_primary).then_with(|| {
-                        a.file_type.cmp(&b.file_type)
-                    })
+                    b_primary
+                        .cmp(&a_primary)
+                        .then_with(|| a.file_type.cmp(&b.file_type))
                 }
                 None => a.file_type.cmp(&b.file_type),
             },
@@ -538,7 +537,10 @@ mod tests {
             SortPriority::new(SortKey::Name, SortDirection::Ascending),
         ]);
         chain.move_slot(0, 1);
-        let (first, second) = (chain.iter().next().unwrap().key, chain.iter().nth(1).unwrap().key);
+        let (first, second) = (
+            chain.iter().next().unwrap().key,
+            chain.iter().nth(1).unwrap().key,
+        );
         assert_eq!(first, SortKey::Name);
         assert_eq!(second, SortKey::Size);
     }

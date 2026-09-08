@@ -53,32 +53,28 @@ pub fn gradient_panel<'a, Message: 'a>(
             .into();
         let _ = line;
         Container::new(
-            Column::new()
-                .push(inner)
-                .push(
-                    Container::new(Space::new().width(Length::Fill).height(Length::Fixed(1.0)))
-                        .style(move |_| iced::widget::container::Style {
-                            background: Some(Background::Color(accent_color)),
-                            ..Default::default()
-                        })
-                        .width(Length::Fill),
-                ),
+            Column::new().push(inner).push(
+                Container::new(Space::new().width(Length::Fill).height(Length::Fixed(1.0)))
+                    .style(move |_| iced::widget::container::Style {
+                        background: Some(Background::Color(accent_color)),
+                        ..Default::default()
+                    })
+                    .width(Length::Fill),
+            ),
         )
         .width(Length::Fill)
         .height(Length::Fill)
     } else {
         let _ = design; // suppress unused warning
         Container::new(
-            Row::new()
-                .push(inner)
-                .push(
-                    Container::new(Space::new().width(Length::Fixed(1.0)).height(Length::Fill))
-                        .style(move |_| iced::widget::container::Style {
-                            background: Some(Background::Color(accent_color)),
-                            ..Default::default()
-                        })
-                        .height(Length::Fill),
-                ),
+            Row::new().push(inner).push(
+                Container::new(Space::new().width(Length::Fixed(1.0)).height(Length::Fill))
+                    .style(move |_| iced::widget::container::Style {
+                        background: Some(Background::Color(accent_color)),
+                        ..Default::default()
+                    })
+                    .height(Length::Fill),
+            ),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -101,7 +97,11 @@ pub fn card<'a, Message: 'a>(
         .padding(12)
         .style(move |_| iced::widget::container::Style {
             background: Some(Background::Color(surface)),
-            border: Border { color: border.color, width: border.width, radius: radius.into() },
+            border: Border {
+                color: border.color,
+                width: border.width,
+                radius: radius.into(),
+            },
             shadow,
             ..Default::default()
         })
@@ -123,25 +123,34 @@ pub fn floating_card<'a, Message: 'a>(
         .padding(16)
         .style(move |_| iced::widget::container::Style {
             background: Some(Background::Color(surface)),
-            border: Border { color: border.color, width: border.width, radius: radius.into() },
+            border: Border {
+                color: border.color,
+                width: border.width,
+                radius: radius.into(),
+            },
             shadow,
             ..Default::default()
         })
 }
 
 /// 3-pixel-wide left accent bar — used to mark the active archive tab.
-pub fn accent_bar<'a, Message: 'a>(
-    color: Color,
-    height: f32,
-) -> Container<'a, Message> {
-    Container::new(Space::new().width(Length::Fixed(3.0)).height(Length::Fixed(height)))
-        .style(move |_| iced::widget::container::Style {
-            background: Some(Background::Color(color)),
-            border: Border { color: Color::TRANSPARENT, width: 0.0, radius: 0.0.into() },
-            ..Default::default()
-        })
-        .width(Length::Fixed(3.0))
-        .height(Length::Fixed(height))
+pub fn accent_bar<'a, Message: 'a>(color: Color, height: f32) -> Container<'a, Message> {
+    Container::new(
+        Space::new()
+            .width(Length::Fixed(3.0))
+            .height(Length::Fixed(height)),
+    )
+    .style(move |_| iced::widget::container::Style {
+        background: Some(Background::Color(color)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+        ..Default::default()
+    })
+    .width(Length::Fixed(3.0))
+    .height(Length::Fixed(height))
 }
 
 /// Pill-shaped badge — used for "TXD", "DFF", "COL" entry-type pills,
@@ -152,10 +161,19 @@ pub fn badge<'a, Message: 'a>(
     text_color: Color,
 ) -> Container<'a, Message> {
     Container::new(fonts::caption(label).color(text_color))
-        .padding(Padding { top: 2.0, bottom: 2.0, left: 8.0, right: 8.0 })
+        .padding(Padding {
+            top: 2.0,
+            bottom: 2.0,
+            left: 8.0,
+            right: 8.0,
+        })
         .style(move |_| iced::widget::container::Style {
             background: Some(Background::Color(bg)),
-            border: Border { color: Color::TRANSPARENT, width: 0.0, radius: 9999.0.into() },
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 9999.0.into(),
+            },
             ..Default::default()
         })
 }
@@ -178,7 +196,11 @@ pub fn snackbar<'a, Message: 'a>(
         .padding(12)
         .style(move |_| iced::widget::container::Style {
             background: Some(Background::Color(surface)),
-            border: Border { color: border.color, width: border.width, radius: radius.into() },
+            border: Border {
+                color: border.color,
+                width: border.width,
+                radius: radius.into(),
+            },
             shadow,
             ..Default::default()
         })
@@ -192,35 +214,48 @@ pub fn hover_surface<'a, Message: 'a>(
     let content: Element<'a, Message> = content.into();
     Container::new(content).style(move |_| iced::widget::container::Style {
         background: Some(Background::Color(bg)),
-        border: Border { color: Color::TRANSPARENT, width: 0.0, radius: 4.0.into() },
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 4.0.into(),
+        },
         ..Default::default()
     })
 }
 
 /// Horizontal rule with the design system's border color.
 pub fn hairline<'a, Message: 'a>(color: Color) -> Element<'a, Message> {
-    rule::horizontal(1).style(move |_theme| iced::widget::rule::Style {
-        color,
-        radius: 0.0.into(),
-        fill_mode: iced::widget::rule::FillMode::Full,
-        snap: false,
-    }).into()
+    rule::horizontal(1)
+        .style(move |_theme| iced::widget::rule::Style {
+            color,
+            radius: 0.0.into(),
+            fill_mode: iced::widget::rule::FillMode::Full,
+            snap: false,
+        })
+        .into()
 }
 
 pub fn vhairline<'a, Message: 'a>(color: Color) -> Element<'a, Message> {
-    rule::vertical(1).style(move |_theme| iced::widget::rule::Style {
-        color,
-        radius: 0.0.into(),
-        fill_mode: iced::widget::rule::FillMode::Full,
-        snap: false,
-    }).into()
+    rule::vertical(1)
+        .style(move |_theme| iced::widget::rule::Style {
+            color,
+            radius: 0.0.into(),
+            fill_mode: iced::widget::rule::FillMode::Full,
+            snap: false,
+        })
+        .into()
 }
 
 /// Build a styled `Row` for menubar entries.
 pub fn menubar_row<'a, Message: 'a>() -> Row<'a, Message> {
     Row::new()
         .spacing(0)
-        .padding(Padding { top: 0.0, bottom: 0.0, left: 0.0, right: 0.0 })
+        .padding(Padding {
+            top: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+            right: 0.0,
+        })
         .align_y(Alignment::Center)
 }
 
@@ -240,5 +275,8 @@ pub fn icon_label<'a, Message: 'a>(
 
 /// Build a styled `Column` for the root layout with no spacing.
 pub fn root_column<'a, Message: 'a>() -> Column<'a, Message> {
-    Column::new().spacing(0).width(Length::Fill).height(Length::Fill)
+    Column::new()
+        .spacing(0)
+        .width(Length::Fill)
+        .height(Length::Fill)
 }

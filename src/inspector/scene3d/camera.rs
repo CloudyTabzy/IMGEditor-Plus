@@ -301,7 +301,10 @@ mod tests {
         let e = cam.eye();
         // With yaw=0, pitch≈0.3, distance=10, the eye sits roughly at
         // (0, 3, 9.5) and looks at the origin.
-        assert!(approx_pt(e, [0.0, 10.0 * 0.3_f32.sin(), 10.0 * 0.3_f32.cos()]));
+        assert!(approx_pt(
+            e,
+            [0.0, 10.0 * 0.3_f32.sin(), 10.0 * 0.3_f32.cos()]
+        ));
     }
 
     #[test]
@@ -400,7 +403,10 @@ mod tests {
             height: 600,
         });
         cam.pan(0.0, 10.0, 0.01);
-        assert!(cam.target[1] > 0.0, "dragging down should pan the view down");
+        assert!(
+            cam.target[1] > 0.0,
+            "dragging down should pan the view down"
+        );
 
         cam.pan(0.0, -20.0, 0.01);
         assert!(cam.target[1] < 0.0, "dragging up should pan the view up");
@@ -424,7 +430,10 @@ mod tests {
         camera.pan(20.0, 20.0, 0.01);
         let after = screen_position(&camera, [0.0, 0.0, 0.0]);
 
-        assert!(after[0] > before[0], "rightward drag should move scene right");
+        assert!(
+            after[0] > before[0],
+            "rightward drag should move scene right"
+        );
         assert!(after[1] > before[1], "downward drag should move scene down");
     }
 

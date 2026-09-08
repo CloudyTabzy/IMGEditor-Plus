@@ -26,25 +26,23 @@ use iced::advanced::widget::tree::Tag;
 use iced::advanced::widget::{Tree, tree};
 use iced::{
     Element, Event, Length, Point, Rectangle, Size,
-    advanced::Shell,
     advanced::Clipboard,
+    advanced::Shell,
+    advanced::Widget,
     advanced::graphics,
     advanced::layout::{self, Limits, Node},
     advanced::renderer,
-    advanced::Widget,
-    mouse::{
-        self, Button as MouseButton, Cursor, Event as MouseEvent, ScrollDelta,
-    },
+    mouse::{self, Button as MouseButton, Cursor, Event as MouseEvent, ScrollDelta},
 };
 
 use iced_widget::renderer::wgpu::primitive::{self, Pipeline as PrimitivePipeline};
 
 use crate::inspector::scene3d::camera::OrbitCamera;
-use crate::inspector::scene3d::pipeline::{
-    GpuMesh, GpuTexture, RenderFlags, ScenePipelines, create_depth_texture,
-    effective_texture_flag, register_gpu_error_handlers, validate_scene_for_device,
-};
 use crate::inspector::scene3d::mesh::Aabb;
+use crate::inspector::scene3d::pipeline::{
+    GpuMesh, GpuTexture, RenderFlags, ScenePipelines, create_depth_texture, effective_texture_flag,
+    register_gpu_error_handlers, validate_scene_for_device,
+};
 use crate::inspector::scene3d::scene::Scene;
 
 const ORBIT_SENSITIVITY: f32 = 0.010;
@@ -113,7 +111,9 @@ impl SceneHandle {
     pub fn set_scene(&self, scene: Scene) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
         let offset = scene_display_offset(&scene, inner.origin_mode);
-        inner.camera.reset_to_aabb(&translated_aabb(scene.aabb, offset));
+        inner
+            .camera
+            .reset_to_aabb(&translated_aabb(scene.aabb, offset));
         inner.scene = Some(Arc::new(scene));
         inner.gpu_error = None;
         inner.dirty = true;
@@ -130,10 +130,9 @@ impl SceneHandle {
     /// The scene itself is preserved.
     pub fn reset_camera(&self) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
-        let display_aabb = inner
-            .scene
-            .as_ref()
-            .map(|scene| translated_aabb(scene.aabb, scene_display_offset(scene, inner.origin_mode)));
+        let display_aabb = inner.scene.as_ref().map(|scene| {
+            translated_aabb(scene.aabb, scene_display_offset(scene, inner.origin_mode))
+        });
         if let Some(aabb) = display_aabb {
             inner.camera.reset_to_aabb(&aabb);
         } else {
@@ -148,10 +147,9 @@ impl SceneHandle {
             SceneOriginMode::Centered => SceneOriginMode::World,
             SceneOriginMode::World => SceneOriginMode::Centered,
         };
-        let display_aabb = inner
-            .scene
-            .as_ref()
-            .map(|scene| translated_aabb(scene.aabb, scene_display_offset(scene, inner.origin_mode)));
+        let display_aabb = inner.scene.as_ref().map(|scene| {
+            translated_aabb(scene.aabb, scene_display_offset(scene, inner.origin_mode))
+        });
         if let Some(aabb) = display_aabb {
             inner.camera.reset_to_aabb(&aabb);
         }
@@ -279,9 +277,7 @@ fn handle_event(
     cursor_inside: bool,
 ) -> bool {
     match event {
-        Event::Mouse(MouseEvent::ButtonPressed(button)) if cursor_inside => {
-            state.begin(*button)
-        }
+        Event::Mouse(MouseEvent::ButtonPressed(button)) if cursor_inside => state.begin(*button),
         Event::Mouse(MouseEvent::ButtonReleased(button)) => state.end(*button),
         Event::Mouse(MouseEvent::CursorMoved { position }) => {
             if let Some(mode) = state.mode {
@@ -350,12 +346,7 @@ where
         }
     }
 
-    fn layout(
-        &mut self,
-        _tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &Limits,
-    ) -> Node {
+    fn layout(&mut self, _tree: &mut Tree, _renderer: &Renderer, limits: &Limits) -> Node {
         layout::atomic(limits, self.width, self.height)
     }
 
@@ -377,12 +368,12 @@ where
         state.cursor_inside = cursor_inside;
         let mut dirty = false;
         self.handle.with_mut(|inner| {
-            let mut needs_redraw =
-                handle_event(&mut inner.camera, state, event, cursor_inside);
+            let mut needs_redraw = handle_event(&mut inner.camera, state, event, cursor_inside);
             if !state.is_dragging() {
                 state.last = None;
             }
-            if !cursor_inside && !state.is_dragging()
+            if !cursor_inside
+                && !state.is_dragging()
                 && matches!(event, Event::Mouse(MouseEvent::CursorMoved { .. }))
             {
                 needs_redraw = false;
@@ -491,10 +482,9 @@ impl primitive::Primitive for ScenePrimitive {
             if inner.scene.is_none() {
                 return (None, [0.0; 3]);
             }
-            inner.camera.set_viewport(crate::inspector::scene3d::camera::Viewport {
-                width,
-                height,
-            });
+            inner
+                .camera
+                .set_viewport(crate::inspector::scene3d::camera::Viewport { width, height });
             let scene = inner.scene.clone();
             let offset = scene
                 .as_ref()
@@ -527,11 +517,7 @@ impl primitive::Primitive for ScenePrimitive {
         }
     }
 
-    fn draw(
-        &self,
-        _pipeline: &Self::Pipeline,
-        _render_pass: &mut wgpu::RenderPass<'_>,
-    ) -> bool {
+    fn draw(&self, _pipeline: &Self::Pipeline, _render_pass: &mut wgpu::RenderPass<'_>) -> bool {
         // Force Iced to route us through `render` instead — that's
         // where we have an encoder and can issue the offscreen render
         // pass. `draw` only gives us the compositor's ongoing render
@@ -548,7 +534,12 @@ impl primitive::Primitive for ScenePrimitive {
         clip_bounds: &Rectangle<u32>,
     ) {
         let (scene, camera, flags, gpu_error) = self.handle.with(|i| {
-            (i.scene.clone(), i.camera.clone(), i.flags, i.gpu_error.is_some())
+            (
+                i.scene.clone(),
+                i.camera.clone(),
+                i.flags,
+                i.gpu_error.is_some(),
+            )
         });
         if gpu_error || pipeline.gpu_error().is_some() {
             return;
@@ -564,7 +555,6 @@ impl primitive::Primitive for ScenePrimitive {
         pipeline.composite_to_frame(encoder, target, clip_bounds);
     }
 }
-
 
 pub struct ScenePipeline {
     pub render_pipelines: ScenePipelines,
@@ -755,10 +745,7 @@ impl ScenePipeline {
         // or intersecting the world Y=0 plane.
         pass.set_pipeline(&self.render_pipelines.grid);
         pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
-        pass.set_vertex_buffer(
-            0,
-            self.render_pipelines.quad_vertex_buffer.slice(..),
-        );
+        pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
         pass.set_index_buffer(
             self.render_pipelines.quad_index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
@@ -766,17 +753,19 @@ impl ScenePipeline {
         pass.draw_indexed(0..6, 0, 0..1);
 
         // 3. the model
-        let use_wireframe = flags.contains(RenderFlags::WIREFRAME)
-            && self.render_pipelines.wireframe.is_some();
+        let use_wireframe =
+            flags.contains(RenderFlags::WIREFRAME) && self.render_pipelines.wireframe.is_some();
         let lit_pipeline = if flags.contains(RenderFlags::CULL_BACK) {
             &self.render_pipelines.lit_cull_back
         } else {
             &self.render_pipelines.lit
         };
-        pass.set_pipeline(match (use_wireframe, self.render_pipelines.wireframe.as_ref()) {
-            (true, Some(wf)) => wf,
-            _ => lit_pipeline,
-        });
+        pass.set_pipeline(
+            match (use_wireframe, self.render_pipelines.wireframe.as_ref()) {
+                (true, Some(wf)) => wf,
+                _ => lit_pipeline,
+            },
+        );
         pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
 
         for (gpu_mesh, tex) in &self.mesh_cache {
@@ -793,10 +782,7 @@ impl ScenePipeline {
         // 4. the XYZ axis gizmo in the bottom-right of the pane.
         pass.set_pipeline(&self.render_pipelines.gizmo);
         pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
-        pass.set_vertex_buffer(
-            0,
-            self.render_pipelines.quad_vertex_buffer.slice(..),
-        );
+        pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
         pass.set_index_buffer(
             self.render_pipelines.quad_index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
@@ -1084,9 +1070,9 @@ mod tests {
             &mut self,
             _handle: &iced::advanced::image::Handle,
             _callback: impl FnOnce(
-                    Result<iced::advanced::image::Allocation, iced::advanced::image::Error>,
-                ) + Send
-                + 'static,
+                Result<iced::advanced::image::Allocation, iced::advanced::image::Error>,
+            ) + Send
+            + 'static,
         ) {
         }
     }

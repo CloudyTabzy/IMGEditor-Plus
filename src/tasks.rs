@@ -130,7 +130,10 @@ pub struct FolderImportOutcome {
     pub target_archive_path: Option<PathBuf>,
 }
 
-pub fn scan_import_folder(folder: &Path, archive: &ArchiveInfo) -> anyhow::Result<FolderImportPlan> {
+pub fn scan_import_folder(
+    folder: &Path,
+    archive: &ArchiveInfo,
+) -> anyhow::Result<FolderImportPlan> {
     let mut files = Vec::new();
     let mut scan_skipped = Vec::new();
     let mut total_bytes = 0_u64;
@@ -210,7 +213,11 @@ pub struct PackTask {
 
 impl PackTask {
     pub fn new(archive: ArchiveInfo, path: PathBuf, version: ImgVersion) -> Self {
-        Self { archive, path, version }
+        Self {
+            archive,
+            path,
+            version,
+        }
     }
 
     pub async fn run(self) -> anyhow::Result<PackOutcome> {
@@ -222,8 +229,8 @@ impl PackTask {
         let entry_count = estimate.entry_count;
         let original_bytes = estimate.original_bytes;
 
-        let mut archive = SaveTask::new(self.archive, self.path.clone(), self.version)
-            .run_blocking()?;
+        let mut archive =
+            SaveTask::new(self.archive, self.path.clone(), self.version).run_blocking()?;
         let packed_bytes = std::fs::metadata(&self.path)?.len();
         let stats = PackStats::from_sizes(entry_count, original_bytes, packed_bytes);
 
@@ -288,7 +295,10 @@ impl FolderImportTask {
             if progress.is_cancelled() {
                 summary.cancelled = true;
                 summary.skipped += plan.files.len() - index;
-                push_import_detail(&mut summary, "Import cancelled; remaining files were skipped.");
+                push_import_detail(
+                    &mut summary,
+                    "Import cancelled; remaining files were skipped.",
+                );
                 break;
             }
 
@@ -394,9 +404,12 @@ impl ExportTask {
 
         let entries: Vec<EntryInfo> = match mode {
             ExportMode::All => archive.entries.clone(),
-            ExportMode::Selected => {
-                archive.entries.iter().filter(|e| e.selected).cloned().collect()
-            }
+            ExportMode::Selected => archive
+                .entries
+                .iter()
+                .filter(|e| e.selected)
+                .cloned()
+                .collect(),
         };
 
         let total = entries.len();
@@ -405,25 +418,11 @@ impl ExportTask {
         let results: Vec<(CompactString, anyhow::Result<()>)> = if total == 0 {
             Vec::new()
         } else if self.engine == ExportEngine::Fast {
-            export_entries_sequential(
-                &entries,
-                &archive,
-                &folder,
-                &progress,
-                total,
-                &completed,
-            )
+            export_entries_sequential(&entries, &archive, &folder, &progress, total, &completed)
         } else if self.engine == ExportEngine::ZeroCopy && archive.source_mmap.is_some() {
             export_entries_zero_copy(&entries, &archive, &folder, &progress, total, &completed)
         } else {
-            export_entries_batched(
-                &entries,
-                &archive,
-                &folder,
-                &progress,
-                total,
-                &completed,
-            )
+            export_entries_batched(&entries, &archive, &folder, &progress, total, &completed)
         };
 
         let count = results.iter().filter(|(_, r)| r.is_ok()).count();
@@ -435,10 +434,7 @@ impl ExportTask {
 
         progress.set_percentage(1.0);
         progress.finish();
-        let exported_names: Vec<String> = entries
-            .iter()
-            .map(|e| e.file_name.to_string())
-            .collect();
+        let exported_names: Vec<String> = entries.iter().map(|e| e.file_name.to_string()).collect();
         Ok((count, exported_names))
     }
 }
@@ -463,13 +459,8 @@ fn export_entries_sequential(
             continue;
         }
 
-        let result = export_entry_buffered(
-            archive.version,
-            entry,
-            source_path.as_deref(),
-            None,
-            folder,
-        );
+        let result =
+            export_entry_buffered(archive.version, entry, source_path.as_deref(), None, folder);
 
         if (idx + 1) % 64 == 0 || idx + 1 == total {
             progress.set_percentage((idx + 1) as f32 / total as f32);
@@ -490,10 +481,7 @@ fn export_entries_batched(
 ) -> Vec<(CompactString, anyhow::Result<()>)> {
     let workers = rayon::current_num_threads().clamp(1, 8);
     let chunk_size = (entries.len() / workers).max(1);
-    let chunks: Vec<Vec<EntryInfo>> = entries
-        .chunks(chunk_size)
-        .map(|c| c.to_vec())
-        .collect();
+    let chunks: Vec<Vec<EntryInfo>> = entries.chunks(chunk_size).map(|c| c.to_vec()).collect();
 
     let source_path = archive.path.clone();
 
@@ -527,7 +515,8 @@ fn export_entries_batched(
 
                     local_completed += 1;
                     if local_completed.is_multiple_of(64) || idx + 1 == chunk_len {
-                        let done = completed.fetch_add(local_completed, Ordering::Relaxed) + local_completed;
+                        let done = completed.fetch_add(local_completed, Ordering::Relaxed)
+                            + local_completed;
                         local_completed = 0;
                         progress.set_percentage(done as f32 / total as f32);
                     }
@@ -622,7 +611,7 @@ fn export_entries_zero_copy(
             let result = export_entry_zero_copy(entry, output_path, &mmap);
 
             let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-            if done % progress_step == 0 || done == total {
+            if done.is_multiple_of(progress_step) || done == total {
                 progress.set_percentage(done as f32 / total as f32);
             }
 
@@ -673,7 +662,9 @@ fn precompute_output_paths(entries: &[EntryInfo], folder: &std::path::Path) -> V
             if !dir_empty {
                 return unique_output_path(&base);
             }
-            let count = name_counts.entry(entry.file_name_lower.clone()).or_insert(0);
+            let count = name_counts
+                .entry(entry.file_name_lower.clone())
+                .or_insert(0);
             *count += 1;
             if *count == 1 {
                 return base;
@@ -784,8 +775,14 @@ mod tests {
         let packed = ArchiveInfo::open(&output).unwrap();
         assert_eq!(packed.entries[0].offset, 0);
         assert_eq!(packed.entries[1].offset, 1);
-        assert_eq!(read_entry_data(&packed, &packed.entries[0]).unwrap()[0], b'A');
-        assert_eq!(read_entry_data(&packed, &packed.entries[1]).unwrap()[0], b'B');
+        assert_eq!(
+            read_entry_data(&packed, &packed.entries[0]).unwrap()[0],
+            b'A'
+        );
+        assert_eq!(
+            read_entry_data(&packed, &packed.entries[1]).unwrap()[0],
+            b'B'
+        );
     }
 
     #[test]
@@ -803,13 +800,22 @@ mod tests {
         assert_eq!(outcome.stats.original_bytes, 0x300000 + 4 * SECTOR_SIZE);
         assert_eq!(outcome.stats.packed_bytes, 0x300000 + 2 * SECTOR_SIZE);
         assert_eq!(outcome.stats.reclaimed_bytes(), 2 * SECTOR_SIZE);
-        assert_eq!(std::fs::metadata(&output).unwrap().len(), 0x300000 + 2 * SECTOR_SIZE);
+        assert_eq!(
+            std::fs::metadata(&output).unwrap().len(),
+            0x300000 + 2 * SECTOR_SIZE
+        );
 
         let packed = ArchiveInfo::open(&output).unwrap();
         assert_eq!(packed.entries[0].offset, 1536);
         assert_eq!(packed.entries[1].offset, 1537);
-        assert_eq!(read_entry_data(&packed, &packed.entries[0]).unwrap()[0], b'A');
-        assert_eq!(read_entry_data(&packed, &packed.entries[1]).unwrap()[0], b'B');
+        assert_eq!(
+            read_entry_data(&packed, &packed.entries[0]).unwrap()[0],
+            b'A'
+        );
+        assert_eq!(
+            read_entry_data(&packed, &packed.entries[1]).unwrap()[0],
+            b'B'
+        );
     }
 
     #[test]
@@ -830,7 +836,11 @@ mod tests {
         assert_eq!(plan.duplicate_count, 1);
         assert_eq!(plan.scan_skipped.len(), 0);
         assert_eq!(plan.discovered_count(), 3);
-        assert!(plan.files.iter().all(|path| path.parent() == Some(dir.path())));
+        assert!(
+            plan.files
+                .iter()
+                .all(|path| path.parent() == Some(dir.path()))
+        );
     }
 
     #[test]
@@ -852,9 +862,27 @@ mod tests {
         assert_eq!(outcome.summary.skipped, 2);
         assert_eq!(outcome.summary.failed, 0);
         assert_eq!(outcome.archive.entries.len(), 2);
-        assert!(outcome.archive.entries.iter().any(|entry| entry.file_name == "existing.dff"));
-        assert!(outcome.archive.entries.iter().any(|entry| entry.file_name == "new.txd"));
-        assert!(outcome.archive.logs.iter().any(|log| log.contains("duplicate skipped")));
+        assert!(
+            outcome
+                .archive
+                .entries
+                .iter()
+                .any(|entry| entry.file_name == "existing.dff")
+        );
+        assert!(
+            outcome
+                .archive
+                .entries
+                .iter()
+                .any(|entry| entry.file_name == "new.txd")
+        );
+        assert!(
+            outcome
+                .archive
+                .logs
+                .iter()
+                .any(|log| log.contains("duplicate skipped"))
+        );
     }
 
     #[test]
@@ -882,7 +910,10 @@ mod tests {
             .find(|entry| entry.file_name == "existing.dff")
             .unwrap();
         assert!(replaced.imported);
-        assert_eq!(replaced.source_path.as_deref(), Some(dir.path().join("existing.dff").as_path()));
+        assert_eq!(
+            replaced.source_path.as_deref(),
+            Some(dir.path().join("existing.dff").as_path())
+        );
     }
 
     #[test]

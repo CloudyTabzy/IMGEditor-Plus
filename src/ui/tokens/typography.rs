@@ -18,7 +18,9 @@ pub enum FontWeight {
 
 impl FontWeight {
     #[inline]
-    pub const fn value(self) -> u16 { self as u16 }
+    pub const fn value(self) -> u16 {
+        self as u16
+    }
 }
 
 /// A complete text style definition.
@@ -39,16 +41,27 @@ impl TextStyle {
         weight: FontWeight,
         line_height: f32,
     ) -> Self {
-        Self { font_family, size, weight, line_height, letter_spacing: 0.0 }
+        Self {
+            font_family,
+            size,
+            weight,
+            line_height,
+            letter_spacing: 0.0,
+        }
     }
 
     #[inline]
     pub const fn with_letter_spacing(self, letter_spacing: f32) -> Self {
-        Self { letter_spacing, ..self }
+        Self {
+            letter_spacing,
+            ..self
+        }
     }
 
     #[inline]
-    pub const fn line_height_px(&self) -> f32 { self.size * self.line_height }
+    pub const fn line_height_px(&self) -> f32 {
+        self.size * self.line_height
+    }
 }
 
 impl Default for TextStyle {

@@ -189,7 +189,12 @@ fn read_pstring(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
     if *pos + 4 > bytes.len() {
         return Err("unexpected end reading string length".to_string());
     }
-    let len = u32::from_le_bytes([bytes[*pos], bytes[*pos + 1], bytes[*pos + 2], bytes[*pos + 3]]) as usize;
+    let len = u32::from_le_bytes([
+        bytes[*pos],
+        bytes[*pos + 1],
+        bytes[*pos + 2],
+        bytes[*pos + 3],
+    ]) as usize;
     *pos += 4;
 
     if *pos + len > bytes.len() {
@@ -221,7 +226,8 @@ fn parse_native_texture(bytes: &[u8]) -> Result<NativeTexture, String> {
     let mut pos = 0usize;
 
     // platform_id
-    let platform_id = u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
+    let platform_id =
+        u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
     pos += 4;
 
     // filter_flags, wrap_v, wrap_u, padding
@@ -235,7 +241,8 @@ fn parse_native_texture(bytes: &[u8]) -> Result<NativeTexture, String> {
     if pos + 4 > bytes.len() {
         return Err("unexpected end before raster_format".to_string());
     }
-    let raster_format = u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
+    let raster_format =
+        u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
     pos += 4;
 
     // width, height
@@ -268,7 +275,8 @@ fn parse_native_texture(bytes: &[u8]) -> Result<NativeTexture, String> {
             return Err("unexpected end before palette size".to_string());
         }
         let pal_data_size =
-            u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
+            u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]])
+                as usize;
         pos += 4;
 
         if pos + pal_data_size > bytes.len() {
@@ -412,9 +420,9 @@ fn is_dxt_format(base: u32) -> bool {
 
 fn bpp_and_align(base: u32, raster_type: u8) -> (usize, usize) {
     match base {
-        0x400 => (1, 1),  // LUM8
+        0x400 => (1, 1),         // LUM8
         0x500 | 0x501 => (4, 4), // 8888
-        0x600 => (3, 4),  // 888
+        0x600 => (3, 4),         // 888
         0x000..=0x500 => {
             // Try common formats.
             if raster_type == 0x12 {
@@ -474,9 +482,8 @@ mod tests {
             0x08, 0x00, 0x00, 0x00, // size = 8
             0x10, 0x00, 0x00, 0x00, // version
             0x01, 0x00, 0x00, 0x00, // STRUCT
-            0x08, 0x00, 0x00, 0x00,
-            0x10, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x08, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
         ];
         let txd = parse_txd(&bytes).unwrap();
         assert_eq!(txd.rw_version, 0x10);

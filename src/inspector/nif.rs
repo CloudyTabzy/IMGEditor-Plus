@@ -42,7 +42,9 @@ pub enum NifError {
     BadStringTable(String),
     #[error("invalid {0}: {1}")]
     InvalidField(&'static str, String),
-    #[error("block {block} ({block_type}) at offset {offset} truncated: expected {expected} bytes, have {actual}")]
+    #[error(
+        "block {block} ({block_type}) at offset {offset} truncated: expected {expected} bytes, have {actual}"
+    )]
     TruncatedBlock {
         block: usize,
         block_type: String,
@@ -182,7 +184,9 @@ pub enum BlockPayload {
     NiPixelData(NiPixelDataPayload),
     /// Block type not yet implemented; the raw bytes are preserved
     /// for the hex view in the inspector panel.
-    Unsupported { raw: Vec<u8> },
+    Unsupported {
+        raw: Vec<u8>,
+    },
 }
 
 /// 12 bytes: `f32 x, f32 y, f32 z`.
@@ -463,7 +467,11 @@ pub(crate) struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     pub(crate) fn new(data: &'a [u8], endian: Endian) -> Self {
-        Self { data, pos: 0, endian }
+        Self {
+            data,
+            pos: 0,
+            endian,
+        }
     }
 
     pub(crate) fn position(&self) -> usize {
@@ -592,20 +600,13 @@ impl<'a> Reader<'a> {
 
     /// `NiFixedString` / `FilePath` / `string` since 20.1.0.3: a
     /// 4-byte index into the header string table.
-    pub(crate) fn read_ni_fixed_string_index(
-        &mut self,
-        what: &'static str,
-    ) -> NifResult<u32> {
+    pub(crate) fn read_ni_fixed_string_index(&mut self, what: &'static str) -> NifResult<u32> {
         self.read_u32(what)
     }
 
     /// Read an array of `i32` references. Indices are signed; -1
     /// means "no reference" in the niftools spec.
-    pub(crate) fn read_i32_array(
-        &mut self,
-        len: usize,
-        what: &'static str,
-    ) -> NifResult<Vec<i32>> {
+    pub(crate) fn read_i32_array(&mut self, len: usize, what: &'static str) -> NifResult<Vec<i32>> {
         let mut out = Vec::with_capacity(len);
         for _ in 0..len {
             out.push(self.read_i32(what)?);
@@ -615,11 +616,7 @@ impl<'a> Reader<'a> {
 
     /// Read an array of `u16` values. Used by `NiTriStripsData` for the
     /// `strip_lengths[]` and `points[]` arrays.
-    pub(crate) fn read_u16_array(
-        &mut self,
-        len: usize,
-        what: &'static str,
-    ) -> NifResult<Vec<u16>> {
+    pub(crate) fn read_u16_array(&mut self, len: usize, what: &'static str) -> NifResult<Vec<u16>> {
         let mut out = Vec::with_capacity(len);
         for _ in 0..len {
             out.push(self.read_u16(what)?);
@@ -721,8 +718,7 @@ impl NifFile {
         // ---- Build block metadata --------------------------------------
         let mut blocks = Vec::with_capacity(num_blocks);
         let mut cursor = header_end;
-        for (i, (&type_index, &size)) in
-            block_type_index.iter().zip(block_sizes.iter()).enumerate()
+        for (i, (&type_index, &size)) in block_type_index.iter().zip(block_sizes.iter()).enumerate()
         {
             let type_name = block_types
                 .get(type_index as usize)
@@ -830,41 +826,47 @@ fn parse_block(type_name: &str, raw: &[u8], endian: Endian) -> NifResult<BlockPa
                 points,
             })
         }
-        t @ ("NiStringExtraData" | "NiSourceTexture" | "NiMaterialProperty"
-             | "NiTexturingProperty" | "NiAlphaProperty" | "NiZBufferProperty"
-             | "NiSpecularProperty" | "NiStencilProperty"
-             | "NiVertexColorProperty" | "NiPixelData") => {
-            match t {
-                "NiStringExtraData" => read_ni_string_extra_data(&mut r)
-                    .map(BlockPayload::NiStringExtraData),
-                "NiSourceTexture" => read_ni_source_texture(&mut r)
-                    .map(BlockPayload::NiSourceTexture),
-                "NiMaterialProperty" => read_ni_material_property(&mut r)
-                    .map(BlockPayload::NiMaterialProperty),
-                "NiTexturingProperty" => read_ni_texturing_property(&mut r)
-                    .map(BlockPayload::NiTexturingProperty),
-                "NiAlphaProperty" => read_ni_alpha_property(&mut r)
-                    .map(BlockPayload::NiAlphaProperty),
-                "NiZBufferProperty" => read_ni_zbuffer_property(&mut r)
-                    .map(BlockPayload::NiZBufferProperty),
-                "NiSpecularProperty" => read_ni_specular_property(&mut r)
-                    .map(BlockPayload::NiSpecularProperty),
-                "NiStencilProperty" => read_ni_stencil_property(&mut r)
-                    .map(BlockPayload::NiStencilProperty),
-                "NiVertexColorProperty" => read_ni_vertex_color_property(&mut r)
-                    .map(BlockPayload::NiVertexColorProperty),
-                "NiPixelData" => read_ni_pixel_data(&mut r)
-                    .map(BlockPayload::NiPixelData),
-                _ => unreachable!(),
+        t @ ("NiStringExtraData"
+        | "NiSourceTexture"
+        | "NiMaterialProperty"
+        | "NiTexturingProperty"
+        | "NiAlphaProperty"
+        | "NiZBufferProperty"
+        | "NiSpecularProperty"
+        | "NiStencilProperty"
+        | "NiVertexColorProperty"
+        | "NiPixelData") => match t {
+            "NiStringExtraData" => {
+                read_ni_string_extra_data(&mut r).map(BlockPayload::NiStringExtraData)
             }
-            .unwrap_or_else(|e| {
-                eprintln!("[IMGEditor] NIF: skipping block {type_name}: {e}");
-                BlockPayload::Unsupported { raw: raw.to_vec() }
-            })
+            "NiSourceTexture" => read_ni_source_texture(&mut r).map(BlockPayload::NiSourceTexture),
+            "NiMaterialProperty" => {
+                read_ni_material_property(&mut r).map(BlockPayload::NiMaterialProperty)
+            }
+            "NiTexturingProperty" => {
+                read_ni_texturing_property(&mut r).map(BlockPayload::NiTexturingProperty)
+            }
+            "NiAlphaProperty" => read_ni_alpha_property(&mut r).map(BlockPayload::NiAlphaProperty),
+            "NiZBufferProperty" => {
+                read_ni_zbuffer_property(&mut r).map(BlockPayload::NiZBufferProperty)
+            }
+            "NiSpecularProperty" => {
+                read_ni_specular_property(&mut r).map(BlockPayload::NiSpecularProperty)
+            }
+            "NiStencilProperty" => {
+                read_ni_stencil_property(&mut r).map(BlockPayload::NiStencilProperty)
+            }
+            "NiVertexColorProperty" => {
+                read_ni_vertex_color_property(&mut r).map(BlockPayload::NiVertexColorProperty)
+            }
+            "NiPixelData" => read_ni_pixel_data(&mut r).map(BlockPayload::NiPixelData),
+            _ => unreachable!(),
         }
-        _ => BlockPayload::Unsupported {
-            raw: raw.to_vec(),
-        },
+        .unwrap_or_else(|e| {
+            eprintln!("[IMGEditor] NIF: skipping block {type_name}: {e}");
+            BlockPayload::Unsupported { raw: raw.to_vec() }
+        }),
+        _ => BlockPayload::Unsupported { raw: raw.to_vec() },
     };
     Ok(payload)
 }
@@ -1089,7 +1091,10 @@ fn read_ni_pixel_data(r: &mut Reader<'_>) -> NifResult<NiPixelDataPayload> {
     // by computing the header size from candidate resolutions.
     let remaining = r.remaining();
     if remaining > 64 * 1024 * 1024 {
-        return Err(NifError::InvalidField("pixel_data", "block too large".to_string()));
+        return Err(NifError::InvalidField(
+            "pixel_data",
+            "block too large".to_string(),
+        ));
     }
     let mut raw_pixels = Vec::with_capacity(remaining);
     for _ in 0..remaining {
@@ -1204,11 +1209,14 @@ fn read_ni_texturing_property(r: &mut Reader<'_>) -> NifResult<NiTexturingProper
             format!("{} exceeds the supported limit", out.num_shader_textures),
         ));
     }
-    out.shader_textures.reserve(out.num_shader_textures as usize);
+    out.shader_textures
+        .reserve(out.num_shader_textures as usize);
     for _ in 0..out.num_shader_textures {
         if r.read_bool("has_shader_texture")? {
-            out.shader_textures
-                .push((Some(read_tex_desc(r)?), Some(r.read_u32("shader_texture_type")?)));
+            out.shader_textures.push((
+                Some(read_tex_desc(r)?),
+                Some(r.read_u32("shader_texture_type")?),
+            ));
         } else {
             out.shader_textures.push((None, None));
         }
@@ -1319,9 +1327,7 @@ impl NifFile {
         for payload in self.payloads.iter_mut().flatten() {
             match payload {
                 BlockPayload::NiNode(d) => d.name = resolve_name(&strings, d.name.as_deref()),
-                BlockPayload::NiTriShape(d) => {
-                    d.name = resolve_name(&strings, d.name.as_deref())
-                }
+                BlockPayload::NiTriShape(d) => d.name = resolve_name(&strings, d.name.as_deref()),
                 BlockPayload::NiTriStrips(d) => {
                     d.base.name = resolve_name(&strings, d.base.name.as_deref())
                 }
@@ -1366,9 +1372,7 @@ fn string_from(strings: &[String], index: u32) -> Option<String> {
 ///   u16  strip_lengths[num_strips]
 ///   u8   has_points
 ///   u16  points[sum(strip_lengths)]
-fn read_strips_footer(
-    r: &mut Reader<'_>,
-) -> (u16, u16, Vec<u16>, bool, Vec<u16>) {
+fn read_strips_footer(r: &mut Reader<'_>) -> (u16, u16, Vec<u16>, bool, Vec<u16>) {
     if r.remaining() < 4 {
         return (0, 0, Vec::new(), false, Vec::new());
     }

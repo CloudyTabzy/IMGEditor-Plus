@@ -16,4 +16,4 @@ pub mod typography;
 #[allow(unused_imports)]
 pub use color::{Color, ColorPalette, SemanticColors, Shade};
 pub use elevation::{Elevation, Shadow};
-pub use theme_tokens::{ThemeTokens};
+pub use theme_tokens::ThemeTokens;

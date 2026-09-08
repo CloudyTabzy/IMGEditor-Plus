@@ -18,7 +18,9 @@ pub struct ThemeTokens {
 }
 
 impl Default for ThemeTokens {
-    fn default() -> Self { Self::light() }
+    fn default() -> Self {
+        Self::light()
+    }
 }
 
 impl ThemeTokens {
@@ -42,16 +44,16 @@ impl ThemeTokens {
         // `ColorScale::get` function still works the same way because
         // shades are just labels.
         t.colors.neutral = crate::ui::tokens::color::ColorScale::new(
-            crate::ui::tokens::color::Color::from_hex(0x0A0A0A),  // s50: page
-            crate::ui::tokens::color::Color::from_hex(0x171717),  // s100
-            crate::ui::tokens::color::Color::from_hex(0x262626),  // s200: surface
-            crate::ui::tokens::color::Color::from_hex(0x404040),  // s300
-            crate::ui::tokens::color::Color::from_hex(0x525252),  // s400
-            crate::ui::tokens::color::Color::from_hex(0x737373),  // s500
-            crate::ui::tokens::color::Color::from_hex(0xA3A3A3),  // s600
-            crate::ui::tokens::color::Color::from_hex(0xD4D4D4),  // s700
-            crate::ui::tokens::color::Color::from_hex(0xE5E5E5),  // s800
-            crate::ui::tokens::color::Color::from_hex(0xFAFAFA),  // s900: text
+            crate::ui::tokens::color::Color::from_hex(0x0A0A0A), // s50: page
+            crate::ui::tokens::color::Color::from_hex(0x171717), // s100
+            crate::ui::tokens::color::Color::from_hex(0x262626), // s200: surface
+            crate::ui::tokens::color::Color::from_hex(0x404040), // s300
+            crate::ui::tokens::color::Color::from_hex(0x525252), // s400
+            crate::ui::tokens::color::Color::from_hex(0x737373), // s500
+            crate::ui::tokens::color::Color::from_hex(0xA3A3A3), // s600
+            crate::ui::tokens::color::Color::from_hex(0xD4D4D4), // s700
+            crate::ui::tokens::color::Color::from_hex(0xE5E5E5), // s800
+            crate::ui::tokens::color::Color::from_hex(0xFAFAFA), // s900: text
         );
         // Stronger shadows on dark mode
         t.elevation = {
@@ -80,16 +82,16 @@ impl ThemeTokens {
     pub fn everforest() -> Self {
         let mut t = Self::light();
         t.colors.neutral = crate::ui::tokens::color::ColorScale::new(
-            crate::ui::tokens::color::Color::from_hex(0x232A2E),  // s50: page
-            crate::ui::tokens::color::Color::from_hex(0x2D353B),  // s100
-            crate::ui::tokens::color::Color::from_hex(0x343F44),  // s200: surface
-            crate::ui::tokens::color::Color::from_hex(0x3D484D),  // s300
-            crate::ui::tokens::color::Color::from_hex(0x475258),  // s400
-            crate::ui::tokens::color::Color::from_hex(0x859289),  // s500
-            crate::ui::tokens::color::Color::from_hex(0x9DA9A0),  // s600
-            crate::ui::tokens::color::Color::from_hex(0xD3C6AA),  // s700
-            crate::ui::tokens::color::Color::from_hex(0xE7DFCF),  // s800
-            crate::ui::tokens::color::Color::from_hex(0xF3EFDF),  // s900: text
+            crate::ui::tokens::color::Color::from_hex(0x232A2E), // s50: page
+            crate::ui::tokens::color::Color::from_hex(0x2D353B), // s100
+            crate::ui::tokens::color::Color::from_hex(0x343F44), // s200: surface
+            crate::ui::tokens::color::Color::from_hex(0x3D484D), // s300
+            crate::ui::tokens::color::Color::from_hex(0x475258), // s400
+            crate::ui::tokens::color::Color::from_hex(0x859289), // s500
+            crate::ui::tokens::color::Color::from_hex(0x9DA9A0), // s600
+            crate::ui::tokens::color::Color::from_hex(0xD3C6AA), // s700
+            crate::ui::tokens::color::Color::from_hex(0xE7DFCF), // s800
+            crate::ui::tokens::color::Color::from_hex(0xF3EFDF), // s900: text
         );
         t.colors.primary = crate::ui::tokens::color::ColorScale::new(
             crate::ui::tokens::color::Color::from_hex(0x3C4841),
@@ -162,17 +164,29 @@ impl ThemeTokens {
     }
 
     #[inline]
-    pub fn colors(&self) -> &ColorPalette { &self.colors }
+    pub fn colors(&self) -> &ColorPalette {
+        &self.colors
+    }
     #[inline]
-    pub fn typography(&self) -> &TypographyScale { &self.typography }
+    pub fn typography(&self) -> &TypographyScale {
+        &self.typography
+    }
     #[inline]
-    pub fn spacing(&self) -> &SpacingScale { &self.spacing }
+    pub fn spacing(&self) -> &SpacingScale {
+        &self.spacing
+    }
     #[inline]
-    pub fn radius(&self) -> &RadiusScale { &self.radius }
+    pub fn radius(&self) -> &RadiusScale {
+        &self.radius
+    }
     #[inline]
-    pub fn elevation(&self) -> &ElevationScale { &self.elevation }
+    pub fn elevation(&self) -> &ElevationScale {
+        &self.elevation
+    }
     #[inline]
-    pub fn motion(&self) -> &MotionScale { &self.motion }
+    pub fn motion(&self) -> &MotionScale {
+        &self.motion
+    }
 }
 
 /// Identifier for which preset is in use.

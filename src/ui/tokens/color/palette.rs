@@ -19,7 +19,12 @@ impl ColorPalette {
         neutral: ColorScale,
         semantic: SemanticColors,
     ) -> Self {
-        Self { primary, secondary, neutral, semantic }
+        Self {
+            primary,
+            secondary,
+            neutral,
+            semantic,
+        }
     }
 }
 
@@ -50,7 +55,12 @@ impl SemanticColors {
         destructive: ColorScale,
         info: ColorScale,
     ) -> Self {
-        Self { success, warning, destructive, info }
+        Self {
+            success,
+            warning,
+            destructive,
+            info,
+        }
     }
 }
 
@@ -67,60 +77,90 @@ impl Default for SemanticColors {
 
 fn default_primary() -> ColorScale {
     ColorScale::new(
-        Color::from_hex(0xE8FBFC), Color::from_hex(0xC2F5F8),
-        Color::from_hex(0x9BEDF4), Color::from_hex(0x55E2E9),
-        Color::from_hex(0x2FD4E0), Color::from_hex(0x1CBAC7),
-        Color::from_hex(0x1399A8), Color::from_hex(0x107A88),
-        Color::from_hex(0x0F5E6B), Color::from_hex(0x0D4D59),
+        Color::from_hex(0xE8FBFC),
+        Color::from_hex(0xC2F5F8),
+        Color::from_hex(0x9BEDF4),
+        Color::from_hex(0x55E2E9),
+        Color::from_hex(0x2FD4E0),
+        Color::from_hex(0x1CBAC7),
+        Color::from_hex(0x1399A8),
+        Color::from_hex(0x107A88),
+        Color::from_hex(0x0F5E6B),
+        Color::from_hex(0x0D4D59),
     )
 }
 
 fn default_secondary() -> ColorScale {
     ColorScale::new(
-        Color::from_hex(0xF5F3FF), Color::from_hex(0xEDE9FE),
-        Color::from_hex(0xDDD6FE), Color::from_hex(0xC4B5FD),
-        Color::from_hex(0xA78BFA), Color::from_hex(0x8B5CF6),
-        Color::from_hex(0x7C3AED), Color::from_hex(0x6D28D9),
-        Color::from_hex(0x5B21B6), Color::from_hex(0x4C1D95),
+        Color::from_hex(0xF5F3FF),
+        Color::from_hex(0xEDE9FE),
+        Color::from_hex(0xDDD6FE),
+        Color::from_hex(0xC4B5FD),
+        Color::from_hex(0xA78BFA),
+        Color::from_hex(0x8B5CF6),
+        Color::from_hex(0x7C3AED),
+        Color::from_hex(0x6D28D9),
+        Color::from_hex(0x5B21B6),
+        Color::from_hex(0x4C1D95),
     )
 }
 
 fn default_success() -> ColorScale {
     ColorScale::new(
-        Color::from_hex(0xF0FDF4), Color::from_hex(0xDCFCE7),
-        Color::from_hex(0xBBF7D0), Color::from_hex(0x86EFAC),
-        Color::from_hex(0x4ADE80), Color::from_hex(0x22C55E),
-        Color::from_hex(0x16A34A), Color::from_hex(0x15803D),
-        Color::from_hex(0x166534), Color::from_hex(0x14532D),
+        Color::from_hex(0xF0FDF4),
+        Color::from_hex(0xDCFCE7),
+        Color::from_hex(0xBBF7D0),
+        Color::from_hex(0x86EFAC),
+        Color::from_hex(0x4ADE80),
+        Color::from_hex(0x22C55E),
+        Color::from_hex(0x16A34A),
+        Color::from_hex(0x15803D),
+        Color::from_hex(0x166534),
+        Color::from_hex(0x14532D),
     )
 }
 
 fn default_warning() -> ColorScale {
     ColorScale::new(
-        Color::from_hex(0xFFFBEB), Color::from_hex(0xFEF3C7),
-        Color::from_hex(0xFDE68A), Color::from_hex(0xFCD34D),
-        Color::from_hex(0xFBBF24), Color::from_hex(0xF59E0B),
-        Color::from_hex(0xD97706), Color::from_hex(0xB45309),
-        Color::from_hex(0x92400E), Color::from_hex(0x78350F),
+        Color::from_hex(0xFFFBEB),
+        Color::from_hex(0xFEF3C7),
+        Color::from_hex(0xFDE68A),
+        Color::from_hex(0xFCD34D),
+        Color::from_hex(0xFBBF24),
+        Color::from_hex(0xF59E0B),
+        Color::from_hex(0xD97706),
+        Color::from_hex(0xB45309),
+        Color::from_hex(0x92400E),
+        Color::from_hex(0x78350F),
     )
 }
 
 fn default_destructive() -> ColorScale {
     ColorScale::new(
-        Color::from_hex(0xFEF2F2), Color::from_hex(0xFEE2E2),
-        Color::from_hex(0xFECACA), Color::from_hex(0xFCA5A5),
-        Color::from_hex(0xF87171), Color::from_hex(0xEF4444),
-        Color::from_hex(0xDC2626), Color::from_hex(0xB91C1C),
-        Color::from_hex(0x991B1B), Color::from_hex(0x7F1D1D),
+        Color::from_hex(0xFEF2F2),
+        Color::from_hex(0xFEE2E2),
+        Color::from_hex(0xFECACA),
+        Color::from_hex(0xFCA5A5),
+        Color::from_hex(0xF87171),
+        Color::from_hex(0xEF4444),
+        Color::from_hex(0xDC2626),
+        Color::from_hex(0xB91C1C),
+        Color::from_hex(0x991B1B),
+        Color::from_hex(0x7F1D1D),
     )
 }
 
 fn default_info() -> ColorScale {
     ColorScale::new(
-        Color::from_hex(0xECFEFF), Color::from_hex(0xCFFAFE),
-        Color::from_hex(0xA5F3FC), Color::from_hex(0x67E8F9),
-        Color::from_hex(0x22D3EE), Color::from_hex(0x06B6D4),
-        Color::from_hex(0x0891B2), Color::from_hex(0x0E7490),
-        Color::from_hex(0x155E75), Color::from_hex(0x164E63),
+        Color::from_hex(0xECFEFF),
+        Color::from_hex(0xCFFAFE),
+        Color::from_hex(0xA5F3FC),
+        Color::from_hex(0x67E8F9),
+        Color::from_hex(0x22D3EE),
+        Color::from_hex(0x06B6D4),
+        Color::from_hex(0x0891B2),
+        Color::from_hex(0x0E7490),
+        Color::from_hex(0x155E75),
+        Color::from_hex(0x164E63),
     )
 }

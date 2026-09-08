@@ -114,7 +114,9 @@ fn actual_file_size(entry: &EntryInfo) -> u64 {
 
 fn inspect_renderware(header: &[u8], inspection: &mut EntryInspection) {
     if header.len() < 12 {
-        inspection.summary.push(("Format".to_string(), "RenderWare (truncated)".to_string()));
+        inspection
+            .summary
+            .push(("Format".to_string(), "RenderWare (truncated)".to_string()));
         return;
     }
 
@@ -129,26 +131,48 @@ fn inspect_renderware(header: &[u8], inspection: &mut EntryInspection) {
         _ => "RenderWare stream",
     };
 
-    inspection.summary.push(("Format".to_string(), type_name.to_string()));
-    inspection.summary.push(("Version".to_string(), format!("0x{:08X}", version)));
+    inspection
+        .summary
+        .push(("Format".to_string(), type_name.to_string()));
+    inspection
+        .summary
+        .push(("Version".to_string(), format!("0x{:08X}", version)));
 
-    if inspection.file_name.as_str().to_ascii_lowercase().ends_with(".dff") && header.len() >= 28 {
+    if inspection
+        .file_name
+        .as_str()
+        .to_ascii_lowercase()
+        .ends_with(".dff")
+        && header.len() >= 28
+    {
         let clump_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
-        inspection.summary.push(("Clump size".to_string(), format!("{} bytes", clump_size)));
+        inspection
+            .summary
+            .push(("Clump size".to_string(), format!("{} bytes", clump_size)));
     }
 }
 
 fn inspect_collision(header: &[u8], inspection: &mut EntryInspection) {
     if header.starts_with(b"COLL") {
-        inspection.summary.push(("Version".to_string(), "GTA III / VC (COLL)".to_string()));
+        inspection
+            .summary
+            .push(("Version".to_string(), "GTA III / VC (COLL)".to_string()));
     } else if header.starts_with(b"COL2") {
-        inspection.summary.push(("Version".to_string(), "GTA SA (COL2)".to_string()));
+        inspection
+            .summary
+            .push(("Version".to_string(), "GTA SA (COL2)".to_string()));
     } else if header.starts_with(b"COL3") {
-        inspection.summary.push(("Version".to_string(), "GTA SA (COL3)".to_string()));
+        inspection
+            .summary
+            .push(("Version".to_string(), "GTA SA (COL3)".to_string()));
     } else if header.starts_with(b"COL4") {
-        inspection.summary.push(("Version".to_string(), "GTA IV (COL4)".to_string()));
+        inspection
+            .summary
+            .push(("Version".to_string(), "GTA IV (COL4)".to_string()));
     } else {
-        inspection.summary.push(("Version".to_string(), "Unknown collision".to_string()));
+        inspection
+            .summary
+            .push(("Version".to_string(), "Unknown collision".to_string()));
     }
 }
 
@@ -160,17 +184,31 @@ fn inspect_nif(header: &[u8], inspection: &mut EntryInspection) {
             .next()
             .unwrap_or("Gamebryo")
             .trim_end_matches('\0');
-        inspection.summary.push(("Format".to_string(), version_line.to_string()));
+        inspection
+            .summary
+            .push(("Format".to_string(), version_line.to_string()));
     } else if header.len() >= 20 {
         let version = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
         let endian = header[12];
         let user_version = u32::from_le_bytes([header[13], header[14], header[15], header[16]]);
-        inspection.summary.push(("Format".to_string(), "NetImmerse / Gamebryo".to_string()));
-        inspection.summary.push(("Version".to_string(), format!("0x{:08X}", version)));
-        inspection.summary.push(("Endian".to_string(), if endian == 1 { "Big" } else { "Little" }.to_string()));
-        inspection.summary.push(("User version".to_string(), format!("0x{:08X}", user_version)));
+        inspection
+            .summary
+            .push(("Format".to_string(), "NetImmerse / Gamebryo".to_string()));
+        inspection
+            .summary
+            .push(("Version".to_string(), format!("0x{:08X}", version)));
+        inspection.summary.push((
+            "Endian".to_string(),
+            if endian == 1 { "Big" } else { "Little" }.to_string(),
+        ));
+        inspection.summary.push((
+            "User version".to_string(),
+            format!("0x{:08X}", user_version),
+        ));
     } else {
-        inspection.summary.push(("Format".to_string(), "NIF (truncated)".to_string()));
+        inspection
+            .summary
+            .push(("Format".to_string(), "NIF (truncated)".to_string()));
     }
 }
 
@@ -178,14 +216,38 @@ fn inspect_text(header: &[u8], inspection: &mut EntryInspection) {
     let text = String::from_utf8_lossy(header);
     let lines = text.lines().count();
     let non_empty = text.lines().filter(|l| !l.trim().is_empty()).count();
-    inspection.summary.push(("Lines".to_string(), format!("{} ({} non-empty)", lines, non_empty)));
+    inspection.summary.push((
+        "Lines".to_string(),
+        format!("{} ({} non-empty)", lines, non_empty),
+    ));
 
-    if inspection.file_name.as_str().to_ascii_lowercase().ends_with(".scm") {
-        inspection.summary.push(("Format".to_string(), "GTA script (main.scm)".to_string()));
-    } else if inspection.file_name.as_str().to_ascii_lowercase().ends_with(".ipl") {
-        inspection.summary.push(("Format".to_string(), "GTA item placement".to_string()));
-    } else if inspection.file_name.as_str().to_ascii_lowercase().ends_with(".ide") {
-        inspection.summary.push(("Format".to_string(), "GTA item definition".to_string()));
+    if inspection
+        .file_name
+        .as_str()
+        .to_ascii_lowercase()
+        .ends_with(".scm")
+    {
+        inspection
+            .summary
+            .push(("Format".to_string(), "GTA script (main.scm)".to_string()));
+    } else if inspection
+        .file_name
+        .as_str()
+        .to_ascii_lowercase()
+        .ends_with(".ipl")
+    {
+        inspection
+            .summary
+            .push(("Format".to_string(), "GTA item placement".to_string()));
+    } else if inspection
+        .file_name
+        .as_str()
+        .to_ascii_lowercase()
+        .ends_with(".ide")
+    {
+        inspection
+            .summary
+            .push(("Format".to_string(), "GTA item definition".to_string()));
     }
 }
 
@@ -199,18 +261,32 @@ fn inspect_dff(header: &[u8], inspection: &mut EntryInspection) {
     let section_end = 12usize + section_size.min(header.len().saturating_sub(12));
 
     while pos + 12 <= section_end {
-        let child_type = u32::from_le_bytes([header[pos], header[pos + 1], header[pos + 2], header[pos + 3]]);
-        let child_size = u32::from_le_bytes([header[pos + 4], header[pos + 5], header[pos + 6], header[pos + 7]]) as usize;
+        let child_type = u32::from_le_bytes([
+            header[pos],
+            header[pos + 1],
+            header[pos + 2],
+            header[pos + 3],
+        ]);
+        let child_size = u32::from_le_bytes([
+            header[pos + 4],
+            header[pos + 5],
+            header[pos + 6],
+            header[pos + 7],
+        ]) as usize;
         let child_end = (pos + 12 + child_size).min(section_end);
 
         if child_type == 0x01 && pos + 12 + 16 <= section_end {
             // Clump STRUCT: num_atomics, num_lights, num_cameras
             let data_offset = pos + 12;
             let num_atomics = u32::from_le_bytes([
-                header[data_offset], header[data_offset + 1],
-                header[data_offset + 2], header[data_offset + 3],
+                header[data_offset],
+                header[data_offset + 1],
+                header[data_offset + 2],
+                header[data_offset + 3],
             ]);
-            inspection.summary.push(("Atomics".to_string(), format!("{}", num_atomics)));
+            inspection
+                .summary
+                .push(("Atomics".to_string(), format!("{}", num_atomics)));
             break;
         }
         pos = child_end;
@@ -286,7 +362,11 @@ fn inspect_col_mesh(header: &[u8], inspection: &mut EntryInspection) {
 
 fn inspect_generic(header: &[u8], inspection: &mut EntryInspection) {
     if !header.is_empty() {
-        let preview: Vec<String> = header.iter().take(32).map(|b| format!("{:02X}", b)).collect();
+        let preview: Vec<String> = header
+            .iter()
+            .take(32)
+            .map(|b| format!("{:02X}", b))
+            .collect();
         inspection.preview_hex = Some(preview.join(" "));
     }
 }
@@ -330,7 +410,12 @@ mod tests {
 
         let inspection = inspect_entry_cached(&mut archive, 0).unwrap();
         assert_eq!(inspection.file_name.as_str(), "data.ipl");
-        assert!(inspection.summary.iter().any(|(k, v)| k == "Lines" && v == "4 (3 non-empty)"));
+        assert!(
+            inspection
+                .summary
+                .iter()
+                .any(|(k, v)| k == "Lines" && v == "4 (3 non-empty)")
+        );
         assert!(inspection.summary.iter().any(|(k, _)| k == "Format"));
     }
 
@@ -345,10 +430,12 @@ mod tests {
         archive.entries.push(entry);
 
         let inspection = inspect_entry_cached(&mut archive, 0).unwrap();
-        assert!(inspection
-            .summary
-            .iter()
-            .any(|(k, v)| k == "Version" && v == "GTA SA (COL2)"));
+        assert!(
+            inspection
+                .summary
+                .iter()
+                .any(|(k, v)| k == "Version" && v == "GTA SA (COL2)")
+        );
     }
 
     #[test]
@@ -362,7 +449,13 @@ mod tests {
         archive.entries.push(entry);
 
         let inspection = inspect_entry_cached(&mut archive, 0).unwrap();
-        assert!(inspection.preview_hex.as_ref().unwrap().starts_with("00 01 02 03"));
+        assert!(
+            inspection
+                .preview_hex
+                .as_ref()
+                .unwrap()
+                .starts_with("00 01 02 03")
+        );
     }
 
     #[test]

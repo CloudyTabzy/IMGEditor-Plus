@@ -203,7 +203,10 @@ const ZERO_SECTOR: [u8; SECTOR_SIZE as usize] = [0; SECTOR_SIZE as usize];
 
 /// Size of the entry data as written during save, matching the clamping
 /// behavior of `read_entry_data_with_source` without copying anything.
-pub(crate) fn entry_data_size(entry: &EntryInfo, source_mmap: Option<&Mmap>) -> anyhow::Result<u64> {
+pub(crate) fn entry_data_size(
+    entry: &EntryInfo,
+    source_mmap: Option<&Mmap>,
+) -> anyhow::Result<u64> {
     if entry.imported {
         let source = entry
             .source_path
@@ -436,10 +439,12 @@ mod tests {
         import_entry(&mut archive, &import_dir, false).unwrap();
 
         assert!(archive.entries.is_empty());
-        assert!(archive
-            .logs
-            .iter()
-            .any(|log| log.contains("Not a regular file")));
+        assert!(
+            archive
+                .logs
+                .iter()
+                .any(|log| log.contains("Not a regular file"))
+        );
     }
 
     #[test]

@@ -56,7 +56,10 @@ mod tests {
             resolve_theme(ThemeMode::DarkTokyoNight),
             Theme::TokyoNight
         ));
-        assert!(matches!(resolve_theme(ThemeMode::DarkGruvbox), Theme::GruvboxDark));
+        assert!(matches!(
+            resolve_theme(ThemeMode::DarkGruvbox),
+            Theme::GruvboxDark
+        ));
         assert!(matches!(
             resolve_theme(ThemeMode::DarkEverforest),
             Theme::Custom(_)

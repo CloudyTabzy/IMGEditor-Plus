@@ -104,8 +104,8 @@ impl ImgParser for PcV2Parser {
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Untitled".to_string());
         archive.version = crate::parser::ImgVersion::Two;
-        let img_file = std::fs::File::open(output_path)
-            .context("failed to reopen packed IMG v2 archive")?;
+        let img_file =
+            std::fs::File::open(output_path).context("failed to reopen packed IMG v2 archive")?;
         archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
         archive.add_log("Archive saved".to_string());
         Ok(())
@@ -147,7 +147,10 @@ impl PcV2Parser {
         // Layout pass: metadata only, no entry data reads.
         let mut layout = Vec::with_capacity(total);
         for entry in archive.entries.iter() {
-            layout.push(crate::parser::entry_data_size(entry, source_mmap.as_deref())?);
+            layout.push(crate::parser::entry_data_size(
+                entry,
+                source_mmap.as_deref(),
+            )?);
         }
 
         // Directory pass: header + all records in one sequential stream.

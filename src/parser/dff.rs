@@ -94,17 +94,29 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                                 break;
                             }
                             let format_flags = u32::from_le_bytes([
-                                bytes[g_pos], bytes[g_pos + 1], bytes[g_pos + 2], bytes[g_pos + 3],
+                                bytes[g_pos],
+                                bytes[g_pos + 1],
+                                bytes[g_pos + 2],
+                                bytes[g_pos + 3],
                             ]);
                             let flags = format_flags;
                             geom.num_tris = u32::from_le_bytes([
-                                bytes[g_pos + 4], bytes[g_pos + 5], bytes[g_pos + 6], bytes[g_pos + 7],
+                                bytes[g_pos + 4],
+                                bytes[g_pos + 5],
+                                bytes[g_pos + 6],
+                                bytes[g_pos + 7],
                             ]);
                             geom.num_verts = u32::from_le_bytes([
-                                bytes[g_pos + 8], bytes[g_pos + 9], bytes[g_pos + 10], bytes[g_pos + 11],
+                                bytes[g_pos + 8],
+                                bytes[g_pos + 9],
+                                bytes[g_pos + 10],
+                                bytes[g_pos + 11],
                             ]);
                             let num_morph = u32::from_le_bytes([
-                                bytes[g_pos + 12], bytes[g_pos + 13], bytes[g_pos + 14], bytes[g_pos + 15],
+                                bytes[g_pos + 12],
+                                bytes[g_pos + 13],
+                                bytes[g_pos + 14],
+                                bytes[g_pos + 15],
                             ]);
                             let _ = num_morph;
 
@@ -115,7 +127,13 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                             let has_uvs_1 = (flags & 0x040) != 0;
                             let has_uvs_2 = (flags & 0x080) != 0;
                             let has_triangles = (flags & 0x002) != 0;
-                            let num_uv_sets = if has_uvs_2 { 2 } else if has_uvs_1 { 1 } else { 0 };
+                            let num_uv_sets = if has_uvs_2 {
+                                2
+                            } else if has_uvs_1 {
+                                1
+                            } else {
+                                0
+                            };
 
                             // Skip prelit colors if present.
                             if has_prelit {
@@ -123,9 +141,7 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                             }
 
                             // Read UV sets.
-                            if num_uv_sets > 0
-                                && data_pos + 4 <= g_end
-                            {
+                            if num_uv_sets > 0 && data_pos + 4 <= g_end {
                                 let stored_uv_sets = u32::from_le_bytes([
                                     bytes[data_pos],
                                     bytes[data_pos + 1],
@@ -138,12 +154,16 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                                     for _v in 0..geom.num_verts as usize {
                                         if data_pos + 8 <= g_end {
                                             let u = f32::from_le_bytes([
-                                                bytes[data_pos], bytes[data_pos + 1],
-                                                bytes[data_pos + 2], bytes[data_pos + 3],
+                                                bytes[data_pos],
+                                                bytes[data_pos + 1],
+                                                bytes[data_pos + 2],
+                                                bytes[data_pos + 3],
                                             ]);
                                             let v = f32::from_le_bytes([
-                                                bytes[data_pos + 4], bytes[data_pos + 5],
-                                                bytes[data_pos + 6], bytes[data_pos + 7],
+                                                bytes[data_pos + 4],
+                                                bytes[data_pos + 5],
+                                                bytes[data_pos + 6],
+                                                bytes[data_pos + 7],
                                             ]);
                                             data_pos += 8;
                                             // Only store the first UV set.
@@ -172,8 +192,10 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                                     let idx = raw_range.start + ti * 8;
                                     if idx + 8 <= raw_range.end {
                                         let v2 = u16::from_le_bytes([bytes[idx], bytes[idx + 1]]);
-                                        let v1 = u16::from_le_bytes([bytes[idx + 2], bytes[idx + 3]]);
-                                        let v0 = u16::from_le_bytes([bytes[idx + 4], bytes[idx + 5]]);
+                                        let v1 =
+                                            u16::from_le_bytes([bytes[idx + 2], bytes[idx + 3]]);
+                                        let v0 =
+                                            u16::from_le_bytes([bytes[idx + 4], bytes[idx + 5]]);
                                         geom.triangles.push(v0);
                                         geom.triangles.push(v1);
                                         geom.triangles.push(v2);
@@ -191,9 +213,12 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                                 }
                                 // Has vertices (u8 or u32 — usually u32)
                                 if data_pos + 4 <= g_end {
-                                    let has_verts =
-                                        u32::from_le_bytes([bytes[data_pos], bytes[data_pos + 1],
-                                                             bytes[data_pos + 2], bytes[data_pos + 3]]) != 0;
+                                    let has_verts = u32::from_le_bytes([
+                                        bytes[data_pos],
+                                        bytes[data_pos + 1],
+                                        bytes[data_pos + 2],
+                                        bytes[data_pos + 3],
+                                    ]) != 0;
                                     data_pos += 4;
                                     if has_verts {
                                         let verts_needed = geom.num_verts as usize * 12;
@@ -202,13 +227,22 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                                             let idx = data_pos + _v * 12;
                                             if idx + 12 <= end {
                                                 let x = f32::from_le_bytes([
-                                                    bytes[idx], bytes[idx + 1], bytes[idx + 2], bytes[idx + 3],
+                                                    bytes[idx],
+                                                    bytes[idx + 1],
+                                                    bytes[idx + 2],
+                                                    bytes[idx + 3],
                                                 ]);
                                                 let y = f32::from_le_bytes([
-                                                    bytes[idx + 4], bytes[idx + 5], bytes[idx + 6], bytes[idx + 7],
+                                                    bytes[idx + 4],
+                                                    bytes[idx + 5],
+                                                    bytes[idx + 6],
+                                                    bytes[idx + 7],
                                                 ]);
                                                 let z = f32::from_le_bytes([
-                                                    bytes[idx + 8], bytes[idx + 9], bytes[idx + 10], bytes[idx + 11],
+                                                    bytes[idx + 8],
+                                                    bytes[idx + 9],
+                                                    bytes[idx + 10],
+                                                    bytes[idx + 11],
                                                 ]);
                                                 geom.vertices.push([x, y, z]);
                                             }
@@ -221,9 +255,12 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                                 if has_norms_flag {
                                     // Has normals (u8 or u32)
                                     if data_pos + 4 <= g_end {
-                                        let has_norms_read =
-                                            u32::from_le_bytes([bytes[data_pos], bytes[data_pos + 1],
-                                                                 bytes[data_pos + 2], bytes[data_pos + 3]]) != 0;
+                                        let has_norms_read = u32::from_le_bytes([
+                                            bytes[data_pos],
+                                            bytes[data_pos + 1],
+                                            bytes[data_pos + 2],
+                                            bytes[data_pos + 3],
+                                        ]) != 0;
                                         data_pos += 4;
                                         if has_norms_read {
                                             let norms_needed = geom.num_verts as usize * 12;
@@ -232,13 +269,22 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                                                 let idx = data_pos + _v * 12;
                                                 if idx + 12 <= end {
                                                     let x = f32::from_le_bytes([
-                                                        bytes[idx], bytes[idx + 1], bytes[idx + 2], bytes[idx + 3],
+                                                        bytes[idx],
+                                                        bytes[idx + 1],
+                                                        bytes[idx + 2],
+                                                        bytes[idx + 3],
                                                     ]);
                                                     let y = f32::from_le_bytes([
-                                                        bytes[idx + 4], bytes[idx + 5], bytes[idx + 6], bytes[idx + 7],
+                                                        bytes[idx + 4],
+                                                        bytes[idx + 5],
+                                                        bytes[idx + 6],
+                                                        bytes[idx + 7],
                                                     ]);
                                                     let z = f32::from_le_bytes([
-                                                        bytes[idx + 8], bytes[idx + 9], bytes[idx + 10], bytes[idx + 11],
+                                                        bytes[idx + 8],
+                                                        bytes[idx + 9],
+                                                        bytes[idx + 10],
+                                                        bytes[idx + 11],
                                                     ]);
                                                     geom.normals.push([x, y, z]);
                                                 }
@@ -262,13 +308,15 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                                     // MATERIAL — walk children for TEXTURE.
                                     let mut t_pos = m_pos;
                                     while t_pos + 12 <= m_end {
-                                        let (t_type, t_size, _) = read_section_header(bytes, &mut t_pos)?;
+                                        let (t_type, t_size, _) =
+                                            read_section_header(bytes, &mut t_pos)?;
                                         let t_end = (t_pos + t_size as usize).min(m_end);
                                         if t_type == 0x06 {
                                             // TEXTURE — has sub-sections for name/alpha strings.
                                             let mut s_pos = t_pos;
                                             while s_pos + 12 <= t_end {
-                                                let (s_type, s_size, _) = read_section_header(bytes, &mut s_pos)?;
+                                                let (s_type, s_size, _) =
+                                                    read_section_header(bytes, &mut s_pos)?;
                                                 let s_end = (s_pos + s_size as usize).min(t_end);
                                                 if s_type == 0x02 {
                                                     // STRING — texture name
@@ -278,7 +326,9 @@ pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
                                                             &bytes[s_pos..s_pos + len],
                                                         )
                                                         .ok()
-                                                        .map(|s| s.trim_end_matches('\0').to_string())
+                                                        .map(|s| {
+                                                            s.trim_end_matches('\0').to_string()
+                                                        })
                                                         .filter(|s| !s.is_empty());
                                                         if geom.texture_name.is_none() {
                                                             geom.texture_name = name_str;

@@ -197,7 +197,10 @@ mod tests {
     #[test]
     fn output_filename_falls_back_to_key() {
         let e = entry("", Some(vec![0u8; 4]));
-        assert_eq!(output_filename("sc06_steelrust_d", &e), "sc06_steelrust_d.bin");
+        assert_eq!(
+            output_filename("sc06_steelrust_d", &e),
+            "sc06_steelrust_d.bin"
+        );
     }
 
     #[test]
