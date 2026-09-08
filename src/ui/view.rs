@@ -36,6 +36,11 @@ fn logo_element() -> Element<'static, Message> {
 /// Height (px) of a single entry row. Must stay in sync with the `height(Length::Fixed(ROW_HEIGHT))`
 /// applied in `build_entry_row`; virtualization math depends on it.
 const ROW_HEIGHT: f32 = 32.0;
+/// Maximum accent travel used by the selected-row pulse.
+const SELECTION_PULSE_BACKGROUND_MAX: f32 = 0.42;
+/// Keep the success tint visible without moving a dark-theme status label into
+/// the low-contrast middle of a light green background.
+const TOAST_BACKGROUND_MAX: f32 = 0.35;
 /// Height (px) of the fixed column-header row.
 const HEADER_HEIGHT: f32 = 32.0;
 /// Number of rows to keep rendered above and below the scroll viewport. 10 rows ≈ 320 px of
@@ -263,15 +268,21 @@ impl App {
             .style(move |theme: &iced::Theme| {
                 if is_selected {
                     let palette = theme.extended_palette();
+                    let peak_background = iced::theme::palette::mix(
+                        palette.primary.weak.color,
+                        palette.primary.strong.color,
+                        SELECTION_PULSE_BACKGROUND_MAX,
+                    );
                     let background = iced::theme::palette::mix(
                         palette.primary.weak.color,
                         palette.primary.strong.color,
-                        selection_pulse * 0.42,
+                        selection_pulse * SELECTION_PULSE_BACKGROUND_MAX,
                     );
                     iced::widget::container::Style {
                         background: Some(background.into()),
-                        text_color: Some(w::readable_text_color(
-                            background,
+                        text_color: Some(w::stable_readable_text_color(
+                            palette.primary.weak.color,
+                            peak_background,
                             palette.primary.weak.text,
                         )),
                         ..Default::default()
@@ -1099,22 +1110,34 @@ impl App {
             .animator
             .get(crate::ui::app::ANIM_TOAST_OPACITY)
             .clamp(0.0, 1.0);
-        let bg = Color {
-            r: normal_bg.r + (toast_bg.r - normal_bg.r) * mix,
-            g: normal_bg.g + (toast_bg.g - normal_bg.g) * mix,
-            b: normal_bg.b + (toast_bg.b - normal_bg.b) * mix,
+        let toast_mix = mix * TOAST_BACKGROUND_MAX;
+        let peak_bg = Color {
+            r: normal_bg.r + (toast_bg.r - normal_bg.r) * TOAST_BACKGROUND_MAX,
+            g: normal_bg.g + (toast_bg.g - normal_bg.g) * TOAST_BACKGROUND_MAX,
+            b: normal_bg.b + (toast_bg.b - normal_bg.b) * TOAST_BACKGROUND_MAX,
             a: 1.0,
         };
+        let bg = Color {
+            r: normal_bg.r + (toast_bg.r - normal_bg.r) * toast_mix,
+            g: normal_bg.g + (toast_bg.g - normal_bg.g) * toast_mix,
+            b: normal_bg.b + (toast_bg.b - normal_bg.b) * toast_mix,
+            a: 1.0,
+        };
+        let preferred_status_text = self.theme().extended_palette().background.base.text;
+        let status_text_target =
+            w::stable_readable_text_color(normal_bg, peak_bg, preferred_status_text);
+        let status_text = w::smooth_color_mix(preferred_status_text, status_text_target, mix);
 
         let bar = Container::new(
             Row::new()
-                .push(fonts::caption(left_text))
+                .push(fonts::caption(left_text).color(status_text))
                 .push(Space::new().width(Length::Fill))
                 .align_y(Alignment::Center)
                 .padding(6),
         )
         .style(move |_| iced::widget::container::Style {
             background: Some(iced::Background::Color(bg)),
+            text_color: Some(status_text),
             ..Default::default()
         });
         bar.into()

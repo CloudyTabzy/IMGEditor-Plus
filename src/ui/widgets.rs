@@ -155,6 +155,53 @@ pub fn readable_text_color(background: Color, preferred: Color) -> Color {
     iced::theme::palette::readable(background, preferred)
 }
 
+/// Choose one foreground for an animation's full background range. Re-running
+/// `readable_text_color` for every frame can flip between light and dark text
+/// at a contrast threshold, which makes a pulse look like a text flicker.
+#[inline]
+pub fn stable_readable_text_color(
+    initial_background: Color,
+    peak_background: Color,
+    preferred: Color,
+) -> Color {
+    const MINIMUM_CONTRAST: f32 = 4.5;
+
+    let preferred_contrast = initial_background
+        .relative_contrast(preferred)
+        .min(peak_background.relative_contrast(preferred));
+    if preferred_contrast >= MINIMUM_CONTRAST {
+        return preferred;
+    }
+
+    let white_contrast = initial_background
+        .relative_contrast(Color::WHITE)
+        .min(peak_background.relative_contrast(Color::WHITE));
+    let black_contrast = initial_background
+        .relative_contrast(Color::BLACK)
+        .min(peak_background.relative_contrast(Color::BLACK));
+
+    if white_contrast >= black_contrast {
+        Color::WHITE
+    } else {
+        Color::BLACK
+    }
+}
+
+/// Interpolate a foreground with a contrast-safe endpoint using a smoothstep
+/// curve, avoiding a visibly abrupt text-color change during feedback pulses.
+#[inline]
+pub fn smooth_color_mix(start: Color, end: Color, progress: f32) -> Color {
+    let progress = progress.clamp(0.0, 1.0);
+    if progress <= 0.0 {
+        return start;
+    }
+    if progress >= 1.0 {
+        return end;
+    }
+    let progress = progress * progress * (3.0 - 2.0 * progress);
+    iced::theme::palette::mix(start, end, progress)
+}
+
 /// Shared tooltip surface for all view-level hints.
 pub fn tooltip_card<'a, Message: 'a>(
     content: impl Into<Element<'a, Message>>,
@@ -331,7 +378,7 @@ pub fn root_column<'a, Message: 'a>() -> Column<'a, Message> {
 
 #[cfg(test)]
 mod tests {
-    use super::readable_text_color;
+    use super::{readable_text_color, smooth_color_mix, stable_readable_text_color};
     use iced::Color;
 
     #[test]
@@ -346,5 +393,74 @@ mod tests {
         assert!(dark_text.is_readable_on(dark_highlight));
         assert_ne!(light_text, Color::WHITE);
         assert_eq!(dark_text, Color::WHITE);
+    }
+
+    #[test]
+    fn stable_text_color_does_not_flip_during_a_highlight() {
+        let initial = Color::from_rgb(0.12, 0.14, 0.16);
+        let peak = Color::from_rgb(0.32, 0.48, 0.34);
+        let text = stable_readable_text_color(initial, peak, Color::WHITE);
+
+        assert_eq!(text, Color::WHITE);
+        assert!(initial.relative_contrast(text) > initial.relative_contrast(Color::BLACK));
+        assert!(peak.relative_contrast(text) > peak.relative_contrast(Color::BLACK));
+    }
+
+    #[test]
+    fn gruvbox_selection_keeps_a_light_foreground_through_the_pulse() {
+        let palette = iced::Theme::GruvboxDark.extended_palette();
+        let peak = iced::theme::palette::mix(
+            palette.primary.weak.color,
+            palette.primary.strong.color,
+            0.42,
+        );
+        let text =
+            stable_readable_text_color(palette.primary.weak.color, peak, palette.primary.weak.text);
+
+        assert!(text.relative_luminance() > 0.7);
+    }
+
+    #[test]
+    fn status_text_remains_readable_through_success_tint() {
+        let design = crate::ui::design::Design::dark();
+        let normal = design.surface_subtle();
+        let toast = design.success_gradient().0;
+        let peak = Color {
+            r: normal.r + (toast.r - normal.r) * 0.35,
+            g: normal.g + (toast.g - normal.g) * 0.35,
+            b: normal.b + (toast.b - normal.b) * 0.35,
+            a: 1.0,
+        };
+        let preferred = iced::Theme::GruvboxDark
+            .extended_palette()
+            .background
+            .base
+            .text;
+        let text = stable_readable_text_color(normal, peak, preferred);
+
+        assert!(normal.relative_contrast(text) >= 4.5);
+        assert!(peak.relative_contrast(text) >= 4.5);
+        for progress in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let background = Color {
+                r: normal.r + (peak.r - normal.r) * progress,
+                g: normal.g + (peak.g - normal.g) * progress,
+                b: normal.b + (peak.b - normal.b) * progress,
+                a: 1.0,
+            };
+            let animated_text = smooth_color_mix(preferred, text, progress);
+            assert!(
+                background.relative_contrast(animated_text) >= 4.5,
+                "progress {progress} produced insufficient text contrast"
+            );
+        }
+    }
+
+    #[test]
+    fn smooth_color_mix_reaches_both_endpoints() {
+        let start = Color::from_rgb(0.8, 0.8, 0.8);
+        let end = Color::from_rgb(1.0, 1.0, 1.0);
+
+        assert_eq!(smooth_color_mix(start, end, 0.0), start);
+        assert_eq!(smooth_color_mix(start, end, 1.0), end);
     }
 }
