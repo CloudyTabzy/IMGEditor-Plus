@@ -1,10 +1,10 @@
 use crate::archive::{ExportStatus, SortColumn};
 use crate::sort::SortDirection;
 use iced::widget::{
-    Column, Container, Row, Scrollable, Space, button, canvas, checkbox, column, container, image,
-    mouse_area, pane_grid, progress_bar, row, rule, stack, text_input, tooltip,
+    Column, Container, Float, Row, Scrollable, Space, button, canvas, checkbox, column, container,
+    image, mouse_area, pane_grid, progress_bar, row, rule, stack, text_input, tooltip,
 };
-use iced::{Alignment, Border, Color, Element, Length};
+use iced::{Alignment, Border, Color, Element, Length, Rectangle, Vector};
 
 use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::pipeline::RenderFlags;
@@ -1605,28 +1605,45 @@ fn build_context_menu(
         ..Default::default()
     });
 
-    // Position the menu at the right-clicked row. The row's y in the table pane
-    // equals the fixed header height plus the row's position within the
-    // scrollable viewport (its content position minus the current scroll).
+    // The row's y in the table pane equals the fixed header height plus the
+    // row's position within the scrollable viewport.
     let row_y = HEADER_HEIGHT + (display_row as f32 * ROW_HEIGHT - scroll_y).max(0.0);
 
-    let menu = container(card)
-        .padding(iced::Padding {
-            top: row_y,
-            left: 12.0,
-            right: 0.0,
-            bottom: 0.0,
-        })
-        .align_x(iced::alignment::Horizontal::Left)
-        .align_y(iced::alignment::Vertical::Top)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into();
+    // Float lays the card out at its natural size before translating it. This
+    // makes the edge checks use the actual menu height instead of an estimate.
+    let menu = Float::new(card)
+        .translate(move |bounds, viewport| context_menu_translation(bounds, viewport, row_y));
 
     let backdrop = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
         .on_press(Message::HideContextMenu);
 
-    Some(stack(vec![backdrop.into(), menu]).into())
+    Some(stack(vec![backdrop.into(), menu.into()]).into())
+}
+
+const CONTEXT_MENU_EDGE_GAP: f32 = 8.0;
+const CONTEXT_MENU_LEFT_OFFSET: f32 = 12.0;
+
+fn context_menu_translation(bounds: Rectangle, viewport: Rectangle, row_y: f32) -> Vector {
+    let anchor_x = bounds.x + CONTEXT_MENU_LEFT_OFFSET;
+    let anchor_y = bounds.y + row_y;
+
+    let min_x = viewport.x + CONTEXT_MENU_EDGE_GAP;
+    let max_x = (viewport.x + viewport.width - bounds.width - CONTEXT_MENU_EDGE_GAP).max(min_x);
+    let x = anchor_x.clamp(min_x, max_x);
+
+    let min_y = viewport.y + CONTEXT_MENU_EDGE_GAP;
+    let max_y = (viewport.y + viewport.height - bounds.height - CONTEXT_MENU_EDGE_GAP).max(min_y);
+    let below_fits =
+        anchor_y + bounds.height <= viewport.y + viewport.height - CONTEXT_MENU_EDGE_GAP;
+    let above_y = anchor_y + ROW_HEIGHT - bounds.height;
+    let preferred_y = if below_fits || above_y < min_y {
+        anchor_y
+    } else {
+        above_y
+    };
+    let y = preferred_y.clamp(min_y, max_y);
+
+    Vector::new(x - bounds.x, y - bounds.y)
 }
 
 fn build_autoscroll_indicator() -> Element<'static, Message> {
@@ -1761,4 +1778,75 @@ fn empty_state() -> Element<'static, Message> {
     .center_x(Length::Fill)
     .center_y(Length::Fill)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_menu_stays_below_when_the_viewport_has_room() {
+        let bounds = Rectangle {
+            x: 100.0,
+            y: 20.0,
+            width: 140.0,
+            height: 100.0,
+        };
+        let viewport = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 500.0,
+            height: 400.0,
+        };
+
+        let translation = context_menu_translation(bounds, viewport, 80.0);
+
+        assert_eq!(bounds.x + translation.x, 112.0);
+        assert_eq!(bounds.y + translation.y, 100.0);
+    }
+
+    #[test]
+    fn context_menu_flips_above_a_bottom_edge() {
+        let bounds = Rectangle {
+            x: 100.0,
+            y: 20.0,
+            width: 140.0,
+            height: 170.0,
+        };
+        let viewport = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 500.0,
+            height: 260.0,
+        };
+
+        let translation = context_menu_translation(bounds, viewport, 190.0);
+        let top = bounds.y + translation.y;
+
+        assert_eq!(top, 72.0);
+        assert!(top + bounds.height <= viewport.y + viewport.height - CONTEXT_MENU_EDGE_GAP);
+    }
+
+    #[test]
+    fn context_menu_clamps_to_viewport_edges() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 140.0,
+            height: 100.0,
+        };
+        let viewport = Rectangle {
+            x: 10.0,
+            y: 30.0,
+            width: 180.0,
+            height: 130.0,
+        };
+
+        let translation = context_menu_translation(bounds, viewport, 0.0);
+        let left = bounds.x + translation.x;
+        let top = bounds.y + translation.y;
+
+        assert_eq!(left, viewport.x + CONTEXT_MENU_EDGE_GAP);
+        assert_eq!(top, viewport.y + CONTEXT_MENU_EDGE_GAP);
+    }
 }
