@@ -46,9 +46,9 @@ use crate::inspector::scene3d::pipeline::{
 use crate::inspector::scene3d::scene::Scene;
 
 const ORBIT_SENSITIVITY: f32 = 0.010;
-const PAN_SENSITIVITY: f32 = 0.00092;
-const WHEEL_ZOOM_PER_PIXEL: f32 = 0.0015;
-const WHEEL_ZOOM_PER_LINE: f32 = 0.06;
+const PAN_SENSITIVITY: f32 = 0.001;
+const WHEEL_ZOOM_PER_LINE: f32 = 0.065;
+const WHEEL_ZOOM_PER_PIXEL: f32 = WHEEL_ZOOM_PER_LINE / 40.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SceneOriginMode {
@@ -323,28 +323,24 @@ fn handle_event(
             if !cursor_inside {
                 return false;
             }
-            let factor = match delta {
-                ScrollDelta::Lines { y, .. } => {
-                    if *y > 0.0 {
-                        1.0 / (1.0 + y * WHEEL_ZOOM_PER_LINE)
-                    } else {
-                        1.0 + (-y) * WHEEL_ZOOM_PER_LINE
-                    }
-                }
-                ScrollDelta::Pixels { y, .. } => {
-                    if *y > 0.0 {
-                        1.0 / (1.0 + y * WHEEL_ZOOM_PER_PIXEL)
-                    } else {
-                        1.0 + (-y) * WHEEL_ZOOM_PER_PIXEL
-                    }
-                }
-            };
-            camera.dolly(factor);
+            camera.dolly(wheel_zoom_factor(delta));
             true
         }
         Event::Keyboard(_) => true,
         _ => false,
     }
+}
+
+/// Convert a wheel delta into a symmetric exponential dolly factor.
+/// Positive wheel deltas zoom in, negative deltas zoom out. Exponential
+/// scaling keeps a one-line step consistent in either direction and makes
+/// high-resolution pixel scrolling feel continuous rather than stepped.
+fn wheel_zoom_factor(delta: &ScrollDelta) -> f32 {
+    let (amount, sensitivity) = match delta {
+        ScrollDelta::Lines { y, .. } => (*y, WHEEL_ZOOM_PER_LINE),
+        ScrollDelta::Pixels { y, .. } => (*y, WHEEL_ZOOM_PER_PIXEL),
+    };
+    (-amount * sensitivity).exp()
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Scene3dWidget
@@ -1099,6 +1095,27 @@ mod tests {
             resource_cache_flags(RenderFlags::empty()),
             resource_cache_flags(RenderFlags::HAS_TEXTURE)
         );
+    }
+
+    #[test]
+    fn wheel_zoom_uses_symmetric_exponential_steps() {
+        let zoom_in = wheel_zoom_factor(&ScrollDelta::Lines { x: 0.0, y: 1.0 });
+        let zoom_out = wheel_zoom_factor(&ScrollDelta::Lines { x: 0.0, y: -1.0 });
+
+        assert!((0.93..1.0).contains(&zoom_in));
+        assert!((1.0..1.08).contains(&zoom_out));
+        assert!(
+            (zoom_in * zoom_out - 1.0).abs() < 1e-5,
+            "zoom steps should undo each other: in={zoom_in}, out={zoom_out}"
+        );
+    }
+
+    #[test]
+    fn wheel_zoom_pixel_and_line_rates_match() {
+        let line = wheel_zoom_factor(&ScrollDelta::Lines { x: 0.0, y: 1.0 });
+        let pixels = wheel_zoom_factor(&ScrollDelta::Pixels { x: 0.0, y: 40.0 });
+
+        assert!((line - pixels).abs() < 1e-6);
     }
 
     #[test]
