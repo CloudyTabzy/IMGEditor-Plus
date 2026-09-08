@@ -917,7 +917,19 @@ impl App {
             return 0.0;
         }
         let progress = self.animator.get(ANIM_ENTRY_FEEDBACK);
-        (progress * std::f32::consts::PI * 3.0).sin() * 1.5
+        (progress * std::f32::consts::PI * 3.0).sin() * 2.0
+    }
+
+    pub(crate) fn entry_text_nudge(&self, target: (usize, usize)) -> f32 {
+        if !self.config.motion_enabled
+            || !self.config.selection_pulse_enabled
+            || self.entry_feedback_target != Some(target)
+            || !self.animator.is_running(ANIM_ENTRY_FEEDBACK)
+        {
+            return 0.0;
+        }
+        let progress = self.animator.get(ANIM_ENTRY_FEEDBACK);
+        (progress * std::f32::consts::PI * 4.0).sin() * 1.25
     }
 
     pub(crate) fn archive_tab_selection_pulse(&self, target: usize) -> f32 {

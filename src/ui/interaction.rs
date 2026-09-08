@@ -54,12 +54,24 @@ impl<Message> canvas::Program<Message> for RippleOverlay {
             .mul_add(bounds.width, bounds.height * bounds.height)
             .sqrt();
         let radius = (diagonal * progress).max(0.5);
-        let alpha = (0.22 * (1.0 - progress)).clamp(0.0, 0.22);
+        let fill_alpha = (0.24 * (1.0 - progress)).clamp(0.0, 0.24);
         let color = theme.extended_palette().primary.base.color;
+        let edge = theme.extended_palette().primary.strong.color;
 
         frame.fill(
             &canvas::Path::circle(center, radius),
-            Color::from_rgba(color.r, color.g, color.b, alpha),
+            Color::from_rgba(color.r, color.g, color.b, fill_alpha),
+        );
+        frame.stroke(
+            &canvas::Path::circle(center, radius),
+            canvas::Stroke::default()
+                .with_width(2.0)
+                .with_color(Color::from_rgba(
+                    edge.r,
+                    edge.g,
+                    edge.b,
+                    (0.78 * (1.0 - progress)).clamp(0.0, 0.78),
+                )),
         );
 
         vec![frame.into_geometry()]

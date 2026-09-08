@@ -217,12 +217,27 @@ impl App {
         let entry_key = (archive_index, entry_index);
         let selection_pulse = self.entry_selection_pulse(entry_key);
         let icon_nudge = self.entry_icon_nudge(entry_key);
-        let file_icon: Element<'_, Message> = if icon_nudge.abs() > f32::EPSILON {
+        let text_nudge = self.entry_text_nudge(entry_key);
+        let icon_scale = if self.config.icon_micro_motion_enabled {
+            1.0 + selection_pulse * 0.10
+        } else {
+            1.0
+        };
+        let file_icon: Element<'_, Message> = if icon_nudge.abs() > f32::EPSILON || icon_scale > 1.0
+        {
             Float::new(icons::file_type(&entry.file_name).size(16))
+                .scale(icon_scale)
                 .translate(move |_, _| Vector::new(icon_nudge, 0.0))
                 .into()
         } else {
             icons::file_type(&entry.file_name).size(16).into()
+        };
+        let name_widget: Element<'_, Message> = if !is_renaming && text_nudge.abs() > f32::EPSILON {
+            Float::new(name_widget)
+                .translate(move |_, _| Vector::new(text_nudge, 0.0))
+                .into()
+        } else {
+            name_widget
         };
         let name_cell = w::icon_label(file_icon, name_widget).width(Length::FillPortion(6));
 
@@ -251,7 +266,7 @@ impl App {
                     let background = iced::theme::palette::mix(
                         palette.primary.weak.color,
                         palette.primary.strong.color,
-                        selection_pulse * 0.28,
+                        selection_pulse * 0.42,
                     );
                     iced::widget::container::Style {
                         background: Some(background.into()),
@@ -280,6 +295,7 @@ impl App {
             ])
             .width(Length::Fill)
             .height(Length::Fixed(ROW_HEIGHT))
+            .clip(true)
             .into()
         } else {
             cell.into()
@@ -339,7 +355,7 @@ impl App {
                     background = iced::theme::palette::mix(
                         background,
                         theme.extended_palette().primary.strong.color,
-                        tab_pulse * 0.24,
+                        tab_pulse * 0.38,
                     );
                     style.tab_label_background = background.into();
                 }
@@ -367,6 +383,7 @@ impl App {
                 ])
                 .width(width)
                 .height(Length::Fixed(32.0))
+                .clip(true)
                 .into()
             } else {
                 tab_bar.into()
@@ -1215,7 +1232,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
                         let background = iced::theme::palette::mix(
                             background,
                             theme.extended_palette().primary.strong.color,
-                            tab_pulse * 0.24,
+                            tab_pulse * 0.38,
                         );
                         style.background = Some(background.into());
                         style.text_color = w::readable_text_color(background, style.text_color);
@@ -1247,6 +1264,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
                 ])
                 .width(Length::Fill)
                 .height(Length::Fixed(40.0))
+                .clip(true)
                 .into()
             } else {
                 row.into()
