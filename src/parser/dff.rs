@@ -808,7 +808,7 @@ fn decode_library_version(library_id: u32) -> u32 {
     if (0x0003_0000..=0x0003_FFFF).contains(&library_id) {
         library_id
     } else if library_id & 0xFFFF_0000 != 0 {
-        ((library_id >> 14) & 0x3FF00) + 0x30000 | ((library_id >> 16) & 0x3F)
+        (((library_id >> 14) & 0x0003_FF00) + 0x0003_0000) | ((library_id >> 16) & 0x3F)
     } else if library_id != 0 {
         library_id << 8
     } else {

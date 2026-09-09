@@ -87,9 +87,7 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
 
         match event {
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                let Some(cursor_position) = cursor.position_over(bounds) else {
-                    return None;
-                };
+                let cursor_position = cursor.position_over(bounds)?;
                 let y = match delta {
                     mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => {
                         *y
@@ -139,9 +137,7 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
                 })
             }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                let Some(cursor_position) = cursor.position_over(bounds) else {
-                    return None;
-                };
+                let cursor_position = cursor.position_over(bounds)?;
                 state.cursor_grabbed_at = Some(cursor_position);
                 state.starting_offset = state.current_offset;
                 if self.render_image {
@@ -158,9 +154,7 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
                 }
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                let Some(origin) = state.cursor_grabbed_at else {
-                    return None;
-                };
+                let origin = state.cursor_grabbed_at?;
                 let scaled_size = texture_image_size(
                     self.image_width,
                     self.image_height,

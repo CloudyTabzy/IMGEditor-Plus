@@ -4353,11 +4353,13 @@ mod tests {
 
     #[test]
     fn configured_sort_chain_is_inherited_by_new_archives() {
-        let mut config = Config::default();
-        config.default_sort_chain = SortChain::new(vec![SortPriority::new(
-            SortKey::Size,
-            SortDirection::Descending,
-        )]);
+        let config = Config {
+            default_sort_chain: SortChain::new(vec![SortPriority::new(
+                SortKey::Size,
+                SortDirection::Descending,
+            )]),
+            ..Config::default()
+        };
         let mut app = App::new(config);
 
         app.editor.new_archive();

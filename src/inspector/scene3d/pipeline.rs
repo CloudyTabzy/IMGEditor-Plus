@@ -615,56 +615,64 @@ impl ScenePipelines {
             &lit_module,
             &pipeline_layout,
             scene_color_format(),
-            wgpu::PrimitiveTopology::TriangleList,
-            wgpu::PolygonMode::Fill,
-            None,
-            true,
-            wgpu::CompareFunction::Less,
-            wgpu::BlendState::REPLACE,
             scene_sample_count,
-            "imgeditor-scene3d/lit_pipeline",
+            PipelineSpec {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                cull_mode: None,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                blend: wgpu::BlendState::REPLACE,
+                label: "imgeditor-scene3d/lit_pipeline",
+            },
         );
         let lit_cull_back = build_lit_pipeline(
             device,
             &lit_module,
             &pipeline_layout,
             scene_color_format(),
-            wgpu::PrimitiveTopology::TriangleList,
-            wgpu::PolygonMode::Fill,
-            Some(wgpu::Face::Back),
-            true,
-            wgpu::CompareFunction::Less,
-            wgpu::BlendState::REPLACE,
             scene_sample_count,
-            "imgeditor-scene3d/lit_cull_back_pipeline",
+            PipelineSpec {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                cull_mode: Some(wgpu::Face::Back),
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                blend: wgpu::BlendState::REPLACE,
+                label: "imgeditor-scene3d/lit_cull_back_pipeline",
+            },
         );
         let lit_alpha = build_lit_pipeline(
             device,
             &lit_module,
             &pipeline_layout,
             scene_color_format(),
-            wgpu::PrimitiveTopology::TriangleList,
-            wgpu::PolygonMode::Fill,
-            None,
-            true,
-            wgpu::CompareFunction::Less,
-            wgpu::BlendState::ALPHA_BLENDING,
             scene_sample_count,
-            "imgeditor-scene3d/lit_alpha_pipeline",
+            PipelineSpec {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                cull_mode: None,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                blend: wgpu::BlendState::ALPHA_BLENDING,
+                label: "imgeditor-scene3d/lit_alpha_pipeline",
+            },
         );
         let lit_cull_back_alpha = build_lit_pipeline(
             device,
             &lit_module,
             &pipeline_layout,
             scene_color_format(),
-            wgpu::PrimitiveTopology::TriangleList,
-            wgpu::PolygonMode::Fill,
-            Some(wgpu::Face::Back),
-            true,
-            wgpu::CompareFunction::Less,
-            wgpu::BlendState::ALPHA_BLENDING,
             scene_sample_count,
-            "imgeditor-scene3d/lit_cull_back_alpha_pipeline",
+            PipelineSpec {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                cull_mode: Some(wgpu::Face::Back),
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                blend: wgpu::BlendState::ALPHA_BLENDING,
+                label: "imgeditor-scene3d/lit_cull_back_alpha_pipeline",
+            },
         );
 
         let wireframe = build_lit_pipeline(
@@ -672,14 +680,16 @@ impl ScenePipelines {
             &wire_module,
             &pipeline_layout,
             scene_color_format(),
-            wgpu::PrimitiveTopology::LineList,
-            wgpu::PolygonMode::Fill,
-            None,
-            false,
-            wgpu::CompareFunction::LessEqual,
-            wgpu::BlendState::ALPHA_BLENDING,
             scene_sample_count,
-            "imgeditor-scene3d/wireframe_pipeline",
+            PipelineSpec {
+                topology: wgpu::PrimitiveTopology::LineList,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                cull_mode: None,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                blend: wgpu::BlendState::ALPHA_BLENDING,
+                label: "imgeditor-scene3d/wireframe_pipeline",
+            },
         );
 
         let compositor = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1052,20 +1062,36 @@ pub(crate) fn register_gpu_error_handlers(device: &wgpu::Device) -> Arc<Mutex<Op
     slot
 }
 
-fn build_lit_pipeline(
-    device: &wgpu::Device,
-    module: &wgpu::ShaderModule,
-    layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
+/// Varying per-pipeline settings for [`build_lit_pipeline`]. Shared
+/// arguments (device, shader module, layout, target format, sample
+/// count) stay as plain parameters.
+struct PipelineSpec {
     topology: wgpu::PrimitiveTopology,
     polygon_mode: wgpu::PolygonMode,
     cull_mode: Option<wgpu::Face>,
     depth_write_enabled: bool,
     depth_compare: wgpu::CompareFunction,
     blend: wgpu::BlendState,
+    label: &'static str,
+}
+
+fn build_lit_pipeline(
+    device: &wgpu::Device,
+    module: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
     sample_count: u32,
-    label: &str,
+    spec: PipelineSpec,
 ) -> wgpu::RenderPipeline {
+    let PipelineSpec {
+        topology,
+        polygon_mode,
+        cull_mode,
+        depth_write_enabled,
+        depth_compare,
+        blend,
+        label,
+    } = spec;
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),

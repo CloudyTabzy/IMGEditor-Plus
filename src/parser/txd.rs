@@ -142,15 +142,17 @@ impl NativeTexture {
             .ok_or(texture_decoder::DecodeError::BufferTooSmall { need: 1, have: 0 })?;
         texture_decoder::decode_native_raster(
             &mip.data,
-            self.width,
-            self.height,
-            self.depth,
-            self.raster_format,
-            &self.palette,
-            self.platform_id,
-            self.d3d_format,
-            self.platform_properties,
-            self.raster_type,
+            &texture_decoder::RasterDescriptor {
+                width: self.width,
+                height: self.height,
+                depth: self.depth,
+                raster_format: self.raster_format,
+                palette: &self.palette,
+                platform_id: self.platform_id,
+                d3d_format: self.d3d_format,
+                platform_properties: self.platform_properties,
+                raster_type: self.raster_type,
+            },
         )
     }
 

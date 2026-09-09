@@ -635,6 +635,22 @@ const D3D_DXT3: u32 = 0x3354_5844;
 const D3D_DXT4: u32 = 0x3454_5844;
 const D3D_DXT5: u32 = 0x3554_5844;
 
+/// Format descriptors for one PC RenderWare Texture Native, as stored
+/// on a `NativeTexture`. Groups the nine scalar/binary inputs of
+/// [`decode_native_raster`] so call sites read by field name.
+#[derive(Clone, Copy)]
+pub struct RasterDescriptor<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub depth: u8,
+    pub raster_format: u32,
+    pub palette: &'a [u8],
+    pub platform_id: u32,
+    pub d3d_format: u32,
+    pub platform_properties: u8,
+    pub raster_type: u8,
+}
+
 /// Decode one PC RenderWare Texture Native mip level.
 ///
 /// Unlike decode_raster, this function receives pixels after the native
@@ -643,16 +659,19 @@ const D3D_DXT5: u32 = 0x3554_5844;
 /// properties byte. Raster flags remain the fallback for uncompressed data.
 pub fn decode_native_raster(
     data: &[u8],
-    width: u32,
-    height: u32,
-    depth: u8,
-    raster_format: u32,
-    palette: &[u8],
-    platform_id: u32,
-    d3d_format: u32,
-    platform_properties: u8,
-    raster_type: u8,
+    desc: &RasterDescriptor<'_>,
 ) -> Result<Vec<u8>, DecodeError> {
+    let RasterDescriptor {
+        width,
+        height,
+        depth,
+        raster_format,
+        palette,
+        platform_id,
+        d3d_format,
+        platform_properties,
+        raster_type,
+    } = *desc;
     let palette_type = (raster_format >> 13) & 0x3;
     if palette_type == 1 {
         return decode_pal8(data, palette, width, height);
