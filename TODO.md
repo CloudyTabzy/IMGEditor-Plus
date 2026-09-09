@@ -1,8 +1,13 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v3.15.0** (smoother 3D camera zoom/panning, synchronized texture overlays, and continued archive/UI refinements). 290 tests passing.
+Last shipped: **v3.15.0** (smoother 3D camera zoom/panning, synchronized texture overlays, and continued archive/UI refinements). 291 tests passing.
 
 Next phase: **supporting other game formats**.
+
+On master (post-v3.15.0, unreleased):
+
+- Byte-budgeted `quick_cache` LRU for decoded 3D scenes (256 MiB desktop / 64 MiB mobile, keyed by `(archive, generation, entry)`) and texture previews (128 MiB / 32 MiB, keyed by entry index); `ArchiveInfo::generation` invalidates both on entry mutations. `Arc<Scene>` / `Arc<Vec<DecodedTexture>>` values are shared zero-copy with the viewer handle and per-frame lookups.
+- Memoized `IdeMap` per game root so only the first 3D load per root walks the directory.
 
 ---
 
@@ -62,10 +67,10 @@ This is fine for **another IMG version** (`PcV3Parser` etc.). For a brand-new co
 
 ## 3. Quality-of-life improvements
 
-- Cache parsed NFT catalogs (the same NFT serves many NIFs)
-- Add a CLI or GUI option to specify the game root path (instead of deriving from archive path)
-- Clear old temp files on startup (`%TEMP%\IMGEditor\preview\`)
-- File-association registration on Windows (right-click → open with IMG Editor Plus)
+- **Cache parsed NFT catalogs** — partially done. The per-game-root `IdeMap` is memoized and decoded texture pixels are cached in the `quick_cache` LRU, so repeated 3D loads skip the directory walk and pixel decode. The catalog parse itself (`parse_nft_catalog_bytes`) still runs per NIF load; parked because parsing is cheap next to decode.
+- **Game root path override** — not started. `Config` has no `game_root` field; the root is still derived from the archive path (`parent().parent()`). A CLI flag or settings field is the planned seam.
+- **Clear old temp files on startup** — done. `main.rs::clean_temp_preview` sweeps `%TEMP%\IMGEditor\preview\` best-effort on launch; locked entries are skipped so it never blocks startup.
+- **Windows file-association registration** — not started. No registry/`ftype` code exists yet.
 
 ---
 
