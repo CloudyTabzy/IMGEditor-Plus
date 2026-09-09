@@ -872,6 +872,7 @@ impl App {
         col = col.push(texture_meta);
 
         let scene_matches = self.viewer_scene_matches_selection();
+        let texture_only_preview = !scene_matches && (is_txd || is_nft);
         let uv_triangles = self.viewer3d_handle.with(|inner| {
             inner
                 .scene
@@ -880,13 +881,38 @@ impl App {
                 .map(|scene| crate::ui::texture_preview::uv_triangles_for_texture(scene, &tex.name))
                 .unwrap_or_default()
         });
-        let uv_toggle = checkbox(self.show_texture_uv && !uv_triangles.is_empty())
-            .label("Show UV map")
-            .on_toggle_maybe((!uv_triangles.is_empty()).then_some(Message::TextureUvToggled));
-        let uv_status = if uv_triangles.is_empty() {
-            fonts::caption("Load matching NIF geometry to enable UVs")
+        let uv_tooltip = if texture_only_preview {
+            "Standalone texture preview. Select a matching DFF or NIF model to enable UV mapping."
+        } else if uv_triangles.is_empty() {
+            "UV mapping is available after matching model geometry is loaded."
+        } else {
+            "Show the UV triangles from the matching model geometry."
+        };
+        let uv_toggle = w::styled_tooltip(
+            checkbox(self.show_texture_uv && !uv_triangles.is_empty())
+                .label("Show UV map")
+                .on_toggle_maybe((!uv_triangles.is_empty()).then_some(Message::TextureUvToggled)),
+            fonts::caption(uv_tooltip),
+            tooltip::Position::Top,
+        );
+        let uv_status = if texture_only_preview {
+            fonts::caption("Texture-only preview · UV map needs matching model geometry")
+        } else if uv_triangles.is_empty() {
+            fonts::caption("Load matching model geometry to enable UVs")
         } else {
             fonts::caption(format!("{} triangles", uv_triangles.len()))
+        };
+        let texture_only_notice: Element<'_, Message> = if texture_only_preview {
+            let design = self.design();
+            let background = design.info();
+            w::badge(
+                "Texture-only preview".to_string(),
+                background,
+                w::readable_text_color(background, Color::WHITE),
+            )
+            .into()
+        } else {
+            Space::new().into()
         };
         let grid_toggle = checkbox(self.show_texture_grid)
             .label("Grid")
@@ -905,6 +931,7 @@ impl App {
         }
         col = col.push(
             row![
+                texture_only_notice,
                 uv_toggle,
                 uv_status,
                 grid_toggle,
@@ -974,7 +1001,15 @@ impl App {
             .width(Length::Fill)
             .into();
         }
-        let (flags, origin_mode) = self.viewer3d_handle.with(|i| (i.flags, i.origin_mode));
+        let (flags, origin_mode, has_textures) = self.viewer3d_handle.with(|i| {
+            (
+                i.flags,
+                i.origin_mode,
+                i.scene
+                    .as_deref()
+                    .is_some_and(|scene| scene.textured_mesh_count() > 0),
+            )
+        });
         let button_height = Length::Fixed(28.0);
         let mut row = Row::new().spacing(4).padding(2).width(Length::Fill);
         row = row.push(w::icon_label(
@@ -1016,6 +1051,20 @@ impl App {
                 .label("Textured")
                 .on_toggle(|_| Message::Viewer3dToggleTextured),
         );
+        let alpha_available = flags.contains(RenderFlags::HAS_TEXTURE) && has_textures;
+        let alpha_checked = alpha_available && flags.contains(RenderFlags::ALPHA_BLEND);
+        let alpha_hint = if alpha_available {
+            "Respect texture alpha for cutouts and transparent materials."
+        } else {
+            "Enable Textured on a model with textures to use alpha blending."
+        };
+        row = row.push(w::styled_tooltip(
+            checkbox(alpha_checked)
+                .label("Alpha blend")
+                .on_toggle_maybe(alpha_available.then_some(|_| Message::Viewer3dToggleAlphaBlend)),
+            fonts::caption(alpha_hint),
+            tooltip::Position::Bottom,
+        ));
         row = row.push(
             checkbox(origin_mode == SceneOriginMode::Centered)
                 .label("Center origin")

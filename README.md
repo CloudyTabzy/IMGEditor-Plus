@@ -48,6 +48,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Lit + wireframe pipelines** — single WGSL shader, `W` cycles wireframe (toolbar)
 - ✅ **MSAA 4x anti-aliasing** — the scene pass renders into multisampled color + depth targets and resolves for smooth model edges
 - ✅ **Textured paths** — DFF/TXD diffuse mapping plus DXT1/2/3/4/5 decoding on `spawn_blocking` so the UI thread stays responsive
+- ✅ **Alpha-aware 3D materials** — RGBA cutouts and transparency use a standard alpha-blended render path, with an in-viewer toggle for opaque/debug inspection
 - ✅ **Bully NFT companion textures** — embedded Gamebryo pixel data and archive-backed source paths are previewed as RGBA
 - ✅ **External PLY viewer fallback** — right-click `Open in external viewer` for non-NIF formats (DFF / COL) and any user preference
 - ✅ **Configurable base orientation** — Y-up default, `B` cycles to Z-up / X-up. Persists in `settings.ini`.
@@ -57,7 +58,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Rotating view-axis gizmo** — the small XYZ widget in the corner tracks the camera as it orbits
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
-- ✅ **305 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
+- ✅ **308 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, alpha rendering, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
 
 **v3.16.0 release highlights:**
 - ✅ **GTA RenderWare preview** — in-app PC DFF model parsing with frame/atomic transforms and TXD diffuse texture resolution for GTA III/VC/SA-style assets
@@ -113,6 +114,7 @@ for the engineering story.
 - ✅ **Inline preview** — cached RGBA preview in the info panel, shared by TXD, NFT, and rendered NIF/DFF textures
 - ✅ **Multi-texture selector** — navigate textures within a TXD or NFT
 - ✅ **UV overlay** — toggle matching NIF/DFF triangle UVs over the fit-to-preview texture
+- ✅ **Texture-only guidance** — standalone TXD/NFT previews clearly explain when UV geometry is unavailable and how to enable it
 - ✅ **Export to TGA** — dump all textures to `.tga` files
 
 ### 🧪 Entry Inspector

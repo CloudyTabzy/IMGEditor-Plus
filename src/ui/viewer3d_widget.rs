@@ -111,7 +111,11 @@ impl Default for SceneHandleInner {
             camera: OrbitCamera::default(),
             // The reference floor is part of the established viewer
             // presentation; the toolbar lets users hide it per session.
-            flags: RenderFlags::SHOW_GRID,
+            // Texture alpha is useful for the common GTA cutout materials
+            // (fences, foliage, glass). Keep it enabled by default when the
+            // user turns on the Textured view; the toolbar can disable it
+            // for opaque/debug inspection.
+            flags: RenderFlags::SHOW_GRID | RenderFlags::ALPHA_BLEND,
             origin_mode: SceneOriginMode::default(),
             dirty: false,
             gpu_error: None,
@@ -196,6 +200,12 @@ impl SceneHandle {
     pub fn toggle_textured(&self) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
         inner.flags ^= crate::inspector::scene3d::pipeline::RenderFlags::HAS_TEXTURE;
+        inner.dirty = true;
+    }
+
+    pub fn toggle_alpha_blend(&self) {
+        let mut inner = self.inner.lock().expect("scene handle mutex");
+        inner.flags ^= crate::inspector::scene3d::pipeline::RenderFlags::ALPHA_BLEND;
         inner.dirty = true;
     }
 
@@ -798,7 +808,13 @@ impl ScenePipeline {
         }
 
         // 3. the model
-        let lit_pipeline = if flags.contains(RenderFlags::CULL_BACK) {
+        let lit_pipeline = if flags.contains(RenderFlags::ALPHA_BLEND) {
+            if flags.contains(RenderFlags::CULL_BACK) {
+                &self.render_pipelines.lit_cull_back_alpha
+            } else {
+                &self.render_pipelines.lit_alpha
+            }
+        } else if flags.contains(RenderFlags::CULL_BACK) {
             &self.render_pipelines.lit_cull_back
         } else {
             &self.render_pipelines.lit

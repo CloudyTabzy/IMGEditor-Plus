@@ -40,13 +40,21 @@ fn vs_main(input: VertexIn) -> VertexOut {
 @fragment
 fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
     let has_texture = (camera.flags & 1u) != 0u;
+    let alpha_blend = (camera.flags & 16u) != 0u;
     let sampled = textureSample(diffuse_tex, diffuse_sampler, input.uv);
 
     // Use a neutral mid-gray default material when no texture is bound.
     // Pure white swamps the Blinn-Phong shading and makes everything look flat.
     let default_base = vec3<f32>(0.502, 0.502, 0.502);
     let base = select(default_base, sampled.rgb, has_texture);
-    let alpha = select(1.0, sampled.a, has_texture);
+    let alpha = select(1.0, sampled.a, has_texture && alpha_blend);
+
+    // Alpha-masked GTA materials commonly use zero-alpha texels for holes.
+    // Discarding only those texels prevents them from claiming depth while
+    // retaining smooth blending for partially transparent pixels.
+    if has_texture && alpha_blend && alpha <= 0.001 {
+        discard;
+    }
 
     let n = normalize(input.world_normal);
     let l = input.light_dir;

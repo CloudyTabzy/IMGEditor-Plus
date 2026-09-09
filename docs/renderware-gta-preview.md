@@ -77,6 +77,12 @@ uses `BaseOrientation::Zup` for DFF and maps the result into the viewer's
 Y-up camera convention. This keeps source placement and rotations intact
 while making the model upright and consistent with the existing NIF viewer.
 
+The 3D viewer preserves the decoded RGBA alpha channel. Textured model passes
+can use standard straight-alpha blending, with fully transparent texels
+discarded so cutout materials do not claim depth. Alpha blending is enabled by
+default when textured viewing is enabled and can be switched off from the
+viewer toolbar for an opaque/debug comparison.
+
 ### TXD / Texture Dictionary
 
 For the usual PC path, the parser accepts a top-level `TEXTURE_DICTIONARY`
@@ -130,6 +136,10 @@ The archive-backed path is intentionally asynchronous:
    the texture tab exposes its name, format, alpha state, dimensions, mip count,
    and preview.
 
+When a TXD or NFT is selected directly, the texture tab labels the view as
+texture-only and explains that UV overlays require matching DFF/NIF geometry.
+The grid remains available because it does not depend on model geometry.
+
 The cache key includes archive identity, archive generation, and entry index.
 Mutations such as imports, deletes, renames, and cross-archive moves therefore
 cannot reuse a stale model or texture preview. Archive-only operation remains
@@ -173,7 +183,7 @@ so CI does not depend on a user's game installation. When a real archive is
 available, run the parser tests from `IMGEditor-rs` and record only an
 untracked manifest of filenames, formats, dimensions, and hashes.
 
-At this change point, the full Rust suite reports 305 passing unit tests and one
+At this change point, the full Rust suite reports 308 passing unit tests and one
 intentionally ignored doctest.
 
 ## Deliberately deferred work

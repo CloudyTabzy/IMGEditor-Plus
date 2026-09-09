@@ -5,8 +5,9 @@
 //!
 //! - **Lit** — vertex + fragment WGSL, full Lambert + ambient, optional
 //!   diffuse texture selected at draw time by a flag in the camera UBO.
-//!   Renders to a private `scene_color_target`, never to the surface.
-//!   Has a real depth attachment so triangle ordering is correct.
+//!   Opaque and alpha-blended variants render to a private
+//!   `scene_color_target`, never to the surface. Both have a real depth
+//!   attachment so triangle ordering remains correct when alpha is disabled.
 //! - **Wireframe** — same vertex stage, line-list rasteriser, depth-tested
 //!   overlay drawn after the solid model.
 //! - **Compositor** — a separate pipeline with no depth and a one-line
@@ -478,6 +479,11 @@ pub fn default_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 pub struct ScenePipelines {
     pub lit: wgpu::RenderPipeline,
     pub lit_cull_back: wgpu::RenderPipeline,
+    /// Alpha-aware variants use standard straight-alpha blending. They keep
+    /// depth writes enabled so opaque GTA materials retain the established
+    /// ordering while fully transparent texels are discarded in the shader.
+    pub lit_alpha: wgpu::RenderPipeline,
+    pub lit_cull_back_alpha: wgpu::RenderPipeline,
     /// Portable explicit-edge pipeline. It uses `LineList` geometry and
     /// `PolygonMode::Fill`, so it works even when `POLYGON_MODE_LINE` is not
     /// exposed by the active graphics backend.
@@ -622,6 +628,34 @@ impl ScenePipelines {
             wgpu::BlendState::REPLACE,
             scene_sample_count,
             "imgeditor-scene3d/lit_cull_back_pipeline",
+        );
+        let lit_alpha = build_lit_pipeline(
+            device,
+            &lit_module,
+            &pipeline_layout,
+            scene_color_format(),
+            wgpu::PrimitiveTopology::TriangleList,
+            wgpu::PolygonMode::Fill,
+            None,
+            true,
+            wgpu::CompareFunction::Less,
+            wgpu::BlendState::ALPHA_BLENDING,
+            scene_sample_count,
+            "imgeditor-scene3d/lit_alpha_pipeline",
+        );
+        let lit_cull_back_alpha = build_lit_pipeline(
+            device,
+            &lit_module,
+            &pipeline_layout,
+            scene_color_format(),
+            wgpu::PrimitiveTopology::TriangleList,
+            wgpu::PolygonMode::Fill,
+            Some(wgpu::Face::Back),
+            true,
+            wgpu::CompareFunction::Less,
+            wgpu::BlendState::ALPHA_BLENDING,
+            scene_sample_count,
+            "imgeditor-scene3d/lit_cull_back_alpha_pipeline",
         );
 
         let wireframe = build_lit_pipeline(
@@ -831,6 +865,8 @@ impl ScenePipelines {
         Self {
             lit,
             lit_cull_back,
+            lit_alpha,
+            lit_cull_back_alpha,
             wireframe,
             grid,
             gizmo,
@@ -1123,19 +1159,21 @@ bitflags::bitflags! {
         const CULL_BACK         = 1 << 2;
         /// Draw the procedural world-Y=0 reference grid.
         const SHOW_GRID         = 1 << 3;
+        /// Respect the sampled texture alpha in the 3D model pass.
+        const ALPHA_BLEND       = 1 << 4;
     }
 }
 
 /// Compute the render flags that should actually be uploaded to the GPU.
 ///
-/// The `HAS_TEXTURE` bit is cleared when the scene has no textured meshes
-/// or when the user has disabled texturing. This keeps the shader from
-/// sampling a default-white texture and makes the flag state deterministic
-/// regardless of how the UI toggles are wired.
+/// The texture bits are cleared when the scene has no textured meshes or when
+/// the user has disabled texturing. This keeps the shader from sampling a
+/// default-white texture and makes the flag state deterministic regardless of
+/// how the UI toggles are wired.
 pub fn effective_texture_flag(scene: &Scene, flags: RenderFlags) -> RenderFlags {
     let mut eff = flags;
     if scene.textured_mesh_count() == 0 || !flags.contains(RenderFlags::HAS_TEXTURE) {
-        eff.remove(RenderFlags::HAS_TEXTURE);
+        eff.remove(RenderFlags::HAS_TEXTURE | RenderFlags::ALPHA_BLEND);
     }
     eff
 }
@@ -1194,6 +1232,7 @@ mod tests {
         assert_eq!(RenderFlags::WIREFRAME.bits(), 1 << 1);
         assert_eq!(RenderFlags::CULL_BACK.bits(), 1 << 2);
         assert_eq!(RenderFlags::SHOW_GRID.bits(), 1 << 3);
+        assert_eq!(RenderFlags::ALPHA_BLEND.bits(), 1 << 4);
     }
 
     #[test]

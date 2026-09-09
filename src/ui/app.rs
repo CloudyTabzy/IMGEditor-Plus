@@ -265,6 +265,7 @@ pub enum Message {
     Viewer3dToggleGrid,
     Viewer3dToggleCullBackfaces,
     Viewer3dToggleTextured,
+    Viewer3dToggleAlphaBlend,
 
     // Sort Manager dialog. The dialog edits a draft copy of the
     // active archive's SortChain; "Apply" commits the draft to the
@@ -2897,6 +2898,10 @@ impl App {
                 self.viewer3d_handle.toggle_textured();
                 Task::none()
             }
+            Message::Viewer3dToggleAlphaBlend => {
+                self.viewer3d_handle.toggle_alpha_blend();
+                Task::none()
+            }
 
             // ---- Sort Manager dialog ----
             Message::OpenSortManager => {
@@ -3970,6 +3975,23 @@ mod tests {
         assert_eq!(app.selected_inspector_tab, InspectorTab::Texture);
         assert_eq!(app.selected_texture, 0);
         assert!(!app.show_texture_uv);
+    }
+
+    #[test]
+    fn alpha_blending_is_enabled_by_default_and_toggleable() {
+        let mut app = test_app();
+        assert!(app.viewer3d_handle.with(|inner| {
+            inner
+                .flags
+                .contains(crate::inspector::scene3d::pipeline::RenderFlags::ALPHA_BLEND)
+        }));
+
+        let _ = app.update(Message::Viewer3dToggleAlphaBlend);
+        assert!(!app.viewer3d_handle.with(|inner| {
+            inner
+                .flags
+                .contains(crate::inspector::scene3d::pipeline::RenderFlags::ALPHA_BLEND)
+        }));
     }
 
     #[test]

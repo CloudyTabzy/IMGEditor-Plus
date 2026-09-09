@@ -211,7 +211,13 @@ pub fn render_frame(
             pass.draw_indexed(0..6, 0, 0..1);
         }
 
-        let lit_pipeline = if flags.contains(RenderFlags::CULL_BACK) {
+        let lit_pipeline = if flags.contains(RenderFlags::ALPHA_BLEND) {
+            if flags.contains(RenderFlags::CULL_BACK) {
+                &pipelines.lit_cull_back_alpha
+            } else {
+                &pipelines.lit_alpha
+            }
+        } else if flags.contains(RenderFlags::CULL_BACK) {
             &pipelines.lit_cull_back
         } else {
             &pipelines.lit
@@ -624,6 +630,59 @@ mod tests {
         camera.reset_to_aabb(&scene.aabb);
         let _ = render_frame(&renderer, &scene, &camera, 64, 64, RenderFlags::HAS_TEXTURE)
             .expect("textured render");
+    }
+
+    #[test]
+    fn alpha_blend_flag_reveals_background_through_transparent_texels() {
+        let renderer = gpu().expect("renderer");
+        let mut scene = triangle_scene();
+        // A fully transparent texel models the cutout pixels used by common
+        // GTA foliage, fencing, and outline textures.
+        scene.meshes[0].diffuse = Some(crate::inspector::scene3d::mesh::SceneTexture {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 0, 0, 0],
+        });
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 128,
+            height: 128,
+        });
+        camera.reset_to_aabb(&scene.aabb);
+
+        let opaque = render_frame(
+            &renderer,
+            &scene,
+            &camera,
+            128,
+            128,
+            RenderFlags::HAS_TEXTURE,
+        )
+        .expect("opaque textured render");
+        let alpha = render_frame(
+            &renderer,
+            &scene,
+            &camera,
+            128,
+            128,
+            RenderFlags::HAS_TEXTURE | RenderFlags::ALPHA_BLEND,
+        )
+        .expect("alpha textured render");
+
+        let opaque_red = opaque
+            .rgba
+            .chunks_exact(4)
+            .filter(|pixel| pixel[0] > 100 && pixel[1] < 100 && pixel[2] < 100)
+            .count();
+        let alpha_red = alpha
+            .rgba
+            .chunks_exact(4)
+            .filter(|pixel| pixel[0] > 100 && pixel[1] < 100 && pixel[2] < 100)
+            .count();
+        assert!(opaque_red > 100, "opaque mode should draw the red triangle");
+        assert!(
+            alpha_red < opaque_red / 4,
+            "transparent texels should reveal the background (opaque={opaque_red}, alpha={alpha_red})"
+        );
     }
 
     #[test]
