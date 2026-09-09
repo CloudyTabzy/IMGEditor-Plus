@@ -1166,6 +1166,8 @@ bitflags::bitflags! {
         const SHOW_GRID         = 1 << 3;
         /// Respect the sampled texture alpha in the 3D model pass.
         const ALPHA_BLEND       = 1 << 4;
+        /// Draw the interactive source-axis navigation overlay.
+        const SHOW_NAVIGATION   = 1 << 5;
     }
 }
 
@@ -1238,6 +1240,7 @@ mod tests {
         assert_eq!(RenderFlags::CULL_BACK.bits(), 1 << 2);
         assert_eq!(RenderFlags::SHOW_GRID.bits(), 1 << 3);
         assert_eq!(RenderFlags::ALPHA_BLEND.bits(), 1 << 4);
+        assert_eq!(RenderFlags::SHOW_NAVIGATION.bits(), 1 << 5);
     }
 
     #[test]

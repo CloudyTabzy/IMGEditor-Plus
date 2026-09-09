@@ -72,7 +72,13 @@ pub struct NavigationUniform {
 
 impl NavigationUniform {
     pub fn new(camera: &OrbitCamera, width: f32, height: f32, ui_scale: f32) -> Self {
-        let scale = ui_scale.min(width / 152.0).min(height / 180.0).max(0.001);
+        // Keep the viewport guide useful without competing with the model.
+        // The same base scale is used for rendering and logical-pixel hits.
+        const BASE_SCALE: f32 = 0.82;
+        let scale = (ui_scale * BASE_SCALE)
+            .min(width / 152.0)
+            .min(height / 180.0)
+            .max(0.001);
         let center = Vec2::new(width - 76.0 * scale, 76.0 * scale);
         let view = camera.view();
         let mut tips = AxisView::ALL.map(|axis| {

@@ -223,6 +223,7 @@ pub enum Message {
     TextureUvToggled(bool),
     ViewTextureGridToggled(bool),
     ViewTextureGridSize(u32),
+    SetNavigationGizmoVisible(bool),
     ToggleMotionEffects(bool),
     ToggleSelectionPulse(bool),
     ToggleClickRipple(bool),
@@ -554,6 +555,8 @@ impl App {
         // builder doesn't reach through `self.config` for hot UI state.
         let show_texture_grid = config.show_texture_grid;
         let texture_grid_divisions = config.texture_grid_divisions;
+        let viewer3d_handle = std::sync::Arc::new(crate::ui::viewer3d_widget::SceneHandle::new());
+        viewer3d_handle.set_navigation_visible(config.show_navigation_gizmo);
         let (panes, pane) = pane_grid::State::new(Pane::Table);
         let mut panes = panes;
         panes.split(pane_grid::Axis::Vertical, pane, Pane::Info);
@@ -605,7 +608,7 @@ impl App {
             toast_pulse_target: 0.0,
             toast_start: None,
             selected_inspector_tab: InspectorTab::Export,
-            viewer3d_handle: std::sync::Arc::new(crate::ui::viewer3d_widget::SceneHandle::new()),
+            viewer3d_handle,
             scene_cache: quick_cache::sync::Cache::with(
                 SCENE_CACHE_ITEM_CAPACITY,
                 SCENE_CACHE_WEIGHT_CAPACITY,
@@ -2550,6 +2553,13 @@ impl App {
                 Task::none()
             }
 
+            Message::SetNavigationGizmoVisible(show) => {
+                self.config.show_navigation_gizmo = show;
+                self.viewer3d_handle.set_navigation_visible(show);
+                self.save_config();
+                Task::none()
+            }
+
             Message::ToggleMotionEffects(enabled) => {
                 self.config.motion_enabled = enabled;
                 if !enabled {
@@ -3559,6 +3569,13 @@ impl App {
         // The View menu contains application-wide interaction preferences.
         let view_toggle = |on: bool| if on { "● " } else { "○ " };
         let view_menu = Menu::new(vec![
+            Item::new(menu_button(
+                format!(
+                    "{}Navigation gizmo",
+                    view_toggle(self.config.show_navigation_gizmo)
+                ),
+                Message::SetNavigationGizmoVisible(!self.config.show_navigation_gizmo),
+            )),
             Item::new(menu_button(
                 format!("{}Motion effects", view_toggle(self.config.motion_enabled)),
                 Message::ToggleMotionEffects(!self.config.motion_enabled),

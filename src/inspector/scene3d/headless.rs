@@ -255,14 +255,16 @@ pub fn render_frame(
             }
         }
 
-        pass.set_pipeline(&pipelines.gizmo);
-        pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
-        pass.set_index_buffer(
-            pipelines.quad_index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
-        pass.draw_indexed(0..6, 0, 0..1);
+        if flags.contains(RenderFlags::SHOW_NAVIGATION) {
+            pass.set_pipeline(&pipelines.gizmo);
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, pipelines.quad_vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                pipelines.quad_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..6, 0, 0..1);
+        }
     }
 
     encoder.copy_texture_to_buffer(
@@ -595,6 +597,32 @@ mod tests {
     }
 
     #[test]
+    fn navigation_visibility_flag_changes_rendered_frame() {
+        let renderer = gpu().expect("renderer");
+        let scene = triangle_scene();
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 256,
+            height: 256,
+        });
+        camera.reset_to_aabb(&scene.aabb);
+
+        let with_navigation = render_frame(
+            &renderer,
+            &scene,
+            &camera,
+            256,
+            256,
+            RenderFlags::SHOW_NAVIGATION,
+        )
+        .expect("navigation frame");
+        let without_navigation =
+            render_frame(&renderer, &scene, &camera, 256, 256, RenderFlags::empty())
+                .expect("plain frame");
+
+        assert_ne!(with_navigation.rgba, without_navigation.rgba);
+    }
+
+    #[test]
     fn render_wireframe_flag_changes_pipeline() {
         let renderer = gpu().expect("renderer");
         let scene = triangle_scene();
@@ -820,10 +848,24 @@ mod tests {
         cam_a.reset_to_aabb(&scene.aabb);
         let mut cam_b = cam_a.clone();
         cam_b.yaw += std::f32::consts::FRAC_PI_2;
-        let fa = render_frame(&renderer, &scene, &cam_a, 256, 256, RenderFlags::empty())
-            .expect("frame a");
-        let fb = render_frame(&renderer, &scene, &cam_b, 256, 256, RenderFlags::empty())
-            .expect("frame b");
+        let fa = render_frame(
+            &renderer,
+            &scene,
+            &cam_a,
+            256,
+            256,
+            RenderFlags::SHOW_NAVIGATION,
+        )
+        .expect("frame a");
+        let fb = render_frame(
+            &renderer,
+            &scene,
+            &cam_b,
+            256,
+            256,
+            RenderFlags::SHOW_NAVIGATION,
+        )
+        .expect("frame b");
         let nav = crate::inspector::scene3d::navigation::NavigationUniform::new(
             &cam_a, 256.0, 256.0, 1.0,
         );
@@ -878,8 +920,15 @@ mod tests {
             camera.base_orientation = scene.base_orientation;
             camera.reset_to_aabb(&scene.aabb);
             camera.snap_to_axis(axis);
-            let frame = render_frame(&renderer, &scene, &camera, 640, 480, RenderFlags::SHOW_GRID)
-                .expect("orthographic GPU render");
+            let frame = render_frame(
+                &renderer,
+                &scene,
+                &camera,
+                640,
+                480,
+                RenderFlags::SHOW_GRID | RenderFlags::SHOW_NAVIGATION,
+            )
+            .expect("orthographic GPU render");
             let nav = NavigationUniform::new(&camera, 640.0, 480.0, 1.0);
             // The axis facing the camera is the last disc drawn and the
             // first hit target. Its highlight ring must land at that point.
@@ -906,11 +955,25 @@ mod tests {
         });
         camera.reset_to_aabb(&scene.aabb);
         camera.yaw = 0.65;
-        let plain =
-            render_frame(&renderer, &scene, &camera, 640, 480, RenderFlags::SHOW_GRID).unwrap();
+        let plain = render_frame(
+            &renderer,
+            &scene,
+            &camera,
+            640,
+            480,
+            RenderFlags::SHOW_GRID | RenderFlags::SHOW_NAVIGATION,
+        )
+        .unwrap();
         camera.navigation_hover = 7;
-        let hover =
-            render_frame(&renderer, &scene, &camera, 640, 480, RenderFlags::SHOW_GRID).unwrap();
+        let hover = render_frame(
+            &renderer,
+            &scene,
+            &camera,
+            640,
+            480,
+            RenderFlags::SHOW_GRID | RenderFlags::SHOW_NAVIGATION,
+        )
+        .unwrap();
         assert_ne!(
             plain.rgba, hover.rgba,
             "projection button hover must be visible"
@@ -976,9 +1039,15 @@ mod tests {
                 if let Some(axis) = axis {
                     camera.snap_to_axis(axis);
                 }
-                let frame =
-                    render_frame(&renderer, &scene, &camera, 800, 600, RenderFlags::SHOW_GRID)
-                        .expect("fixture navigation render");
+                let frame = render_frame(
+                    &renderer,
+                    &scene,
+                    &camera,
+                    800,
+                    600,
+                    RenderFlags::SHOW_GRID | RenderFlags::SHOW_NAVIGATION,
+                )
+                .expect("fixture navigation render");
                 write_png(&frame, format!("target/navigation-{name}-{label}.png")).unwrap();
             }
         }

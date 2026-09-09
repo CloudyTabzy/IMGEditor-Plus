@@ -116,7 +116,7 @@ impl Default for SceneHandleInner {
             // (fences, foliage, glass). Keep it enabled by default when the
             // user turns on the Textured view; the toolbar can disable it
             // for opaque/debug inspection.
-            flags: RenderFlags::SHOW_GRID | RenderFlags::ALPHA_BLEND,
+            flags: RenderFlags::SHOW_GRID | RenderFlags::ALPHA_BLEND | RenderFlags::SHOW_NAVIGATION,
             origin_mode: SceneOriginMode::default(),
             dirty: false,
             gpu_error: None,
@@ -190,6 +190,13 @@ impl SceneHandle {
     pub fn toggle_grid(&self) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
         inner.flags ^= crate::inspector::scene3d::pipeline::RenderFlags::SHOW_GRID;
+        inner.dirty = true;
+    }
+
+    pub fn set_navigation_visible(&self, visible: bool) {
+        let mut inner = self.inner.lock().expect("scene handle mutex");
+        inner.flags.set(RenderFlags::SHOW_NAVIGATION, visible);
+        inner.camera.navigation_hover = 0;
         inner.dirty = true;
     }
 
@@ -445,11 +452,16 @@ where
         state.cursor_inside = cursor_inside;
         let mut dirty = false;
         self.handle.with_mut(|inner| {
-            let navigation =
-                NavigationUniform::new(&inner.camera, bounds.width, bounds.height, 1.0);
-            let hit = cursor
-                .position_in(bounds)
-                .and_then(|p| navigation.hit_test(glam::Vec2::new(p.x, p.y)));
+            let navigation_visible = inner.flags.contains(RenderFlags::SHOW_NAVIGATION);
+            let hit = navigation_visible
+                .then(|| {
+                    let navigation =
+                        NavigationUniform::new(&inner.camera, bounds.width, bounds.height, 1.0);
+                    cursor
+                        .position_in(bounds)
+                        .and_then(|p| navigation.hit_test(glam::Vec2::new(p.x, p.y)))
+                })
+                .flatten();
             let hover = hit.map_or(0, |action| action.id());
             if hover != inner.camera.navigation_hover {
                 inner.camera.navigation_hover = hover;
@@ -520,13 +532,15 @@ where
             return mouse::Interaction::Idle;
         }
         let (has_scene, over_navigation) = self.handle.with(|i| {
+            let navigation_visible = i.flags.contains(RenderFlags::SHOW_NAVIGATION);
             let nav = NavigationUniform::new(&i.camera, bounds.width, bounds.height, 1.0);
             (
                 i.scene.is_some(),
-                cursor
-                    .position_in(bounds)
-                    .and_then(|p| nav.hit_test(glam::Vec2::new(p.x, p.y)))
-                    .is_some(),
+                navigation_visible
+                    && cursor
+                        .position_in(bounds)
+                        .and_then(|p| nav.hit_test(glam::Vec2::new(p.x, p.y)))
+                        .is_some(),
             )
         });
         if !has_scene {
@@ -931,15 +945,17 @@ impl ScenePipeline {
             }
         }
 
-        // 5. source-coordinate navigation overlay in the top-right.
-        pass.set_pipeline(&self.render_pipelines.gizmo);
-        pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
-        pass.set_index_buffer(
-            self.render_pipelines.quad_index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
-        pass.draw_indexed(0..6, 0, 0..1);
+        if flags.contains(RenderFlags::SHOW_NAVIGATION) {
+            // 5. source-coordinate navigation overlay in the top-right.
+            pass.set_pipeline(&self.render_pipelines.gizmo);
+            pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                self.render_pipelines.quad_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..6, 0, 0..1);
+        }
     }
 
     /// Composite the offscreen color texture into the existing render pass
@@ -1167,6 +1183,20 @@ mod tests {
 
         h.toggle_grid();
         assert!(h.with(|i| i.flags.contains(RenderFlags::SHOW_GRID)));
+    }
+
+    #[test]
+    fn navigation_gizmo_is_enabled_by_default_and_toggleable() {
+        let h = SceneHandle::new();
+        assert!(h.with(|i| i.flags.contains(RenderFlags::SHOW_NAVIGATION)));
+
+        h.with_mut(|i| i.camera.navigation_hover = 7);
+        h.set_navigation_visible(false);
+        assert!(!h.with(|i| i.flags.contains(RenderFlags::SHOW_NAVIGATION)));
+        assert_eq!(h.with(|i| i.camera.navigation_hover), 0);
+
+        h.set_navigation_visible(true);
+        assert!(h.with(|i| i.flags.contains(RenderFlags::SHOW_NAVIGATION)));
     }
 
     #[test]
