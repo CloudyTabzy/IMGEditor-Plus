@@ -18,6 +18,9 @@ pub struct Editor {
     /// app layer keeps this in sync; it feeds type grouping and the
     /// type sort.
     pub(crate) file_type_literal: bool,
+    /// Right-click context selection adds to the existing selection
+    /// instead of replacing it (`Config::context_selection_accumulates`).
+    pub(crate) context_selection_accumulates: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -153,11 +156,24 @@ impl Editor {
     /// multi-selection. This matches the original editor's context actions:
     /// the clicked entry is included in Delete/Export while other selected
     /// entries remain selected.
+    /// Select an entry for the context menu. In accumulate mode the
+    /// entry is added to the selection. In replace mode the selection
+    /// is only replaced when the right-clicked entry is NOT already
+    /// selected — right-clicking an item that is part of an existing
+    /// multi-selection (select-all, shift-click, …) keeps that
+    /// selection intact and just opens the menu on it.
     pub fn select_context_entry(&mut self, index: usize) {
+        let accumulates = self.context_selection_accumulates;
         if let Some(archive) = self.selected_archive_mut()
-            && let Some(entry) = archive.entries.get_mut(index)
+            && archive.entries.get(index).is_some()
         {
-            entry.selected = true;
+            let already_selected = archive.entries[index].selected;
+            if !accumulates && !already_selected {
+                for entry in archive.entries.iter_mut() {
+                    entry.selected = false;
+                }
+            }
+            archive.entries[index].selected = true;
             archive.refresh_export_status();
             self.selected_entry = Some(index);
         }
@@ -458,6 +474,7 @@ mod tests {
     #[test]
     fn context_selection_preserves_existing_selection() {
         let mut editor = Editor::new();
+        editor.context_selection_accumulates = true;
         editor.new_archive();
         editor.archives[0].entries.push(EntryInfo::new("a.dff"));
         editor.archives[0].entries.push(EntryInfo::new("b.txd"));
@@ -467,6 +484,45 @@ mod tests {
 
         assert!(editor.archives[0].entries[0].selected);
         assert!(editor.archives[0].entries[1].selected);
+        assert_eq!(editor.selected_entry, Some(1));
+    }
+
+    #[test]
+    fn context_selection_replaces_when_not_accumulating() {
+        let mut editor = Editor::new();
+        editor.context_selection_accumulates = false;
+        editor.new_archive();
+        editor.archives[0].entries.push(EntryInfo::new("a.dff"));
+        editor.archives[0].entries.push(EntryInfo::new("b.txd"));
+        editor.archives[0].entries.push(EntryInfo::new("c.col"));
+        editor.archives[0].entries[0].selected = true;
+        editor.archives[0].entries[1].selected = true;
+
+        editor.select_context_entry(2);
+
+        assert!(!editor.archives[0].entries[0].selected);
+        assert!(!editor.archives[0].entries[1].selected);
+        assert!(editor.archives[0].entries[2].selected);
+        assert_eq!(editor.selected_entry, Some(2));
+    }
+
+    #[test]
+    fn context_selection_keeps_multi_selection_when_target_is_selected() {
+        let mut editor = Editor::new();
+        editor.context_selection_accumulates = false;
+        editor.new_archive();
+        editor.archives[0].entries.push(EntryInfo::new("a.dff"));
+        editor.archives[0].entries.push(EntryInfo::new("b.txd"));
+        editor.archives[0].entries.push(EntryInfo::new("c.col"));
+        // Select-all style multi-selection.
+        editor.archives[0].entries[0].selected = true;
+        editor.archives[0].entries[1].selected = true;
+        editor.archives[0].entries[2].selected = true;
+
+        editor.select_context_entry(1);
+
+        // Right-clicking an already-selected member keeps the group.
+        assert!(editor.archives[0].entries.iter().all(|e| e.selected));
         assert_eq!(editor.selected_entry, Some(1));
     }
 

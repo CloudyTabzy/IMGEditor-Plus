@@ -252,6 +252,9 @@ pub struct Config {
     /// Type column shows raw extensions in capitals (`DFF`, `NIF`)
     /// instead of curated category labels (`Model`, `Texture`).
     pub literal_file_types: bool,
+    /// Right-clicking an entry adds it to the current selection instead
+    /// of replacing it.
+    pub context_selection_accumulates: bool,
 }
 
 /// Grid divisions offered in the texture preview controls. Kept coarse so
@@ -287,6 +290,7 @@ impl Default for Config {
             icon_micro_motion_enabled: true,
             show_search_bar: true,
             literal_file_types: false,
+            context_selection_accumulates: true,
         }
     }
 }
@@ -462,6 +466,9 @@ impl Config {
                 "literal_file_types" => {
                     config.literal_file_types = value.eq_ignore_ascii_case("true");
                 }
+                "context_selection_accumulates" => {
+                    config.context_selection_accumulates = value.eq_ignore_ascii_case("true");
+                }
                 _ => {}
             }
         }
@@ -624,6 +631,15 @@ impl Config {
                 "false"
             }
         )?;
+        writeln!(
+            file,
+            "context_selection_accumulates={}",
+            if self.context_selection_accumulates {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
         Ok(())
     }
 
@@ -669,6 +685,7 @@ mod tests {
         assert!(config.icon_micro_motion_enabled);
         assert!(config.show_search_bar);
         assert!(!config.literal_file_types);
+        assert!(config.context_selection_accumulates);
     }
 
     #[test]
@@ -699,6 +716,7 @@ mod tests {
             icon_micro_motion_enabled: false,
             show_search_bar: false,
             literal_file_types: true,
+            context_selection_accumulates: false,
         };
         let archive_a = temp.path().join("a.img");
         let archive_b = temp.path().join("b.img");
@@ -733,6 +751,7 @@ mod tests {
         assert!(!loaded.icon_micro_motion_enabled);
         assert!(!loaded.show_search_bar);
         assert!(loaded.literal_file_types);
+        assert!(!loaded.context_selection_accumulates);
     }
 
     #[test]

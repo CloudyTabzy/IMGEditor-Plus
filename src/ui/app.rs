@@ -254,6 +254,7 @@ pub enum Message {
     ToggleIconMicroMotion(bool),
     ToggleSearchBar(bool),
     ToggleLiteralFileTypes(bool),
+    ToggleContextAccumulate(bool),
 
     ExportEmbeddedTexturesRequest {
         entry_index: usize,
@@ -605,6 +606,7 @@ impl App {
         let mut editor = Editor::new();
         editor.set_default_sort_chain(config.default_sort_chain.clone());
         editor.file_type_literal = config.literal_file_types;
+        editor.context_selection_accumulates = config.context_selection_accumulates;
         // View preferences are mirrored onto App fields so the view
         // builder doesn't reach through `self.config` for hot UI state.
         let show_texture_grid = config.show_texture_grid;
@@ -2627,8 +2629,10 @@ impl App {
                             (self.shimmer_phase + dt.as_secs_f32() * 0.9).fract();
                     }
                     if self.editor.archives().is_empty() && self.config.motion_enabled {
+                        // Slow idle clock for the empty-state hero (~6.7 s
+                        // drift cycle).
                         self.empty_state_phase =
-                            (self.empty_state_phase + dt.as_secs_f32() * 0.22).fract();
+                            (self.empty_state_phase + dt.as_secs_f32() * 0.15).fract();
                     }
                 }
                 self.prev_tick = Some(now);
@@ -3066,6 +3070,13 @@ impl App {
                     archive.invalidate_type_cache();
                 }
                 self.filter_pending = true;
+                self.save_config();
+                Task::none()
+            }
+
+            Message::ToggleContextAccumulate(accumulates) => {
+                self.config.context_selection_accumulates = accumulates;
+                self.editor.context_selection_accumulates = accumulates;
                 self.save_config();
                 Task::none()
             }
@@ -4139,6 +4150,13 @@ impl App {
             )),
             Item::new(menu_button(
                 format!(
+                    "{}Right-click adds to selection",
+                    view_toggle(self.config.context_selection_accumulates)
+                ),
+                Message::ToggleContextAccumulate(!self.config.context_selection_accumulates),
+            )),
+            Item::new(menu_button(
+                format!(
                     "{}Motion effects",
                     view_toggle(self.config.motion_enabled)
                 ),
@@ -4941,6 +4959,48 @@ mod tests {
         let _ = app.update(Message::ToggleLiteralFileTypes(false));
         assert!(!app.config.literal_file_types);
         assert!(!app.editor.file_type_literal);
+    }
+
+    #[test]
+    fn toggling_context_accumulate_switches_right_click_selection_mode() {
+        let mut app = test_app_with_entries();
+        assert!(app.config.context_selection_accumulates);
+        assert!(app.editor.context_selection_accumulates);
+
+        let _ = app.update(Message::ToggleContextAccumulate(false));
+        assert!(!app.config.context_selection_accumulates);
+        assert!(!app.editor.context_selection_accumulates);
+
+        // Right-clicking a second entry replaces the selection.
+        app.editor.archives_mut()[0].entries[0].selected = true;
+        let _ = app.update(Message::EntryRightClicked(1));
+        let selected: Vec<bool> = app.editor.archives()[0]
+            .entries
+            .iter()
+            .map(|e| e.selected)
+            .collect();
+        assert_eq!(selected, vec![false, true]);
+        assert!(app.context_menu.is_some());
+
+        // Right-clicking an already-selected member of a multi-selection
+        // (select-all + right-click) keeps the group intact.
+        let _ = app.update(Message::SelectAll);
+        let _ = app.update(Message::EntryRightClicked(0));
+        let selected: Vec<bool> = app.editor.archives()[0]
+            .entries
+            .iter()
+            .map(|e| e.selected)
+            .collect();
+        assert_eq!(selected, vec![true, true]);
+
+        let _ = app.update(Message::ToggleContextAccumulate(true));
+        let _ = app.update(Message::EntryRightClicked(0));
+        let selected: Vec<bool> = app.editor.archives()[0]
+            .entries
+            .iter()
+            .map(|e| e.selected)
+            .collect();
+        assert_eq!(selected, vec![true, true]);
     }
 
     #[test]

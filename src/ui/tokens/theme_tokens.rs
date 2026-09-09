@@ -44,8 +44,8 @@ impl ThemeTokens {
         // `ColorScale::get` function still works the same way because
         // shades are just labels.
         t.colors.neutral = crate::ui::tokens::color::ColorScale::new(
-            crate::ui::tokens::color::Color::from_hex(0x0A0A0A), // s50: page
-            crate::ui::tokens::color::Color::from_hex(0x171717), // s100
+            crate::ui::tokens::color::Color::from_hex(0x121216), // s50: page (lifted from near-black so the empty workspace doesn't read as pitch black)
+            crate::ui::tokens::color::Color::from_hex(0x1A1A1E), // s100
             crate::ui::tokens::color::Color::from_hex(0x262626), // s200: surface
             crate::ui::tokens::color::Color::from_hex(0x404040), // s300
             crate::ui::tokens::color::Color::from_hex(0x525252), // s400

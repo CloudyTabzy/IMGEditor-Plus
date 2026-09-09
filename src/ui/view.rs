@@ -2102,10 +2102,19 @@ fn build_context_menu(
 ) -> Option<Element<'_, Message>> {
     let entry = archive.entries.get(entry_index)?;
 
-    let mut items: Vec<Element<'_, Message>> = vec![
-        fonts::strong(entry.file_name.to_string()).into(),
-        w::hairline(divider),
-    ];
+    // Header: the right-clicked entry's name, plus a "+N more" badge
+    // when the right-click accumulated a multi-selection.
+    let selected_count = archive.entries.iter().filter(|e| e.selected).count();
+    let mut header = Column::new().spacing(2);
+    header = header.push(fonts::strong(entry.file_name.to_string()));
+    if selected_count > 1 {
+        header = header.push(fonts::caption(format!(
+            "+{} more selected",
+            selected_count - 1
+        )));
+    }
+
+    let mut items: Vec<Element<'_, Message>> = vec![header.into(), w::hairline(divider)];
 
     let lower = entry.file_name.to_lowercase();
     if lower.ends_with(".nif") || lower.ends_with(".dff") {
