@@ -1188,7 +1188,9 @@ impl App {
         if !texture_previews.is_empty()
             && let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
         {
-            archive.texture_cache.insert(entry_index, texture_previews);
+            archive
+                .texture_cache
+                .insert(entry_index, Arc::new(texture_previews));
         }
     }
 
@@ -2423,7 +2425,9 @@ impl App {
                     Ok(textures) => {
                         if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
                             let count = textures.len();
-                            archive.texture_cache.insert(index, textures);
+                            archive
+                                .texture_cache
+                                .insert(index, Arc::new(textures));
                             archive.add_log(format!("Decoded {count} texture preview(s)"));
                             if is_active {
                                 self.toast = Some(format!("Decoded {count} texture(s)"));
@@ -2459,8 +2463,7 @@ impl App {
                     .editor
                     .archives()
                     .get(archive_index)
-                    .and_then(|a| a.texture_cache.get(&entry_index))
-                    .cloned();
+                    .and_then(|a| a.texture_cache.get(&entry_index));
                 let Some(textures) = textures else {
                     self.toast = Some("No decoded textures to export.".into());
                     return Task::none();
@@ -2471,7 +2474,7 @@ impl App {
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || -> Result<(), String> {
-                            for tex in &textures {
+                            for tex in textures.iter() {
                                 let safe_name: String = tex
                                     .name
                                     .chars()

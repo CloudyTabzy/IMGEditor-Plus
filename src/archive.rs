@@ -12,6 +12,29 @@ use crate::parser::{
     DecodedTexture, EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE,
     encode_entry_name, sector_rounded_size,
 };
+
+/// Soft memory budget for the decoded texture-preview cache, weighted by
+/// raw RGBA bytes. Lazily filled ceiling, not an upfront allocation;
+/// mobile targets get a smaller ceiling for tighter per-app memory
+/// budgets.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+const TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY: u64 = 32 * 1024 * 1024;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY: u64 = 128 * 1024 * 1024;
+const TEXTURE_PREVIEW_CACHE_ITEM_CAPACITY: usize = 256;
+
+/// Weighs a cached texture preview list by its decoded RGBA byte size.
+#[derive(Clone)]
+pub struct TexturePreviewWeight;
+
+impl quick_cache::Weighter<usize, Arc<Vec<DecodedTexture>>> for TexturePreviewWeight {
+    fn weight(&self, _key: &usize, val: &Arc<Vec<DecodedTexture>>) -> u64 {
+        val.iter()
+            .map(|tex| tex.rgba.len() as u64)
+            .sum::<u64>()
+            .max(1)
+    }
+}
 use crate::sort::{SortChain, SortDirection, SortKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,7 +247,11 @@ pub struct ArchiveInfo {
     /// Decoded texture previews keyed by archive entry index. The cache is
     /// shared by RenderWare TXD dictionaries, Bully NFT catalogs, and NIF
     /// scenes whose companion textures were resolved by the 3D viewer.
-    pub texture_cache: std::collections::HashMap<usize, Vec<DecodedTexture>>,
+    /// Byte-budgeted LRU (see [`TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY`]);
+    /// values are `Arc`-shared so per-frame view lookups clone a pointer,
+    /// not the RGBA buffers. Cleared by `invalidate_entry_caches`.
+    pub texture_cache:
+        Arc<quick_cache::sync::Cache<usize, Arc<Vec<DecodedTexture>>, TexturePreviewWeight>>,
     /// Cache for `unique_file_types()` invalidated whenever entries are added,
     /// removed, or renamed.
     cached_file_types: Option<Vec<CompactString>>,
@@ -264,7 +291,13 @@ impl ArchiveInfo {
             sort: SortState::default(),
             sort_chain: SortChain::default(),
             inspection_cache: std::collections::HashMap::new(),
-            texture_cache: std::collections::HashMap::new(),
+            texture_cache: Arc::new(quick_cache::sync::Cache::with(
+                TEXTURE_PREVIEW_CACHE_ITEM_CAPACITY,
+                TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY,
+                TexturePreviewWeight,
+                Default::default(),
+                Default::default(),
+            )),
             cached_file_types: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
@@ -303,7 +336,13 @@ impl ArchiveInfo {
             sort: SortState::default(),
             sort_chain: SortChain::default(),
             inspection_cache: std::collections::HashMap::new(),
-            texture_cache: std::collections::HashMap::new(),
+            texture_cache: Arc::new(quick_cache::sync::Cache::with(
+                TEXTURE_PREVIEW_CACHE_ITEM_CAPACITY,
+                TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY,
+                TexturePreviewWeight,
+                Default::default(),
+                Default::default(),
+            )),
             cached_file_types: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
@@ -740,9 +779,7 @@ mod tests {
         let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
         assert_eq!(archive.generation(), 0);
 
-        archive
-            .texture_cache
-            .insert(0, Vec::new());
+        archive.texture_cache.insert(0, Arc::new(Vec::new()));
         assert_eq!(archive.texture_cache.len(), 1);
 
         archive.invalidate_entry_caches();

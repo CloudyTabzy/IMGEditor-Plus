@@ -13,6 +13,39 @@ Before tagging a release or publishing a build, update every user-facing version
 
 Run `cargo check` after changing `Cargo.toml` to confirm the status bar and welcome modal pick up the new version.
 
+## Dependency decisions (do not re-add without reading this)
+
+These choices were audited deliberately; re-adding or "upgrading" them
+without a measured need repeats the mistake they fixed.
+
+- **`crossbeam` was removed (direct dep).** Zero references in `src/`.
+  All inter-thread traffic is already served by iced `Task<Message>`
+  (UI state is single-threaded by design) and `tokio::sync::mpsc`
+  (viewer events). Message volumes are tiny (per user action) against
+  millisecond-scale workloads (decode/IO/GPU), so crossbeam's wins —
+  MPMC channels, `select!`, lock-free structures, runtime-free
+  threading — are below the measurement floor here. Note: `crossbeam-*`
+  crates remain in `Cargo.lock` **transitively via rayon** (rayon's
+  scheduler is built on crossbeam-deque/epoch); that is expected and
+  not a leftover. Re-add only if a feature genuinely needs
+  multi-consumer channels or lock-free structures (>100k ops/sec,
+  many threads).
+- **`memmap2` is used at its most basic level on purpose.** Archive
+  maps are plain `Mmap::map` (src/parser/pc_v1.rs, pc_v2.rs). All of
+  memmap2's advice/prefetch surface (`advise`, `advise_range`,
+  `MmapOptions::populate`, `lock`) is `#[cfg(unix)]`-gated — on
+  Windows it either does not exist or is silently ignored
+  (`populate` compiles but maps to an ignored `_populate` flag). The
+  app is Windows-first, so plain `Mmap::map` is the correct API and
+  lazy page-faulting already matches the random-access read pattern.
+  When the far-future Linux port happens, add a `#[cfg(unix)]`
+  `advise(Advice::Random)` + `populate()` to the archive mmap sites.
+- **Do not reach for `parking_lot` to "improve" `std::sync::Mutex`.**
+  The gap vs std is microbench territory (std uses SRWLock/futex
+  internally); the app's one hot lock (`SceneHandle.inner`) is
+  effectively uncontended. Reconsider only on a profile that shows
+  lock overhead.
+
 ## Executable icon
 
 The Windows executable icon is embedded from `asset/logo/IMGEditorLogo.ico` via `build.rs` and `asset/logo/icon.rc`. The ICO was generated from `asset/logo/IMGEditorLogo.png` with Pillow at sizes 16, 32, 48, 128, and 256. If the source PNG changes, regenerate the ICO:
@@ -80,6 +113,11 @@ Everything lives in `src/ui/app.rs` unless noted:
   is app-global, not per-archive.
 - The per-game-root `IdeMap` is memoized in `App::ide_maps`; the first 3D
   load per game root builds it, later loads reuse it.
+- `ArchiveInfo::texture_cache` (src/archive.rs) — same `quick_cache`
+  treatment as the scene cache, weighted by decoded RGBA bytes (128 MiB
+  desktop / 32 MiB mobile). Values are `Arc<Vec<DecodedTexture>>` because
+  `view.rs` reads it per-frame; a plain value type would deep-copy the
+  buffers on every redraw (quick_cache `get` clones by value).
 
 **Telemetry note (remove before "finished"):** the cache-hit breadcrumb
 (`3D cache hit: entries N (hits X, misses Y, resident Z MiB)`) and the
