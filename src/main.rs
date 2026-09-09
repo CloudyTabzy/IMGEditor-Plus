@@ -3,6 +3,7 @@
 fn main() -> anyhow::Result<()> {
     imgeditor::dev_logger::init_dev_log();
     install_panic_hook();
+    clean_temp_preview();
 
     #[cfg(all(windows, not(feature = "bench")))]
     hide_console_window();
@@ -40,6 +41,21 @@ fn hide_console_window() {
         if window.is_null() {
             FreeConsole();
         }
+    }
+}
+
+/// Best-effort sweep of leftover render previews from prior sessions.
+/// The directory is created on demand by `inspector::viewer3d`; a crashed
+/// run can orphan files there, so we clear it once at startup. Locked or
+/// in-use entries are skipped silently — this must never block startup.
+fn clean_temp_preview() {
+    let dir = std::env::temp_dir().join("IMGEditor").join("preview");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let _ = std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir_all(&path));
     }
 }
 
