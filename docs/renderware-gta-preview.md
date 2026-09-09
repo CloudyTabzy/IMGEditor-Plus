@@ -18,20 +18,26 @@ The embedded viewer now recognizes these model entries:
   San Andreas.
 - `.nif` Gamebryo models used by Bully, through the existing pipeline.
 
-It also recognizes `.txd` RenderWare Texture Dictionaries and `.nft` Bully
-texture catalogs. DFF/TXD support is an inspection feature: it reads and
-renders the common PC formats, but it is not yet a complete RenderWare editor
-or serializer.
+It also recognizes `.txd` RenderWare Texture Dictionaries (including the
+legacy platform-independent `0x23` form) and `.nft` Bully texture catalogs.
+DFF/TXD support is an inspection feature: it reads and renders the common PC
+formats, but it is not yet a complete RenderWare editor or serializer.
 
 The local validation corpus supplied as
 `C:\Dev\IMGEditor-master\Gta_3_img` is useful, but its identity should not be
-overstated. The image is an IMG v2 archive (`VER2`) and its extracted files
+overstated. This appears to be a GTAMods-style modder backup: its uploader is
+more strongly associated with San Andreas modding than GTA III, and the image
+may be mislabeled, modified, mixed, or incomplete rather than being a clean
+retail GTA III image. It is an IMG v2 archive (`VER2`) whose extracted files
 include San Andreas-style names such as `gta_proc_*` and `cuntw_*`. The current
 export contained 16,316 entries: 12,964 DFF files, 2,759 TXD files, and no NFT
-files. It therefore validates shared PC RenderWare coverage and archive
-integration; it does not prove compatibility with a retail GTA III or Vice
-City archive. A legally obtained, known-game fixture and a small manifest
-should be added before claiming game-specific parity.
+files. The audit found 12,953 renderable DFFs; the 11 exceptions begin with a
+RenderWare UV Animation Dictionary (`0x2B`) rather than a model Clump. It found
+2,740 TXDs with decodable textures and 19 zero-texture placeholder dictionaries.
+This validates shared PC RenderWare coverage and archive integration; it does
+not prove compatibility with a retail GTA III or Vice City archive. A legally
+obtained, known-game fixture and a small manifest should be added before
+claiming game-specific parity.
 
 ## Format findings
 
@@ -73,8 +79,9 @@ while making the model upright and consistent with the existing NIF viewer.
 
 ### TXD / Texture Dictionary
 
-The parser accepts a top-level `TEXTURE_DICTIONARY` (`0x16`), reads its texture
-count, and walks `TEXTURE_NATIVE` (`0x15`) children. The PC native structure
+For the usual PC path, the parser accepts a top-level `TEXTURE_DICTIONARY`
+(`0x16`), reads its texture count, and walks `TEXTURE_NATIVE` (`0x15`) children.
+The PC native structure
 contains:
 
 - platform ID, filter/addressing fields, and fixed 32-byte diffuse/alpha names;
@@ -88,7 +95,12 @@ Both the D3D8 platform (`8`, common in older GTA PC assets) and D3D9 platform
 D3D9 compression is selected from the DXT FourCC. Older streams that only carry
 the legacy compressed raster marker still use the raster-format fallback.
 
-The base mip is decoded into the viewer's RGBA8 layout. The decoder covers:
+The legacy platform-independent dictionary (`0x23`) is also accepted. Its raw
+texture count/device pair is followed by per-texture mip counts, `IMAGE`
+(`0x18`) chunks, `TEXTURE` metadata, and an extension. IMAGE rows are cropped
+from their declared pitch into a tight representation, and 4/8-bit palettes
+are retained for the same decoder path. The base mip is decoded into the
+viewer's RGBA8 layout. The decoder covers:
 
 - DXT1/BC1, DXT2/BC2, DXT3/BC2, DXT4/BC3, and DXT5/BC3;
 - 1555, 565, 4444, 8888, 888, and 555 packed/unpacked PC rasters;
@@ -150,7 +162,8 @@ Focused tests cover:
 - empty and non-RenderWare inputs;
 - DFF section parsing, actual triangle ordering, material texture names,
   compact atomics, frame transforms, and real local DFF samples;
-- TXD headers, PC native texture parsing, DXT decoding, and a real local TXD;
+- TXD headers, PC native and platform-independent texture parsing, DXT
+  decoding, and a real local TXD;
 - PAL4 high-nibble/RGBA behavior, bounded PAL8 palettes, legacy D3D8
   compression fallback, and oversized dimensions; and
 - scene construction with a DFF mesh and resolved diffuse texture.

@@ -799,6 +799,12 @@ pub fn native_format_name(
     platform_properties: u8,
     raster_type: u8,
 ) -> &'static str {
+    match (raster_format >> 13) & 0x3 {
+        1 => return "PAL8",
+        2 => return "PAL4",
+        3 => return "PAL4 (LSB)",
+        _ => {}
+    }
     match d3d_format {
         D3D_8888 => "8888 ARGB",
         D3D_888 => "888 RGB",

@@ -1725,7 +1725,11 @@ fn build_context_menu(
         );
     }
 
-    if lower.ends_with(".txd") || lower.ends_with(".nft") {
+    if lower.ends_with(".txd")
+        || lower.ends_with(".nft")
+        || lower.ends_with(".nif")
+        || lower.ends_with(".dff")
+    {
         items.push(
             context_button(
                 "View textures",

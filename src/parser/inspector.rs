@@ -126,6 +126,7 @@ fn inspect_renderware(header: &[u8], inspection: &mut EntryInspection) {
     let type_name = match chunk_type {
         0x10 => "Clump (model)",
         0x16 => "Texture Dictionary",
+        0x23 => "Platform-independent Texture Dictionary",
         0x1B => "Animation",
         0x0253F2F6 => "UV Animation",
         _ => "RenderWare stream",

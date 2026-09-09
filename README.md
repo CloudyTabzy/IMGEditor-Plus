@@ -108,7 +108,7 @@ for the engineering story.
 - ✅ **COL** (Collision v1/v2/v3) — collision meshes with sphere/box debug shapes, PLY export → system viewer
 
 ### 🎨 Texture Viewer
-- ✅ **TXD** (RenderWare Texture Dictionary) — PC D3D8/D3D9 parser + bounded raster decoder (DXT1/2/3/4/5, 1555, 565, 4444, 8888, PAL4, PAL8, + more)
+- ✅ **TXD** (RenderWare Texture Dictionary) — PC D3D8/D3D9 plus legacy platform-independent parser + bounded raster decoder (DXT1/2/3/4/5, 1555, 565, 4444, 8888, PAL4, PAL8, + more)
 - ✅ **NFT** (Bully/Gamebryo texture catalog) — embedded DXT1/DXT3/DXT5 payloads and archive-backed TGA/DDS/PNG sources
 - ✅ **Inline preview** — cached RGBA preview in the info panel, shared by TXD, NFT, and rendered NIF/DFF textures
 - ✅ **Multi-texture selector** — navigate textures within a TXD or NFT

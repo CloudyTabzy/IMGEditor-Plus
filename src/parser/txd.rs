@@ -3,8 +3,9 @@
 //! The GTA PC dictionaries used by III, Vice City, and San Andreas contain
 //! D3D8/D3D9 Texture Native sections. Their native payload has a nested
 //! STRUCT chunk, fixed 32-byte names, raster flags, an optional palette, and
-//! length-prefixed mip levels. Console-native dictionaries are left for a
-//! future platform-specific decoder.
+//! length-prefixed mip levels. Older RenderWare tools can also emit a
+//! platform-independent dictionary (`0x23`) with IMAGE sections; those are
+//! normalized into the same viewer texture model.
 
 use crate::parser::texture_decoder;
 
@@ -16,11 +17,15 @@ pub mod rw {
     pub const TEXTURE: u32 = 0x06;
     pub const TEXTURE_NATIVE: u32 = 0x15;
     pub const TEXTURE_DICTIONARY: u32 = 0x16;
+    pub const IMAGE: u32 = 0x18;
+    pub const PI_TEXTURE_DICTIONARY: u32 = 0x23;
 }
 
 pub const PLATFORM_D3D8: u32 = 8;
 pub const PLATFORM_D3D9: u32 = 9;
 const MAX_TEXTURE_DIMENSION: u32 = 8_192;
+const MAX_TEXTURES: u32 = 16_384;
+const MAX_PI_MIPMAPS: u32 = 16;
 
 /// D3D9 format values used by RenderWare's PC native texture stream.
 pub mod d3d_format {
@@ -172,22 +177,26 @@ impl NativeTexture {
     }
 
     pub fn has_alpha_channel(&self) -> bool {
-        texture_decoder::native_has_alpha(
-            self.raster_format,
-            self.platform_id,
-            self.d3d_format,
-            self.platform_properties,
-            self.raster_type,
-        )
+        self.has_alpha != 0
+            || texture_decoder::native_has_alpha(
+                self.raster_format,
+                self.platform_id,
+                self.d3d_format,
+                self.platform_properties,
+                self.raster_type,
+            )
     }
 }
 
 /// Parse a complete TXD file from raw bytes.
 pub fn parse_txd(bytes: &[u8]) -> Result<TxdFile, String> {
     let top = read_section(bytes, 0, bytes.len())?;
+    if top.kind == rw::PI_TEXTURE_DICTIONARY {
+        return parse_platform_independent_txd(bytes, top);
+    }
     if top.kind != rw::TEXTURE_DICTIONARY {
         return Err(format!(
-            "expected TEXTURE_DICTIONARY section (0x16), got 0x{:02X}",
+            "expected TEXTURE_DICTIONARY or platform-independent dictionary, got 0x{:02X}",
             top.kind
         ));
     }
@@ -208,11 +217,19 @@ pub fn parse_txd(bytes: &[u8]) -> Result<TxdFile, String> {
                 if body.len() >= 4 {
                     texture_count = u16::from_le_bytes([body[0], body[1]]);
                     device_id = u16::from_le_bytes([body[2], body[3]]);
+                    if u32::from(texture_count) > MAX_TEXTURES {
+                        return Err(format!(
+                            "texture count {} exceeds the supported limit {}",
+                            texture_count, MAX_TEXTURES
+                        ));
+                    }
                 }
             }
             rw::TEXTURE_NATIVE => {
                 let body = &bytes[child.start..child.end];
-                if let Ok(texture) = parse_native_texture(body) {
+                if textures.len() < MAX_TEXTURES as usize
+                    && let Ok(texture) = parse_native_texture(body)
+                {
                     textures.push(texture);
                 }
             }
@@ -227,6 +244,314 @@ pub fn parse_txd(bytes: &[u8]) -> Result<TxdFile, String> {
         rw_version: top.version,
         textures,
     })
+}
+
+/// Parse the legacy platform-independent RenderWare texture dictionary.
+///
+/// Unlike a normal TXD, the `0x23` root stores the texture count/device pair
+/// directly in its body. Each record then contains a mip count, one or more
+/// `IMAGE` chunks, a `TEXTURE` metadata chunk, and an `EXTENSION` chunk. The
+/// images are converted to the same tight-row representation used by native
+/// textures so the existing decoder and UI need no format-specific branch.
+fn parse_platform_independent_txd(bytes: &[u8], top: Section) -> Result<TxdFile, String> {
+    let body = &bytes[top.start..top.end];
+    let mut cursor = Cursor::new(body);
+    let texture_count = cursor.u16("platform-independent texture count")?;
+    let device_id = cursor.u16("platform-independent device id")?;
+    if u32::from(texture_count) > MAX_TEXTURES {
+        return Err(format!(
+            "texture count {} exceeds the supported limit {}",
+            texture_count, MAX_TEXTURES
+        ));
+    }
+
+    let mut textures = Vec::with_capacity(texture_count as usize);
+    for texture_index in 0..texture_count {
+        let mip_count = cursor.u32("platform-independent mipmap count")?;
+        if mip_count == 0 || mip_count > MAX_PI_MIPMAPS {
+            return Err(format!(
+                "texture {} declares {} mipmaps; supported range is 1..={}",
+                texture_index, mip_count, MAX_PI_MIPMAPS
+            ));
+        }
+
+        let mut images = Vec::with_capacity(mip_count as usize);
+        for mip_index in 0..mip_count {
+            let image_section = read_section(body, cursor.position, body.len())?;
+            if image_section.kind != rw::IMAGE {
+                return Err(format!(
+                    "texture {} mip {} expected IMAGE section (0x18), got 0x{:02X}",
+                    texture_index, mip_index, image_section.kind
+                ));
+            }
+            images.push(parse_platform_independent_image(
+                &body[image_section.start..image_section.end],
+            )?);
+            cursor.position = image_section.end;
+        }
+
+        let texture_section = read_section(body, cursor.position, body.len())?;
+        if texture_section.kind != rw::TEXTURE {
+            return Err(format!(
+                "texture {} expected TEXTURE section (0x06), got 0x{:02X}",
+                texture_index, texture_section.kind
+            ));
+        }
+        let metadata =
+            parse_platform_independent_texture(&body[texture_section.start..texture_section.end])?;
+        cursor.position = texture_section.end;
+
+        let extension = read_section(body, cursor.position, body.len())?;
+        if extension.kind != rw::EXTENSION {
+            return Err(format!(
+                "texture {} expected EXTENSION section (0x03), got 0x{:02X}",
+                texture_index, extension.kind
+            ));
+        }
+        cursor.position = extension.end;
+
+        let first = images
+            .first()
+            .ok_or_else(|| format!("texture {} has no image mipmaps", texture_index))?;
+        let width = first.width;
+        let height = first.height;
+        let depth = first.depth;
+        let palette = first.palette.clone();
+        let has_alpha = platform_independent_has_alpha(
+            depth,
+            &palette,
+            &first.pixels,
+            width as usize * height as usize,
+        );
+        let (raster_format, raster_type) = platform_independent_raster(depth);
+        let mipmaps = images
+            .into_iter()
+            .map(|image| MipmapLevel {
+                width: image.width,
+                height: image.height,
+                data: image.pixels,
+            })
+            .collect::<Vec<_>>();
+
+        textures.push(NativeTexture {
+            platform_id: 0,
+            filter_mode: metadata.filter_mode,
+            uv_addressing: metadata.uv_addressing,
+            diffuse_name: metadata.name,
+            alpha_name: metadata.mask,
+            raster_format,
+            d3d_format: 0,
+            width,
+            height,
+            depth,
+            num_mipmaps: mipmaps.len() as u8,
+            raster_type,
+            platform_properties: 0,
+            has_alpha: has_alpha as u8,
+            palette,
+            mipmaps,
+        });
+    }
+
+    Ok(TxdFile {
+        device_id,
+        texture_count,
+        rw_version: top.version,
+        textures,
+    })
+}
+
+#[derive(Debug)]
+struct PlatformIndependentImage {
+    width: u32,
+    height: u32,
+    depth: u8,
+    pixels: Vec<u8>,
+    palette: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct PlatformIndependentTexture {
+    filter_mode: u8,
+    uv_addressing: u8,
+    name: String,
+    mask: String,
+}
+
+fn parse_platform_independent_image(bytes: &[u8]) -> Result<PlatformIndependentImage, String> {
+    let struct_section = read_section(bytes, 0, bytes.len())?;
+    if struct_section.kind != rw::STRUCT {
+        return Err(format!(
+            "platform-independent IMAGE expected STRUCT section (0x01), got 0x{:02X}",
+            struct_section.kind
+        ));
+    }
+    let mut header = Cursor::new(&bytes[struct_section.start..struct_section.end]);
+    let width = header.u32("image width")?;
+    let height = header.u32("image height")?;
+    let depth = header.u32("image depth")?;
+    let pitch = header.u32("image pitch")?;
+    if width == 0 || height == 0 || width > MAX_TEXTURE_DIMENSION || height > MAX_TEXTURE_DIMENSION
+    {
+        return Err(format!(
+            "image dimensions {width}x{height} exceed the supported range"
+        ));
+    }
+    let depth = u8::try_from(depth).map_err(|_| format!("unsupported image depth {depth}"))?;
+    let row_bytes = platform_independent_row_bytes(width, depth)?;
+    let pitch = usize::try_from(pitch).map_err(|_| "image pitch is too large".to_string())?;
+    if pitch < row_bytes {
+        return Err(format!(
+            "image pitch {pitch} is smaller than its {row_bytes}-byte row"
+        ));
+    }
+    let pixel_bytes = pitch
+        .checked_mul(height as usize)
+        .ok_or_else(|| "image pixel size overflowed".to_string())?;
+    let pixel_end = struct_section
+        .end
+        .checked_add(pixel_bytes)
+        .ok_or_else(|| "platform-independent IMAGE pixel range overflowed".to_string())?;
+    let pixels = bytes
+        .get(struct_section.end..pixel_end)
+        .ok_or_else(|| "platform-independent IMAGE pixels are truncated".to_string())?;
+    let tight_len = row_bytes
+        .checked_mul(height as usize)
+        .ok_or_else(|| "image tight pixel size overflowed".to_string())?;
+    let mut tight_pixels = vec![0u8; tight_len];
+    for (source, destination) in pixels
+        .chunks_exact(pitch)
+        .zip(tight_pixels.chunks_exact_mut(row_bytes))
+    {
+        destination.copy_from_slice(&source[..row_bytes]);
+    }
+
+    let palette_size = match depth {
+        4 => 64,
+        8 => 1024,
+        _ => 0,
+    };
+    let palette_start = pixel_end;
+    let palette_end = palette_start
+        .checked_add(palette_size)
+        .ok_or_else(|| "platform-independent IMAGE palette range overflowed".to_string())?;
+    let palette = bytes
+        .get(palette_start..palette_end)
+        .ok_or_else(|| "platform-independent IMAGE palette is truncated".to_string())?
+        .to_vec();
+
+    Ok(PlatformIndependentImage {
+        width,
+        height,
+        depth,
+        pixels: tight_pixels,
+        palette,
+    })
+}
+
+fn parse_platform_independent_texture(bytes: &[u8]) -> Result<PlatformIndependentTexture, String> {
+    let mut position = 0usize;
+    let struct_section = read_section(bytes, position, bytes.len())?;
+    if struct_section.kind != rw::STRUCT {
+        return Err(format!(
+            "platform-independent TEXTURE expected STRUCT section (0x01), got 0x{:02X}",
+            struct_section.kind
+        ));
+    }
+    let mut structure = Cursor::new(&bytes[struct_section.start..struct_section.end]);
+    let filter_mode = structure.u8("texture filter mode")?;
+    let uv_addressing = structure.u8("texture UV addressing")?;
+    let _ = structure.u16("texture metadata padding")?;
+    position = struct_section.end;
+
+    let name_section = read_section(bytes, position, bytes.len())?;
+    let name = read_string_section(bytes, name_section, "texture name")?;
+    position = name_section.end;
+    let mask_section = read_section(bytes, position, bytes.len())?;
+    let mask = read_string_section(bytes, mask_section, "texture mask")?;
+
+    Ok(PlatformIndependentTexture {
+        filter_mode,
+        uv_addressing,
+        name,
+        mask,
+    })
+}
+
+fn read_string_section(bytes: &[u8], section: Section, what: &str) -> Result<String, String> {
+    if section.kind != rw::STRING {
+        return Err(format!(
+            "expected STRING section for {what}, got 0x{:02X}",
+            section.kind
+        ));
+    }
+    Ok(read_fixed_name(&bytes[section.start..section.end]))
+}
+
+fn platform_independent_row_bytes(width: u32, depth: u8) -> Result<usize, String> {
+    if !matches!(depth, 4 | 8 | 16 | 24 | 32) {
+        return Err(format!(
+            "unsupported platform-independent image depth {depth}"
+        ));
+    }
+    let bits = (width as usize)
+        .checked_mul(depth as usize)
+        .ok_or_else(|| "image row size overflowed".to_string())?;
+    Ok(bits.div_ceil(8))
+}
+
+fn platform_independent_raster(depth: u8) -> (u32, u8) {
+    match depth {
+        4 => (
+            texture_decoder::format::FORMAT_888 | texture_decoder::format::EXT_PAL4,
+            0,
+        ),
+        8 => (
+            texture_decoder::format::FORMAT_888 | texture_decoder::format::EXT_PAL8,
+            0,
+        ),
+        16 => (
+            texture_decoder::format::FORMAT_1555,
+            texture_decoder::format::RASTER_TYPE_1555 as u8,
+        ),
+        24 => (
+            texture_decoder::format::FORMAT_888,
+            texture_decoder::format::RASTER_TYPE_888 as u8,
+        ),
+        32 => (
+            texture_decoder::format::FORMAT_8888,
+            texture_decoder::format::RASTER_TYPE_8888 as u8,
+        ),
+        _ => unreachable!("platform-independent image depth was validated"),
+    }
+}
+
+fn platform_independent_has_alpha(
+    depth: u8,
+    palette: &[u8],
+    pixels: &[u8],
+    pixel_count: usize,
+) -> bool {
+    match depth {
+        4 => (0..pixel_count).any(|index| {
+            let byte = pixels.get(index / 2).copied().unwrap_or_default();
+            let palette_index = if index % 2 == 0 {
+                byte >> 4
+            } else {
+                byte & 0x0F
+            };
+            palette
+                .get(usize::from(palette_index) * 4 + 3)
+                .is_some_and(|alpha| *alpha < 255)
+        }),
+        8 => pixels.iter().take(pixel_count).any(|index| {
+            palette
+                .get(usize::from(*index) * 4 + 3)
+                .is_some_and(|alpha| *alpha < 255)
+        }),
+        16 | 32 => true,
+        _ => false,
+    }
 }
 
 fn parse_native_texture(bytes: &[u8]) -> Result<NativeTexture, String> {
@@ -420,6 +745,36 @@ mod tests {
         section(rw::TEXTURE_DICTIONARY, 0x1803_FFFF, &dict_body)
     }
 
+    fn platform_independent_txd_fixture() -> Vec<u8> {
+        let version = 0x1803_FFFF;
+        let mut image_struct = Vec::new();
+        image_struct.extend_from_slice(&2_u32.to_le_bytes()); // width
+        image_struct.extend_from_slice(&1_u32.to_le_bytes()); // height
+        image_struct.extend_from_slice(&8_u32.to_le_bytes()); // depth
+        image_struct.extend_from_slice(&4_u32.to_le_bytes()); // pitch, padded row
+
+        let mut palette = vec![0_u8; 1024];
+        palette[..4].copy_from_slice(&[255, 0, 0, 255]);
+        palette[4..8].copy_from_slice(&[0, 255, 0, 255]);
+        let mut image_body = section(rw::STRUCT, version, &image_struct);
+        image_body.extend_from_slice(&[0, 1, 0, 0]);
+        image_body.extend_from_slice(&palette);
+        let image = section(rw::IMAGE, version, &image_body);
+
+        let mut texture_body = section(rw::STRUCT, version, &[6, 17, 0, 0]);
+        texture_body.extend_from_slice(&section(rw::STRING, version, b"pi_tex\0"));
+        texture_body.extend_from_slice(&section(rw::STRING, version, b"mask\0"));
+        let texture = section(rw::TEXTURE, version, &texture_body);
+
+        let mut dictionary_body = Vec::new();
+        dictionary_body.extend_from_slice(&[1, 0, 3, 0]); // count, device
+        dictionary_body.extend_from_slice(&1_u32.to_le_bytes()); // mip count
+        dictionary_body.extend_from_slice(&image);
+        dictionary_body.extend_from_slice(&texture);
+        dictionary_body.extend_from_slice(&section(rw::EXTENSION, version, &[]));
+        section(rw::PI_TEXTURE_DICTIONARY, version, &dictionary_body)
+    }
+
     #[test]
     fn reject_empty_file() {
         assert!(parse_txd(&[]).is_err());
@@ -467,6 +822,27 @@ mod tests {
         assert_eq!(texture.platform_id, PLATFORM_D3D8);
         assert_eq!(texture.format_name(), "1555 ARGB");
         assert_eq!(texture.decode_rgba().unwrap(), vec![0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn parses_platform_independent_paletted_texture() {
+        let txd = parse_txd(&platform_independent_txd_fixture())
+            .expect("platform-independent TXD should parse");
+        assert_eq!(txd.device_id, 3);
+        assert_eq!(txd.texture_count, 1);
+        assert_eq!(txd.textures.len(), 1);
+
+        let texture = &txd.textures[0];
+        assert_eq!(texture.diffuse_name, "pi_tex");
+        assert_eq!(texture.alpha_name, "mask");
+        assert_eq!(texture.width, 2);
+        assert_eq!(texture.height, 1);
+        assert_eq!(texture.format_name(), "PAL8");
+        assert!(!texture.has_alpha_channel());
+        assert_eq!(
+            texture.decode_rgba().unwrap(),
+            vec![255, 0, 0, 255, 0, 255, 0, 255]
+        );
     }
 
     #[test]
