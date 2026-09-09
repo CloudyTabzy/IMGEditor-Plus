@@ -1535,23 +1535,27 @@ pub fn build(app: &App) -> Element<'_, Message> {
         .center_y(Length::Fill)
         .into()
     } else {
-        let search = row![
-            w::icon_label(icons::search().size(15), fonts::header("Search:")),
-            text_input("", &app.search)
-                .id(iced::widget::Id::new("search_input"))
-                .on_input(Message::SearchChanged)
-                .width(Length::Fill),
-        ]
-        .spacing(8)
-        .padding(8);
+        let show_search = app.config.show_search_bar;
+        let search_area: Option<Element<'_, Message>> = show_search.then(|| {
+            let search = row![
+                w::icon_label(icons::search().size(15), fonts::header("Search:")),
+                text_input("", &app.search)
+                    .id(iced::widget::Id::new("search_input"))
+                    .on_input(Message::SearchChanged)
+                    .width(Length::Fill),
+            ]
+            .spacing(8)
+            .padding(8);
 
-        let search_bg = design.chrome();
-        let search = Container::new(search)
-            .width(Length::Fill)
-            .style(move |_| iced::widget::container::Style {
-                background: Some(iced::Background::Color(search_bg)),
-                ..Default::default()
-            });
+            let search_bg = design.chrome();
+            Container::new(search)
+                .width(Length::Fill)
+                .style(move |_| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(search_bg)),
+                    ..Default::default()
+                })
+                .into()
+        });
 
         let pane_surface = design.surface();
         let split_divider = design.divider();
@@ -1593,7 +1597,10 @@ pub fn build(app: &App) -> Element<'_, Message> {
         })
         .height(Length::Fill);
 
-        column![search, main_row].into()
+        match search_area {
+            Some(search) => column![search, main_row].into(),
+            None => main_row.into(),
+        }
     };
 
     let status = app.build_status_bar();

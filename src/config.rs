@@ -245,6 +245,10 @@ pub struct Config {
     pub click_ripple_enabled: bool,
     /// Give the file icon a restrained micro-nudge during selection feedback.
     pub icon_micro_motion_enabled: bool,
+    /// Show the long search strip above the pane grid. Hidden frees
+    /// vertical space for the entry table and info panels; `Ctrl+F`
+    /// reveals it again.
+    pub show_search_bar: bool,
 }
 
 /// Grid divisions offered in the texture preview controls. Kept coarse so
@@ -278,6 +282,7 @@ impl Default for Config {
             selection_pulse_enabled: true,
             click_ripple_enabled: true,
             icon_micro_motion_enabled: true,
+            show_search_bar: true,
         }
     }
 }
@@ -447,6 +452,9 @@ impl Config {
                 "icon_micro_motion_enabled" => {
                     config.icon_micro_motion_enabled = value.eq_ignore_ascii_case("true");
                 }
+                "show_search_bar" => {
+                    config.show_search_bar = value.eq_ignore_ascii_case("true");
+                }
                 _ => {}
             }
         }
@@ -591,6 +599,15 @@ impl Config {
                 "false"
             }
         )?;
+        writeln!(
+            file,
+            "show_search_bar={}",
+            if self.show_search_bar {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
         Ok(())
     }
 
@@ -634,6 +651,7 @@ mod tests {
         assert!(config.selection_pulse_enabled);
         assert!(config.click_ripple_enabled);
         assert!(config.icon_micro_motion_enabled);
+        assert!(config.show_search_bar);
     }
 
     #[test]
@@ -662,6 +680,7 @@ mod tests {
             selection_pulse_enabled: false,
             click_ripple_enabled: false,
             icon_micro_motion_enabled: false,
+            show_search_bar: false,
         };
         let archive_a = temp.path().join("a.img");
         let archive_b = temp.path().join("b.img");
@@ -694,6 +713,7 @@ mod tests {
         assert!(!loaded.selection_pulse_enabled);
         assert!(!loaded.click_ripple_enabled);
         assert!(!loaded.icon_micro_motion_enabled);
+        assert!(!loaded.show_search_bar);
     }
 
     #[test]

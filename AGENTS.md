@@ -13,6 +13,39 @@ Before tagging a release or publishing a build, update every user-facing version
 
 Run `cargo check` after changing `Cargo.toml` to confirm the status bar and welcome modal pick up the new version.
 
+## Resource-constrained build policy (IMPORTANT)
+
+The dev machine has ~16 GB RAM, tight disk space, and a small Windows
+paging file. Heavy cargo commands can OOM-kill the linker/compiler,
+which **crashes or destabilizes the user's other programs** (browsers,
+etc.) and leaves corrupted artifacts in `target/` that cascade into
+bizarre "invalid metadata" / "can't find crate" errors on later runs.
+
+Rules when building or testing here:
+
+1. **One heavy command at a time.** Never chain `cargo check && cargo
+   clippy && cargo test` in a single run — finish one, inspect, then
+   start the next.
+2. **Cap parallelism:** run `cargo build -j 2` / `cargo test -j 2`
+   whenever the build touches many crates (after a clean, dependency
+   bumps, or when more than ~10 crates need compiling). Incremental
+   single-crate rebuilds may use default parallelism.
+3. **Prefer narrow scopes:** `cargo check`, `cargo test --lib`, or
+   `cargo test --lib <module>` before the full suite; full-suite runs
+   (which link examples) only when needed and one at a time.
+4. **Avoid `cargo clean` unless the target dir is provably corrupt**
+   (E0460/E0786/E0463-style errors right after an OOM). It deletes
+   gigabytes and forces a full multi-minute rebuild. A failed run's
+   follow-up retry with `-j 2` is usually enough.
+5. **Watch for the OOM signature:** `LNK1102: out of memory`,
+   `os error 1455` ("paging file is too small"). If seen, stop, do not
+   immediately retry at full parallelism — rerun with `-j 2`.
+6. **Never run the full test suite and a release build concurrently**,
+   and never leave background builds running while doing other work.
+
+If artifacts were corrupted by an OOM kill, `cargo clean` followed by
+`cargo test -j 2` is the reliable recovery path (done 2026-09-10).
+
 ## Dependency decisions (do not re-add without reading this)
 
 These choices were audited deliberately; re-adding or "upgrading" them

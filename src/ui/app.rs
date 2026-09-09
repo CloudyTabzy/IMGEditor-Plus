@@ -239,6 +239,7 @@ pub enum Message {
     ToggleSelectionPulse(bool),
     ToggleClickRipple(bool),
     ToggleIconMicroMotion(bool),
+    ToggleSearchBar(bool),
 
     ExportEmbeddedTexturesRequest {
         entry_index: usize,
@@ -1468,6 +1469,10 @@ impl App {
             Shortcut::ClearSelection => Task::done(Message::ClearSelection),
             Shortcut::Delete => Task::done(Message::DeleteSelected),
             Shortcut::FocusSearch => {
+                if !self.config.show_search_bar {
+                    self.config.show_search_bar = true;
+                    self.save_config();
+                }
                 self.search_focused = true;
                 iced::widget::operation::focus(iced::widget::Id::new(SEARCH_INPUT_ID))
             }
@@ -2823,6 +2828,18 @@ impl App {
                 self.save_config();
                 Task::none()
             }
+            Message::ToggleSearchBar(show) => {
+                self.config.show_search_bar = show;
+                if !show {
+                    // The filter box is gone, so a stale filter would
+                    // silently hide entries. Reset to show everything.
+                    self.search.clear();
+                    self.filter_pending = true;
+                    self.search_focused = false;
+                }
+                self.save_config();
+                Task::none()
+            }
 
             Message::ExportEmbeddedTexturesRequest {
                 entry_index,
@@ -3845,7 +3862,17 @@ impl App {
                 Message::SetNavigationGizmoVisible(!self.config.show_navigation_gizmo),
             )),
             Item::new(menu_button(
-                format!("{}Motion effects", view_toggle(self.config.motion_enabled)),
+                format!(
+                    "{}Search bar",
+                    view_toggle(self.config.show_search_bar)
+                ),
+                Message::ToggleSearchBar(!self.config.show_search_bar),
+            )),
+            Item::new(menu_button(
+                format!(
+                    "{}Motion effects",
+                    view_toggle(self.config.motion_enabled)
+                ),
                 Message::ToggleMotionEffects(!self.config.motion_enabled),
             )),
             Item::new(menu_button(
@@ -4622,6 +4649,42 @@ mod tests {
         assert!(matches!(follow_up[0], Message::ClearSelection));
         let _ = app.update(Message::ClearSelection);
         assert_eq!(app.editor.selected_entry(), None);
+    }
+
+    #[test]
+    fn hiding_search_bar_clears_the_active_filter() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::SearchChanged("first".to_string()));
+        let _ = app.update(Message::DebounceTick);
+        assert_eq!(
+            app.editor.archives()[0].selected_indices.len(),
+            1,
+            "filter should match exactly one entry"
+        );
+
+        let _ = app.update(Message::ToggleSearchBar(false));
+        let _ = app.update(Message::DebounceTick);
+        assert!(!app.config.show_search_bar);
+        assert!(app.search.is_empty());
+        assert_eq!(
+            app.editor.archives()[0].selected_indices.len(),
+            2,
+            "hiding the bar must reveal every entry again"
+        );
+
+        let _ = app.update(Message::ToggleSearchBar(true));
+        assert!(app.config.show_search_bar);
+    }
+
+    #[test]
+    fn focus_search_shortcut_reveals_a_hidden_search_bar() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::ToggleSearchBar(false));
+        assert!(!app.config.show_search_bar);
+
+        let _ = app.handle_shortcut(Shortcut::FocusSearch);
+        assert!(app.config.show_search_bar);
+        assert!(app.search_focused);
     }
 
     #[test]
