@@ -43,6 +43,11 @@ const UPDATER_REPO: &str = "CloudyTabzy/IMGEditor-Plus";
 const SEARCH_INPUT_ID: &str = "search_input";
 const RENAME_INPUT_ID: &str = "rename_input";
 
+fn is_renderable_model_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".nif") || lower.ends_with(".dff")
+}
+
 pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
 pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
 pub const ANIM_ENTRY_FEEDBACK: crate::ui::animator::AnimationId = 3;
@@ -501,14 +506,17 @@ pub struct App {
 /// closing an archive cannot re-key stale scenes onto a different archive.
 /// The generation counter folds in entry-list mutations.
 type SceneCacheKey = (String, u64, usize);
-type SceneCache = quick_cache::sync::Cache<SceneCacheKey, Arc<crate::inspector::scene3d::Scene>, SceneCpuWeight>;
+type SceneCache =
+    quick_cache::sync::Cache<SceneCacheKey, Arc<crate::inspector::scene3d::Scene>, SceneCpuWeight>;
 
 /// Weighs a cached scene by its estimated CPU memory (mesh buffers + decoded
 /// RGBA textures), reusing the same estimate the GPU admission check uses.
 #[derive(Clone)]
 struct SceneCpuWeight;
 
-impl quick_cache::Weighter<SceneCacheKey, Arc<crate::inspector::scene3d::Scene>> for SceneCpuWeight {
+impl quick_cache::Weighter<SceneCacheKey, Arc<crate::inspector::scene3d::Scene>>
+    for SceneCpuWeight
+{
     fn weight(&self, _key: &SceneCacheKey, val: &Arc<crate::inspector::scene3d::Scene>) -> u64 {
         val.estimated_gpu_bytes().unwrap_or(0).max(1)
     }
@@ -1033,7 +1041,7 @@ impl App {
     fn refresh_active_preview(&mut self) -> Task<Message> {
         match self.selected_inspector_tab {
             InspectorTab::Model3D => {
-                let is_nif = self
+                let is_model = self
                     .editor
                     .selected_archive()
                     .and_then(|archive_index| self.editor.archives().get(archive_index))
@@ -1042,8 +1050,8 @@ impl App {
                             .selected_entry()
                             .and_then(|entry_index| archive.entries.get(entry_index))
                     })
-                    .is_some_and(|entry| entry.file_name.to_ascii_lowercase().ends_with(".nif"));
-                if is_nif {
+                    .is_some_and(|entry| is_renderable_model_name(&entry.file_name));
+                if is_model {
                     self.load_selected_nif(InspectorTab::Model3D)
                 } else {
                     Task::none()
@@ -1073,8 +1081,8 @@ impl App {
         let lower = entry.file_name.to_ascii_lowercase();
         self.selected_inspector_tab = InspectorTab::Texture;
         self.reset_texture_preview_state();
-        if lower.ends_with(".nif") {
-            // NIF textures are resolved through the scene decoder so the
+        if lower.ends_with(".nif") || lower.ends_with(".dff") {
+            // Model textures are resolved through the scene decoder so the
             // texture tab and UV overlay share the same source of truth.
             if self.viewer_scene_matches_selection() {
                 return Task::none();
@@ -1098,11 +1106,11 @@ impl App {
 
     fn load_selected_nif(&mut self, target_tab: InspectorTab) -> Task<Message> {
         let Some(archive_index) = self.editor.selected_archive() else {
-            self.toast = Some("Select a NIF entry first.".into());
+            self.toast = Some("Select a NIF or DFF entry first.".into());
             return Task::none();
         };
         let Some(entry_index) = self.editor.selected_entry() else {
-            self.toast = Some("Select a NIF entry first.".into());
+            self.toast = Some("Select a NIF or DFF entry first.".into());
             return Task::none();
         };
         let Some(entry) = self
@@ -1114,9 +1122,9 @@ impl App {
             self.toast = Some("The selected entry is no longer available.".into());
             return Task::none();
         };
-        if !entry.file_name.to_ascii_lowercase().ends_with(".nif") {
+        if !is_renderable_model_name(&entry.file_name) {
             self.toast = Some(format!(
-                "In-app 3D viewer only supports .nif ({}).",
+                "In-app 3D viewer supports .nif and .dff ({}).",
                 entry.file_name
             ));
             return Task::none();
@@ -2425,9 +2433,7 @@ impl App {
                     Ok(textures) => {
                         if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
                             let count = textures.len();
-                            archive
-                                .texture_cache
-                                .insert(index, Arc::new(textures));
+                            archive.texture_cache.insert(index, Arc::new(textures));
                             archive.add_log(format!("Decoded {count} texture preview(s)"));
                             if is_active {
                                 self.toast = Some(format!("Decoded {count} texture(s)"));
@@ -2684,6 +2690,7 @@ impl App {
                     .and_then(|s| s.to_str())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| entry_clone.file_name.to_string());
+                let is_dff = entry_clone.file_name.to_ascii_lowercase().ends_with(".dff");
                 // Reuse a memoized IdeMap for this game root when one has
                 // already been built; otherwise the background task builds
                 // one and hands it back for memoization.
@@ -2693,10 +2700,7 @@ impl App {
                         .and_then(|p| p.parent().and_then(|stream| stream.parent()))
                         .map(|p| p.to_path_buf());
                     match game_root {
-                        Some(root) => self
-                            .ide_maps
-                            .get(&root)
-                            .map(|map| (root, Arc::clone(map))),
+                        Some(root) => self.ide_maps.get(&root).map(|map| (root, Arc::clone(map))),
                         None => None,
                     }
                 };
@@ -2733,6 +2737,33 @@ impl App {
                                         &archive_entries,
                                         archive_path.as_deref(),
                                     );
+                                if is_dff {
+                                    let dff_meshes = crate::parser::dff::parse_dff(&bytes)
+                                        .map_err(|e| format!("DFF parse: {e}"))?;
+                                    let texture_names = dff_meshes
+                                        .iter()
+                                        .filter_map(|mesh| mesh.texture_name.clone())
+                                        .collect::<Vec<_>>();
+                                    let renderware_textures =
+                                        archive_texture_index.resolve_textures_for_dff(
+                                            &nif_basename,
+                                            &texture_names,
+                                            ide_map.as_deref(),
+                                        );
+                                    let resolver = move |name: &str| {
+                                        let key =
+                                            crate::inspector::texture::texture_key(name);
+                                        renderware_textures.get(&key).cloned()
+                                    };
+                                    let base =
+                                        crate::inspector::scene3d::camera::BaseOrientation::Zup;
+                                    return crate::inspector::scene3d::decode::build_scene_from_dff(
+                                        &dff_meshes,
+                                        base,
+                                        resolver,
+                                    )
+                                        .map_err(|e| format!("scene: {e:?}"));
+                                }
                                 let nft_catalog = ide_map
                                     .as_deref()
                                     .and_then(|map| {
@@ -2813,11 +2844,8 @@ impl App {
                         ));
                         let scene = Arc::new(scene);
                         if let Some(archive) = self.editor.archives().get(archive_index) {
-                            let key = (
-                                archive.file_name.clone(),
-                                archive.generation(),
-                                entry_index,
-                            );
+                            let key =
+                                (archive.file_name.clone(), archive.generation(), entry_index);
                             self.scene_cache.insert(key, Arc::clone(&scene));
                         }
                         self.store_scene_texture_previews(&scene, archive_index, entry_index);
@@ -3242,7 +3270,7 @@ impl App {
                                     width: tex.width,
                                     height: tex.height,
                                     rgba,
-                                    has_alpha: tex.has_alpha != 0 || tex.raster_format != 0x200,
+                                    has_alpha: tex.has_alpha_channel(),
                                     format_name: tex.format_name().to_string(),
                                     mipmap_count: tex.num_mipmaps as u32,
                                     handle: std::sync::OnceLock::new(),
@@ -3888,11 +3916,18 @@ mod tests {
         let target = &app.editor.archives()[1];
         assert_eq!(source.entries[0].file_name, "b.nif");
         assert_eq!(source.entries[1].file_name, "c.nif");
-        assert!(target.entries.iter().any(|entry| entry.file_name == "a.nif"));
-        assert!(target
-            .entries
-            .iter()
-            .any(|entry| entry.file_name == "target.nif"));
+        assert!(
+            target
+                .entries
+                .iter()
+                .any(|entry| entry.file_name == "a.nif")
+        );
+        assert!(
+            target
+                .entries
+                .iter()
+                .any(|entry| entry.file_name == "target.nif")
+        );
         assert_eq!(source.selected_indices.as_slice(), &[0, 1]);
         assert_eq!(source.display_row_of(0), Some(0));
         assert_eq!(source.display_row_of(1), Some(1));

@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v3.15.0
+# 🎮 IMG Editor Plus v3.16.0
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -47,7 +47,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Orbit / pan / zoom camera** — LMB drag to orbit, MMB drag to pan, wheel to zoom
 - ✅ **Lit + wireframe pipelines** — single WGSL shader, `W` cycles wireframe (toolbar)
 - ✅ **MSAA 4x anti-aliasing** — the scene pass renders into multisampled color + depth targets and resolves for smooth model edges
-- ✅ **Textured paths** — DXT1/DXT3/DXT5 diffuse decoded on `spawn_blocking` so the UI thread stays responsive
+- ✅ **Textured paths** — DFF/TXD diffuse mapping plus DXT1/2/3/4/5 decoding on `spawn_blocking` so the UI thread stays responsive
 - ✅ **Bully NFT companion textures** — embedded Gamebryo pixel data and archive-backed source paths are previewed as RGBA
 - ✅ **External PLY viewer fallback** — right-click `Open in external viewer` for non-NIF formats (DFF / COL) and any user preference
 - ✅ **Configurable base orientation** — Y-up default, `B` cycles to Z-up / X-up. Persists in `settings.ini`.
@@ -57,9 +57,11 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Rotating view-axis gizmo** — the small XYZ widget in the corner tracks the camera as it orbits
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
-- ✅ **294 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully fixtures
+- ✅ **305 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
 
-**v3.15.0 release highlights:**
+**v3.16.0 release highlights:**
+- ✅ **GTA RenderWare preview** — in-app PC DFF model parsing with frame/atomic transforms and TXD diffuse texture resolution for GTA III/VC/SA-style assets
+- ✅ **PC TXD raster coverage** — D3D8/D3D9 dictionaries, palette formats, DXT2/4, and bounded dimension-safe decoding
 - ✅ **Zero-copy export and two-pass save** — large archives stream directly from the memory map with a safe buffered fallback when needed
 - ✅ **Synchronized texture previews** — image, grid, and NIF UV overlays share the same full-panel zoom and pan viewport
 - ✅ **Portable mesh wire overlay** — inspect visible triangle edges in the in-app 3D viewer without changing the textured render
@@ -102,15 +104,15 @@ for the engineering story.
 
 ### 🖼️ 3D Model Viewer
 - ✅ **NIF** (Gamebryo 20.3.0.9) — Bully Scholarship Edition models, textured OBJ+MTL or PLY export → system viewer
-- ✅ **DFF** (RenderWare Clump) — GTA III/VC/SA models, PLY export → system viewer
+- ✅ **DFF** (RenderWare Clump) — GTA III/VC/SA-style PC models in the embedded viewer with frame/atomic transforms, material splits, and TXD diffuse textures; PLY fallback remains available
 - ✅ **COL** (Collision v1/v2/v3) — collision meshes with sphere/box debug shapes, PLY export → system viewer
 
 ### 🎨 Texture Viewer
-- ✅ **TXD** (RenderWare Texture Dictionary) — full parser + 13 raster format decoder (DXT1/3/5, 1555, 565, 4444, 8888, PAL4, PAL8, + more)
+- ✅ **TXD** (RenderWare Texture Dictionary) — PC D3D8/D3D9 parser + bounded raster decoder (DXT1/2/3/4/5, 1555, 565, 4444, 8888, PAL4, PAL8, + more)
 - ✅ **NFT** (Bully/Gamebryo texture catalog) — embedded DXT1/DXT3/DXT5 payloads and archive-backed TGA/DDS/PNG sources
-- ✅ **Inline preview** — cached RGBA preview in the info panel, shared by TXD, NFT, and rendered NIF textures
+- ✅ **Inline preview** — cached RGBA preview in the info panel, shared by TXD, NFT, and rendered NIF/DFF textures
 - ✅ **Multi-texture selector** — navigate textures within a TXD or NFT
-- ✅ **UV overlay** — toggle matching NIF triangle UVs over the fit-to-preview texture
+- ✅ **UV overlay** — toggle matching NIF/DFF triangle UVs over the fit-to-preview texture
 - ✅ **Export to TGA** — dump all textures to `.tga` files
 
 ### 🧪 Entry Inspector
@@ -216,7 +218,7 @@ The codebase is architected so the core parsers and archive logic are platform-a
 The main UI layer uses Iced, which is cross-platform by design, so the desktop porting effort is mostly packaging and platform-specific window integration.
 
 ### Platform-specific note on GTA support
-Version 3.x is developed and tested primarily against **Bully Scholarship Edition** archives. IMG v1/v2 parsing works for GTA III, Vice City, and San Andreas, but Bully-specific formats (NIF model inspection, TXD variants, etc.) receive priority. Broader GTA workflow polish — importing, exporting, and format edge cases — is planned for future v4 releases or will be addressed earlier if there is community demand.
+Version 3.x is developed and tested primarily against **Bully Scholarship Edition** archives, with the embedded viewer now covering common PC RenderWare DFF/TXD assets used by GTA III, Vice City, and San Andreas. Genuine per-game fixtures are still needed for compatibility claims; console-native geometry, skinning, animation, and advanced RenderWare material effects remain future work. Broader GTA workflow polish — importing, exporting, and format edge cases — will be addressed as representative archives become available.
 
 ### Unicode and non-ASCII language support
 Core archive parsing stores entry names as UTF-8, so non-ASCII characters inside archives round-trip correctly. However, full support for languages like Russian (Cyrillic) is not yet guaranteed:

@@ -1,20 +1,10 @@
-//! RenderWare Texture Dictionary (TXD) binary stream parser.
+//! RenderWare Texture Dictionary (TXD) parser.
 //!
-//! Layout for GTA III / VC / SA PC texture dictionaries:
-//!
-//! ```text
-//! TEXDICT_MAIN (0x16)
-//!   ├── STRUCT (0x01): device_id (u16)
-//!   └── TEXTURENATIVE (0x15) × N
-//!         ├── platform_id (u32)
-//!         ├── filter_flags / wrap / padding (4 bytes)
-//!         ├── diffuse_name: length (u32) + data
-//!         ├── alpha_name:   length (u32) + data
-//!         ├── raster_format (u32)
-//!         ├── width (u16), height (u16)
-//!         ├── depth (u8), num_mipmaps (u8), raster_type (u8), alpha (u8)
-//!         └── [optional EXTENSION (0x03) for cube maps]
-//! ```
+//! The GTA PC dictionaries used by III, Vice City, and San Andreas contain
+//! D3D8/D3D9 Texture Native sections. Their native payload has a nested
+//! STRUCT chunk, fixed 32-byte names, raster flags, an optional palette, and
+//! length-prefixed mip levels. Console-native dictionaries are left for a
+//! future platform-specific decoder.
 
 use crate::parser::texture_decoder;
 
@@ -28,10 +18,80 @@ pub mod rw {
     pub const TEXTURE_DICTIONARY: u32 = 0x16;
 }
 
+pub const PLATFORM_D3D8: u32 = 8;
+pub const PLATFORM_D3D9: u32 = 9;
+const MAX_TEXTURE_DIMENSION: u32 = 8_192;
+
+/// D3D9 format values used by RenderWare's PC native texture stream.
+pub mod d3d_format {
+    pub const _8888: u32 = 21;
+    pub const _888: u32 = 22;
+    pub const _565: u32 = 23;
+    pub const _555: u32 = 24;
+    pub const _1555: u32 = 25;
+    pub const _4444: u32 = 26;
+    pub const L8: u32 = 50;
+    pub const A8L8: u32 = 51;
+    pub const DXT1: u32 = 0x3154_5844;
+    pub const DXT2: u32 = 0x3254_5844;
+    pub const DXT3: u32 = 0x3354_5844;
+    pub const DXT4: u32 = 0x3454_5844;
+    pub const DXT5: u32 = 0x3554_5844;
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Section {
+    kind: u32,
+    start: usize,
+    end: usize,
+    version: u32,
+}
+
+struct Cursor<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, position: 0 }
+    }
+
+    fn take(&mut self, amount: usize, what: &str) -> Result<&'a [u8], String> {
+        let end = self
+            .position
+            .checked_add(amount)
+            .ok_or_else(|| format!("{what} size overflowed"))?;
+        let bytes = self
+            .bytes
+            .get(self.position..end)
+            .ok_or_else(|| format!("unexpected end reading {what}"))?;
+        self.position = end;
+        Ok(bytes)
+    }
+
+    fn u8(&mut self, what: &str) -> Result<u8, String> {
+        Ok(self.take(1, what)?[0])
+    }
+
+    fn u16(&mut self, what: &str) -> Result<u16, String> {
+        Ok(u16::from_le_bytes(
+            self.take(2, what)?.try_into().expect("bounded read"),
+        ))
+    }
+
+    fn u32(&mut self, what: &str) -> Result<u32, String> {
+        Ok(u32::from_le_bytes(
+            self.take(4, what)?.try_into().expect("bounded read"),
+        ))
+    }
+}
+
 /// A parsed TXD file containing zero or more textures.
 #[derive(Debug, Clone, Default)]
 pub struct TxdFile {
     pub device_id: u16,
+    pub texture_count: u16,
     pub rw_version: u32,
     pub textures: Vec<NativeTexture>,
 }
@@ -40,14 +100,22 @@ pub struct TxdFile {
 #[derive(Debug, Clone)]
 pub struct NativeTexture {
     pub platform_id: u32,
+    pub filter_mode: u8,
+    pub uv_addressing: u8,
     pub diffuse_name: String,
     pub alpha_name: String,
+    /// Complete RenderWare raster format flags.
     pub raster_format: u32,
+    /// D3D9 format/FourCC. D3D8 normally leaves this at zero and stores its
+    /// compression selector in platform_properties.
+    pub d3d_format: u32,
     pub width: u32,
     pub height: u32,
     pub depth: u8,
     pub num_mipmaps: u8,
     pub raster_type: u8,
+    pub platform_properties: u8,
+    /// Kept as a byte for compatibility with the earlier parser API.
     pub has_alpha: u8,
     pub palette: Vec<u8>,
     pub mipmaps: Vec<MipmapLevel>,
@@ -66,378 +134,291 @@ impl NativeTexture {
         let mip = self
             .mipmaps
             .first()
-            .expect("NativeTexture has at least one mipmap");
-        texture_decoder::decode_raster(
+            .ok_or(texture_decoder::DecodeError::BufferTooSmall { need: 1, have: 0 })?;
+        texture_decoder::decode_native_raster(
             &mip.data,
             self.width,
             self.height,
+            self.depth,
             self.raster_format,
             &self.palette,
+            self.platform_id,
+            self.d3d_format,
+            self.platform_properties,
             self.raster_type,
         )
     }
 
     /// Human-readable format name.
     pub fn format_name(&self) -> &'static str {
-        texture_decoder::format::format_name(self.raster_format)
+        texture_decoder::native_format_name(
+            self.raster_format,
+            self.platform_id,
+            self.d3d_format,
+            self.platform_properties,
+            self.raster_type,
+        )
     }
 
-    /// Whether the raster format has DXT compression.
+    /// Whether the raster format is block-compressed.
     pub fn is_dxt(&self) -> bool {
-        texture_decoder::format::is_dxt(self.raster_format)
+        texture_decoder::native_is_dxt(
+            self.raster_format,
+            self.platform_id,
+            self.d3d_format,
+            self.platform_properties,
+            self.raster_type,
+        )
+    }
+
+    pub fn has_alpha_channel(&self) -> bool {
+        texture_decoder::native_has_alpha(
+            self.raster_format,
+            self.platform_id,
+            self.d3d_format,
+            self.platform_properties,
+            self.raster_type,
+        )
     }
 }
 
 /// Parse a complete TXD file from raw bytes.
 pub fn parse_txd(bytes: &[u8]) -> Result<TxdFile, String> {
-    if bytes.len() < 12 {
-        return Err("file too short".to_string());
-    }
-
-    let mut pos = 0usize;
-
-    // Read top-level section header.
-    let (section_type, section_size, rw_version) = read_section_header(bytes, &mut pos)?;
-    if section_type != rw::TEXTURE_DICTIONARY {
+    let top = read_section(bytes, 0, bytes.len())?;
+    if top.kind != rw::TEXTURE_DICTIONARY {
         return Err(format!(
             "expected TEXTURE_DICTIONARY section (0x16), got 0x{:02X}",
-            section_type
+            top.kind
         ));
     }
 
-    let section_end = pos + section_size as usize;
-    if section_end > bytes.len() {
-        return Err(format!(
-            "section size {} exceeds file length {}",
-            section_size,
-            bytes.len()
-        ));
-    }
-
-    // Read struct (0x01) within the dictionary.
+    let mut position = top.start;
     let mut device_id = 0u16;
+    let mut texture_count = 0u16;
     let mut textures = Vec::new();
 
-    while pos < section_end {
-        if pos + 12 > bytes.len() {
+    while position < top.end {
+        if top.end - position < 12 {
             break;
         }
-        let (child_type, child_size, _) = read_section_header(bytes, &mut pos)?;
-        let child_end = pos + child_size as usize;
-
-        match child_type {
+        let child = read_section(bytes, position, top.end)?;
+        match child.kind {
             rw::STRUCT => {
-                // Struct data: device_id (u16) + 6 bytes padding
-                if pos + 2 <= bytes.len() {
-                    device_id = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
+                let body = &bytes[child.start..child.end];
+                if body.len() >= 4 {
+                    texture_count = u16::from_le_bytes([body[0], body[1]]);
+                    device_id = u16::from_le_bytes([body[2], body[3]]);
                 }
-                pos = child_end.min(section_end);
             }
             rw::TEXTURE_NATIVE => {
-                let chunk = &bytes[pos..child_end.min(bytes.len())];
-                match parse_native_texture(chunk) {
-                    Ok(tex) => textures.push(tex),
-                    Err(e) => {
-                        // Skip unparseable textures silently.
-                        let _ = e;
-                    }
+                let body = &bytes[child.start..child.end];
+                if let Ok(texture) = parse_native_texture(body) {
+                    textures.push(texture);
                 }
-                pos = child_end.min(section_end);
             }
-            _ => {
-                // Skip unknown child sections.
-                pos = child_end.min(section_end);
-            }
+            _ => {}
         }
+        position = child.end;
     }
 
     Ok(TxdFile {
         device_id,
-        rw_version,
+        texture_count,
+        rw_version: top.version,
         textures,
     })
 }
 
-fn read_section_header(bytes: &[u8], pos: &mut usize) -> Result<(u32, u32, u32), String> {
-    if *pos + 12 > bytes.len() {
-        return Err("unexpected end of section header".to_string());
-    }
-    let section_type = u32::from_le_bytes([
-        bytes[*pos],
-        bytes[*pos + 1],
-        bytes[*pos + 2],
-        bytes[*pos + 3],
-    ]);
-    let section_size = u32::from_le_bytes([
-        bytes[*pos + 4],
-        bytes[*pos + 5],
-        bytes[*pos + 6],
-        bytes[*pos + 7],
-    ]);
-    let rw_version = u32::from_le_bytes([
-        bytes[*pos + 8],
-        bytes[*pos + 9],
-        bytes[*pos + 10],
-        bytes[*pos + 11],
-    ]);
-    *pos += 12;
-    Ok((section_type, section_size, rw_version))
-}
-
-/// Read a length-prefixed Pascal-style string (u32 length + data).
-fn read_pstring(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
-    if *pos + 4 > bytes.len() {
-        return Err("unexpected end reading string length".to_string());
-    }
-    let len = u32::from_le_bytes([
-        bytes[*pos],
-        bytes[*pos + 1],
-        bytes[*pos + 2],
-        bytes[*pos + 3],
-    ]) as usize;
-    *pos += 4;
-
-    if *pos + len > bytes.len() {
-        return Err(format!("string length {} exceeds buffer", len));
-    }
-
-    let s = if len > 0 {
-        std::str::from_utf8(&bytes[*pos..*pos + len])
-            .map_err(|e| format!("invalid UTF-8 in string: {e}"))?
-            .to_string()
-    } else {
-        String::new()
-    };
-    // Strings are padded to 4-byte alignment in RW.
-    let aligned = (len + 3) & !3;
-    *pos += aligned;
-    Ok(s)
-}
-
-/// Parse a TEXTURENATIVE section body.
 fn parse_native_texture(bytes: &[u8]) -> Result<NativeTexture, String> {
-    if bytes.len() < 36 {
+    // GTA PC Texture Native chunks contain a nested STRUCT. A raw fallback is
+    // retained for old tools that omitted that wrapper.
+    let mut position = 0usize;
+    while position < bytes.len() {
+        if bytes.len() - position < 12 {
+            break;
+        }
+        let Ok(child) = read_section(bytes, position, bytes.len()) else {
+            break;
+        };
+        if child.kind == rw::STRUCT {
+            return parse_native_struct(&bytes[child.start..child.end]);
+        }
+        position = child.end;
+    }
+    parse_native_struct(bytes)
+}
+
+fn parse_native_struct(bytes: &[u8]) -> Result<NativeTexture, String> {
+    let mut cursor = Cursor::new(bytes);
+    let platform_id = cursor.u32("platform id")?;
+    let filter_mode = cursor.u8("filter mode")?;
+    let uv_addressing = cursor.u8("UV addressing")?;
+    let _ = cursor.u16("native header padding")?;
+    let diffuse_name = read_fixed_name(cursor.take(32, "diffuse name")?);
+    let alpha_name = read_fixed_name(cursor.take(32, "alpha name")?);
+    let raster_format = cursor.u32("raster format flags")?;
+    let d3d_format = cursor.u32("D3D format")?;
+    let width = u32::from(cursor.u16("texture width")?);
+    let height = u32::from(cursor.u16("texture height")?);
+    if width == 0 || height == 0 || width > MAX_TEXTURE_DIMENSION || height > MAX_TEXTURE_DIMENSION
+    {
         return Err(format!(
-            "TEXTURENATIVE body too short: {} bytes",
-            bytes.len()
+            "texture dimensions {width}x{height} exceed the supported range"
         ));
     }
+    let depth = cursor.u8("texture depth")?;
+    let raw_levels = cursor.u8("mipmap level count")?;
+    let raster_type = cursor.u8("raster type")?;
+    let platform_properties = cursor.u8("platform properties")?;
+    let num_mipmaps = raw_levels.max(1);
 
-    let mut pos = 0usize;
-
-    // platform_id
-    let platform_id =
-        u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
-    pos += 4;
-
-    // filter_flags, wrap_v, wrap_u, padding
-    pos += 4;
-
-    // diffuse name
-    let diffuse_name = read_pstring(bytes, &mut pos)?;
-    let alpha_name = read_pstring(bytes, &mut pos)?;
-
-    // Raster format
-    if pos + 4 > bytes.len() {
-        return Err("unexpected end before raster_format".to_string());
-    }
-    let raster_format =
-        u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
-    pos += 4;
-
-    // width, height
-    if pos + 4 > bytes.len() {
-        return Err("unexpected end before dimensions".to_string());
-    }
-    let width = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]) as u32;
-    let height = u16::from_le_bytes([bytes[pos + 2], bytes[pos + 3]]) as u32;
-    pos += 4;
-
-    // depth, num_mipmaps, raster_type, alpha
-    if pos + 4 > bytes.len() {
-        return Err("unexpected end before raster metadata".to_string());
-    }
-    let depth = bytes[pos];
-    let num_mipmaps = bytes[pos + 1];
-    let raster_type = bytes[pos + 2];
-    let has_alpha = bytes[pos + 3];
-    pos += 4;
-
-    // For PC Direct3D textures, mipmap data follows immediately.
-    // For textures with palettes, palette data comes first.
-    let base = raster_format & 0xFFF;
-    let is_pal4 = (raster_format & 0x4000) != 0;
-    let is_pal8 = (raster_format & 0x2000) != 0;
-
-    let palette = if is_pal4 || is_pal8 {
-        let palette_size = if is_pal4 { 16 * 4 } else { 256 * 4 };
-        if pos + 4 > bytes.len() {
-            return Err("unexpected end before palette size".to_string());
-        }
-        let pal_data_size =
-            u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]])
-                as usize;
-        pos += 4;
-
-        if pos + pal_data_size > bytes.len() {
-            return Err("palette data exceeds buffer".to_string());
-        }
-        let pal = bytes[pos..pos + pal_data_size.min(palette_size)].to_vec();
-        // Align to 4 bytes
-        let aligned = (pal_data_size + 3) & !3;
-        pos += aligned;
-        pal
-    } else {
-        Vec::new()
+    let palette_size = match (raster_format >> 13) & 0x3 {
+        1 => Some(1024usize),
+        2 | 3 => Some(if depth == 4 { 64 } else { 128 }),
+        _ => None,
+    };
+    let palette = match palette_size {
+        Some(size) => cursor.take(size, "palette")?.to_vec(),
+        None => Vec::new(),
     };
 
-    // Read mipmap data.
-    // For PC textures on the GTA render path, mipmap data follows the
-    // header with an optional 4-byte header size field for DXT formats.
-    let remaining = bytes.len() - pos;
-
-    let mut mipmaps = Vec::new();
-
-    // Determine actual mipmap dimensions.
-    let actual_mip_count = if num_mipmaps > 0 { num_mipmaps } else { 1 };
-    let mip_widths: Vec<u32> = (0..actual_mip_count)
-        .scan(width, |w, _| {
-            let wc = *w;
-            *w = (*w / 2).max(1);
-            Some(wc)
-        })
-        .collect();
-    let mip_heights: Vec<u32> = (0..actual_mip_count)
-        .scan(height, |h, _| {
-            let hc = *h;
-            *h = (*h / 2).max(1);
-            Some(hc)
-        })
-        .collect();
-
-    // For DXT, there may be a 4-byte header size before each mipmap.
-    // For uncompressed formats, mipmap data is stored end-to-end.
-    if is_dxt_format(base) {
-        // DXT-compressed: each mipmap has a 4-byte data_size prefix,
-        // then the DXT blocks.
-        let mut data_pos = pos;
-        for mi in 0..actual_mip_count as usize {
-            if data_pos + 4 > bytes.len() {
-                break;
-            }
-            let mip_size = u32::from_le_bytes([
-                bytes[data_pos],
-                bytes[data_pos + 1],
-                bytes[data_pos + 2],
-                bytes[data_pos + 3],
-            ]) as usize;
-            data_pos += 4;
-
-            let mw = mip_widths.get(mi).copied().unwrap_or(1);
-            let mh = mip_heights.get(mi).copied().unwrap_or(1);
-
-            let actual_data = if data_pos + mip_size <= bytes.len() {
-                bytes[data_pos..data_pos + mip_size].to_vec()
-            } else {
-                let available = bytes.len().saturating_sub(data_pos);
-                bytes[data_pos..data_pos + available].to_vec()
-            };
-            data_pos += (mip_size + 3) & !3; // Align to 4 bytes
-
-            mipmaps.push(MipmapLevel {
-                width: mw,
-                height: mh,
-                data: actual_data,
-            });
-        }
-    } else if is_pal4 || is_pal8 {
-        // Palettized: pixel indices follow the palette.
-        let data_pos = pos;
-        let pixel_data = bytes[data_pos..].to_vec();
+    let mut mipmaps = Vec::with_capacity(num_mipmaps as usize);
+    for level in 0..num_mipmaps as usize {
+        let byte_len = cursor.u32("mipmap byte length")? as usize;
+        let data = cursor.take(byte_len, "mipmap pixels")?.to_vec();
         mipmaps.push(MipmapLevel {
-            width,
-            height,
-            data: pixel_data,
-        });
-    } else {
-        // Uncompressed: data is stored end-to-end.
-        let data_pos = pos;
-        let mut data_offset = 0usize;
-        for mi in 0..actual_mip_count as usize {
-            let mw = mip_widths.get(mi).copied().unwrap_or(1) as usize;
-            let mh = mip_heights.get(mi).copied().unwrap_or(1) as usize;
-
-            let (bpp, row_align) = bpp_and_align(base, raster_type);
-            let row_stride = (mw * bpp).div_ceil(row_align) * row_align;
-            let mip_byte_size = row_stride * mh;
-            let aligned_size = (mip_byte_size + 3) & !3;
-
-            let end = data_offset + aligned_size.min(remaining.saturating_sub(data_offset));
-            let mip_data = if end <= remaining {
-                bytes[data_pos + data_offset..data_pos + end].to_vec()
-            } else {
-                vec![]
-            };
-
-            mipmaps.push(MipmapLevel {
-                width: mw as u32,
-                height: mh as u32,
-                data: mip_data,
-            });
-            data_offset += aligned_size;
-        }
-    }
-
-    // Ensure at least one mipmap.
-    if mipmaps.is_empty() {
-        let data_len = remaining.min(bytes.len().saturating_sub(pos));
-        mipmaps.push(MipmapLevel {
-            width,
-            height,
-            data: bytes[pos..pos + data_len].to_vec(),
+            width: width.checked_shr(level as u32).unwrap_or(0).max(1),
+            height: height.checked_shr(level as u32).unwrap_or(0).max(1),
+            data,
         });
     }
+
+    let has_alpha = texture_decoder::native_has_alpha(
+        raster_format,
+        platform_id,
+        d3d_format,
+        platform_properties,
+        raster_type,
+    ) as u8;
 
     Ok(NativeTexture {
         platform_id,
+        filter_mode,
+        uv_addressing,
         diffuse_name,
         alpha_name,
         raster_format,
+        d3d_format,
         width,
         height,
         depth,
-        num_mipmaps: actual_mip_count,
+        num_mipmaps,
         raster_type,
+        platform_properties,
         has_alpha,
         palette,
         mipmaps,
     })
 }
 
-fn is_dxt_format(base: u32) -> bool {
-    base == 0x100 || base == 0x200 || base == 0x300
+fn read_fixed_name(bytes: &[u8]) -> String {
+    let bytes = bytes.split(|&byte| byte == 0).next().unwrap_or_default();
+    String::from_utf8_lossy(bytes).trim().to_string()
 }
 
-fn bpp_and_align(base: u32, raster_type: u8) -> (usize, usize) {
-    match base {
-        0x400 => (1, 1),         // LUM8
-        0x500 | 0x501 => (4, 4), // 8888
-        0x600 => (3, 4),         // 888
-        0x000..=0x500 => {
-            // Try common formats.
-            if raster_type == 0x12 {
-                (4, 4) // DXT-like sizing
-            } else {
-                (2, 4) // Default 16-bit
-            }
-        }
-        _ => (4, 4), // Default: 32-bit
+fn read_section(bytes: &[u8], position: usize, limit: usize) -> Result<Section, String> {
+    let header_end = position
+        .checked_add(12)
+        .ok_or_else(|| "section header offset overflowed".to_string())?;
+    if header_end > limit || header_end > bytes.len() {
+        return Err("unexpected end of section header".to_string());
     }
+    let kind = u32::from_le_bytes(bytes[position..position + 4].try_into().expect("header"));
+    let size = u32::from_le_bytes(
+        bytes[position + 4..position + 8]
+            .try_into()
+            .expect("header"),
+    ) as usize;
+    let version = u32::from_le_bytes(
+        bytes[position + 8..position + 12]
+            .try_into()
+            .expect("header"),
+    );
+    let end = header_end
+        .checked_add(size)
+        .ok_or_else(|| format!("section 0x{kind:02X} size overflowed"))?;
+    if end > limit || end > bytes.len() {
+        return Err(format!(
+            "section 0x{kind:02X} size {size} exceeds its container"
+        ));
+    }
+    Ok(Section {
+        kind,
+        start: header_end,
+        end,
+        version,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn section(kind: u32, version: u32, body: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(12 + body.len());
+        bytes.extend_from_slice(&kind.to_le_bytes());
+        bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&version.to_le_bytes());
+        bytes.extend_from_slice(body);
+        bytes
+    }
+
+    fn d3d9_txd_fixture() -> Vec<u8> {
+        let mut native = Vec::new();
+        native.extend_from_slice(&PLATFORM_D3D9.to_le_bytes());
+        native.extend_from_slice(&[6, 17, 0, 0]);
+        native.extend_from_slice(&{
+            let mut name = [0_u8; 32];
+            name[..5].copy_from_slice(b"oak2b");
+            name.to_vec()
+        });
+        native.extend_from_slice(&[0; 32]);
+        native.extend_from_slice(&0x0000_0300_u32.to_le_bytes());
+        native.extend_from_slice(&d3d_format::DXT3.to_le_bytes());
+        native.extend_from_slice(&4_u16.to_le_bytes());
+        native.extend_from_slice(&4_u16.to_le_bytes());
+        native.extend_from_slice(&[16, 1, 4, 9]);
+        native.extend_from_slice(&16_u32.to_le_bytes());
+        native.extend_from_slice(&[0xFF; 16]);
+
+        let native_struct = section(rw::STRUCT, 0x1803_FFFF, &native);
+        let native_section = section(rw::TEXTURE_NATIVE, 0x1803_FFFF, &native_struct);
+        let mut dict_body = section(rw::STRUCT, 0x1803_FFFF, &[1, 0, 2, 0]);
+        dict_body.extend_from_slice(&native_section);
+        section(rw::TEXTURE_DICTIONARY, 0x1803_FFFF, &dict_body)
+    }
+
+    fn d3d8_txd_fixture() -> Vec<u8> {
+        let mut native = Vec::new();
+        native.extend_from_slice(&PLATFORM_D3D8.to_le_bytes());
+        native.extend_from_slice(&[6, 17, 0, 0]);
+        native.extend_from_slice(&[0; 32]);
+        native.extend_from_slice(&[0; 32]);
+        native.extend_from_slice(&0x0000_0100_u32.to_le_bytes());
+        native.extend_from_slice(&0_u32.to_le_bytes());
+        native.extend_from_slice(&1_u16.to_le_bytes());
+        native.extend_from_slice(&1_u16.to_le_bytes());
+        native.extend_from_slice(&[16, 1, 1, 0]);
+        native.extend_from_slice(&2_u32.to_le_bytes());
+        // 1555: opaque black.
+        native.extend_from_slice(&0x8000_u16.to_le_bytes());
+
+        let native_struct = section(rw::STRUCT, 0x1803_FFFF, &native);
+        let native_section = section(rw::TEXTURE_NATIVE, 0x1803_FFFF, &native_struct);
+        let mut dict_body = section(rw::STRUCT, 0x1803_FFFF, &[1, 0, 0, 0]);
+        dict_body.extend_from_slice(&native_section);
+        section(rw::TEXTURE_DICTIONARY, 0x1803_FFFF, &dict_body)
+    }
 
     #[test]
     fn reject_empty_file() {
@@ -446,46 +427,62 @@ mod tests {
 
     #[test]
     fn reject_non_txd_section() {
-        // Bogus section type 0x01 (STRUCT) with size 0
-        let bytes = vec![
-            0x01, 0x00, 0x00, 0x00, // type = STRUCT
-            0x00, 0x00, 0x00, 0x00, // size = 0
-            0xFF, 0xFF, 0x03, 0x10, // version
-        ];
+        let bytes = section(rw::STRUCT, 0x1003_FFFF, &[]);
         assert!(parse_txd(&bytes).is_err());
     }
 
     #[test]
-    fn parses_minimal_txd_header() {
-        // Minimal TXD: TEXDICT_MAIN + struct { device_id=0 }
-        let mut bytes = Vec::new();
-        // TEXDICT_MAIN section
-        bytes.extend_from_slice(&[0x16, 0x00, 0x00, 0x00]); // type
-        bytes.extend_from_slice(&[0x08, 0x00, 0x00, 0x00]); // size = 8
-        bytes.extend_from_slice(&[0xFF, 0xFF, 0x03, 0x10]); // version
-        // STRUCT child
-        bytes.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // type = STRUCT
-        bytes.extend_from_slice(&[0x08, 0x00, 0x00, 0x00]); // size = 8
-        bytes.extend_from_slice(&[0xFF, 0xFF, 0x03, 0x10]); // version
-        bytes.extend_from_slice(&[0x02, 0x00]); // device_id = 2
-        bytes.extend_from_slice(&[0x00; 6]); // padding
-
+    fn parses_texture_dictionary_header() {
+        let bytes = section(
+            rw::TEXTURE_DICTIONARY,
+            0x1803_FFFF,
+            &section(rw::STRUCT, 0x1803_FFFF, &[0, 0, 2, 0]),
+        );
         let txd = parse_txd(&bytes).unwrap();
         assert_eq!(txd.device_id, 2);
+        assert_eq!(txd.texture_count, 0);
         assert!(txd.textures.is_empty());
     }
 
     #[test]
-    fn roundtrip_rw_version() {
-        let bytes = vec![
-            0x16, 0x00, 0x00, 0x00, // type = TEXDICT
-            0x08, 0x00, 0x00, 0x00, // size = 8
-            0x10, 0x00, 0x00, 0x00, // version
-            0x01, 0x00, 0x00, 0x00, // STRUCT
-            0x08, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00,
-        ];
-        let txd = parse_txd(&bytes).unwrap();
-        assert_eq!(txd.rw_version, 0x10);
+    fn parses_pc_d3d9_native_texture() {
+        let txd = parse_txd(&d3d9_txd_fixture()).expect("fixture should parse");
+        assert_eq!(txd.device_id, 2);
+        assert_eq!(txd.texture_count, 1);
+        assert_eq!(txd.textures.len(), 1);
+        let texture = &txd.textures[0];
+        assert_eq!(texture.diffuse_name, "oak2b");
+        assert_eq!(texture.width, 4);
+        assert_eq!(texture.height, 4);
+        assert_eq!(texture.mipmaps[0].data.len(), 16);
+        assert_eq!(texture.format_name(), "DXT3");
+        assert_eq!(texture.decode_rgba().unwrap().len(), 4 * 4 * 4);
+    }
+
+    #[test]
+    fn parses_pc_d3d8_native_texture() {
+        let txd = parse_txd(&d3d8_txd_fixture()).expect("D3D8 fixture should parse");
+        assert_eq!(txd.textures.len(), 1);
+        let texture = &txd.textures[0];
+        assert_eq!(texture.platform_id, PLATFORM_D3D8);
+        assert_eq!(texture.format_name(), "1555 ARGB");
+        assert_eq!(texture.decode_rgba().unwrap(), vec![0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn parses_real_renderware_texture_when_fixture_is_present() {
+        let path = "C:/Dev/IMGEditor-master/Gta_3_img/Exported/gta_proc_grassland.txd";
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let txd = parse_txd(&bytes).expect("real TXD should parse");
+        assert!(!txd.textures.is_empty());
+        let decoded = txd
+            .textures
+            .iter()
+            .filter_map(|texture| texture.decode_rgba().ok())
+            .next()
+            .expect("real TXD should expose a decodable PC texture");
+        assert!(!decoded.is_empty());
     }
 }

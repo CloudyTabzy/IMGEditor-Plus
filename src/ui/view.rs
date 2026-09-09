@@ -537,12 +537,14 @@ impl App {
                 .into();
         };
         let Some(entry_index) = self.editor.selected_entry() else {
-            return container(fonts::caption("Select a .nif entry to preview it in 3D."))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
-                .into();
+            return container(fonts::caption(
+                "Select a .nif or .dff entry to preview it in 3D.",
+            ))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .into();
         };
         let Some(entry) = archive.entries.get(entry_index) else {
             return container(fonts::caption("The selected entry is no longer available."))
@@ -553,13 +555,13 @@ impl App {
                 .into();
         };
         let entry_lower = entry.file_name.to_ascii_lowercase();
-        let is_nif = entry_lower.ends_with(".nif");
+        let is_model = entry_lower.ends_with(".nif") || entry_lower.ends_with(".dff");
         let scene_matches = self.viewer_scene_matches_selection();
         let gpu_error = scene_matches
             .then(|| self.viewer3d_handle.with(|inner| inner.gpu_error.clone()))
             .flatten();
 
-        let toolbar = self.build_viewer3d_toolbar(is_nif, scene_matches);
+        let toolbar = self.build_viewer3d_toolbar(is_model, scene_matches);
         let stats = self.build_viewer3d_stats(scene_matches);
 
         let body: Element<'_, Message> = if let Some(error) = gpu_error {
@@ -583,9 +585,9 @@ impl App {
             let widget =
                 crate::ui::viewer3d_widget::Scene3dWidget::new(self.viewer3d_handle.clone());
             widget.into()
-        } else if is_nif {
+        } else if is_model {
             container(fonts::caption(
-                "This NIF is selected but not loaded in the 3D viewer yet.",
+                "This model is selected but not loaded in the 3D viewer yet.",
             ))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -595,7 +597,7 @@ impl App {
             .into()
         } else {
             container(fonts::caption(format!(
-                "The in-app viewer renders .nif entries. {} isn't a NIF — use the right-click menu to open it in an external viewer.",
+                "The in-app viewer renders .nif and .dff entries. {} is not a supported model — use the right-click menu for another viewer.",
                 entry_lower
             )))
             .width(Length::Fill)
@@ -605,10 +607,11 @@ impl App {
             .into()
         };
 
-        let prompt: Element<'_, Message> = if !scene_matches && is_nif {
-            fonts::caption("Use ‘Load selected’ above to preview this NIF.").into()
+        let prompt: Element<'_, Message> = if !scene_matches && is_model {
+            fonts::caption("Use ‘Load selected’ above to preview this model.").into()
         } else if !scene_matches {
-            fonts::caption("Select a .nif entry, then right-click → Open in 3D viewer.").into()
+            fonts::caption("Select a .nif or .dff entry, then right-click → Open in 3D viewer.")
+                .into()
         } else {
             Space::new().height(Length::Fixed(0.0)).into()
         };
@@ -697,7 +700,7 @@ impl App {
         };
         let Some(entry_index) = self.editor.selected_entry() else {
             return container(fonts::caption(
-                "Select a TXD, NFT, or NIF entry to preview textures.",
+                "Select a TXD, NFT, NIF, or DFF entry to preview textures.",
             ))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -707,7 +710,7 @@ impl App {
         };
         let Some(entry) = archive.entries.get(entry_index) else {
             return container(fonts::caption(
-                "Select a .txd or .nft entry to preview textures.",
+                "Select a .txd, .nft, .nif, or .dff entry to preview textures.",
             ))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -720,9 +723,10 @@ impl App {
         let is_txd = lower.ends_with(".txd");
         let is_nft = lower.ends_with(".nft");
         let is_nif = lower.ends_with(".nif");
-        if !is_txd && !is_nft && !is_nif {
+        let is_dff = lower.ends_with(".dff");
+        if !is_txd && !is_nft && !is_nif && !is_dff {
             return container(fonts::caption(format!(
-                "{} is not a texture container. Preview is available for TXD, NFT, or rendered NIF entries.",
+                "{} is not a texture container. Preview is available for TXD, NFT, or rendered model entries.",
                 entry_name
             )))
             .width(Length::Fill)
@@ -733,12 +737,12 @@ impl App {
         }
         let textures = archive.texture_cache.get(&entry_index);
         let Some(textures) = textures else {
-            if is_nif {
+            if is_nif || is_dff {
                 return column![
-                    fonts::caption("Load the selected NIF to resolve its companion textures."),
+                    fonts::caption("Load the selected model to resolve its textures."),
                     button(w::icon_label(
                         icons::model().size(14),
-                        fonts::body("Load selected NIF"),
+                        fonts::body("Load selected model"),
                     ))
                     .on_press(Message::Viewer3dLoadSelected),
                 ]
@@ -780,11 +784,11 @@ impl App {
             .spacing(6)
             .width(Length::Fill)
             .align_y(Alignment::Center);
-        if is_nif && !self.viewer_scene_matches_selection() {
+        if (is_nif || is_dff) && !self.viewer_scene_matches_selection() {
             action_row = action_row.push(
                 button(w::icon_label(
                     icons::model().size(14),
-                    fonts::body("Load selected NIF"),
+                    fonts::body("Load selected model"),
                 ))
                 .on_press(Message::Viewer3dLoadSelected),
             );
@@ -951,8 +955,8 @@ impl App {
         col.into()
     }
 
-    fn build_viewer3d_toolbar(&self, is_nif: bool, scene_matches: bool) -> Element<'_, Message> {
-        if !is_nif {
+    fn build_viewer3d_toolbar(&self, is_model: bool, scene_matches: bool) -> Element<'_, Message> {
+        if !is_model {
             return Space::new().height(Length::Fixed(28.0)).into();
         }
         if !scene_matches {
@@ -1696,7 +1700,7 @@ fn build_context_menu(
     ];
 
     let lower = entry.file_name.to_lowercase();
-    if lower.ends_with(".nif") {
+    if lower.ends_with(".nif") || lower.ends_with(".dff") {
         items.push(
             context_button(
                 "Open in 3D viewer",
@@ -1711,7 +1715,7 @@ fn build_context_menu(
             )
             .into(),
         );
-    } else if lower.ends_with(".dff") || lower.ends_with(".col") {
+    } else if lower.ends_with(".col") {
         items.push(
             context_button(
                 "Open in external viewer",

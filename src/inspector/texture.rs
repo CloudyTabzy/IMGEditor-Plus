@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,7 +36,11 @@ impl IdeMap {
             let path = entry.path();
             if path.is_dir() {
                 Self::walk_and_parse(&path, map)?;
-            } else if path.extension().and_then(|e| e.to_str()) == Some("ide") {
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("ide"))
+            {
                 Self::parse_ide_file(&path, map);
             }
         }
@@ -73,11 +77,17 @@ impl IdeMap {
         }
     }
 
-    /// Look up a NIF basename (case-insensitive) to get the NFT name.
-    pub fn nft_name_for(&self, nif_basename: &str) -> Option<&str> {
+    /// Look up a model basename (case-insensitive) to get its texture
+    /// dictionary name from an IDE objs entry.
+    pub fn txd_name_for(&self, model_basename: &str) -> Option<&str> {
         self.inner
-            .get(&nif_basename.to_lowercase())
+            .get(&model_basename.to_lowercase())
             .map(|s| s.as_str())
+    }
+
+    /// Backward-compatible name for the Bully NIF/NFT resolver.
+    pub fn nft_name_for(&self, nif_basename: &str) -> Option<&str> {
+        self.txd_name_for(nif_basename)
     }
 
     /// Locate the `.nft` file on disk for a given txd name.
@@ -204,6 +214,99 @@ impl ArchiveTextureIndex {
             }
         }
         None
+    }
+
+    /// Resolve diffuse names referenced by a RenderWare DFF against TXDs in
+    /// this archive. IDE mapping and same-basename candidates are cheap
+    /// first attempts; the bounded fallback scan makes archive-only previews
+    /// useful even when the user has not supplied the game's IDE files.
+    pub fn resolve_textures_for_dff(
+        &self,
+        dff_basename: &str,
+        texture_names: &[String],
+        ide_map: Option<&IdeMap>,
+    ) -> HashMap<String, SceneTexture> {
+        const MAX_TXD_SCAN_BYTES: u64 = 256 * 1024 * 1024;
+
+        let mut wanted: HashSet<String> = texture_names
+            .iter()
+            .map(|name| texture_key(name))
+            .filter(|name| !name.is_empty())
+            .collect();
+        let mut resolved = HashMap::new();
+        if wanted.is_empty() {
+            return resolved;
+        }
+
+        let mut candidates = Vec::with_capacity(2);
+        if let Some(txd_name) = ide_map.and_then(|map| map.txd_name_for(dff_basename)) {
+            candidates.push(format!("{txd_name}.txd"));
+        }
+        candidates.push(format!("{dff_basename}.txd"));
+        for candidate in candidates {
+            self.resolve_txd_entry(&candidate, &mut wanted, &mut resolved);
+            if wanted.is_empty() {
+                return resolved;
+            }
+        }
+
+        let mut txd_names: Vec<String> = self
+            .entries
+            .values()
+            .filter(|entry| entry.file_name.to_ascii_lowercase().ends_with(".txd"))
+            .map(|entry| entry.file_name.to_string())
+            .collect();
+        txd_names.sort_unstable_by_key(|name| name.to_ascii_lowercase());
+        txd_names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+
+        let mut scanned_bytes = 0u64;
+        for txd_name in txd_names {
+            let Some(entry) = self.entries.get(&texture_key(&txd_name)) else {
+                continue;
+            };
+            let entry_bytes = u64::from(entry.sector).saturating_mul(crate::parser::SECTOR_SIZE);
+            if scanned_bytes.saturating_add(entry_bytes) > MAX_TXD_SCAN_BYTES {
+                break;
+            }
+            scanned_bytes = scanned_bytes.saturating_add(entry_bytes);
+            self.resolve_txd_entry(&txd_name, &mut wanted, &mut resolved);
+            if wanted.is_empty() {
+                break;
+            }
+        }
+        resolved
+    }
+
+    fn resolve_txd_entry(
+        &self,
+        entry_name: &str,
+        wanted: &mut HashSet<String>,
+        resolved: &mut HashMap<String, SceneTexture>,
+    ) {
+        let Some(bytes) = self.read(entry_name) else {
+            return;
+        };
+        let Ok(txd) = crate::parser::txd::parse_txd(&bytes) else {
+            return;
+        };
+        for texture in txd.textures {
+            let key = texture_key(&texture.diffuse_name);
+            if !wanted.contains(&key) {
+                continue;
+            }
+            let Ok(rgba) = texture.decode_rgba() else {
+                continue;
+            };
+            resolved.insert(
+                key.clone(),
+                SceneTexture {
+                    width: texture.width,
+                    height: texture.height,
+                    rgba,
+                },
+            );
+            wanted.remove(&key);
+        }
     }
 }
 
@@ -355,7 +458,7 @@ fn decode_dds_payload(bytes: &[u8]) -> Option<SceneTexture> {
     SceneTexture::from_tga(&tga)
 }
 
-fn texture_key(name: &str) -> String {
+pub(crate) fn texture_key(name: &str) -> String {
     name.rsplit(['/', '\\'])
         .next()
         .unwrap_or(name)

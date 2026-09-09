@@ -19,7 +19,9 @@ use thiserror::Error;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DxtType {
     Dxt1,
+    Dxt2,
     Dxt3,
+    Dxt4,
     Dxt5,
 }
 
@@ -27,13 +29,26 @@ pub enum DxtType {
 pub enum DecodeError {
     #[error("buffer too small: need {need} bytes, have {have}")]
     BufferTooSmall { need: usize, have: usize },
+    #[error("invalid texture dimensions: {width}x{height}")]
+    InvalidDimensions { width: u32, height: u32 },
     #[error("unsupported format: 0x{0:03X}")]
     UnsupportedFormat(u32),
 }
 
+const MAX_DECODE_DIMENSION: u32 = 8_192;
+
+fn checked_pixel_count(width: u32, height: u32) -> Result<usize, DecodeError> {
+    if width == 0 || height == 0 || width > MAX_DECODE_DIMENSION || height > MAX_DECODE_DIMENSION {
+        return Err(DecodeError::InvalidDimensions { width, height });
+    }
+    (width as usize)
+        .checked_mul(height as usize)
+        .ok_or(DecodeError::InvalidDimensions { width, height })
+}
+
 // ---- DXT block decoders ------------------------------------------------
 
-fn dxt1_block(block: &[u8]) -> [[u8; 4]; 16] {
+fn dxt_color_block(block: &[u8], allow_transparent: bool) -> [[u8; 4]; 16] {
     let c0 = u16::from_le_bytes([block[0], block[1]]);
     let c1 = u16::from_le_bytes([block[2], block[3]]);
 
@@ -56,19 +71,13 @@ fn dxt1_block(block: &[u8]) -> [[u8; 4]; 16] {
     let mut out = [[0u8; 4]; 16];
     for (i, pixel) in out.iter_mut().enumerate() {
         let idx = ((codes >> (i * 2)) & 3) as u8;
-        *pixel = match (c0 > c1, idx) {
+        *pixel = match (c0 > c1 || !allow_transparent, idx) {
             (true, 0) | (false, 0) => col0,
             (true, 1) | (false, 1) => col1,
             (true, 2) => {
                 let r = ((col0[0] as u16 * 2 + col1[0] as u16) / 3) as u8;
                 let g = ((col0[1] as u16 * 2 + col1[1] as u16) / 3) as u8;
                 let b = ((col0[2] as u16 * 2 + col1[2] as u16) / 3) as u8;
-                [r, g, b, 255]
-            }
-            (true, 3) => {
-                let r = ((col0[0] as u16 + col1[0] as u16 * 2) / 3) as u8;
-                let g = ((col0[1] as u16 + col1[1] as u16 * 2) / 3) as u8;
-                let b = ((col0[2] as u16 + col1[2] as u16 * 2) / 3) as u8;
                 [r, g, b, 255]
             }
             (false, 2) => {
@@ -80,16 +89,26 @@ fn dxt1_block(block: &[u8]) -> [[u8; 4]; 16] {
                     255,
                 ]
             }
+            (true, 3) => {
+                let r = ((col0[0] as u16 + col1[0] as u16 * 2) / 3) as u8;
+                let g = ((col0[1] as u16 + col1[1] as u16 * 2) / 3) as u8;
+                let b = ((col0[2] as u16 + col1[2] as u16 * 2) / 3) as u8;
+                [r, g, b, 255]
+            }
             (false, 3) => [0, 0, 0, 0],
-            _ => unreachable!(),
+            _ => unreachable!("DXT color selector is only two bits"),
         };
     }
     out
 }
 
+fn dxt1_block(block: &[u8]) -> [[u8; 4]; 16] {
+    dxt_color_block(block, true)
+}
+
 fn dxt3_block(block: &[u8]) -> [[u8; 4]; 16] {
     // First 8 bytes: explicit 4-bit alpha per texel
-    let mut out = dxt1_block(&block[8..16]);
+    let mut out = dxt_color_block(&block[8..16], false);
     for i in 0..16 {
         let nibble = if i % 2 == 0 {
             block[i / 2] & 0x0F
@@ -156,7 +175,7 @@ fn dxt5_block(block: &[u8]) -> [[u8; 4]; 16] {
         }
     };
 
-    let mut color_out = dxt1_block(&block[8..16]);
+    let mut color_out = dxt_color_block(&block[8..16], false);
     for (i, pixel) in color_out.iter_mut().enumerate() {
         let alpha_idx = ((alpha_codes >> (i * 3)) & 7) as u8;
         pixel[3] = interpolate_alpha(alpha_idx);
@@ -167,13 +186,20 @@ fn dxt5_block(block: &[u8]) -> [[u8; 4]; 16] {
 // ---- DXT surface decoders ---------------------------------------------
 
 fn decode_dxt_surface(data: &[u8], w: u32, h: u32, dxt: DxtType) -> Result<Vec<u8>, DecodeError> {
+    let pixel_count = checked_pixel_count(w, h)?;
     let bw = w.div_ceil(4).max(1) as usize;
     let bh = h.div_ceil(4).max(1) as usize;
     let block_bytes: usize = match dxt {
         DxtType::Dxt1 => 8,
-        DxtType::Dxt3 | DxtType::Dxt5 => 16,
+        DxtType::Dxt2 | DxtType::Dxt3 | DxtType::Dxt4 | DxtType::Dxt5 => 16,
     };
-    let needed = bw * bh * block_bytes;
+    let needed = bw
+        .checked_mul(bh)
+        .and_then(|blocks| blocks.checked_mul(block_bytes))
+        .ok_or(DecodeError::InvalidDimensions {
+            width: w,
+            height: h,
+        })?;
     if data.len() < needed {
         return Err(DecodeError::BufferTooSmall {
             need: needed,
@@ -181,15 +207,23 @@ fn decode_dxt_surface(data: &[u8], w: u32, h: u32, dxt: DxtType) -> Result<Vec<u
         });
     }
 
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    let mut rgba = vec![
+        0u8;
+        pixel_count
+            .checked_mul(4)
+            .ok_or(DecodeError::InvalidDimensions {
+                width: w,
+                height: h
+            })?
+    ];
 
     for by in 0..bh {
         for bx in 0..bw {
             let src_offset = (by * bw + bx) * block_bytes;
             let block_px = match dxt {
                 DxtType::Dxt1 => dxt1_block(&data[src_offset..src_offset + 8]),
-                DxtType::Dxt3 => dxt3_block(&data[src_offset..src_offset + 16]),
-                DxtType::Dxt5 => dxt5_block(&data[src_offset..src_offset + 16]),
+                DxtType::Dxt2 | DxtType::Dxt3 => dxt3_block(&data[src_offset..src_offset + 16]),
+                DxtType::Dxt4 | DxtType::Dxt5 => dxt5_block(&data[src_offset..src_offset + 16]),
             };
             for row in 0..4 {
                 for col in 0..4 {
@@ -198,7 +232,15 @@ fn decode_dxt_surface(data: &[u8], w: u32, h: u32, dxt: DxtType) -> Result<Vec<u
                     if img_y >= h as usize || img_x >= w as usize {
                         continue;
                     }
-                    let px = block_px[row * 4 + col];
+                    let mut px = block_px[row * 4 + col];
+                    if matches!(dxt, DxtType::Dxt2 | DxtType::Dxt4) && px[3] != 0 {
+                        // DXT2/DXT4 store premultiplied color. The viewer's
+                        // RGBA surface is straight-alpha, so restore the
+                        // color channels for correct previews.
+                        px[0] = ((u16::from(px[0]) * 255) / u16::from(px[3])).min(255) as u8;
+                        px[1] = ((u16::from(px[1]) * 255) / u16::from(px[3])).min(255) as u8;
+                        px[2] = ((u16::from(px[2]) * 255) / u16::from(px[3])).min(255) as u8;
+                    }
                     let dst = (img_y * w as usize + img_x) * 4;
                     rgba[dst..dst + 4].copy_from_slice(&px);
                 }
@@ -212,7 +254,7 @@ fn decode_dxt_surface(data: &[u8], w: u32, h: u32, dxt: DxtType) -> Result<Vec<u
 // ---- Uncompressed format decoders --------------------------------------
 
 fn decode_1555(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
-    let pixel_count = (w * h) as usize;
+    let pixel_count = checked_pixel_count(w, h)?;
     let needed = pixel_count * 2;
     if data.len() < needed {
         return Err(DecodeError::BufferTooSmall {
@@ -236,7 +278,7 @@ fn decode_1555(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
 }
 
 fn decode_565(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
-    let pixel_count = (w * h) as usize;
+    let pixel_count = checked_pixel_count(w, h)?;
     let needed = pixel_count * 2;
     if data.len() < needed {
         return Err(DecodeError::BufferTooSmall {
@@ -259,7 +301,7 @@ fn decode_565(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
 }
 
 fn decode_4444(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
-    let pixel_count = (w * h) as usize;
+    let pixel_count = checked_pixel_count(w, h)?;
     let needed = pixel_count * 2;
     if data.len() < needed {
         return Err(DecodeError::BufferTooSmall {
@@ -283,7 +325,7 @@ fn decode_4444(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
 }
 
 fn decode_8888(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
-    let pixel_count = (w * h) as usize;
+    let pixel_count = checked_pixel_count(w, h)?;
     let needed = pixel_count * 4;
     if data.len() < needed {
         return Err(DecodeError::BufferTooSmall {
@@ -308,7 +350,7 @@ fn decode_8888(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
 }
 
 fn decode_888(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
-    let pixel_count = (w * h) as usize;
+    let pixel_count = checked_pixel_count(w, h)?;
     let needed = pixel_count * 3;
     if data.len() < needed {
         return Err(DecodeError::BufferTooSmall {
@@ -328,7 +370,7 @@ fn decode_888(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
 }
 
 fn decode_555(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
-    let pixel_count = (w * h) as usize;
+    let pixel_count = checked_pixel_count(w, h)?;
     let needed = pixel_count * 2;
     if data.len() < needed {
         return Err(DecodeError::BufferTooSmall {
@@ -351,7 +393,7 @@ fn decode_555(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
 }
 
 fn decode_lum8(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
-    let pixel_count = (w * h) as usize;
+    let pixel_count = checked_pixel_count(w, h)?;
     let needed = pixel_count;
     if data.len() < needed {
         return Err(DecodeError::BufferTooSmall {
@@ -370,8 +412,29 @@ fn decode_lum8(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
     Ok(rgba)
 }
 
+fn decode_a8l8(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
+    let pixel_count = checked_pixel_count(w, h)?;
+    let needed = pixel_count * 2;
+    if data.len() < needed {
+        return Err(DecodeError::BufferTooSmall {
+            need: needed,
+            have: data.len(),
+        });
+    }
+    let mut rgba = vec![0u8; pixel_count * 4];
+    for i in 0..pixel_count {
+        let l = data[i * 2];
+        let a = data[i * 2 + 1];
+        rgba[i * 4] = l;
+        rgba[i * 4 + 1] = l;
+        rgba[i * 4 + 2] = l;
+        rgba[i * 4 + 3] = a;
+    }
+    Ok(rgba)
+}
+
 fn decode_pal4(data: &[u8], palette: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
-    let pixel_count = (w * h) as usize;
+    let pixel_count = checked_pixel_count(w, h)?;
     let data_needed = pixel_count.div_ceil(2);
     if data.len() < data_needed {
         return Err(DecodeError::BufferTooSmall {
@@ -389,24 +452,19 @@ fn decode_pal4(data: &[u8], palette: &[u8], w: u32, h: u32) -> Result<Vec<u8>, D
     let mut rgba = vec![0u8; pixel_count * 4];
     for i in 0..pixel_count {
         let nibble = if i % 2 == 0 {
-            data[i / 2] & 0x0F
-        } else {
             (data[i / 2] >> 4) & 0x0F
+        } else {
+            data[i / 2] & 0x0F
         } as usize;
-        let b = palette[nibble * 4];
-        let g = palette[nibble * 4 + 1];
-        let r = palette[nibble * 4 + 2];
-        let a = palette[nibble * 4 + 3];
-        rgba[i * 4] = r;
-        rgba[i * 4 + 1] = g;
-        rgba[i * 4 + 2] = b;
-        rgba[i * 4 + 3] = a;
+        // RenderWare palettes are stored as RGBA entries. This differs from
+        // the BGRA byte order used by uncompressed PC rasters.
+        rgba[i * 4..i * 4 + 4].copy_from_slice(&palette[nibble * 4..nibble * 4 + 4]);
     }
     Ok(rgba)
 }
 
 fn decode_pal8(data: &[u8], palette: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
-    let pixel_count = (w * h) as usize;
+    let pixel_count = checked_pixel_count(w, h)?;
     let needed = pixel_count;
     if data.len() < needed {
         return Err(DecodeError::BufferTooSmall {
@@ -414,24 +472,23 @@ fn decode_pal8(data: &[u8], palette: &[u8], w: u32, h: u32) -> Result<Vec<u8>, D
             have: data.len(),
         });
     }
-    if palette.len() < 1024 {
-        // 256 entries × 4 bytes
+    let palette_entries = palette.len() / 4;
+    if palette_entries == 0 {
         return Err(DecodeError::BufferTooSmall {
-            need: 1024,
+            need: 4,
             have: palette.len(),
         });
     }
     let mut rgba = vec![0u8; pixel_count * 4];
     for i in 0..pixel_count {
         let idx = data[i] as usize;
-        let b = palette[idx * 4];
-        let g = palette[idx * 4 + 1];
-        let r = palette[idx * 4 + 2];
-        let a = palette[idx * 4 + 3];
-        rgba[i * 4] = r;
-        rgba[i * 4 + 1] = g;
-        rgba[i * 4 + 2] = b;
-        rgba[i * 4 + 3] = a;
+        if idx >= palette_entries {
+            return Err(DecodeError::BufferTooSmall {
+                need: (idx + 1) * 4,
+                have: palette.len(),
+            });
+        }
+        rgba[i * 4..i * 4 + 4].copy_from_slice(&palette[idx * 4..idx * 4 + 4]);
     }
     Ok(rgba)
 }
@@ -451,6 +508,14 @@ pub mod format {
     pub const EXT_PAL4: u32 = 0x4000;
     pub const EXT_MIPMAP: u32 = 0x8000;
 
+    pub const RASTER_TYPE_1555: u32 = 0x01;
+    pub const RASTER_TYPE_565: u32 = 0x02;
+    pub const RASTER_TYPE_4444: u32 = 0x03;
+    pub const RASTER_TYPE_LUM8: u32 = 0x04;
+    pub const RASTER_TYPE_8888: u32 = 0x05;
+    pub const RASTER_TYPE_888: u32 = 0x06;
+    pub const RASTER_TYPE_555: u32 = 0x0A;
+
     pub fn base_format(raster_format: u32) -> u32 {
         raster_format & 0xFFF
     }
@@ -469,13 +534,13 @@ pub mod format {
 
     pub fn format_name(raster_format: u32) -> &'static str {
         match base_format(raster_format) {
-            FORMAT_1555 => "1555 ARGB",
-            FORMAT_565 => "565 RGB",
-            FORMAT_4444 => "4444 ARGB",
-            FORMAT_LUM8 => "LUM8",
-            FORMAT_8888 => "8888 ARGB",
-            FORMAT_888 => "888 RGB",
-            FORMAT_555 => "555 XRGB",
+            FORMAT_1555 | RASTER_TYPE_1555 => "1555 ARGB",
+            FORMAT_565 | RASTER_TYPE_565 => "565 RGB",
+            FORMAT_4444 | RASTER_TYPE_4444 => "4444 ARGB",
+            FORMAT_LUM8 | RASTER_TYPE_LUM8 => "LUM8",
+            FORMAT_8888 | RASTER_TYPE_8888 => "8888 ARGB",
+            FORMAT_888 | RASTER_TYPE_888 => "888 RGB",
+            FORMAT_555 | RASTER_TYPE_555 => "555 XRGB",
             _ => "Unknown",
         }
     }
@@ -504,7 +569,7 @@ pub struct DecodedTexture {
 /// Decode raster data to RGBA given the TXD raster format.
 ///
 /// `data` is the raw mipmap pixel data (after any platform-specific header).
-/// `palette` is the 32-bit BGRA palette bytes (for PAL4/PAL8).
+/// `palette` is the 32-bit RGBA palette bytes (for PAL4/PAL8).
 /// `raster_type` is the RW raster type field (0x12 = DXT compressed).
 pub fn decode_raster(
     data: &[u8],
@@ -550,6 +615,235 @@ pub fn decode_raster(
             format::FORMAT_888 => decode_888(data, width, height),
             format::FORMAT_555 => decode_555(data, width, height),
             _ => Err(DecodeError::UnsupportedFormat(base)),
+        }
+    }
+}
+
+const PLATFORM_D3D8: u32 = 8;
+const PLATFORM_D3D9: u32 = 9;
+const D3D_8888: u32 = 21;
+const D3D_888: u32 = 22;
+const D3D_565: u32 = 23;
+const D3D_555: u32 = 24;
+const D3D_1555: u32 = 25;
+const D3D_4444: u32 = 26;
+const D3D_L8: u32 = 50;
+const D3D_A8L8: u32 = 51;
+const D3D_DXT1: u32 = 0x3154_5844;
+const D3D_DXT2: u32 = 0x3254_5844;
+const D3D_DXT3: u32 = 0x3354_5844;
+const D3D_DXT4: u32 = 0x3454_5844;
+const D3D_DXT5: u32 = 0x3554_5844;
+
+/// Decode one PC RenderWare Texture Native mip level.
+///
+/// Unlike decode_raster, this function receives pixels after the native
+/// mip-length prefix has already been removed. D3D9 selects the format with
+/// its D3D format/FourCC, while D3D8 stores the DXT selector in the platform
+/// properties byte. Raster flags remain the fallback for uncompressed data.
+pub fn decode_native_raster(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    depth: u8,
+    raster_format: u32,
+    palette: &[u8],
+    platform_id: u32,
+    d3d_format: u32,
+    platform_properties: u8,
+    raster_type: u8,
+) -> Result<Vec<u8>, DecodeError> {
+    let palette_type = (raster_format >> 13) & 0x3;
+    if palette_type == 1 {
+        return decode_pal8(data, palette, width, height);
+    }
+    if palette_type == 2 || palette_type == 3 {
+        if depth == 4 {
+            return decode_pal4(data, palette, width, height);
+        }
+        return decode_pal8(data, palette, width, height);
+    }
+
+    if let Some(dxt) = native_dxt_type(
+        raster_format,
+        platform_id,
+        d3d_format,
+        platform_properties,
+        raster_type,
+    ) {
+        return decode_dxt_surface(data, width, height, dxt);
+    }
+
+    let raster = raster_type_code(raster_format);
+    match (platform_id, d3d_format) {
+        (PLATFORM_D3D9, D3D_8888) => decode_8888(data, width, height),
+        (PLATFORM_D3D9, D3D_888) => decode_888(data, width, height),
+        (PLATFORM_D3D9, D3D_565) => decode_565(data, width, height),
+        (PLATFORM_D3D9, D3D_555) => decode_555(data, width, height),
+        (PLATFORM_D3D9, D3D_1555) => decode_1555(data, width, height),
+        (PLATFORM_D3D9, D3D_4444) => decode_4444(data, width, height),
+        (PLATFORM_D3D9, D3D_L8) => decode_lum8(data, width, height),
+        (PLATFORM_D3D9, D3D_A8L8) => decode_a8l8(data, width, height),
+        _ => match raster {
+            format::RASTER_TYPE_1555 => decode_1555(data, width, height),
+            format::RASTER_TYPE_565 => decode_565(data, width, height),
+            format::RASTER_TYPE_4444 => decode_4444(data, width, height),
+            format::RASTER_TYPE_LUM8 => decode_lum8(data, width, height),
+            format::RASTER_TYPE_8888 => decode_8888(data, width, height),
+            format::RASTER_TYPE_888 => decode_888(data, width, height),
+            format::RASTER_TYPE_555 => decode_555(data, width, height),
+            _ => Err(DecodeError::UnsupportedFormat(raster_format)),
+        },
+    }
+}
+
+pub fn native_dxt_type(
+    raster_format: u32,
+    platform_id: u32,
+    d3d_format: u32,
+    platform_properties: u8,
+    raster_type: u8,
+) -> Option<DxtType> {
+    if platform_id == PLATFORM_D3D8 {
+        let dxt = match platform_properties {
+            1 => Some(DxtType::Dxt1),
+            2 => Some(DxtType::Dxt2),
+            3 => Some(DxtType::Dxt3),
+            4 => Some(DxtType::Dxt4),
+            5 => Some(DxtType::Dxt5),
+            _ => None,
+        };
+        if dxt.is_some() {
+            return dxt;
+        }
+    }
+
+    if platform_id == PLATFORM_D3D9 {
+        let dxt = match d3d_format {
+            D3D_DXT1 => Some(DxtType::Dxt1),
+            D3D_DXT2 => Some(DxtType::Dxt2),
+            D3D_DXT3 => Some(DxtType::Dxt3),
+            D3D_DXT4 => Some(DxtType::Dxt4),
+            D3D_DXT5 => Some(DxtType::Dxt5),
+            _ => None,
+        };
+        if dxt.is_some() {
+            return dxt;
+        }
+    }
+
+    // Keep compatibility with older callers that only supplied the legacy
+    // raster type marker and raster-format base.
+    if raster_type == 0x12 {
+        return match format::base_format(raster_format) {
+            format::FORMAT_1555 => Some(DxtType::Dxt1),
+            format::FORMAT_565 => Some(DxtType::Dxt3),
+            format::FORMAT_4444 => Some(DxtType::Dxt5),
+            _ => Some(DxtType::Dxt1),
+        };
+    }
+    None
+}
+
+pub fn native_is_dxt(
+    raster_format: u32,
+    platform_id: u32,
+    d3d_format: u32,
+    platform_properties: u8,
+    raster_type: u8,
+) -> bool {
+    native_dxt_type(
+        raster_format,
+        platform_id,
+        d3d_format,
+        platform_properties,
+        raster_type,
+    )
+    .is_some()
+}
+
+pub fn native_has_alpha(
+    raster_format: u32,
+    platform_id: u32,
+    d3d_format: u32,
+    platform_properties: u8,
+    raster_type: u8,
+) -> bool {
+    if platform_id == PLATFORM_D3D9 {
+        return platform_properties & 0x01 != 0
+            || matches!(
+                d3d_format,
+                D3D_DXT2 | D3D_DXT3 | D3D_DXT4 | D3D_DXT5 | D3D_1555 | D3D_4444 | D3D_A8L8
+            );
+    }
+    if platform_id == PLATFORM_D3D8 {
+        return match platform_properties {
+            2..=5 => true,
+            1 => raster_type_code(raster_format) == format::RASTER_TYPE_1555,
+            _ => matches!(
+                raster_type_code(raster_format),
+                format::RASTER_TYPE_1555 | format::RASTER_TYPE_4444 | format::RASTER_TYPE_8888
+            ),
+        };
+    }
+    matches!(
+        raster_type_code(raster_format),
+        format::RASTER_TYPE_1555 | format::RASTER_TYPE_4444 | format::RASTER_TYPE_8888
+    ) || raster_type == 0x12
+}
+
+pub fn native_format_name(
+    raster_format: u32,
+    platform_id: u32,
+    d3d_format: u32,
+    platform_properties: u8,
+    raster_type: u8,
+) -> &'static str {
+    match d3d_format {
+        D3D_8888 => "8888 ARGB",
+        D3D_888 => "888 RGB",
+        D3D_565 => "565 RGB",
+        D3D_555 => "555 XRGB",
+        D3D_1555 => "1555 ARGB",
+        D3D_4444 => "4444 ARGB",
+        D3D_L8 => "LUM8",
+        D3D_A8L8 => "A8L8",
+        D3D_DXT1 => "DXT1",
+        D3D_DXT2 => "DXT2",
+        D3D_DXT3 => "DXT3",
+        D3D_DXT4 => "DXT4",
+        D3D_DXT5 => "DXT5",
+        _ => match native_dxt_type(
+            raster_format,
+            platform_id,
+            d3d_format,
+            platform_properties,
+            raster_type,
+        ) {
+            Some(DxtType::Dxt1) => "DXT1",
+            Some(DxtType::Dxt2) => "DXT2",
+            Some(DxtType::Dxt3) => "DXT3",
+            Some(DxtType::Dxt4) => "DXT4",
+            Some(DxtType::Dxt5) => "DXT5",
+            None => format::format_name(raster_type_code(raster_format)),
+        },
+    }
+}
+
+fn raster_type_code(raster_format: u32) -> u32 {
+    let encoded = (raster_format >> 8) & 0x0F;
+    if encoded != 0 {
+        encoded
+    } else {
+        match format::base_format(raster_format) {
+            format::FORMAT_1555 => format::RASTER_TYPE_1555,
+            format::FORMAT_565 => format::RASTER_TYPE_565,
+            format::FORMAT_4444 => format::RASTER_TYPE_4444,
+            format::FORMAT_LUM8 => format::RASTER_TYPE_LUM8,
+            format::FORMAT_8888 => format::RASTER_TYPE_8888,
+            format::FORMAT_888 => format::RASTER_TYPE_888,
+            format::FORMAT_555 => format::RASTER_TYPE_555,
+            other => other,
         }
     }
 }
@@ -610,5 +904,48 @@ mod tests {
         assert_eq!(rgba[1], 255);
         assert_eq!(rgba[2], 136);
         assert_eq!(rgba[3], 255);
+    }
+
+    #[test]
+    fn decode_pal4_uses_high_nibble_first_and_rgba_palette_order() {
+        let palette = (0..16)
+            .flat_map(|index| [index * 4, index * 4 + 1, index * 4 + 2, index * 4 + 3])
+            .collect::<Vec<_>>();
+        let rgba = decode_pal4(&[0x12], &palette, 2, 1).expect("PAL4 should decode");
+
+        assert_eq!(&rgba[..4], &[4, 5, 6, 7]);
+        assert_eq!(&rgba[4..8], &[8, 9, 10, 11]);
+    }
+
+    #[test]
+    fn decode_pal8_accepts_bounded_palettes_and_rejects_missing_entries() {
+        let palette = [10, 20, 30, 40, 50, 60, 70, 80];
+        let rgba = decode_pal8(&[1], &palette, 1, 1).expect("PAL8 should decode");
+        assert_eq!(rgba, vec![50, 60, 70, 80]);
+
+        let error = decode_pal8(&[2], &palette, 1, 1).expect_err("missing entry should fail");
+        assert!(matches!(
+            error,
+            DecodeError::BufferTooSmall { need: 12, have: 8 }
+        ));
+    }
+
+    #[test]
+    fn reject_unreasonable_decode_dimensions_before_allocation() {
+        let error = decode_8888(&[], MAX_DECODE_DIMENSION + 1, 1)
+            .expect_err("oversized textures should be rejected");
+        assert!(matches!(
+            error,
+            DecodeError::InvalidDimensions { width, height }
+                if width == MAX_DECODE_DIMENSION + 1 && height == 1
+        ));
+    }
+
+    #[test]
+    fn native_dxt_falls_back_to_legacy_marker_for_d3d8() {
+        assert_eq!(
+            native_dxt_type(format::FORMAT_1555, PLATFORM_D3D8, 0, 0, 0x12,),
+            Some(DxtType::Dxt1)
+        );
     }
 }

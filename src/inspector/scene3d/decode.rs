@@ -23,6 +23,7 @@ use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::mesh::{Aabb, SceneMesh, SceneTexture, Vertex};
 use crate::inspector::scene3d::scene::Scene;
 use crate::inspector::viewer3d::{MeshData, collect_meshes};
+use crate::parser::dff::DffMesh;
 
 #[derive(Debug, Error)]
 pub enum DecodeError {
@@ -81,6 +82,72 @@ where
     let mut nif = NifFile::parse(bytes).map_err(|_| DecodeError::NoGeometry)?;
     nif.resolve_string_indices();
     build_scene_from_nif(&nif, base_orientation, texture_resolver)
+}
+
+/// Build a Scene from RenderWare DFF meshes.
+///
+/// GTA PC DFF coordinates are Z-up, so the caller normally supplies
+/// BaseOrientation::Zup. The texture resolver is called once for each
+/// material-split mesh that exposes a diffuse TXD name.
+pub fn build_scene_from_dff<F>(
+    dff_meshes: &[DffMesh],
+    base_orientation: BaseOrientation,
+    texture_resolver: F,
+) -> Result<Scene, DecodeError>
+where
+    F: Fn(&str) -> Option<SceneTexture>,
+{
+    if dff_meshes.is_empty() {
+        return Err(DecodeError::NoGeometry);
+    }
+
+    let mut meshes = Vec::with_capacity(dff_meshes.len());
+    let mut scene_aabb: Option<Aabb> = None;
+    for raw in dff_meshes {
+        if raw.positions.is_empty() || raw.indices.is_empty() {
+            continue;
+        }
+        let data = MeshData {
+            name: raw.name.clone(),
+            texture_name: raw.texture_name.clone(),
+            positions: raw.positions.clone(),
+            normals: raw.normals.clone(),
+            uvs: raw.uvs.clone(),
+            indices: raw.indices.clone(),
+        };
+        let diffuse = data.texture_name.as_deref().and_then(&texture_resolver);
+        let mesh = mesh_from_data(&data, base_orientation, diffuse);
+        scene_aabb = Some(match scene_aabb {
+            Some(aabb) => aabb.merged(mesh.aabb),
+            None => mesh.aabb,
+        });
+        meshes.push(mesh);
+    }
+
+    if meshes.is_empty() {
+        return Err(DecodeError::NoGeometry);
+    }
+
+    Ok(Scene {
+        meshes,
+        aabb: scene_aabb.unwrap_or_default(),
+        ambient: [0.42, 0.44, 0.48],
+        key_light: [0.65, 0.85, 0.55],
+        base_orientation,
+    })
+}
+
+/// Convenience: parse DFF bytes, then build the embedded viewer scene.
+pub fn parse_and_build_scene_from_dff<F>(
+    bytes: &[u8],
+    base_orientation: BaseOrientation,
+    texture_resolver: F,
+) -> Result<Scene, DecodeError>
+where
+    F: Fn(&str) -> Option<SceneTexture>,
+{
+    let meshes = crate::parser::dff::parse_dff(bytes).map_err(|_| DecodeError::NoGeometry)?;
+    build_scene_from_dff(&meshes, base_orientation, texture_resolver)
 }
 
 fn mesh_from_data(
@@ -197,6 +264,38 @@ mod tests {
         let m = BaseOrientation::Zup.to_yup_matrix();
         let v = m * glam::Vec4::new(0.0, 1.0, 0.0, 1.0);
         assert!(approx_pt([v.x, v.y, v.z], [0.0, 0.0, -1.0]));
+    }
+
+    #[test]
+    fn dff_builder_keeps_geometry_and_resolves_diffuse_texture() {
+        let meshes = [DffMesh {
+            name: "body".to_string(),
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            normals: vec![[0.0, 1.0, 0.0]; 3],
+            uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            indices: vec![0, 1, 2],
+            material_name: None,
+            texture_name: Some("body_d".to_string()),
+        }];
+        let requested = RefCell::new(Vec::new());
+
+        let scene = build_scene_from_dff(&meshes, BaseOrientation::Zup, |name| {
+            requested.borrow_mut().push(name.to_string());
+            Some(SceneTexture {
+                width: 1,
+                height: 1,
+                rgba: vec![255, 128, 64, 255],
+            })
+        })
+        .expect("DFF mesh should build into a scene");
+
+        assert_eq!(scene.total_vertices(), 3);
+        assert_eq!(scene.total_triangles(), 1);
+        assert_eq!(scene.textured_mesh_count(), 1);
+        assert_eq!(
+            requested.borrow().as_slice(),
+            [String::from("body_d")].as_slice()
+        );
     }
 
     #[test]

@@ -11,11 +11,11 @@
 //! - [`camera`] — orbit camera with `glam::Mat4` projection, configurable
 //!   base orientation (Y / Z / X up).
 //! - [`scene`] — `Scene` aggregating meshes with lighting state.
-//! - [`decode`] — turns a parsed [`crate::inspector::nif::NifFile`] into
-//!   a `Scene`, reusing [`crate::inspector::viewer3d::collect_mesh`] for
-//!   the geometry strip-to-triangle expansion.
+//! - [`decode`] — turns parsed NIF or RenderWare DFF data into a `Scene`,
+//!   reusing [`crate::inspector::viewer3d::collect_mesh`] for NIF geometry
+//!   strip-to-triangle expansion.
 //!
-//! The expected lifetime is: `parse NIF bytes → resolve NFT pixels
+//! The expected lifetime is: `parse model bytes → resolve companion pixels
 //! (optional) → build Scene → upload to GPU in the widget`. None of those
 //! later steps are visible in this module.
 
@@ -33,7 +33,10 @@ pub mod scene;
 #[allow(unused_imports)]
 pub use camera::{BaseOrientation, OrbitCamera, Viewport};
 #[allow(unused_imports)]
-pub use decode::{DecodeError, build_scene_from_nif, parse_and_build_scene};
+pub use decode::{
+    DecodeError, build_scene_from_dff, build_scene_from_nif, parse_and_build_scene,
+    parse_and_build_scene_from_dff,
+};
 #[allow(unused_imports)]
 pub use mesh::{Aabb, SceneMesh, SceneTexture, VERTEX_STRIDE, Vertex};
 #[allow(unused_imports)]

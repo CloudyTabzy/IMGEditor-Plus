@@ -1,11 +1,11 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v3.15.0** (smoother 3D camera zoom/panning, synchronized texture overlays, and continued archive/UI refinements). 294 tests passing.
+Last shipped: **v3.16.0** (PC RenderWare DFF/TXD preview support, safer raster decoding, smoother 3D camera zoom/panning, synchronized texture overlays, and continued archive/UI refinements).
 
-Next phase: **validating and hardening GTA III/VC/SA IMG support** before
+Next phase: **validating and hardening GTA III/VC/SA IMG and RenderWare support** before
 considering other container families.
 
-On master (post-v3.15.0, unreleased):
+On master (post-v3.16.0, unreleased):
 
 - Byte-budgeted `quick_cache` LRU for decoded 3D scenes (256 MiB desktop / 64 MiB mobile, keyed by `(archive, generation, entry)`) and texture previews (128 MiB / 32 MiB, keyed by entry index); `ArchiveInfo::generation` invalidates both on entry mutations. `Arc<Scene>` / `Arc<Vec<DecodedTexture>>` values are shared zero-copy with the viewer handle and per-frame lookups.
 - Memoized `IdeMap` per game root so only the first 3D load per root walks the directory.
@@ -67,7 +67,41 @@ The reference’s compact v2 data-start calculation is intentionally not a targe
 for adoption: retain the current `0x300000` rebuild convention until real San
 Andreas validation confirms a different layout is safe.
 
-## 3. Other game formats (deferred)
+## 3. RenderWare DFF/TXD preview follow-ups
+
+The embedded viewer now supports the common PC RenderWare path used by GTA
+III, Vice City, and San Andreas: non-native DFF geometry, frame/atomic
+transforms, PC D3D8/D3D9 TXDs, diffuse texture resolution, and the core raster
+decoders. See [`docs/renderware-gta-preview.md`](docs/renderware-gta-preview.md)
+for the format notes and the important caveat that the current local
+`Gta_3_img` corpus is labelled as GTA III but contains San Andreas-style
+assets.
+
+Recommended future adaptations, each gated by representative fixtures:
+
+- [ ] Add legally obtained GTA III and Vice City DFF/TXD fixtures and an
+  untracked per-game manifest of names, dimensions, raster formats, and hashes.
+- [ ] Decode native PS2, Xbox, GameCube, and PSP geometry/texture streams
+  instead of treating them as PC vertex data.
+- [ ] Add DFF skin/bone/HAnim data, IFP animation discovery, and optional pose
+  playback in the viewer.
+- [ ] Preserve and preview additional UV sets, prelit vertex colors, multiple
+  material properties, and material-split geometry where the source needs it.
+- [ ] Support common RenderWare effects such as MatFX, dual/environment
+  textures, bump/specular masks, and material colors without flattening them
+  into an inaccurate diffuse-only result.
+- [ ] Cover Bin Mesh/native geometry variants and unusual TXD palette, mipmap,
+  and stream layouts with focused decoder tests.
+- [ ] Replace the bounded fallback TXD scan with a generation-aware reverse
+  texture index once archive sizes or load latency justify the extra state.
+- [ ] Decide whether DFF/TXD editing and serialization belong in IMGEditor Plus;
+  if so, add round-trip tests before exposing write actions in the UI.
+
+The current PC inspection path should remain the safe default: unsupported
+platform payloads must be reported clearly rather than guessed into malformed
+geometry or colors.
+
+## 4. Other game formats (deferred)
 
 Pick a target before scoping the work. Candidate families:
 

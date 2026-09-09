@@ -9,8 +9,8 @@ Date: 2026-06-18
   deltas at the same nominal rate.
 - Blender-style MMB panning is modestly more responsive while preserving the
   existing screen-space movement convention.
-- The Rust test suite is now **294 tests**, including scene3d camera, renderer,
-  and cross-archive cache-invalidation regressions.
+- The Rust test suite is now **305 tests**, including scene3d camera, renderer,
+  RenderWare DFF/TXD decoding, and cross-archive cache-invalidation regressions.
 
 ## Update — 2026-09-07: zero-copy export, measured hard limit, faster save
 

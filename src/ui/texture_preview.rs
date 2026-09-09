@@ -567,7 +567,7 @@ pub fn decoded_textures_from_scene(scene: &Scene) -> Vec<DecodedTexture> {
             height: texture.height,
             rgba: texture.rgba.clone(),
             has_alpha,
-            format_name: "NIF companion texture".to_string(),
+            format_name: "Model companion texture".to_string(),
             mipmap_count: 1,
             handle: std::sync::OnceLock::new(),
         });

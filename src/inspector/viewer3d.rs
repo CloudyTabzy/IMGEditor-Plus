@@ -98,15 +98,16 @@ fn export_viewer(
         eprintln!("[IMGEditor] viewer: no diffuse texture found in NIF");
     }
 
-    let stem = name.rsplit('.').next().unwrap_or(&name);
+    let stem = Path::new(&name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&name);
     let temp_dir = std::env::temp_dir().join("IMGEditor").join("preview");
     let _ = fs::create_dir_all(&temp_dir);
 
     // Resolve texture via IDE → NFT pipeline.
-    let nif_basename = Path::new(&name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(stem);
+    let nif_basename = stem;
     eprintln!("[IMGEditor] viewer: nif basename = {nif_basename}, game_root = {game_root:?}");
     let ide_map = game_root.as_ref().map(|root| IdeMap::build(root));
     let nft_catalog = ide_map
@@ -363,7 +364,11 @@ fn export_dff_viewer(dff_data: Vec<u8>, name: String, tx: mpsc::UnboundedSender<
     let temp_dir = std::env::temp_dir().join("IMGEditor").join("preview");
     let _ = fs::create_dir_all(&temp_dir);
 
-    let stem = name.rsplit('.').next().unwrap_or(&name);
+    let stem = Path::new(&name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&name);
     let ply_path = temp_dir.join(format!("{stem}.ply"));
 
     // Flatten all meshes into one PLY with vertex-offset indexing.
