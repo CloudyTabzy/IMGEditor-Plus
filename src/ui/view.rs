@@ -1634,17 +1634,50 @@ pub fn build(app: &App) -> Element<'_, Message> {
             )
             .width(Length::Fixed(SEARCH_LABEL_WIDTH))
             .align_y(Alignment::Center);
-            let search = row![
-                mouse_area(label).on_press(Message::FocusSearchInput),
-                text_input("", &app.search)
-                    .id(iced::widget::Id::new("search_input"))
-                    .on_input(Message::SearchChanged)
-                    .width(Length::Fill),
-            ]
-            .spacing(8)
-            .padding([6, 8])
-            .height(Length::Fill)
-            .align_y(Alignment::Center);
+            let search_input = text_input("", &app.search)
+                .id(iced::widget::Id::new("search_input"))
+                .on_input(Message::SearchChanged)
+                .width(Length::Fill);
+            let mut search = row![mouse_area(label).on_press(Message::FocusSearchInput), search_input]
+                .spacing(8)
+                .padding([6, 8])
+                .height(Length::Fill)
+                .align_y(Alignment::Center);
+            // Trailing clear button: wipes the query and refocuses the
+            // input. Only rendered when there is something to clear.
+            if !app.search.is_empty() {
+                let clear_icon = container(icons::close().size(14))
+                    .width(Length::Fixed(20.0))
+                    .height(Length::Fixed(20.0))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill);
+                let hover_bg = with_alpha(design.accent(), 0.22);
+                search = search.push(
+                    button(clear_icon)
+                        .on_press(Message::ClearSearch)
+                        .padding(0)
+                        .width(Length::Fixed(22.0))
+                        .height(Length::Fixed(22.0))
+                        .style(move |theme, status| {
+                            let highlighted = matches!(
+                                status,
+                                button::Status::Hovered | button::Status::Pressed
+                            );
+                            let palette = theme.extended_palette();
+                            iced::widget::button::Style {
+                                background: highlighted
+                                    .then_some(iced::Background::Color(hover_bg)),
+                                text_color: palette.background.base.text,
+                                border: Border {
+                                    color: Color::TRANSPARENT,
+                                    width: 0.0,
+                                    radius: 4.0.into(),
+                                },
+                                ..Default::default()
+                            }
+                        }),
+                );
+            }
 
             let search_bg = design.chrome();
             Container::new(search)

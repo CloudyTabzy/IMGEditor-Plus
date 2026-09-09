@@ -174,6 +174,8 @@ pub enum Message {
     CancelActive,
 
     SearchChanged(String),
+    /// Clear the search box, reset the filter, and refocus the input.
+    ClearSearch,
     SearchPredictMove(i32),
     SearchPredictCommit,
     SearchPredictDismiss,
@@ -961,6 +963,10 @@ impl App {
         let click_task = self.update(Message::EntryClicked(0));
         Task::batch(vec![
             click_task,
+            // Refocusing the text input also moves its caret to the end
+            // of the committed name (State::focus resets the cursor), so
+            // the insertion point doesn't linger at the old typed offset.
+            iced::widget::operation::focus(iced::widget::Id::new(SEARCH_INPUT_ID)),
             iced::advanced::widget::operate(scroll_to(
                 iced::widget::Id::new("entry_table"),
                 AbsoluteOffset {
@@ -2115,6 +2121,14 @@ impl App {
                 self.prediction_index = None;
                 self.search_focused = true;
                 Task::none()
+            }
+            Message::ClearSearch => {
+                self.search.clear();
+                self.filter_pending = true;
+                self.predictions_dismissed = false;
+                self.prediction_index = None;
+                self.search_focused = true;
+                iced::widget::operation::focus(iced::widget::Id::new(SEARCH_INPUT_ID))
             }
             Message::SearchPredictMove(direction) => {
                 if !self.predictions_open() {
@@ -5001,6 +5015,24 @@ mod tests {
             .map(|e| e.selected)
             .collect();
         assert_eq!(selected, vec![true, true]);
+    }
+
+    #[test]
+    fn clear_search_resets_query_and_refocuses() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::SearchChanged("first".to_string()));
+        let _ = app.update(Message::DebounceTick);
+        assert_eq!(app.editor.archives()[0].selected_indices.len(), 1);
+
+        let _ = app.update(Message::ClearSearch);
+        assert!(app.search.is_empty());
+        assert!(app.search_focused);
+        let _ = app.update(Message::DebounceTick);
+        assert_eq!(
+            app.editor.archives()[0].selected_indices.len(),
+            2,
+            "clearing must reveal every entry again"
+        );
     }
 
     #[test]
