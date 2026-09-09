@@ -70,6 +70,7 @@ pub fn build<'a>(
     draft: &'a SortChain,
     preview_entries: &'a [EntryInfo],
     primary_type: Option<&'a str>,
+    literal_types: bool,
     ide_labels: &'a std::collections::HashMap<
         compact_str::CompactString,
         compact_str::CompactString,
@@ -108,7 +109,8 @@ pub fn build<'a>(
     // draft chain. The empty-state placeholder shows what the
     // current (un-sorted) order looks like, so the user can
     // see the "no sort" baseline.
-    let preview = preview_pane(preview_entries, draft, primary_type, ide_labels, col_labels);
+    let preview =
+        preview_pane(preview_entries, draft, primary_type, literal_types, ide_labels, col_labels);
 
     let preset_picker = preset_picker();
 
@@ -325,6 +327,7 @@ fn preview_pane<'a>(
     entries: &'a [EntryInfo],
     chain: &'a SortChain,
     primary_type: Option<&'a str>,
+    literal_types: bool,
     ide_labels: &'a std::collections::HashMap<
         compact_str::CompactString,
         compact_str::CompactString,
@@ -355,6 +358,7 @@ fn preview_pane<'a>(
     let mut sorted: Vec<EntryInfo> = entries.to_vec();
     let ctx = SortContext {
         primary_type,
+        literal_types,
         ide_files: ide_labels,
         col_files: col_labels,
     };

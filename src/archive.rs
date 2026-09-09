@@ -188,6 +188,10 @@ pub struct EntryInfo {
     pub file_name_lower: CompactString,
     pub file_name_raw: [u8; MAX_ENTRY_NAME_BYTES],
     pub file_type: CompactString,
+    /// Uppercase raw extension (`DFF`, `NIF`, `FILE` when the name has
+    /// no extension). Mode-independent: the literal type display and
+    /// sorts read this instead of re-parsing the name.
+    pub file_ext: CompactString,
     pub source_path: Option<PathBuf>,
     pub imported: bool,
     pub rename: bool,
@@ -200,6 +204,13 @@ impl EntryInfo {
         let file_name_lower = CompactString::new(file_name.to_lowercase());
         let file_name_raw = encode_entry_name(&file_name);
         let file_type = infer_file_type(&file_name);
+        let file_ext = CompactString::new(
+            std::path::Path::new(&file_name)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_uppercase())
+                .unwrap_or_else(|| "FILE".to_string()),
+        );
 
         Self {
             offset: 0,
@@ -208,10 +219,22 @@ impl EntryInfo {
             file_name_lower,
             file_name_raw,
             file_type,
+            file_ext,
             source_path: None,
             imported: false,
             rename: false,
             selected: false,
+        }
+    }
+
+    /// The type string shown in the table and used for type grouping:
+    /// the curated category label, or the raw extension in capitals
+    /// when literal mode is on.
+    pub fn display_file_type(&self, literal: bool) -> &CompactString {
+        if literal {
+            &self.file_ext
+        } else {
+            &self.file_type
         }
     }
 }
@@ -355,7 +378,7 @@ impl ArchiveInfo {
             ImgVersion::Unknown => crate::parser::UnknownParser.open(&mut archive)?,
         }
 
-        archive.update_selected_list("");
+        archive.update_selected_list("", false);
         Ok(archive)
     }
 
@@ -388,7 +411,7 @@ impl ArchiveInfo {
         self.logs.push(format!("[{}] {}", now, message));
     }
 
-    pub fn update_selected_list(&mut self, filter: &str) {
+    pub fn update_selected_list(&mut self, filter: &str, literal_types: bool) {
         self.sync_sort_state_from_chain();
         let filter = filter.trim().to_lowercase();
         self.selected_indices.clear();
@@ -397,7 +420,7 @@ impl ArchiveInfo {
         // Eagerly clone the cached file-type list. `unique_file_types` needs
         // `&mut self` to populate the cache, so it must happen before we hold
         // any borrowed `EntryInfo` references from `self.entries`.
-        let unique_types = self.unique_file_types().to_vec();
+        let unique_types = self.unique_file_types(literal_types).to_vec();
 
         let mut matches: Vec<(usize, &EntryInfo, Option<i64>)> = if filter.is_empty() {
             self.entries
@@ -448,6 +471,7 @@ impl ArchiveInfo {
         // when the maps are empty, which is the safe default.
         let sort_ctx = crate::sort::SortContext {
             primary_type,
+            literal_types,
             ..crate::sort::SortContext::empty()
         };
 
@@ -523,15 +547,24 @@ impl ArchiveInfo {
     /// Returns the sorted, deduplicated list of file types in this archive.
     /// The result is cached and only recomputed when the cache is invalidated
     /// by entry mutations.
-    pub(crate) fn unique_file_types(&mut self) -> &[CompactString] {
+    pub(crate) fn unique_file_types(&mut self, literal: bool) -> &[CompactString] {
         if self.cached_file_types.is_none() {
-            let mut types: Vec<CompactString> =
-                self.entries.iter().map(|e| e.file_type.clone()).collect();
+            let mut types: Vec<CompactString> = self
+                .entries
+                .iter()
+                .map(|e| e.display_file_type(literal).clone())
+                .collect();
             types.sort();
             types.dedup();
             self.cached_file_types = Some(types);
         }
         self.cached_file_types.as_deref().unwrap_or_default()
+    }
+
+    /// Drop the distinct-type cache. Call after the literal-type display
+    /// mode changes, since the cached strings differ per mode.
+    pub(crate) fn invalidate_type_cache(&mut self) {
+        self.cached_file_types = None;
     }
 
     /// Current mutation generation. See [`Self::generation`].
@@ -650,6 +683,18 @@ pub fn infer_file_type(file_name: &str) -> CompactString {
         CompactString::new("Definition")
     } else if lower.contains(".dat") {
         CompactString::new("Data")
+    } else if lower.contains(".nif") {
+        // Bully Gamebryo model.
+        CompactString::new("Model")
+    } else if lower.contains(".idb") {
+        // Bully item/instance definition bank (SJBO objects).
+        CompactString::new("Definition")
+    } else if lower.contains(".ipb") {
+        // Bully instance placement bank.
+        CompactString::new("Placement")
+    } else if lower.contains(".db") {
+        // Bully stream database tracked by the modding toolchain.
+        CompactString::new("Data")
     } else {
         std::path::Path::new(file_name)
             .extension()
@@ -662,7 +707,7 @@ pub fn infer_file_type(file_name: &str) -> CompactString {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sort::SortPriority;
+    use crate::sort::{SortKey, SortPriority};
 
     #[test]
     fn infer_known_types() {
@@ -674,6 +719,67 @@ mod tests {
         assert_eq!(infer_file_type("item.ipl"), "Placement");
         assert_eq!(infer_file_type("object.ide"), "Definition");
         assert_eq!(infer_file_type("data.dat"), "Data");
+    }
+
+    #[test]
+    fn infer_bully_types() {
+        assert_eq!(infer_file_type("1950fridge.nif"), "Model");
+        assert_eq!(infer_file_type("world.idb"), "Definition");
+        assert_eq!(infer_file_type("props.ipb"), "Placement");
+        assert_eq!(infer_file_type("stream.db"), "Data");
+    }
+
+    #[test]
+    fn entry_stores_literal_extension() {
+        let entry = EntryInfo::new("MiXeD.NiF");
+        assert_eq!(entry.file_ext, "NIF");
+        let bare = EntryInfo::new("readme");
+        assert_eq!(bare.file_ext, "FILE");
+        let multi = EntryInfo::new("player.dff.backup");
+        assert_eq!(multi.file_ext, "BACKUP");
+    }
+
+    #[test]
+    fn display_file_type_switches_by_mode() {
+        let entry = EntryInfo::new("1950fridge.nif");
+        assert_eq!(entry.display_file_type(false).as_str(), "Model");
+        assert_eq!(entry.display_file_type(true).as_str(), "NIF");
+    }
+
+    #[test]
+    fn unique_types_follow_display_mode() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("a.nif"));
+        archive.entries.push(EntryInfo::new("b.nft"));
+        archive.entries.push(EntryInfo::new("c.nif"));
+
+        assert_eq!(
+            archive.unique_file_types(false),
+            ["Model", "Texture"].as_slice()
+        );
+        archive.invalidate_type_cache();
+        // Alphabetical: "NFT" < "NIF".
+        assert_eq!(
+            archive.unique_file_types(true),
+            ["NFT", "NIF"].as_slice()
+        );
+    }
+
+    #[test]
+    fn literal_mode_changes_type_sort_grouping() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        // Curated labels tie both to "Model" (name order breaks the
+        // tie); literal extensions put DFF before NIF.
+        archive.entries.push(EntryInfo::new("a.nif"));
+        archive.entries.push(EntryInfo::new("b.dff"));
+        archive.sort_chain =
+            SortChain::new(vec![SortPriority::new(SortKey::Type, SortDirection::Ascending)]);
+
+        archive.update_selected_list("", false);
+        assert_eq!(archive.selected_indices.as_slice(), &[0, 1]);
+
+        archive.update_selected_list("", true);
+        assert_eq!(archive.selected_indices.as_slice(), &[1, 0]);
     }
 
     #[test]
@@ -712,10 +818,10 @@ mod tests {
         archive.entries.push(EntryInfo::new("bbb.txd"));
         archive.entries.push(EntryInfo::new("aab.dff"));
 
-        archive.update_selected_list("aa");
+        archive.update_selected_list("aa", false);
         assert_eq!(archive.selected_indices.as_slice(), &[0, 2]);
 
-        archive.update_selected_list("txd");
+        archive.update_selected_list("txd", false);
         assert_eq!(archive.selected_indices.as_slice(), &[1]);
     }
 
@@ -728,13 +834,13 @@ mod tests {
 
         // "pol" prefixes "police_car" and "polmav", but the shorter
         // name is denser; the scattered match on "taxi" must lose.
-        archive.update_selected_list("pol");
+        archive.update_selected_list("pol", false);
         assert_eq!(archive.selected_indices.first(), Some(&2));
         assert!(archive.selected_indices.contains(&0));
         assert!(!archive.selected_indices.contains(&1));
 
         // Scattered initials still match the subsequence scan.
-        archive.update_selected_list("pff");
+        archive.update_selected_list("pff", false);
         assert!(
             archive.selected_indices.contains(&0),
             "p.c.dff subsequence"
@@ -749,7 +855,7 @@ mod tests {
 
         // Not a subsequence ("r" never appears after "s"), but close
         // enough for Jaro-Winkler to rescue.
-        archive.update_selected_list("policastr");
+        archive.update_selected_list("policastr", false);
         assert_eq!(archive.selected_indices.as_slice(), &[0]);
     }
 
@@ -767,7 +873,7 @@ mod tests {
             SortDirection::Descending,
         )]);
 
-        archive.update_selected_list("");
+        archive.update_selected_list("", false);
 
         assert_eq!(archive.selected_indices.as_slice(), &[1, 2, 0]);
         assert_eq!(archive.sort.column, SortColumn::Size);
@@ -785,7 +891,7 @@ mod tests {
             SortPriority::new(SortKey::Name, SortDirection::Ascending),
         ]);
 
-        archive.update_selected_list("");
+        archive.update_selected_list("", false);
 
         assert_eq!(archive.selected_indices.as_slice(), &[1, 2, 0]);
         assert_eq!(archive.sort.column, SortColumn::Type);
@@ -799,7 +905,7 @@ mod tests {
         archive.entries.push(EntryInfo::new("aaa.txd"));
         archive.entries.push(EntryInfo::new("bbb.dff"));
 
-        archive.update_selected_list("");
+        archive.update_selected_list("", false);
         assert_eq!(archive.display_row_of(0), Some(2));
         assert_eq!(archive.display_row_of(1), Some(0));
         assert_eq!(archive.display_row_of(2), Some(1));
@@ -828,12 +934,12 @@ mod tests {
         archive.entries.push(EntryInfo::new("a.dff"));
         archive.entries.push(EntryInfo::new("b.txd"));
 
-        let first = archive.unique_file_types().to_vec();
+        let first = archive.unique_file_types(false).to_vec();
         assert_eq!(first, vec!["Model", "Texture"]);
 
         archive.invalidate_entry_caches();
         archive.entries.push(EntryInfo::new("c.col"));
-        let second = archive.unique_file_types().to_vec();
+        let second = archive.unique_file_types(false).to_vec();
         assert_eq!(second, vec!["Collision", "Model", "Texture"]);
     }
 

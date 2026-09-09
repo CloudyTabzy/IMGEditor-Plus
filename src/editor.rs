@@ -14,6 +14,10 @@ pub struct Editor {
     /// app layer is responsible for keeping this in sync with
     /// `Config::default_sort_chain`.
     default_sort_chain: SortChain,
+    /// Literal-type display mode (`Config::literal_file_types`). The
+    /// app layer keeps this in sync; it feeds type grouping and the
+    /// type sort.
+    pub(crate) file_type_literal: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,7 +82,7 @@ impl Editor {
 
         archive.sort_chain = self.default_sort_chain.clone();
         archive.sync_sort_state_from_chain();
-        archive.update_selected_list("");
+        archive.update_selected_list("", self.file_type_literal);
         self.add_archive(archive);
         true
     }
@@ -111,7 +115,7 @@ impl Editor {
         let mut archive = ArchiveInfo::open(path).map_err(OpenArchiveError::OpenFailed)?;
         archive.sort_chain = self.default_sort_chain.clone();
         archive.sync_sort_state_from_chain();
-        archive.update_selected_list("");
+        archive.update_selected_list("", self.file_type_literal);
         self.add_archive(archive);
         Ok(())
     }
@@ -244,10 +248,11 @@ impl Editor {
     }
 
     pub fn delete_selected(&mut self) {
+        let literal = self.file_type_literal;
         if let Some(archive) = self.selected_archive_mut() {
             archive.entries.retain(|entry| !entry.selected);
             archive.invalidate_entry_caches();
-            archive.update_selected_list("");
+            archive.update_selected_list("", literal);
             archive.dirty = true;
             self.selected_entry = None;
         }
@@ -255,6 +260,7 @@ impl Editor {
 
     pub fn rename_selected(&mut self, new_name: &str) {
         let selected = self.selected_entry;
+        let literal = self.file_type_literal;
         if let Some(archive) = self.selected_archive_mut() {
             if let Some(index) = selected
                 && let Some(entry) = archive.entries.get_mut(index)
@@ -268,7 +274,7 @@ impl Editor {
                 *entry = updated;
                 archive.invalidate_entry_caches();
                 archive.dirty = true;
-                archive.update_selected_list("");
+                archive.update_selected_list("", literal);
             }
             archive.clear_rename();
         }
@@ -295,8 +301,9 @@ impl Editor {
     }
 
     pub fn update_filtered_list(&mut self, filter: &str) {
+        let literal = self.file_type_literal;
         if let Some(archive) = self.selected_archive_mut() {
-            archive.update_selected_list(filter);
+            archive.update_selected_list(filter, literal);
             archive.update_search = false;
         }
     }

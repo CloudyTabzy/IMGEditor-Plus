@@ -253,6 +253,7 @@ pub enum Message {
     ToggleClickRipple(bool),
     ToggleIconMicroMotion(bool),
     ToggleSearchBar(bool),
+    ToggleLiteralFileTypes(bool),
 
     ExportEmbeddedTexturesRequest {
         entry_index: usize,
@@ -603,6 +604,7 @@ impl App {
         let show_welcome = !config.first_run_complete;
         let mut editor = Editor::new();
         editor.set_default_sort_chain(config.default_sort_chain.clone());
+        editor.file_type_literal = config.literal_file_types;
         // View preferences are mirrored onto App fields so the view
         // builder doesn't reach through `self.config` for hot UI state.
         let show_texture_grid = config.show_texture_grid;
@@ -1856,7 +1858,7 @@ impl App {
                     Ok(archive) => {
                         self.editor.replace_archive(index, archive);
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
-                            archive.update_selected_list(&self.search);
+                            archive.update_selected_list(&self.search, self.config.literal_file_types);
                         }
                         self.toast = Some(format!("Imported {count} files."));
                     }
@@ -1954,7 +1956,7 @@ impl App {
                         let summary = outcome.summary;
                         self.editor.replace_archive(index, outcome.archive);
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
-                            archive.update_selected_list(&self.search);
+                            archive.update_selected_list(&self.search, self.config.literal_file_types);
                         }
                         self.toast = Some(format_folder_import_summary(&summary));
                     }
@@ -2780,7 +2782,8 @@ impl App {
             }
             Message::SortBy(column) => {
                 let updated_chain = if let Some(archive) = self.editor.selected_archive_mut() {
-                    let unique_types = archive.unique_file_types().to_vec();
+                    let unique_types =
+                        archive.unique_file_types(self.config.literal_file_types).to_vec();
                     match column {
                         SortColumn::Name => {
                             if archive.sort.column == SortColumn::Name {
@@ -2832,7 +2835,7 @@ impl App {
                     };
                     archive.sync_sort_state_from_chain();
                     let filter = self.search.clone();
-                    archive.update_selected_list(&filter);
+                    archive.update_selected_list(&filter, self.config.literal_file_types);
                     Some(archive.sort_chain.clone())
                 } else {
                     None
@@ -3052,6 +3055,17 @@ impl App {
                     self.search_focused = false;
                     self.close_predictions();
                 }
+                self.save_config();
+                Task::none()
+            }
+
+            Message::ToggleLiteralFileTypes(literal) => {
+                self.config.literal_file_types = literal;
+                self.editor.file_type_literal = literal;
+                for archive in self.editor.archives_mut() {
+                    archive.invalidate_type_cache();
+                }
+                self.filter_pending = true;
                 self.save_config();
                 Task::none()
             }
@@ -3430,7 +3444,7 @@ impl App {
                         a.sort_chain = draft.clone();
                         a.sync_sort_state_from_chain();
                         let filter = self.search.clone();
-                        a.update_selected_list(&filter);
+                        a.update_selected_list(&filter, self.config.literal_file_types);
                     }
                     self.config.default_sort_chain = draft.clone();
                     self.editor.set_default_sort_chain(draft);
@@ -3655,7 +3669,7 @@ impl App {
             }
             target_archive.dirty = true;
             target_archive.invalidate_entry_caches();
-            target_archive.update_selected_list(&search);
+            target_archive.update_selected_list(&search, self.config.literal_file_types);
         }
 
         // Remove from the source. We do this in reverse index order
@@ -3668,7 +3682,7 @@ impl App {
             }
             source_archive.dirty = true;
             source_archive.invalidate_entry_caches();
-            source_archive.update_selected_list(&search);
+            source_archive.update_selected_list(&search, self.config.literal_file_types);
         }
 
         if selected_archive == Some(source) {
@@ -4118,6 +4132,13 @@ impl App {
             )),
             Item::new(menu_button(
                 format!(
+                    "{}Literal file types",
+                    view_toggle(self.config.literal_file_types)
+                ),
+                Message::ToggleLiteralFileTypes(!self.config.literal_file_types),
+            )),
+            Item::new(menu_button(
+                format!(
                     "{}Motion effects",
                     view_toggle(self.config.motion_enabled)
                 ),
@@ -4379,7 +4400,7 @@ mod tests {
         let archive = app.editor.archives_mut().first_mut().unwrap();
         archive.entries.push(EntryInfo::new("first.dff"));
         archive.entries.push(EntryInfo::new("second.txd"));
-        archive.update_selected_list("");
+        archive.update_selected_list("", false);
         app
     }
 
@@ -4479,7 +4500,7 @@ mod tests {
             source.entries.push(EntryInfo::new("b.nif"));
             source.entries.push(EntryInfo::new("c.nif"));
             source.entries[2].selected = true;
-            source.update_selected_list("");
+            source.update_selected_list("", false);
             source.texture_cache.insert(2, Arc::new(Vec::new()));
         }
 
@@ -4487,7 +4508,7 @@ mod tests {
         {
             let target = app.editor.archives_mut().get_mut(1).unwrap();
             target.entries.push(EntryInfo::new("target.nif"));
-            target.update_selected_list("");
+            target.update_selected_list("", false);
             target.texture_cache.insert(0, Arc::new(Vec::new()));
         }
 
@@ -4543,7 +4564,7 @@ mod tests {
         app.editor.archives_mut()[0]
             .entries
             .push(EntryInfo::new("model.nif"));
-        app.editor.archives_mut()[0].update_selected_list("");
+        app.editor.archives_mut()[0].update_selected_list("", false);
         app.editor.select_entry(2, false, false);
         app.active_viewer_entry = Some((0, 0));
 
@@ -4604,7 +4625,7 @@ mod tests {
         archive.entries[0].sector = 1;
         archive.entries[1].sector = 9;
         archive.entries[2].sector = 4;
-        archive.update_selected_list("");
+        archive.update_selected_list("", false);
 
         let _ = app.update(Message::SortBy(SortColumn::Size));
         let archive = &app.editor.archives()[0];
@@ -4650,7 +4671,7 @@ mod tests {
         app.editor.archives_mut()[0]
             .entries
             .push(EntryInfo::new("model.nif"));
-        app.editor.archives_mut()[0].update_selected_list("");
+        app.editor.archives_mut()[0].update_selected_list("", false);
         app.selected_inspector_tab = InspectorTab::Model3D;
         app.active_viewer_entry = Some((0, 0));
         let row = app.editor.archives()[0]
@@ -4696,7 +4717,7 @@ mod tests {
         app.editor.archives_mut()[0]
             .entries
             .push(EntryInfo::new("newer.nif"));
-        app.editor.archives_mut()[0].update_selected_list("");
+        app.editor.archives_mut()[0].update_selected_list("", false);
         app.editor.select_entry(2, false, false);
         app.begin_viewer_load((0, 2), "newer.nif".to_string());
 
@@ -4897,6 +4918,29 @@ mod tests {
         assert!(matches!(follow_up[0], Message::ClearSelection));
         let _ = app.update(Message::ClearSelection);
         assert_eq!(app.editor.selected_entry(), None);
+    }
+
+    #[test]
+    fn toggling_literal_file_types_updates_mode_and_cache() {
+        let mut app = test_app_with_entries();
+        // Warm the curated type cache first.
+        let _ = app.update(Message::DebounceTick);
+
+        let _ = app.update(Message::ToggleLiteralFileTypes(true));
+        assert!(app.config.literal_file_types);
+        assert!(app.editor.file_type_literal);
+        // The per-archive cache was invalidated: the next read sees
+        // literal extensions, not the stale curated labels.
+        let types = app
+            .editor
+            .archives_mut()[0]
+            .unique_file_types(true)
+            .to_vec();
+        assert_eq!(types, ["DFF", "TXD"].as_slice());
+
+        let _ = app.update(Message::ToggleLiteralFileTypes(false));
+        assert!(!app.config.literal_file_types);
+        assert!(!app.editor.file_type_literal);
     }
 
     #[test]

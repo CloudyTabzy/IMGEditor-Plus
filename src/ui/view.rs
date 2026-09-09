@@ -208,6 +208,7 @@ impl App {
 
         let is_renaming = entry.rename;
         let is_selected = entry.selected;
+        let literal_types = self.config.literal_file_types;
 
         // Render display strings on demand for the visible row only. Pre-caching
         // these for every filtered entry caused thousands of allocations each
@@ -217,7 +218,7 @@ impl App {
         } else {
             Cow::Borrowed(entry.file_name.as_str())
         };
-        let file_type = Cow::Borrowed(entry.file_type.as_str());
+        let file_type = Cow::Borrowed(entry.display_file_type(literal_types).as_str());
         let size_kb = Cow::Owned(format!("{} KB", entry.sector * 2));
 
         let name_widget: Element<'_, Message> = if is_renaming {
@@ -532,7 +533,10 @@ impl App {
                 Space::new().width(Length::Fill),
                 copy_button("Copy", Message::CopySelectedEntryDetails),
             ]);
-            col = col.push(Self::build_inspection_panel(inspection));
+            col = col.push(Self::build_inspection_panel(
+                inspection,
+                self.config.literal_file_types,
+            ));
             col = col.push(w::hairline(design.divider()));
         }
 
@@ -1214,11 +1218,19 @@ impl App {
         row.wrap().vertical_spacing(4).into()
     }
 
-    fn build_inspection_panel(inspection: &EntryInspection) -> Element<'_, Message> {
+    fn build_inspection_panel(
+        inspection: &EntryInspection,
+        literal_types: bool,
+    ) -> Element<'_, Message> {
         let mut panel = Column::new().spacing(4);
 
         panel = panel.push(label_value_owned("Name", inspection.file_name.to_string()));
-        panel = panel.push(label_value_owned("Type", inspection.file_type.to_string()));
+        let type_label = if literal_types {
+            literal_type_label(&inspection.file_name)
+        } else {
+            inspection.file_type.to_string()
+        };
+        panel = panel.push(label_value_owned("Type", type_label));
 
         let size_text = if inspection.size_bytes >= 1024 * 1024 {
             format!(
@@ -1943,6 +1955,7 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
         draft,
         leaked,
         None, // primary_type - populated for the table view, not the dialog
+        app.config.literal_file_types,
         &EMPTY_IDE_MAP,
         &EMPTY_COL_MAP,
     );
@@ -2178,6 +2191,16 @@ const SEARCH_LABEL_WIDTH: f32 = 88.0;
 /// row spacing. Keeps the card under the text input, not the whole
 /// strip.
 const SEARCH_DROPDOWN_X: f32 = 104.0;
+
+/// Raw extension in capitals for the literal type display mode
+/// (`DFF`, `NIF`), or `FILE` for extension-less names.
+fn literal_type_label(file_name: &str) -> String {
+    std::path::Path::new(file_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_uppercase())
+        .unwrap_or_else(|| "FILE".to_string())
+}
 
 /// The fuzzy-search prediction dropdown, rendered between the search
 /// strip and the pane grid while the search input is focused. Lists the

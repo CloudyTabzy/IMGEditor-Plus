@@ -302,6 +302,10 @@ pub struct SortContext<'a> {
     /// "Primary" file-type string used to break ties in `SortKey::Type`.
     /// Without this, the type sort reduces to a name sort.
     pub primary_type: Option<&'a str>,
+    /// When true, type comparisons use the raw uppercase extension
+    /// (`EntryInfo::file_ext`) instead of the curated label, matching
+    /// the literal type display mode.
+    pub literal_types: bool,
 }
 
 impl<'a> Default for SortContext<'a> {
@@ -322,6 +326,7 @@ impl<'a> Default for SortContext<'a> {
             ide_files: ide,
             col_files: col,
             primary_type: None,
+            literal_types: false,
         }
     }
 }
@@ -342,6 +347,7 @@ impl<'a> SortContext<'a> {
             ide_files,
             col_files,
             primary_type: None,
+            literal_types: false,
         }
     }
 
@@ -386,16 +392,23 @@ impl SortByKey for SortKey {
             // then alphabetical within the rest, then name as the
             // final intra-type tiebreaker. Without `primary_type` set
             // in the context this reduces to a plain type sort.
-            SortKey::Type => match ctx.primary_type {
-                Some(primary) => {
-                    let a_primary = a.file_type == *primary;
-                    let b_primary = b.file_type == *primary;
-                    b_primary
-                        .cmp(&a_primary)
-                        .then_with(|| a.file_type.cmp(&b.file_type))
+            // Comparisons use the displayed type string (curated label
+            // or raw extension in literal mode) so grouping matches
+            // what the table shows.
+            SortKey::Type => {
+                let a_type = a.display_file_type(ctx.literal_types);
+                let b_type = b.display_file_type(ctx.literal_types);
+                match ctx.primary_type {
+                    Some(primary) => {
+                        let a_primary = a_type == primary;
+                        let b_primary = b_type == primary;
+                        b_primary
+                            .cmp(&a_primary)
+                            .then_with(|| a_type.cmp(b_type))
+                    }
+                    None => a_type.cmp(b_type),
                 }
-                None => a.file_type.cmp(&b.file_type),
-            },
+            }
 
             // Extension: case-insensitive compare on the file_type
             // string itself (EntryInfo already derives the extension

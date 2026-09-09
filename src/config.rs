@@ -249,6 +249,9 @@ pub struct Config {
     /// vertical space for the entry table and info panels; `Ctrl+F`
     /// reveals it again.
     pub show_search_bar: bool,
+    /// Type column shows raw extensions in capitals (`DFF`, `NIF`)
+    /// instead of curated category labels (`Model`, `Texture`).
+    pub literal_file_types: bool,
 }
 
 /// Grid divisions offered in the texture preview controls. Kept coarse so
@@ -283,6 +286,7 @@ impl Default for Config {
             click_ripple_enabled: true,
             icon_micro_motion_enabled: true,
             show_search_bar: true,
+            literal_file_types: false,
         }
     }
 }
@@ -455,6 +459,9 @@ impl Config {
                 "show_search_bar" => {
                     config.show_search_bar = value.eq_ignore_ascii_case("true");
                 }
+                "literal_file_types" => {
+                    config.literal_file_types = value.eq_ignore_ascii_case("true");
+                }
                 _ => {}
             }
         }
@@ -608,6 +615,15 @@ impl Config {
                 "false"
             }
         )?;
+        writeln!(
+            file,
+            "literal_file_types={}",
+            if self.literal_file_types {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
         Ok(())
     }
 
@@ -652,6 +668,7 @@ mod tests {
         assert!(config.click_ripple_enabled);
         assert!(config.icon_micro_motion_enabled);
         assert!(config.show_search_bar);
+        assert!(!config.literal_file_types);
     }
 
     #[test]
@@ -681,6 +698,7 @@ mod tests {
             click_ripple_enabled: false,
             icon_micro_motion_enabled: false,
             show_search_bar: false,
+            literal_file_types: true,
         };
         let archive_a = temp.path().join("a.img");
         let archive_b = temp.path().join("b.img");
@@ -714,6 +732,7 @@ mod tests {
         assert!(!loaded.click_ripple_enabled);
         assert!(!loaded.icon_micro_motion_enabled);
         assert!(!loaded.show_search_bar);
+        assert!(loaded.literal_file_types);
     }
 
     #[test]
