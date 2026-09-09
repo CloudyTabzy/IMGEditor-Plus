@@ -1,6 +1,6 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v3.15.0** (smoother 3D camera zoom/panning, synchronized texture overlays, and continued archive/UI refinements). 293 tests passing.
+Last shipped: **v3.15.0** (smoother 3D camera zoom/panning, synchronized texture overlays, and continued archive/UI refinements). 294 tests passing.
 
 Next phase: **supporting other game formats**.
 

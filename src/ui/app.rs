@@ -3054,19 +3054,71 @@ impl App {
         target: usize,
         entry_indices: &[usize],
     ) {
+        if source == target {
+            return;
+        }
+
+        let archive_count = self.editor.archives().len();
+        if source >= archive_count || target >= archive_count {
+            return;
+        }
+
+        let search = self.search.clone();
+
         // We need to collect the entries first because we'd
         // otherwise borrow the source archive mutably while also
         // needing to mutate the target archive. Two-phase move
         // avoids the borrow conflict.
-        let entries: Vec<crate::archive::EntryInfo> = {
-            let Some(archive) = self.editor.archives().get(source) else {
-                return;
-            };
-            entry_indices
+        let (source_name, target_name, valid_indices, entries) = {
+            let archives = self.editor.archives();
+            let source_archive = &archives[source];
+            let source_name = source_archive.file_name.clone();
+            let target_name = archives[target].file_name.clone();
+
+            let mut valid_indices: Vec<usize> = entry_indices
                 .iter()
-                .filter_map(|&i| archive.entries.get(i).cloned())
-                .collect()
+                .copied()
+                .filter(|&index| index < source_archive.entries.len())
+                .collect();
+            valid_indices.sort_unstable();
+            valid_indices.dedup();
+
+            let entries: Vec<crate::archive::EntryInfo> = valid_indices
+                .iter()
+                .map(|&index| source_archive.entries[index].clone())
+                .collect();
+
+            (source_name, target_name, valid_indices, entries)
         };
+        if entries.is_empty() {
+            return;
+        }
+
+        let moved_count = entries.len();
+        let selected_archive = self.editor.selected_archive();
+        let selected_entry = self.editor.selected_entry();
+        let selected_entry_after_move = if selected_archive == Some(source) {
+            selected_entry.and_then(|index| {
+                if valid_indices.binary_search(&index).is_ok() {
+                    None
+                } else {
+                    let shift = valid_indices
+                        .iter()
+                        .take_while(|&&removed| removed < index)
+                        .count();
+                    Some(index.saturating_sub(shift))
+                }
+            })
+        } else {
+            selected_entry
+        };
+
+        // Generation invalidation prevents an entry index from resolving to
+        // a stale preview after the source list changes. Evicting both names
+        // as well releases old scene allocations immediately instead of
+        // waiting for the byte-budgeted cache to pressure them out.
+        self.drop_scene_cache_for_archive(&source_name);
+        self.drop_scene_cache_for_archive(&target_name);
 
         // Insert into the target archive. If the target already
         // has an entry with the same name, we rename the moved
@@ -3088,29 +3140,62 @@ impl App {
                 }
                 target_archive.entries.push(entry);
             }
+            target_archive.dirty = true;
+            target_archive.invalidate_entry_caches();
+            target_archive.update_selected_list(&search);
         }
 
         // Remove from the source. We do this in reverse index order
         // so earlier removals don't shift the indices of later
-        // removals. This is the standard "delete in reverse" idiom
-        // for indexed removal.
+        // removals. Rebuilding the filtered list below also repairs
+        // the display-row lookup after raw entry indices shift.
         if let Some(source_archive) = self.editor.archives_mut().get_mut(source) {
-            let mut indices: Vec<usize> = entry_indices.to_vec();
-            indices.sort_unstable();
-            indices.reverse();
-            indices.retain(|&i| i < source_archive.entries.len());
-            indices.dedup();
-            for (shift, &i) in indices.iter().enumerate() {
-                let actual = i - shift;
-                source_archive.entries.remove(actual);
-                source_archive.selected_indices.retain(|&mut j| j != i);
-                source_archive.selected_lookup.remove(&i);
+            for &index in valid_indices.iter().rev() {
+                source_archive.entries.remove(index);
             }
             source_archive.dirty = true;
+            source_archive.invalidate_entry_caches();
+            source_archive.update_selected_list(&search);
         }
+
+        if selected_archive == Some(source) {
+            self.editor.set_selected_entry(selected_entry_after_move);
+        }
+
+        if let Some((archive_index, entry_index)) = self.active_viewer_entry
+            && archive_index == source
+        {
+            if valid_indices.binary_search(&entry_index).is_ok() {
+                self.active_viewer_entry = None;
+                self.viewer3d_handle.clear();
+                self.reset_texture_preview_state();
+            } else {
+                let shift = valid_indices
+                    .iter()
+                    .take_while(|&&removed| removed < entry_index)
+                    .count();
+                self.active_viewer_entry = Some((source, entry_index.saturating_sub(shift)));
+            }
+        }
+
+        if selected_archive == Some(source) {
+            self.inspected_entry = self.inspected_entry.take().and_then(|(index, inspection)| {
+                if valid_indices.binary_search(&index).is_ok() {
+                    None
+                } else {
+                    let shift = valid_indices
+                        .iter()
+                        .take_while(|&&removed| removed < index)
+                        .count();
+                    Some((index.saturating_sub(shift), inspection))
+                }
+            });
+        }
+
+        self.context_menu = None;
         self.toast = Some(format!(
             "Moved {} entries to archive #{}",
-            entry_indices.len(),
+            moved_count,
             target + 1
         ));
     }
@@ -3758,6 +3843,69 @@ mod tests {
 
         assert_eq!(app.editor.archives()[0].entries.len(), 1);
         assert_eq!(app.editor.archives()[0].entries[0].file_name, "first.dff");
+    }
+
+    #[test]
+    fn moving_entries_invalidates_both_preview_caches_and_repairs_indices() {
+        use crate::inspector::scene3d::{BaseOrientation, Scene};
+
+        let mut app = test_app();
+        app.editor.new_archive();
+        {
+            let source = app.editor.archives_mut().first_mut().unwrap();
+            source.entries.push(EntryInfo::new("a.nif"));
+            source.entries.push(EntryInfo::new("b.nif"));
+            source.entries.push(EntryInfo::new("c.nif"));
+            source.entries[2].selected = true;
+            source.update_selected_list("");
+            source.texture_cache.insert(2, Arc::new(Vec::new()));
+        }
+
+        app.editor.new_archive();
+        {
+            let target = app.editor.archives_mut().get_mut(1).unwrap();
+            target.entries.push(EntryInfo::new("target.nif"));
+            target.update_selected_list("");
+            target.texture_cache.insert(0, Arc::new(Vec::new()));
+        }
+
+        let source_name = app.editor.archives()[0].file_name.clone();
+        let source_generation = app.editor.archives()[0].generation();
+        app.scene_cache.insert(
+            (source_name, source_generation, 2),
+            Arc::new(Scene::empty(BaseOrientation::Yup)),
+        );
+
+        app.editor.select_archive(0);
+        app.editor.set_selected_entry(Some(2));
+        app.active_viewer_entry = Some((0, 2));
+        app.viewer3d_handle
+            .set_scene(Arc::new(Scene::empty(BaseOrientation::Yup)));
+
+        app.move_entries_between_archives(0, 1, &[0]);
+
+        let source = &app.editor.archives()[0];
+        let target = &app.editor.archives()[1];
+        assert_eq!(source.entries[0].file_name, "b.nif");
+        assert_eq!(source.entries[1].file_name, "c.nif");
+        assert!(target.entries.iter().any(|entry| entry.file_name == "a.nif"));
+        assert!(target
+            .entries
+            .iter()
+            .any(|entry| entry.file_name == "target.nif"));
+        assert_eq!(source.selected_indices.as_slice(), &[0, 1]);
+        assert_eq!(source.display_row_of(0), Some(0));
+        assert_eq!(source.display_row_of(1), Some(1));
+        assert_eq!(app.editor.selected_entry(), Some(1));
+        assert_eq!(app.active_viewer_entry, Some((0, 1)));
+        assert!(app.viewer3d_handle.with(|inner| inner.scene.is_some()));
+        assert_eq!(source.generation(), 1);
+        assert_eq!(target.generation(), 1);
+        assert!(source.texture_cache.is_empty());
+        assert!(target.texture_cache.is_empty());
+        assert!(app.scene_cache.is_empty());
+        assert!(source.dirty);
+        assert!(target.dirty);
     }
 
     #[test]
