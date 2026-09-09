@@ -38,7 +38,9 @@ fn logo_element() -> Element<'static, Message> {
 /// applied in `build_entry_row`; virtualization math depends on it.
 const ROW_HEIGHT: f32 = 32.0;
 /// Maximum accent travel used by the selected-row pulse.
-const SELECTION_PULSE_BACKGROUND_MAX: f32 = 0.42;
+/// Peak colour travel of the selected-row pulse. Raised so the pulse
+/// reads clearly against the resting selection tint.
+const SELECTION_PULSE_BACKGROUND_MAX: f32 = 0.62;
 /// Keep the success tint visible without moving a dark-theme status label into
 /// the low-contrast middle of a light green background.
 const TOAST_BACKGROUND_MAX: f32 = 0.35;
@@ -251,6 +253,49 @@ impl App {
         let file_type = Cow::Borrowed(entry.display_file_type(literal_types).as_str());
         let size_kb = Cow::Owned(format!("{} KB", entry.sector * 2));
 
+        let entry_key = (archive_index, entry_index);
+        let selection_pulse = self.entry_selection_pulse(entry_key);
+        let icon_nudge = self.entry_icon_nudge(entry_key);
+        let text_nudge = self.entry_text_nudge(entry_key);
+        // The pulse micro-motion renders the name and icon through a
+        // `Float` overlay, which does NOT inherit the row container's
+        // text color — without an explicit color the overlay text falls
+        // back to the theme default and flashes white in themes whose
+        // resting text isn't white. Compute the same color the row
+        // style applies and pin it onto both widgets.
+        let theme = self.theme();
+        let extended = theme.extended_palette();
+        let row_text_color = if is_selected {
+            let peak_background = iced::theme::palette::mix(
+                extended.primary.weak.color,
+                extended.primary.strong.color,
+                SELECTION_PULSE_BACKGROUND_MAX,
+            );
+            w::stable_readable_text_color(
+                extended.primary.weak.color,
+                peak_background,
+                extended.primary.weak.text,
+            )
+        } else {
+            extended.background.base.text
+        };
+        let icon_scale = if self.config.icon_micro_motion_enabled {
+            1.0 + selection_pulse * 0.10
+        } else {
+            1.0
+        };
+        let file_type_icon =
+            icons::file_type(&entry.file_name).style(text_color_fn(row_text_color));
+        let file_icon: Element<'_, Message> = if icon_nudge.abs() > f32::EPSILON || icon_scale > 1.0
+        {
+            Float::new(file_type_icon.size(16))
+                .scale(icon_scale)
+                .translate(move |_, _| Vector::new(icon_nudge, 0.0))
+                .into()
+        } else {
+            file_type_icon.size(16).into()
+        };
+
         let name_widget: Element<'_, Message> = if is_renaming {
             text_input("", &self.rename_buffer)
                 .id(iced::widget::Id::new("rename_input"))
@@ -264,27 +309,12 @@ impl App {
             } else {
                 fonts::body(file_name)
             };
-            label.width(Length::Fill).into()
+            label
+                .style(text_color_fn(row_text_color))
+                .width(Length::Fill)
+                .into()
         };
 
-        let entry_key = (archive_index, entry_index);
-        let selection_pulse = self.entry_selection_pulse(entry_key);
-        let icon_nudge = self.entry_icon_nudge(entry_key);
-        let text_nudge = self.entry_text_nudge(entry_key);
-        let icon_scale = if self.config.icon_micro_motion_enabled {
-            1.0 + selection_pulse * 0.10
-        } else {
-            1.0
-        };
-        let file_icon: Element<'_, Message> = if icon_nudge.abs() > f32::EPSILON || icon_scale > 1.0
-        {
-            Float::new(icons::file_type(&entry.file_name).size(16))
-                .scale(icon_scale)
-                .translate(move |_, _| Vector::new(icon_nudge, 0.0))
-                .into()
-        } else {
-            icons::file_type(&entry.file_name).size(16).into()
-        };
         let name_widget: Element<'_, Message> = if !is_renaming && text_nudge.abs() > f32::EPSILON {
             Float::new(name_widget)
                 .translate(move |_, _| Vector::new(text_nudge, 0.0))
@@ -1390,11 +1420,20 @@ fn toolbar_button(
     icon: Element<'static, Message>,
     msg: Message,
 ) -> iced::widget::Button<'static, Message> {
-    button(icon)
-        .on_press(msg)
-        .padding(6)
-        .width(Length::Fixed(34.0))
-        .height(Length::Fixed(34.0))
+    // Pin the icon to a fixed 22x22 box centered on both axes inside
+    // the 34x34 button; relies on nothing but layout, so every glyph
+    // gets the same geometric treatment.
+    button(
+        container(icon)
+            .width(Length::Fixed(22.0))
+            .height(Length::Fixed(22.0))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .on_press(msg)
+    .padding(6)
+    .width(Length::Fixed(34.0))
+    .height(Length::Fixed(34.0))
 }
 
 fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, Message> {
@@ -1554,9 +1593,12 @@ pub fn build(app: &App) -> Element<'_, Message> {
         let modal_open = app.modal_open();
         let hero_icon: Element<'_, Message> = if app.config.motion_enabled && !modal_open {
             let phase = app.empty_state_phase * std::f32::consts::TAU;
+            // Gentle idle drift: scale and bob are a quarter-turn out of
+            // phase (circular motion) with a low amplitude, so the icon
+            // floats instead of throbbing.
             Float::new(icons::archive().size(42).color(empty_state_accent))
-                .scale(1.0 + phase.sin() * 0.045)
-                .translate(move |_, _| Vector::new(0.0, phase.cos() * 2.5))
+                .scale(1.0 + phase.cos() * 0.018)
+                .translate(move |_, _| Vector::new(0.0, phase.sin() * 1.4))
                 .into()
         } else {
             icons::archive().size(42).color(empty_state_accent).into()
@@ -2201,6 +2243,16 @@ fn context_menu_translation(bounds: Rectangle, viewport: Rectangle, row_y: f32) 
     let y = preferred_y.clamp(min_y, max_y);
 
     Vector::new(x - bounds.x, y - bounds.y)
+}
+
+/// A fixed text-color style closure; reused across widgets that must
+/// keep the same foreground inside and outside `Float` overlays.
+fn text_color_fn(
+    color: Color,
+) -> impl for<'a> Fn(&'a iced::Theme) -> iced::widget::text::Style {
+    move |_| iced::widget::text::Style {
+        color: Some(color),
+    }
 }
 
 fn with_alpha(color: Color, factor: f32) -> Color {
