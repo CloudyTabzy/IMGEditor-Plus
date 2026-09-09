@@ -1,6 +1,6 @@
 [package]
 name = "imgeditor"
-version = "3.16.0"
+version = "4.0.0"
 edition = "2024"
 rust-version = "1.96"
 
@@ -55,6 +55,7 @@ quick_cache = { version = "0.7.0", features = ["stats"] }
 
 [dev-dependencies]
 tempfile = "3"
+iced_runtime = "0.14"
 
 [build-dependencies]
 embed-resource = "2"

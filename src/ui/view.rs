@@ -2,7 +2,7 @@ use crate::archive::{ExportStatus, SortColumn};
 use crate::sort::SortDirection;
 use iced::widget::{
     Column, Container, Float, Row, Scrollable, Space, button, canvas, checkbox, column, container,
-    image, mouse_area, pane_grid, progress_bar, row, rule, stack, text_input, tooltip,
+    image, mouse_area, pane_grid, progress_bar, row, stack, text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length, Rectangle, Vector};
 
@@ -57,6 +57,8 @@ impl App {
             return Space::new().width(Length::Fill).height(Length::Fill).into();
         };
 
+        let design = self.design();
+
         let name_label = sort_label(
             "Name",
             archive.sort.column == SortColumn::Name,
@@ -87,8 +89,16 @@ impl App {
         .padding(6)
         .height(Length::Fixed(HEADER_HEIGHT));
 
+        let header_bg = design.surface();
+        let headers = Container::new(headers)
+            .width(Length::Fill)
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(header_bg)),
+                ..Default::default()
+            });
+
         if archive.selected_indices.is_empty() {
-            return column![headers, empty_state()]
+            return column![headers, w::hairline(design.divider()), empty_state()]
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into();
@@ -156,7 +166,13 @@ impl App {
         layers.push(scrollable.into());
 
         if let Some((entry_index, display_row)) = self.context_menu
-            && let Some(overlay) = build_context_menu(archive, entry_index, display_row, scroll_y)
+            && let Some(overlay) = build_context_menu(
+                archive,
+                entry_index,
+                display_row,
+                scroll_y,
+                design.divider(),
+            )
         {
             layers.push(overlay);
         }
@@ -175,7 +191,7 @@ impl App {
             table_body
         };
 
-        column![headers, table_body]
+        column![headers, w::hairline(design.divider()), table_body]
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -401,6 +417,17 @@ impl App {
                 tab_bar.into()
             };
 
+        let tab_bar = Container::new(tab_bar)
+            .width(width)
+            .height(Length::Fixed(32.0))
+            .style({
+                let chrome = self.design().chrome();
+                move |_| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(chrome)),
+                    ..Default::default()
+                }
+            });
+
         let active_content: Element<'_, Message> = match selected_tab {
             InspectorTab::Export => export_tab,
             InspectorTab::Model3D => model_tab,
@@ -427,6 +454,8 @@ impl App {
             return Space::new().width(Length::Fill).height(Length::Fill).into();
         };
 
+        let design = self.design();
+
         let version_text = version_label(archive.version);
         let total = archive.entries.len();
         let visible = archive.selected_indices.len();
@@ -446,12 +475,26 @@ impl App {
             }
         };
 
+        let progress_widget: Element<'_, Message> = if in_use && self.config.motion_enabled {
+            stack(vec![
+                progress_bar(0.0..=1.0, display_progress).into(),
+                interaction::shimmer_overlay::<Message>(self.shimmer_phase, display_progress)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            ])
+            .width(Length::Fill)
+            .into()
+        } else {
+            progress_bar(0.0..=1.0, display_progress).into()
+        };
+
         let mut col = column![
             label_value_owned("Format", version_text.to_string()),
             label_value("Entries", format!("{total} (visible: {visible})")),
-            rule::horizontal(1),
+            w::hairline(design.divider()),
             label_value(progress_label, percent_text),
-            progress_bar(0.0..=1.0, display_progress),
+            progress_widget,
         ]
         .spacing(6)
         .padding(8)
@@ -479,7 +522,7 @@ impl App {
             );
         }
 
-        col = col.push(rule::horizontal(1));
+        col = col.push(w::hairline(design.divider()));
 
         if let Some((index, inspection)) = self.inspected_entry.as_ref()
             && archive.entries.get(*index).is_some()
@@ -490,7 +533,7 @@ impl App {
                 copy_button("Copy", Message::CopySelectedEntryDetails),
             ]);
             col = col.push(Self::build_inspection_panel(inspection));
-            col = col.push(rule::horizontal(1));
+            col = col.push(w::hairline(design.divider()));
         }
 
         col = col.push(row![
@@ -501,10 +544,25 @@ impl App {
 
         let logs: Vec<String> = archive.logs.iter().rev().take(50).cloned().collect();
         let log_widget = Column::with_children(logs.into_iter().map(|m| fonts::caption(m).into()));
-        col = col.push(log_widget);
+        let log_bg = design.page();
+        let log_border = design.divider();
+        col = col.push(
+            Container::new(log_widget)
+                .width(Length::Fill)
+                .padding(6)
+                .style(move |_| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(log_bg)),
+                    border: iced::Border {
+                        color: log_border,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }),
+        );
 
         if !archive.recent_exports.is_empty() {
-            col = col.push(rule::horizontal(1));
+            col = col.push(w::hairline(design.divider()));
             col = col.push(fonts::header("Recent exports:"));
             let exports: Vec<String> = archive
                 .recent_exports
@@ -1246,7 +1304,7 @@ impl App {
 
         // Animate a smooth transition between the normal surface color
         // and a success-green tint when a toast is active.
-        let normal_bg = design.surface_subtle();
+        let normal_bg = design.chrome();
         let toast_bg = design.success_gradient().0;
         let mix = self
             .animator
@@ -1297,7 +1355,7 @@ fn toolbar_button(
         .height(Length::Fixed(34.0))
 }
 
-fn build_toolbar(accent: Color, bg: Color) -> Element<'static, Message> {
+fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, Message> {
     let toolbar = row![
         w::styled_tooltip(
             toolbar_button(icons::new_archive().size(18).into(), Message::NewArchive),
@@ -1319,7 +1377,7 @@ fn build_toolbar(accent: Color, bg: Color) -> Element<'static, Message> {
             fonts::body("Pack archive"),
             tooltip::Position::Bottom,
         ),
-        rule::vertical(1),
+        w::vhairline(divider),
         w::styled_tooltip(
             toolbar_button(icons::import().size(18).into(), Message::ImportFiles),
             fonts::body("Import"),
@@ -1335,7 +1393,7 @@ fn build_toolbar(accent: Color, bg: Color) -> Element<'static, Message> {
             fonts::body("Export selected"),
             tooltip::Position::Bottom,
         ),
-        rule::vertical(1),
+        w::vhairline(divider),
         w::styled_tooltip(
             toolbar_button(icons::delete().size(18).into(), Message::DeleteSelected),
             fonts::body("Delete selected"),
@@ -1364,10 +1422,11 @@ fn build_toolbar(accent: Color, bg: Color) -> Element<'static, Message> {
 
 pub fn build(app: &App) -> Element<'_, Message> {
     let design = app.design();
-    let tab_surface = design.surface_subtle();
+    let tab_surface = design.chrome();
+    let page_bg = design.page();
     let empty_state_accent = design.accent();
     let menubar = app.menubar();
-    let toolbar = build_toolbar(design.accent(), design.surface_subtle());
+    let toolbar = build_toolbar(design.accent(), design.chrome(), design.divider());
 
     let tab_bar: Element<'_, Message> = if app.editor.archives().is_empty() {
         Space::new().height(Length::Fixed(0.0)).into()
@@ -1445,10 +1504,25 @@ pub fn build(app: &App) -> Element<'_, Message> {
     };
 
     let body: Element<'_, Message> = if app.editor.archives().is_empty() {
+        // Idle "breathing" on the hero icon: a slow scale + bob driven by the
+        // animation ticker. Float renders through Iced's window-level overlay
+        // layer, which paints above the modal stack — so whenever a dialog is
+        // on screen the icon must fall back to a plain inline widget or it
+        // would draw on top of the dialog.
+        let modal_open = app.modal_open();
+        let hero_icon: Element<'_, Message> = if app.config.motion_enabled && !modal_open {
+            let phase = app.empty_state_phase * std::f32::consts::TAU;
+            Float::new(icons::archive().size(42).color(empty_state_accent))
+                .scale(1.0 + phase.sin() * 0.045)
+                .translate(move |_, _| Vector::new(0.0, phase.cos() * 2.5))
+                .into()
+        } else {
+            icons::archive().size(42).color(empty_state_accent).into()
+        };
         Container::new(
             column![
                 Space::new().height(Length::Fill),
-                icons::archive().size(42).color(empty_state_accent),
+                hero_icon,
                 Space::new().height(Length::Fixed(8.0)),
                 fonts::display("Open or create an archive to get started."),
                 Space::new().height(Length::Fixed(8.0)),
@@ -1471,23 +1545,72 @@ pub fn build(app: &App) -> Element<'_, Message> {
         .spacing(8)
         .padding(8);
 
-        let main_row = pane_grid(&app.panes, |_pane, state, _is_maximized| {
-            pane_grid::Content::new(match state {
+        let search_bg = design.chrome();
+        let search = Container::new(search)
+            .width(Length::Fill)
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(search_bg)),
+                ..Default::default()
+            });
+
+        let pane_surface = design.surface();
+        let split_divider = design.divider();
+        let split_accent = design.accent();
+        let main_row = pane_grid(&app.panes, move |_pane, state, _is_maximized| {
+            let content: Element<'_, Message> = match state {
                 Pane::Table => app.build_entry_table(),
                 Pane::Info => app.build_info_panel(),
-            })
+            };
+            pane_grid::Content::new(
+                Container::new(content)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(move |_| iced::widget::container::Style {
+                        background: Some(iced::Background::Color(pane_surface)),
+                        ..Default::default()
+                    }),
+            )
         })
         .on_resize(10, Message::PaneResized)
+        .spacing(3)
+        .style(move |_| pane_grid::Style {
+            hovered_region: pane_grid::Highlight {
+                background: iced::Background::Color(Color::TRANSPARENT),
+                border: iced::Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: 0.0.into(),
+                },
+            },
+            hovered_split: pane_grid::Line {
+                color: split_divider,
+                width: 3.0,
+            },
+            picked_split: pane_grid::Line {
+                color: split_accent,
+                width: 3.0,
+            },
+        })
         .height(Length::Fill);
 
         column![search, main_row].into()
     };
 
     let status = app.build_status_bar();
-    let base = column![menubar, toolbar, tab_bar, body, status]
-        .spacing(0)
-        .width(Length::Fill)
-        .height(Length::Fill);
+    let base = column![
+        menubar,
+        w::hairline(design.divider()),
+        toolbar,
+        w::hairline(design.divider()),
+        tab_bar,
+        w::hairline(design.divider()),
+        body,
+        w::hairline(design.divider()),
+        status,
+    ]
+    .spacing(0)
+    .width(Length::Fill)
+    .height(Length::Fill);
 
     let overlays: Vec<Element<'_, Message>> = vec![
         build_about(app),
@@ -1496,6 +1619,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_folder_import(app),
         build_update_status(app),
         build_sort_manager(app),
+        build_toast_overlay(app),
     ]
     .into_iter()
     .flatten()
@@ -1505,6 +1629,10 @@ pub fn build(app: &App) -> Element<'_, Message> {
         return Container::new(base)
             .width(Length::Fill)
             .height(Length::Fill)
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(page_bg)),
+                ..Default::default()
+            })
             .into();
     }
 
@@ -1512,6 +1640,10 @@ pub fn build(app: &App) -> Element<'_, Message> {
         Container::new(base)
             .width(Length::Fill)
             .height(Length::Fill)
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(page_bg)),
+                ..Default::default()
+            })
             .into(),
     ];
     layers.extend(overlays);
@@ -1818,12 +1950,13 @@ fn build_context_menu(
     entry_index: usize,
     display_row: usize,
     scroll_y: f32,
+    divider: Color,
 ) -> Option<Element<'_, Message>> {
     let entry = archive.entries.get(entry_index)?;
 
     let mut items: Vec<Element<'_, Message>> = vec![
         fonts::strong(entry.file_name.to_string()).into(),
-        rule::horizontal(1).into(),
+        w::hairline(divider),
     ];
 
     let lower = entry.file_name.to_lowercase();
@@ -1964,8 +2097,65 @@ fn context_menu_translation(bounds: Rectangle, viewport: Rectangle, row_y: f32) 
     Vector::new(x - bounds.x, y - bounds.y)
 }
 
-fn build_autoscroll_indicator() -> Element<'static, Message> {
-    let dot = container(
+fn with_alpha(color: Color, factor: f32) -> Color {
+    Color {
+        a: color.a * factor,
+        ..color
+    }
+}
+
+/// Floating toast snackbar pinned to the bottom-right corner. Slides up and
+/// fades in when a toast appears; fades back out through `reveal` after the
+/// toast is dismissed. All colors are alpha-scaled by `reveal` (Iced has no
+/// opacity widget), so the whole card animates as one surface.
+fn build_toast_overlay(app: &App) -> Option<Element<'_, Message>> {
+    let (text, reveal) = app.toast_overlay()?;
+    let design = app.design();
+    let surface = with_alpha(design.surface(), reveal);
+    let border = with_alpha(design.border(), reveal);
+    let text_color = with_alpha(design.text(), reveal);
+    let accent = with_alpha(design.accent(), reveal);
+    let shadow_alpha = 0.35 * reveal;
+
+    let card = Container::new(
+        row![
+            w::accent_bar(accent, 20.0),
+            fonts::body(text).color(text_color),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+    )
+    .padding(10)
+    .max_width(480.0)
+    .style(move |_| iced::widget::container::Style {
+        background: Some(iced::Background::Color(surface)),
+        border: Border {
+            color: border,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, shadow_alpha),
+            offset: iced::Vector::new(0.0, 4.0),
+            blur_radius: 14.0,
+        },
+        ..Default::default()
+    });
+
+    Some(
+        Float::new(card)
+            .translate(move |bounds, viewport| {
+                let margin = 16.0;
+                let hidden_offset = (1.0 - reveal) * (bounds.height + margin + 8.0);
+                let x = viewport.x + viewport.width - bounds.width - margin;
+                let y = viewport.y + viewport.height - bounds.height - margin + hidden_offset;
+                Vector::new(x - bounds.x, y - bounds.y)
+            })
+            .into(),
+    )
+}
+
+fn build_autoscroll_indicator() -> Element<'static, Message> {    let dot = container(
         Space::new()
             .width(Length::Fixed(8.0))
             .height(Length::Fixed(8.0)),

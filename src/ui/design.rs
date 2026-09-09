@@ -90,6 +90,22 @@ impl Design {
         }
     }
 
+    /// Chrome background (toolbar, tab bar, status bar, search strip) —
+    /// sits between `page` and `surface` so chrome reads as its own layer.
+    pub fn chrome(&self) -> Color {
+        to_iced(self.palette().neutral.get(Shade::S100))
+    }
+
+    /// Faint divider / hairline color. Kept below `border()` so hairlines
+    /// separate zones without shouting.
+    pub fn divider(&self) -> Color {
+        if self.is_dark {
+            to_iced_alpha(self.palette().neutral.get(Shade::S300), 0.45)
+        } else {
+            to_iced(self.palette().neutral.get(Shade::S200))
+        }
+    }
+
     /// Border / divider color.
     pub fn border(&self) -> Color {
         if self.is_dark {

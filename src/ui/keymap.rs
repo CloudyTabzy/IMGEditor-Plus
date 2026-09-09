@@ -2,6 +2,8 @@ use iced::keyboard::Key;
 use iced::keyboard::Modifiers;
 use iced::keyboard::key::{Code, Named, Physical};
 
+use crate::ui::app::InspectorTab;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shortcut {
     New,
@@ -19,6 +21,7 @@ pub enum Shortcut {
     Delete,
     FocusSearch,
     CheckUpdates,
+    SwitchTab(InspectorTab),
 }
 
 impl Shortcut {
@@ -39,6 +42,9 @@ impl Shortcut {
             Shortcut::Delete => "Delete selected",
             Shortcut::FocusSearch => "Focus search",
             Shortcut::CheckUpdates => "Check for updates",
+            Shortcut::SwitchTab(InspectorTab::Export) => "Export tab",
+            Shortcut::SwitchTab(InspectorTab::Model3D) => "3D viewer",
+            Shortcut::SwitchTab(InspectorTab::Texture) => "Texture viewer",
         }
     }
 }
@@ -83,12 +89,42 @@ pub fn shortcut_chord(shortcut: Shortcut) -> KeyChord {
             Physical::Code(Code::KeyA),
             Modifiers::CTRL | Modifiers::SHIFT,
         ),
-        Shortcut::ClearSelection => (Physical::Code(Code::Escape), Modifiers::empty()),
+        Shortcut::ClearSelection => (Physical::Code(Code::KeyD), Modifiers::CTRL),
         Shortcut::Delete => (Physical::Code(Code::Delete), Modifiers::empty()),
         Shortcut::FocusSearch => (Physical::Code(Code::KeyF), Modifiers::CTRL),
         Shortcut::CheckUpdates => (Physical::Code(Code::KeyU), Modifiers::CTRL),
+        Shortcut::SwitchTab(InspectorTab::Export) => {
+            (Physical::Code(Code::Digit1), Modifiers::empty())
+        }
+        Shortcut::SwitchTab(InspectorTab::Model3D) => {
+            (Physical::Code(Code::Digit2), Modifiers::empty())
+        }
+        Shortcut::SwitchTab(InspectorTab::Texture) => {
+            (Physical::Code(Code::Digit3), Modifiers::empty())
+        }
     };
     KeyChord::new(physical, mods)
+}
+
+/// Secondary chord accepted for a shortcut, for keyboard layouts and
+/// hardware (numpad) where the primary binding is awkward. Detection
+/// accepts both; menus advertise only the primary chord.
+fn alternate_chord(shortcut: Shortcut) -> Option<KeyChord> {
+    let (physical, mods) = match shortcut {
+        Shortcut::ClearSelection => (Physical::Code(Code::Escape), Modifiers::empty()),
+        Shortcut::Delete => (Physical::Code(Code::KeyX), Modifiers::CTRL),
+        Shortcut::SwitchTab(InspectorTab::Export) => {
+            (Physical::Code(Code::Numpad1), Modifiers::empty())
+        }
+        Shortcut::SwitchTab(InspectorTab::Model3D) => {
+            (Physical::Code(Code::Numpad2), Modifiers::empty())
+        }
+        Shortcut::SwitchTab(InspectorTab::Texture) => {
+            (Physical::Code(Code::Numpad3), Modifiers::empty())
+        }
+        _ => return None,
+    };
+    Some(KeyChord::new(physical, mods))
 }
 
 pub fn chord_matches(chord: KeyChord, pressed_physical: Physical, pressed_mods: Modifiers) -> bool {
@@ -108,26 +144,17 @@ pub fn chord_matches(chord: KeyChord, pressed_physical: Physical, pressed_mods: 
     true
 }
 
+pub fn shortcut_matches(shortcut: Shortcut, pressed_physical: Physical, pressed_mods: Modifiers) -> bool {
+    if chord_matches(shortcut_chord(shortcut), pressed_physical, pressed_mods) {
+        return true;
+    }
+    alternate_chord(shortcut)
+        .is_some_and(|chord| chord_matches(chord, pressed_physical, pressed_mods))
+}
+
 pub fn detect_pressed(pressed_physical: Physical, pressed_mods: Modifiers) -> Option<Shortcut> {
-    let all = [
-        Shortcut::New,
-        Shortcut::Open,
-        Shortcut::Save,
-        Shortcut::SaveAs,
-        Shortcut::Close,
-        Shortcut::Import,
-        Shortcut::ImportReplace,
-        Shortcut::ExportAll,
-        Shortcut::ExportSelected,
-        Shortcut::SelectAll,
-        Shortcut::InvertSelection,
-        Shortcut::ClearSelection,
-        Shortcut::Delete,
-        Shortcut::FocusSearch,
-        Shortcut::CheckUpdates,
-    ];
-    all.into_iter()
-        .find(|s| chord_matches(shortcut_chord(*s), pressed_physical, pressed_mods))
+    all_shortcuts().into_iter()
+        .find(|s| shortcut_matches(*s, pressed_physical, pressed_mods))
 }
 
 pub fn shortcut_display(shortcut: Shortcut) -> String {
@@ -178,6 +205,12 @@ fn label_for_physical(physical: Physical) -> String {
         Physical::Code(Code::Enter) => "Enter".into(),
         Physical::Code(Code::Escape) => "Esc".into(),
         Physical::Code(Code::Space) => "Space".into(),
+        Physical::Code(Code::Digit1) => "1".into(),
+        Physical::Code(Code::Digit2) => "2".into(),
+        Physical::Code(Code::Digit3) => "3".into(),
+        Physical::Code(Code::Numpad1) => "Num 1".into(),
+        Physical::Code(Code::Numpad2) => "Num 2".into(),
+        Physical::Code(Code::Numpad3) => "Num 3".into(),
         Physical::Code(Code::Quote) => "'".into(),
         other => format!("{other:?}"),
     }
@@ -211,6 +244,9 @@ pub fn all_shortcuts() -> Vec<Shortcut> {
         Shortcut::Delete,
         Shortcut::FocusSearch,
         Shortcut::CheckUpdates,
+        Shortcut::SwitchTab(InspectorTab::Export),
+        Shortcut::SwitchTab(InspectorTab::Model3D),
+        Shortcut::SwitchTab(InspectorTab::Texture),
     ]
 }
 
@@ -240,9 +276,60 @@ mod tests {
     }
 
     #[test]
+    fn detect_ctrl_x_deletes() {
+        let detected = detect_pressed(Physical::Code(Code::KeyX), Modifiers::CTRL);
+        assert_eq!(detected, Some(Shortcut::Delete));
+    }
+
+    #[test]
     fn detect_escape_clears_selection() {
         let detected = detect_pressed(Physical::Code(Code::Escape), Modifiers::empty());
         assert_eq!(detected, Some(Shortcut::ClearSelection));
+    }
+
+    #[test]
+    fn detect_ctrl_d_clears_selection() {
+        let detected = detect_pressed(Physical::Code(Code::KeyD), Modifiers::CTRL);
+        assert_eq!(detected, Some(Shortcut::ClearSelection));
+    }
+
+    #[test]
+    fn display_shows_ctrl_d_for_clear_selection() {
+        let display = shortcut_display(Shortcut::ClearSelection);
+        assert!(display.contains("Ctrl"));
+        assert!(display.contains("D"));
+    }
+
+    #[test]
+    fn digits_switch_inspector_tabs() {
+        assert_eq!(
+            detect_pressed(Physical::Code(Code::Digit1), Modifiers::empty()),
+            Some(Shortcut::SwitchTab(InspectorTab::Export))
+        );
+        assert_eq!(
+            detect_pressed(Physical::Code(Code::Digit2), Modifiers::empty()),
+            Some(Shortcut::SwitchTab(InspectorTab::Model3D))
+        );
+        assert_eq!(
+            detect_pressed(Physical::Code(Code::Digit3), Modifiers::empty()),
+            Some(Shortcut::SwitchTab(InspectorTab::Texture))
+        );
+    }
+
+    #[test]
+    fn numpad_digits_are_alternate_tab_chords() {
+        assert_eq!(
+            detect_pressed(Physical::Code(Code::Numpad1), Modifiers::empty()),
+            Some(Shortcut::SwitchTab(InspectorTab::Export))
+        );
+        assert_eq!(
+            detect_pressed(Physical::Code(Code::Numpad2), Modifiers::empty()),
+            Some(Shortcut::SwitchTab(InspectorTab::Model3D))
+        );
+        assert_eq!(
+            detect_pressed(Physical::Code(Code::Numpad3), Modifiers::empty()),
+            Some(Shortcut::SwitchTab(InspectorTab::Texture))
+        );
     }
 
     #[test]

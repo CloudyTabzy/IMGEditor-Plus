@@ -54,6 +54,7 @@ pub const ANIM_ENTRY_FEEDBACK: crate::ui::animator::AnimationId = 3;
 pub const ANIM_ARCHIVE_TAB_FEEDBACK: crate::ui::animator::AnimationId = 4;
 pub const ANIM_INSPECTOR_TAB_FEEDBACK: crate::ui::animator::AnimationId = 5;
 pub const ANIM_CLICK_RIPPLE: crate::ui::animator::AnimationId = 6;
+pub const ANIM_TOAST_REVEAL: crate::ui::animator::AnimationId = 7;
 
 #[derive(Debug, Clone)]
 pub enum OpenArchiveOutcome {
@@ -505,6 +506,15 @@ pub struct App {
     toast_pulses_remaining: u32,
     toast_pulse_target: f32,
     toast_start: Option<std::time::Instant>,
+    /// Text of the floating toast snackbar while it is visible or fading
+    /// out. Mirrors `toast` but survives dismissal for the fade-out.
+    pub(crate) toast_reveal_text: Option<String>,
+    /// True while the toast snackbar is animating towards hidden.
+    toast_reveal_fading: bool,
+    /// Repeating 0..1 clock for the progress-bar shimmer sweep.
+    pub(crate) shimmer_phase: f32,
+    /// Repeating 0..1 clock for the empty-state idle animation.
+    pub(crate) empty_state_phase: f32,
     /// Decoded 3D scenes keyed by (archive file name, archive generation,
     /// entry index). Lets the viewer restore a previously loaded model
     /// instantly instead of re-reading + re-parsing the NIF. Memory bound
@@ -623,6 +633,10 @@ impl App {
             toast_pulses_remaining: 0,
             toast_pulse_target: 0.0,
             toast_start: None,
+            toast_reveal_text: None,
+            toast_reveal_fading: false,
+            shimmer_phase: 0.0,
+            empty_state_phase: 0.0,
             selected_inspector_tab: InspectorTab::Export,
             viewer3d_handle,
             scene_cache: quick_cache::sync::Cache::with(
@@ -822,11 +836,53 @@ impl App {
         Task::none()
     }
 
+    /// Like `iced::widget::operation::is_focused`, but always completes:
+    /// the stock operation finishes with `Outcome::None` when the target
+    /// widget is absent from the tree (the search box on the welcome
+    /// screen, the rename box outside rename mode), which silently drops
+    /// the mapped message and deadlocks the shortcut focus handshake.
+    /// A missing widget here simply counts as "not focused".
+    fn is_focused_or_absent(id: iced::widget::Id) -> Task<bool> {
+        use iced::Rectangle;
+        use iced::advanced::widget::operation::{Focusable, Operation, Outcome};
+
+        struct Probe {
+            target: iced::widget::Id,
+            result: Option<bool>,
+        }
+
+        impl Operation<bool> for Probe {
+            fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<bool>)) {
+                operate(self);
+            }
+
+            fn focusable(
+                &mut self,
+                id: Option<&iced::widget::Id>,
+                _bounds: Rectangle,
+                state: &mut dyn Focusable,
+            ) {
+                if id.is_some_and(|id| *id == self.target) {
+                    self.result = Some(state.is_focused());
+                }
+            }
+
+            fn finish(&self) -> Outcome<bool> {
+                Outcome::Some(self.result.unwrap_or(false))
+            }
+        }
+
+        iced::advanced::widget::operate(Probe {
+            target: id,
+            result: None,
+        })
+    }
+
     fn input_focus_task() -> Task<Message> {
         Task::batch(vec![
-            iced::widget::operation::is_focused(iced::widget::Id::new(SEARCH_INPUT_ID))
+            Self::is_focused_or_absent(iced::widget::Id::new(SEARCH_INPUT_ID))
                 .map(Message::SearchFocusChanged),
-            iced::widget::operation::is_focused(iced::widget::Id::new(RENAME_INPUT_ID))
+            Self::is_focused_or_absent(iced::widget::Id::new(RENAME_INPUT_ID))
                 .map(Message::RenameFocusChanged),
         ])
     }
@@ -836,6 +892,18 @@ impl App {
         self.pending_search_focus = None;
         self.pending_rename_focus = None;
         Self::input_focus_task()
+    }
+
+    /// True while a modal dialog covers the workspace. Keyboard shortcuts
+    /// must not fire behind a dialog (a stray `1`/`2`/`3` or Ctrl+D while
+    /// reading the About box would otherwise act on the hidden UI).
+    pub(crate) fn modal_open(&self) -> bool {
+        self.show_about
+            || self.show_welcome
+            || self.show_unsupported.is_some()
+            || self.pending_folder_import.is_some()
+            || self.show_update_status.is_some()
+            || self.show_sort_manager
     }
 
     fn resolve_shortcut_focus_check(&mut self) -> Task<Message> {
@@ -853,7 +921,7 @@ impl App {
         self.search_focused = search_focused;
         self.rename_focused = rename_focused;
 
-        if search_focused || rename_focused {
+        if search_focused || rename_focused || self.modal_open() {
             Task::none()
         } else {
             self.handle_shortcut(shortcut)
@@ -875,9 +943,18 @@ impl App {
     fn prepare_interaction_animation(&mut self) {
         // The animation subscription is intentionally stopped while idle. Do
         // not let the first tick of a new effect inherit the elapsed wall time
-        // from the previous subscription.
-        if self.animator.running_count() == 0 && self.toast.is_none() && self.viewer_load.is_none()
-        {
+        // from the previous subscription. Continuous idle effects (toast
+        // reveal, progress shimmer, empty-state breathing) keep the
+        // subscription alive, so the tick chain must not be reset while any
+        // of them could be driving frames — otherwise their phase clocks
+        // never advance.
+        let subscription_alive = self.animator.running_count() > 0
+            || self.toast.is_some()
+            || self.toast_reveal_text.is_some()
+            || self.viewer_load.is_some()
+            || self.has_active_progress()
+            || (self.editor.archives().is_empty() && self.config.motion_enabled);
+        if !subscription_alive {
             self.prev_tick = None;
         }
     }
@@ -1061,6 +1138,21 @@ impl App {
             .as_ref()
             .filter(|load| Some(load.target) == self.selected_entry_key())
             .map(|load| load.entry_name.as_str())
+    }
+
+    /// The floating toast snackbar's text and reveal progress (0 = hidden,
+    /// 1 = fully shown). Returns `Some` while the toast is up and during
+    /// its fade-out, so the view layer gets a continuous lifecycle.
+    pub(crate) fn toast_overlay(&self) -> Option<(String, f32)> {
+        let text = self.toast_reveal_text.clone()?;
+        let reveal = if !self.config.motion_enabled {
+            1.0
+        } else if self.toast_reveal_fading {
+            self.animator.get_or(ANIM_TOAST_REVEAL, 0.0).clamp(0.0, 1.0)
+        } else {
+            self.animator.get_or(ANIM_TOAST_REVEAL, 1.0).clamp(0.0, 1.0)
+        };
+        (reveal > 0.0).then_some((text, reveal))
     }
 
     fn begin_viewer_load(&mut self, target: (usize, usize), entry_name: String) {
@@ -1380,6 +1472,7 @@ impl App {
                 iced::widget::operation::focus(iced::widget::Id::new(SEARCH_INPUT_ID))
             }
             Shortcut::CheckUpdates => Task::done(Message::CheckUpdatesManual),
+            Shortcut::SwitchTab(tab) => Task::done(Message::Viewer3dSelectTab(tab)),
         }
     }
 }
@@ -2308,6 +2401,14 @@ impl App {
                         self.viewer_load_phase =
                             (self.viewer_load_phase + dt.as_secs_f32() * 0.72).fract();
                     }
+                    if self.has_active_progress() {
+                        self.shimmer_phase =
+                            (self.shimmer_phase + dt.as_secs_f32() * 0.9).fract();
+                    }
+                    if self.editor.archives().is_empty() && self.config.motion_enabled {
+                        self.empty_state_phase =
+                            (self.empty_state_phase + dt.as_secs_f32() * 0.22).fract();
+                    }
                 }
                 self.prev_tick = Some(now);
 
@@ -2340,6 +2441,45 @@ impl App {
                     }
                 } else {
                     self.toast_start = None;
+                }
+
+                // Floating toast snackbar reveal: slide+fade in when the
+                // toast text changes, fade out once the toast clears.
+                if let Some(current) = self.toast.clone() {
+                    let is_new = self.toast_reveal_text.as_ref() != Some(&current);
+                    if is_new {
+                        self.toast_reveal_text = Some(current);
+                    }
+                    if is_new || self.toast_reveal_fading {
+                        self.toast_reveal_fading = false;
+                        if self.config.motion_enabled {
+                            self.animator.animate(
+                                ANIM_TOAST_REVEAL,
+                                self.animator.get_or(ANIM_TOAST_REVEAL, 0.0),
+                                1.0,
+                                Duration::from_millis(220),
+                                crate::ui::easing::Easing::CubicOut,
+                            );
+                        }
+                    }
+                } else if self.toast_reveal_text.is_some() {
+                    if !self.config.motion_enabled {
+                        self.toast_reveal_text = None;
+                        self.toast_reveal_fading = false;
+                        self.animator.cancel(ANIM_TOAST_REVEAL);
+                    } else if !self.toast_reveal_fading {
+                        self.toast_reveal_fading = true;
+                        self.animator.animate(
+                            ANIM_TOAST_REVEAL,
+                            self.animator.get_or(ANIM_TOAST_REVEAL, 1.0),
+                            0.0,
+                            Duration::from_millis(220),
+                            crate::ui::easing::Easing::CubicOut,
+                        );
+                    } else if !self.animator.is_running(ANIM_TOAST_REVEAL) {
+                        self.toast_reveal_text = None;
+                        self.toast_reveal_fading = false;
+                    }
                 }
 
                 self.prepare_interaction_animation();
@@ -3491,10 +3631,15 @@ impl App {
 
         // Only run the animation ticker when something needs it. A constant
         // 60 Hz update forces a full view rebuild every frame, which makes
-        // scrolling and typing feel sluggish on large archives.
+        // scrolling and typing feel sluggish on large archives. The
+        // empty-archive idle screen is cheap to redraw, so the breathing
+        // icon may keep the ticker alive there.
         let anim_tick = if self.animator.running_count() > 0
             || self.toast.is_some()
+            || self.toast_reveal_text.is_some()
             || self.viewer_load.is_some()
+            || self.has_active_progress()
+            || (self.editor.archives().is_empty() && self.config.motion_enabled)
         {
             iced::time::every(Duration::from_millis(16)).map(Message::AnimationTick)
         } else {
@@ -3671,6 +3816,27 @@ impl App {
         // The View menu contains application-wide interaction preferences.
         let view_toggle = |on: bool| if on { "● " } else { "○ " };
         let view_menu = Menu::new(vec![
+            Item::new(menu_button(
+                format!(
+                    "Go to export tab ({})",
+                    shortcut_display(Shortcut::SwitchTab(InspectorTab::Export))
+                ),
+                Message::Viewer3dSelectTab(InspectorTab::Export),
+            )),
+            Item::new(menu_button(
+                format!(
+                    "Go to 3D viewer ({})",
+                    shortcut_display(Shortcut::SwitchTab(InspectorTab::Model3D))
+                ),
+                Message::Viewer3dSelectTab(InspectorTab::Model3D),
+            )),
+            Item::new(menu_button(
+                format!(
+                    "Go to texture viewer ({})",
+                    shortcut_display(Shortcut::SwitchTab(InspectorTab::Texture))
+                ),
+                Message::Viewer3dSelectTab(InspectorTab::Texture),
+            )),
             Item::new(menu_button(
                 format!(
                     "{}Navigation gizmo",
@@ -3925,7 +4091,11 @@ mod tests {
     use super::*;
 
     fn test_app() -> App {
-        App::new(Config::default())
+        let mut app = App::new(Config::default());
+        // The first-run welcome modal gates shortcuts now; tests below
+        // assume a normal workspace with no dialog open.
+        app.show_welcome = false;
+        app
     }
 
     fn test_app_with_entries() -> App {
@@ -3936,6 +4106,31 @@ mod tests {
         archive.entries.push(EntryInfo::new("second.txd"));
         archive.update_selected_list("");
         app
+    }
+
+    /// Run a task's side effects and collect the follow-up messages it
+    /// would feed back into the runtime (mirrors what the real event loop
+    /// does with `Task::done` values).
+    fn drain_task(task: iced::task::Task<Message>) -> Vec<Message> {
+        use iced::futures::StreamExt;
+
+        let Some(stream) = iced_runtime::task::into_stream(task) else {
+            return Vec::new();
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async move {
+            stream
+                .filter_map(|action| async move {
+                    match action {
+                        iced_runtime::Action::Output(message) => Some(message),
+                        _ => None,
+                    }
+                })
+                .collect::<Vec<_>>()
+                .await
+        })
     }
 
     #[test]
@@ -4375,5 +4570,177 @@ mod tests {
         let mut app = test_app();
         let _ = app.handle_shortcut(Shortcut::FocusSearch);
         assert!(app.search_focused);
+    }
+
+    #[test]
+    fn shortcut_pipeline_switches_inspector_tab_when_no_input_focused() {
+        // End-to-end check for the digit chords, including the focus
+        // handshake: no text inputs exist in this state, which used to
+        // deadlock the check and swallow every shortcut.
+        let mut app = test_app();
+        assert_eq!(app.selected_inspector_tab, InspectorTab::Export);
+
+        let _ = app.update(Message::ShortcutPressed(Shortcut::SwitchTab(
+            InspectorTab::Model3D,
+        )));
+        let _ = app.update(Message::SearchFocusChanged(false));
+        let follow_up = drain_task(app.update(Message::RenameFocusChanged(false)));
+        assert_eq!(follow_up.len(), 1);
+        assert!(matches!(
+            follow_up[0],
+            Message::Viewer3dSelectTab(InspectorTab::Model3D)
+        ));
+        let _ = app.update(Message::Viewer3dSelectTab(InspectorTab::Model3D));
+        assert_eq!(app.selected_inspector_tab, InspectorTab::Model3D);
+
+        let _ = app.update(Message::ShortcutPressed(Shortcut::SwitchTab(
+            InspectorTab::Texture,
+        )));
+        let _ = app.update(Message::SearchFocusChanged(false));
+        let follow_up = drain_task(app.update(Message::RenameFocusChanged(false)));
+        assert_eq!(follow_up.len(), 1);
+        assert!(matches!(
+            follow_up[0],
+            Message::Viewer3dSelectTab(InspectorTab::Texture)
+        ));
+        let _ = app.update(Message::Viewer3dSelectTab(InspectorTab::Texture));
+        assert_eq!(app.selected_inspector_tab, InspectorTab::Texture);
+    }
+
+    #[test]
+    fn ctrl_d_deselects_entries() {
+        let mut app = test_app_with_entries();
+        app.editor.select_entry(1, false, false);
+        assert!(app.editor.selected_entry().is_some());
+
+        let _ = app.update(Message::ShortcutPressed(Shortcut::ClearSelection));
+        let _ = app.update(Message::SearchFocusChanged(false));
+        let follow_up = drain_task(app.update(Message::RenameFocusChanged(false)));
+        assert_eq!(follow_up.len(), 1);
+        assert!(matches!(follow_up[0], Message::ClearSelection));
+        let _ = app.update(Message::ClearSelection);
+        assert_eq!(app.editor.selected_entry(), None);
+    }
+
+    #[test]
+    fn shortcuts_are_ignored_while_a_modal_is_open() {
+        let mut app = test_app();
+        app.show_about = true;
+
+        let _ = app.update(Message::ShortcutPressed(Shortcut::SwitchTab(
+            InspectorTab::Model3D,
+        )));
+        let _ = app.update(Message::SearchFocusChanged(false));
+        let follow_up = drain_task(app.update(Message::RenameFocusChanged(false)));
+        assert!(follow_up.is_empty(), "modal must swallow the shortcut");
+        assert_eq!(app.selected_inspector_tab, InspectorTab::Export);
+
+        app.show_about = false;
+        let _ = app.update(Message::ShortcutPressed(Shortcut::SwitchTab(
+            InspectorTab::Model3D,
+        )));
+        let _ = app.update(Message::SearchFocusChanged(false));
+        let follow_up = drain_task(app.update(Message::RenameFocusChanged(false)));
+        assert_eq!(follow_up.len(), 1);
+        assert!(matches!(
+            follow_up[0],
+            Message::Viewer3dSelectTab(InspectorTab::Model3D)
+        ));
+    }
+
+    /// Advance the animation clock in 50 ms steps — the real tick handler
+    /// caps `dt` at 50 ms, so single large jumps would under-advance.
+    fn tick_n(app: &mut App, start: std::time::Instant, steps: u64) -> std::time::Instant {
+        let mut now = start;
+        for _ in 0..steps {
+            now += Duration::from_millis(50);
+            let _ = app.update(Message::AnimationTick(now));
+        }
+        now
+    }
+
+    #[test]
+    fn toast_overlay_slides_in_and_fades_out() {
+        let mut app = test_app();
+        assert!(app.toast_overlay().is_none());
+
+        app.toast = Some("Saved.".to_string());
+        let start = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(start));
+
+        // 50 ms in: mid-reveal.
+        let mut now = tick_n(&mut app, start, 1);
+        let (text, reveal) = app.toast_overlay().expect("toast should be visible");
+        assert_eq!(text, "Saved.");
+        assert!(reveal > 0.0 && reveal < 1.0, "mid-reveal: {reveal}");
+
+        // 300 ms in: reveal has completed, snackbar fully shown.
+        now = tick_n(&mut app, now, 5);
+        let (_, reveal) = app.toast_overlay().expect("toast should still be visible");
+        assert!((reveal - 1.0).abs() < 0.01);
+
+        // Dismiss: the text survives until the fade-out finishes.
+        app.toast = None;
+        now = tick_n(&mut app, now, 1); // fade-out starts
+        let (text, _) = app.toast_overlay().expect("fade-out keeps the text");
+        assert_eq!(text, "Saved.");
+        now = tick_n(&mut app, now, 2); // mid-fade
+        let (_, reveal) = app.toast_overlay().expect("mid-fade still visible");
+        assert!(reveal < 1.0, "mid-fade: {reveal}");
+        let _ = tick_n(&mut app, now, 3); // fade completes and clears
+        assert!(app.toast_overlay().is_none());
+    }
+
+    #[test]
+    fn toast_overlay_is_static_when_motion_is_disabled() {
+        let mut app = test_app();
+        app.config.motion_enabled = false;
+
+        app.toast = Some("Copied".to_string());
+        let now = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(now));
+
+        let (_, reveal) = app.toast_overlay().expect("toast should be visible");
+        assert!((reveal - 1.0).abs() < f32::EPSILON);
+
+        app.toast = None;
+        let _ = app.update(Message::AnimationTick(now + Duration::from_millis(50)));
+        assert!(app.toast_overlay().is_none());
+    }
+
+    #[test]
+    fn shimmer_phase_advances_only_while_progress_is_active() {
+        let mut app = test_app_with_entries();
+        let start = std::time::Instant::now();
+        let mut now = tick_n(&mut app, start, 2);
+        assert_eq!(app.shimmer_phase, 0.0);
+
+        app.editor.archives()[0].progress.start();
+        now = tick_n(&mut app, now, 2);
+        assert!(app.shimmer_phase > 0.0, "phase: {}", app.shimmer_phase);
+
+        app.editor.archives()[0].progress.finish();
+        let held = app.shimmer_phase;
+        let _ = tick_n(&mut app, now, 2);
+        assert_eq!(app.shimmer_phase, held);
+    }
+
+    #[test]
+    fn empty_state_breathes_only_with_no_archives_and_motion() {
+        let mut app = test_app();
+        let start = std::time::Instant::now();
+        let now = tick_n(&mut app, start, 2);
+        assert!(app.empty_state_phase > 0.0);
+
+        app.editor.new_archive();
+        let held = app.empty_state_phase;
+        let _ = tick_n(&mut app, now, 2);
+        assert_eq!(app.empty_state_phase, held);
+
+        // Motion disabled: no breathing on the empty state either.
+        let mut app = test_app();
+        app.config.motion_enabled = false;
+        let _ = tick_n(&mut app, start, 2);
+        assert_eq!(app.empty_state_phase, 0.0);
     }
 }

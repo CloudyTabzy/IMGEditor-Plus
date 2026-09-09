@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v3.16.0
+# 🎮 IMG Editor Plus v4.0.0
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -61,6 +61,13 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
 - ✅ **Automated regression tests** — cover parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, six-axis navigation, alpha rendering, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
+
+**v4.0.0 release highlights:**
+- ✅ **Proper GTA IMG content rendering** — entries inside IMG v1/v2 archives now open natively in the in-app 3D viewer and texture viewer: PC DFF models with frame/atomic transforms and TXD diffuse resolution (GTA III/VC/SA-style RenderWare assets), Bully NIF/NFT models and texture catalogs, plus COL collision meshes
+- ✅ **UI overhaul** — full design-token refresh with Affinity-style shade hierarchy, hairline chrome dividers, inset log well, and a pane layout with custom split styling
+- ✅ **Motion effects suite** — floating toast snackbar (slide + fade), progress-bar shimmer, breathing empty-state hero, click ripples, selection pulses, and icon micro-motion; all toggleable under `View → Motion effects`
+- ✅ **Expanded keyboard shortcuts** — `Ctrl+D` deselect, `Ctrl+X` delete, `Ctrl+F` focus search, and `1`/`2`/`3` to jump to the Export / 3D viewer / Texture viewer tabs (numpad works too)
+- ✅ **Robust shortcut pipeline** — shortcut focus detection no longer deadlocks when the search or rename box is off-screen or absent, and shortcuts are correctly suppressed while typing, renaming, or when a dialog is open
 
 **v3.16.0 release highlights:**
 - ✅ **GTA RenderWare preview** — in-app PC DFF model parsing with frame/atomic transforms and TXD diffuse texture resolution for GTA III/VC/SA-style assets
@@ -133,7 +140,7 @@ for the engineering story.
 - ✅ **Smooth animation engine** — 26 easing curves, animated progress bar, animated status-bar pulse
 - ✅ **Inter + Bricolage + Lucide icon fonts** — clean, modern typography
 - ✅ **Resizable master/detail panes** — drag the splitter
-- ✅ **Editable keyboard shortcuts** — see table below
+- ✅ **Full keyboard shortcut set** — see table below
 - ✅ **DPI-aware** window sizing
 
 ---
@@ -222,7 +229,7 @@ The codebase is architected so the core parsers and archive logic are platform-a
 The main UI layer uses Iced, which is cross-platform by design, so the desktop porting effort is mostly packaging and platform-specific window integration.
 
 ### Platform-specific note on GTA support
-Version 3.x is developed and tested primarily against **Bully Scholarship Edition** archives, with the embedded viewer now covering common PC RenderWare DFF/TXD assets used by GTA III, Vice City, and San Andreas. Genuine per-game fixtures are still needed for compatibility claims; console-native geometry, skinning, animation, and advanced RenderWare material effects remain future work. Broader GTA workflow polish — importing, exporting, and format edge cases — will be addressed as representative archives become available.
+Version 4.0 is developed and tested primarily against **Bully Scholarship Edition** archives, with the embedded viewer now covering common PC RenderWare DFF/TXD assets used by GTA III, Vice City, and San Andreas. Genuine per-game fixtures are still needed for compatibility claims; console-native geometry, skinning, animation, and advanced RenderWare material effects remain future work. Broader GTA workflow polish — importing, exporting, and format edge cases — will be addressed as representative archives become available.
 
 ### Unicode and non-ASCII language support
 Core archive parsing stores entry names as UTF-8, so non-ASCII characters inside archives round-trip correctly. However, full support for languages like Russian (Cyrillic) is not yet guaranteed:
@@ -240,15 +247,21 @@ Core archive parsing stores entry names as UTF-8, so non-ASCII characters inside
 | `Ctrl+N` | New archive |
 | `Ctrl+O` | Open archive |
 | `Ctrl+S` | Save in place |
-| `Shift+S` | Save as |
-| `Ctrl+I` | Import files |
-| `Shift+I` | Import and replace |
-| `Ctrl+E` | Export all |
-| `Shift+E` | Export selected |
-| `Ctrl+A` | Select all |
-| `Shift+A` | Invert selection |
+| `Ctrl+Shift+S` | Save as |
 | `Shift+X` | Close tab |
-| `Delete` | Delete selected |
+| `Ctrl+I` | Import files |
+| `Ctrl+Shift+I` | Import and replace |
+| `Ctrl+E` | Export all |
+| `Ctrl+Shift+E` | Export selected |
+| `Ctrl+A` | Select all |
+| `Ctrl+Shift+A` | Invert selection |
+| `Ctrl+D` | Deselect all (`Esc` also works) |
+| `Delete` or `Ctrl+X` | Delete selected |
+| `Ctrl+F` | Focus the search box |
+| `1` / `2` / `3` | Switch to Export / 3D viewer / Texture viewer tab (numpad works too) |
+| `Ctrl+U` | Check for updates |
+
+Shortcuts are suppressed while you are typing in the search or rename box and while a dialog is open.
 
 ---
 
