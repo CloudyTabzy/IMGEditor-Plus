@@ -46,6 +46,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Tab split in the right pane** — `Model 3D` (new) | `Texture` (TXD/NFT preview)
 - ✅ **Orbit / pan / zoom camera** — LMB drag to orbit, MMB drag to pan, wheel to zoom
 - ✅ **Interactive axis navigation** — labeled ±X/±Y/±Z gizmo with hover feedback, exact orthographic views, and a perspective/orthographic button; axis colors follow the model's source coordinates and its visibility is saved under `View → Navigation gizmo`
+- ✅ **Adaptive model loading transition** — cache misses immediately show a theme-aware spinner while geometry and textures prepare; cached models restore without a distracting flash
 - ✅ **Lit + wireframe pipelines** — single WGSL shader, `W` cycles wireframe (toolbar)
 - ✅ **MSAA 4x anti-aliasing** — the scene pass renders into multisampled color + depth targets and resolves for smooth model edges
 - ✅ **Textured paths** — DFF/TXD diffuse mapping plus DXT1/2/3/4/5 decoding on `spawn_blocking` so the UI thread stays responsive

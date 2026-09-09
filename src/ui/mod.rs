@@ -8,6 +8,7 @@ pub mod fonts;
 pub mod icons;
 pub mod interaction;
 pub mod keymap;
+pub mod loading_indicator;
 pub mod sort_manager;
 pub mod texture_preview;
 pub mod theme;

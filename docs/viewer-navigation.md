@@ -8,6 +8,10 @@ from back to front so the visible target wins when axes overlap.
 The guide is intentionally compact so it does not compete with smaller models.
 Use `View → Navigation gizmo` to show or hide it; that preference is saved.
 
+On a first load, the viewer replaces the empty state with an indeterminate,
+theme-aware spinner while it decodes geometry and resolves textures. It only
+appears for a real cache miss; previously viewed models return immediately.
+
 - Click a circle to enter orthographic projection looking toward the target from that axis.
 - Click the facing circle again to view the opposite side.
 - Drag the gizmo or the scene with LMB to orbit. Orbiting restores perspective.

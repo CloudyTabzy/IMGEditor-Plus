@@ -14,6 +14,7 @@ use crate::ui::app::{ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, 
 use crate::ui::fonts;
 use crate::ui::icons;
 use crate::ui::interaction;
+use crate::ui::loading_indicator::LoadingSpinner;
 use crate::ui::viewer3d_widget::SceneOriginMode;
 use crate::ui::widgets as w;
 
@@ -557,11 +558,12 @@ impl App {
         let entry_lower = entry.file_name.to_ascii_lowercase();
         let is_model = entry_lower.ends_with(".nif") || entry_lower.ends_with(".dff");
         let scene_matches = self.viewer_scene_matches_selection();
+        let loading = self.viewer_load_matches_selection();
         let gpu_error = scene_matches
             .then(|| self.viewer3d_handle.with(|inner| inner.gpu_error.clone()))
             .flatten();
 
-        let toolbar = self.build_viewer3d_toolbar(is_model, scene_matches);
+        let toolbar = self.build_viewer3d_toolbar(is_model, scene_matches, loading);
         let stats = self.build_viewer3d_stats(scene_matches);
 
         let body: Element<'_, Message> = if let Some(error) = gpu_error {
@@ -585,16 +587,35 @@ impl App {
             let widget =
                 crate::ui::viewer3d_widget::Scene3dWidget::new(self.viewer3d_handle.clone());
             widget.into()
-        } else if is_model {
-            container(fonts::caption(
-                "This model is selected but not loaded in the 3D viewer yet.",
-            ))
+        } else if loading {
+            let entry_name = self.viewer_loading_entry_name().unwrap_or("selected model");
+            container(
+                column![
+                    canvas::Canvas::new(LoadingSpinner::new(self.viewer_load_phase))
+                        .width(Length::Fixed(48.0))
+                        .height(Length::Fixed(48.0)),
+                    fonts::header("Preparing 3D preview"),
+                    fonts::body(entry_name),
+                    fonts::caption("Reading geometry and resolving textures…"),
+                    fonts::caption("Future previews of this model will be instant."),
+                ]
+                .spacing(8)
+                .align_x(Alignment::Center),
+            )
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
             .padding(16)
             .into()
+        } else if is_model {
+            container(fonts::caption("Ready to preview this model in 3D."))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .padding(16)
+                .into()
         } else {
             container(fonts::caption(format!(
                 "The in-app viewer renders .nif and .dff entries. {} is not a supported model — use the right-click menu for another viewer.",
@@ -607,7 +628,9 @@ impl App {
             .into()
         };
 
-        let prompt: Element<'_, Message> = if !scene_matches && is_model {
+        let prompt: Element<'_, Message> = if loading {
+            Space::new().height(Length::Fixed(0.0)).into()
+        } else if !scene_matches && is_model {
             fonts::caption("Use ‘Load selected’ above to preview this model.").into()
         } else if !scene_matches {
             fonts::caption("Select a .nif or .dff entry, then right-click → Open in 3D viewer.")
@@ -675,6 +698,8 @@ impl App {
                 "{} vertices   {} triangles   {} textures   {}×{}   {}   {}",
                 vertices, triangles, textures, w, h, orient_label, origin_label
             )
+        } else if let Some(entry_name) = self.viewer_loading_entry_name() {
+            format!("Preparing {entry_name}…")
         } else {
             "No scene loaded".to_string()
         };
@@ -1004,11 +1029,26 @@ impl App {
         col.into()
     }
 
-    fn build_viewer3d_toolbar(&self, is_model: bool, scene_matches: bool) -> Element<'_, Message> {
+    fn build_viewer3d_toolbar(
+        &self,
+        is_model: bool,
+        scene_matches: bool,
+        loading: bool,
+    ) -> Element<'_, Message> {
         if !is_model {
             return Space::new().height(Length::Fixed(28.0)).into();
         }
         if !scene_matches {
+            if loading {
+                return row![
+                    w::icon_label(icons::model().size(14), fonts::caption("3D:")),
+                    fonts::caption("Preparing selected model…"),
+                ]
+                .spacing(4)
+                .padding(2)
+                .width(Length::Fill)
+                .into();
+            }
             return row![
                 w::icon_label(icons::model().size(14), fonts::caption("3D:")),
                 w::styled_tooltip(

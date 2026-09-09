@@ -84,6 +84,16 @@ pub struct AutoScroll {
     pub current: Option<Point>,
 }
 
+/// The specific scene currently being decoded off the UI thread.
+///
+/// Keeping the identity with the loading state prevents a late completion for
+/// an older selection from replacing the current loading transition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ViewerLoadState {
+    target: (usize, usize),
+    entry_name: String,
+}
+
 /// Application event type. Heterogeneous by design — some variants carry
 /// large payloads (`Viewer3dLoadCompleted::Scene`, `ExportCompleted::Vec<String>`)
 /// while most are unit or single-value. Boxing the large variants would
@@ -471,6 +481,10 @@ pub struct App {
     /// Selection can change without destroying the current scene, so the UI
     /// uses this identity to avoid presenting a stale model as the new one.
     pub active_viewer_entry: Option<(usize, usize)>,
+    /// Loading state for a cold 3D scene. Cache hits deliberately skip it.
+    pub(crate) viewer_load: Option<ViewerLoadState>,
+    /// Normalized position for the indeterminate model-loading spinner.
+    pub(crate) viewer_load_phase: f32,
     pub scroll_y: f32,
     pub selected_inspector_tab: InspectorTab,
     pub viewer3d_handle: std::sync::Arc<crate::ui::viewer3d_widget::SceneHandle>,
@@ -592,6 +606,8 @@ impl App {
             show_texture_grid,
             texture_grid_divisions,
             active_viewer_entry: None,
+            viewer_load: None,
+            viewer_load_phase: 0.0,
             scroll_y: 0.0,
             filter_pending: false,
             autoscroll: None,
@@ -860,7 +876,8 @@ impl App {
         // The animation subscription is intentionally stopped while idle. Do
         // not let the first tick of a new effect inherit the elapsed wall time
         // from the previous subscription.
-        if self.animator.running_count() == 0 && self.toast.is_none() {
+        if self.animator.running_count() == 0 && self.toast.is_none() && self.viewer_load.is_none()
+        {
             self.prev_tick = None;
         }
     }
@@ -1033,6 +1050,47 @@ impl App {
             && self.viewer3d_handle.with(|inner| inner.scene.is_some())
     }
 
+    pub(crate) fn viewer_load_matches_selection(&self) -> bool {
+        self.viewer_load
+            .as_ref()
+            .is_some_and(|load| Some(load.target) == self.selected_entry_key())
+    }
+
+    pub(crate) fn viewer_loading_entry_name(&self) -> Option<&str> {
+        self.viewer_load
+            .as_ref()
+            .filter(|load| Some(load.target) == self.selected_entry_key())
+            .map(|load| load.entry_name.as_str())
+    }
+
+    fn begin_viewer_load(&mut self, target: (usize, usize), entry_name: String) {
+        if self
+            .viewer_load
+            .as_ref()
+            .is_some_and(|load| load.target == target)
+        {
+            return;
+        }
+        // The animation clock is intentionally idle when no other effect is
+        // running. Reset it here so a first loader frame never skips ahead.
+        if self.animator.running_count() == 0 && self.toast.is_none() {
+            self.prev_tick = None;
+        }
+        self.viewer_load = Some(ViewerLoadState { target, entry_name });
+        self.viewer_load_phase = 0.0;
+    }
+
+    fn clear_viewer_load(&mut self) {
+        self.viewer_load = None;
+        self.viewer_load_phase = 0.0;
+    }
+
+    fn clear_stale_viewer_load(&mut self) {
+        if self.viewer_load.is_some() && !self.viewer_load_matches_selection() {
+            self.clear_viewer_load();
+        }
+    }
+
     fn reset_texture_preview_state(&mut self) {
         self.selected_texture = 0;
         self.show_texture_uv = false;
@@ -1058,6 +1116,7 @@ impl App {
                 if is_model {
                     self.load_selected_nif(InspectorTab::Model3D)
                 } else {
+                    self.clear_viewer_load();
                     Task::none()
                 }
             }
@@ -1135,13 +1194,27 @@ impl App {
         }
 
         self.selected_inspector_tab = target_tab;
+        let target = (archive_index, entry_index);
+        let entry_name = entry.file_name.to_string();
         if self.viewer_scene_matches_selection() {
+            self.clear_viewer_load();
+            return Task::none();
+        }
+        // A user can press the explicit load control while the automatic
+        // selection load is in flight. Keep one decode task and one stable
+        // transition instead of restarting the spinner or doing duplicate I/O.
+        if self
+            .viewer_load
+            .as_ref()
+            .is_some_and(|load| load.target == target)
+        {
             return Task::none();
         }
         // Cache hit: the scene for this (archive, generation, entry) is
         // already decoded — restore it instantly instead of re-reading,
         // re-parsing, and re-resolving textures.
         if let Some(scene) = self.cached_scene_for(archive_index, entry_index) {
+            self.clear_viewer_load();
             self.store_scene_texture_previews(&scene, archive_index, entry_index);
             self.viewer3d_handle.set_scene(scene);
             self.active_viewer_entry = Some((archive_index, entry_index));
@@ -1159,6 +1232,7 @@ impl App {
         }
         self.active_viewer_entry = None;
         self.viewer3d_handle.clear();
+        self.begin_viewer_load(target, entry_name);
         Task::done(Message::Viewer3dRequestLoad {
             archive_index,
             entry_index,
@@ -1320,6 +1394,7 @@ impl App {
             Message::NewArchive => {
                 self.editor.new_archive();
                 self.active_viewer_entry = None;
+                self.clear_viewer_load();
                 self.viewer3d_handle.clear();
                 Task::none()
             }
@@ -1488,6 +1563,7 @@ impl App {
                     .map(|archive| archive.file_name.clone());
                 self.editor.close_selected_archive();
                 self.active_viewer_entry = None;
+                self.clear_viewer_load();
                 self.viewer3d_handle.clear();
                 if let Some(name) = closed_name {
                     self.drop_scene_cache_for_archive(&name);
@@ -1503,6 +1579,7 @@ impl App {
                     .map(|archive| archive.file_name.clone());
                 self.editor.close_archive(index);
                 self.active_viewer_entry = None;
+                self.clear_viewer_load();
                 self.viewer3d_handle.clear();
                 if let Some(name) = closed_name {
                     self.drop_scene_cache_for_archive(&name);
@@ -1515,6 +1592,7 @@ impl App {
                 self.start_click_ripple(RippleTarget::ArchiveTab(index));
                 self.editor.select_archive(index);
                 self.active_viewer_entry = None;
+                self.clear_viewer_load();
                 self.viewer3d_handle.clear();
                 let task = self.refresh_inspection();
                 Task::batch(vec![task, Task::none()])
@@ -1730,6 +1808,7 @@ impl App {
                 self.inspected_entry = None;
                 self.reset_texture_preview_state();
                 self.active_viewer_entry = None;
+                self.clear_viewer_load();
                 self.viewer3d_handle.clear();
                 Task::none()
             }
@@ -1867,6 +1946,7 @@ impl App {
                     let shift = self.modifiers.shift();
                     let ctrl = self.modifiers.command();
                     self.editor.select_entry(entry_index, shift, ctrl);
+                    self.clear_stale_viewer_load();
                     self.reset_texture_preview_state();
                     let inspection_task = self.refresh_inspection();
                     let preview_task = if shift || ctrl {
@@ -1883,6 +1963,7 @@ impl App {
                 let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
                     self.editor.set_selected_entry(Some(entry_index));
                     self.editor.select_entry(entry_index, false, false);
+                    self.clear_stale_viewer_load();
                     self.reset_texture_preview_state();
                     if let Some(archive) = self.editor.selected_archive_mut() {
                         archive.set_rename(entry_index);
@@ -1903,6 +1984,7 @@ impl App {
             Message::EntryRightClicked(display_row) => {
                 let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
                     self.editor.select_context_entry(entry_index);
+                    self.clear_stale_viewer_load();
                     self.reset_texture_preview_state();
                     self.context_menu = Some((entry_index, display_row));
                     self.refresh_inspection()
@@ -2222,8 +2304,14 @@ impl App {
                         .saturating_duration_since(prev)
                         .min(Duration::from_millis(50));
                     self.animator.update(dt);
+                    if self.viewer_load.is_some() {
+                        self.viewer_load_phase =
+                            (self.viewer_load_phase + dt.as_secs_f32() * 0.72).fract();
+                    }
                 }
                 self.prev_tick = Some(now);
+
+                self.clear_stale_viewer_load();
 
                 if !self.animator.is_running(ANIM_ENTRY_FEEDBACK) {
                     self.entry_feedback_target = None;
@@ -2840,11 +2928,20 @@ impl App {
                 if let Some((root, map)) = ide_map {
                     self.ide_maps.entry(root).or_insert(map);
                 }
+                let completed_target = (archive_index, entry_index);
                 if self.editor.selected_archive() != Some(archive_index)
                     || self.editor.selected_entry() != Some(entry_index)
                 {
+                    if self
+                        .viewer_load
+                        .as_ref()
+                        .is_some_and(|load| load.target == completed_target)
+                    {
+                        self.clear_viewer_load();
+                    }
                     return Task::none();
                 }
+                self.clear_viewer_load();
                 match result {
                     Ok(scene) => {
                         dev_logger::breadcrumb(&format!(
@@ -2881,6 +2978,7 @@ impl App {
             }
             Message::Viewer3dClear => {
                 self.active_viewer_entry = None;
+                self.clear_viewer_load();
                 self.viewer3d_handle.clear();
                 Task::none()
             }
@@ -3210,6 +3308,7 @@ impl App {
         {
             if valid_indices.binary_search(&entry_index).is_ok() {
                 self.active_viewer_entry = None;
+                self.clear_viewer_load();
                 self.viewer3d_handle.clear();
                 self.reset_texture_preview_state();
             } else {
@@ -3393,7 +3492,10 @@ impl App {
         // Only run the animation ticker when something needs it. A constant
         // 60 Hz update forces a full view rebuild every frame, which makes
         // scrolling and typing feel sluggish on large archives.
-        let anim_tick = if self.animator.running_count() > 0 || self.toast.is_some() {
+        let anim_tick = if self.animator.running_count() > 0
+            || self.toast.is_some()
+            || self.viewer_load.is_some()
+        {
             iced::time::every(Duration::from_millis(16)).map(Message::AnimationTick)
         } else {
             Subscription::none()
@@ -3980,6 +4082,16 @@ mod tests {
         assert_eq!(app.selected_inspector_tab, InspectorTab::Model3D);
         assert_eq!(app.active_viewer_entry, None);
         assert!(app.viewer3d_handle.with(|inner| inner.scene.is_none()));
+        assert_eq!(
+            app.viewer_load.as_ref().map(|load| load.target),
+            Some((0, 2))
+        );
+        assert_eq!(
+            app.viewer_load
+                .as_ref()
+                .map(|load| load.entry_name.as_str()),
+            Some("model.nif")
+        );
     }
 
     #[test]
@@ -4080,6 +4192,70 @@ mod tests {
         assert_eq!(app.editor.selected_entry(), Some(2));
         assert_eq!(app.selected_inspector_tab, InspectorTab::Model3D);
         assert_eq!(app.active_viewer_entry, None);
+        assert_eq!(
+            app.viewer_load.as_ref().map(|load| load.target),
+            Some((0, 2))
+        );
+    }
+
+    #[test]
+    fn viewer_loading_phase_advances_only_while_the_selected_model_is_pending() {
+        let mut app = test_app_with_entries();
+        app.editor.select_entry(0, false, false);
+        assert_eq!(app.selected_entry_key(), Some((0, 0)));
+        app.begin_viewer_load((0, 0), "first.dff".to_string());
+        let start = std::time::Instant::now();
+
+        let _ = app.update(Message::AnimationTick(start));
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(250)));
+
+        assert!(
+            app.viewer_load_phase > 0.0,
+            "phase: {}, load state: {:?}",
+            app.viewer_load_phase,
+            app.viewer_load
+        );
+        assert!(app.viewer_load_phase < 1.0);
+    }
+
+    #[test]
+    fn stale_viewer_completion_does_not_hide_the_newer_model_transition() {
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0]
+            .entries
+            .push(EntryInfo::new("newer.nif"));
+        app.editor.archives_mut()[0].update_selected_list("");
+        app.editor.select_entry(2, false, false);
+        app.begin_viewer_load((0, 2), "newer.nif".to_string());
+
+        let _ = app.update(Message::Viewer3dLoadCompleted {
+            archive_index: 0,
+            entry_index: 0,
+            result: Err("stale completion".to_string()),
+            ide_map: None,
+        });
+
+        assert_eq!(
+            app.viewer_load.as_ref().map(|load| load.target),
+            Some((0, 2))
+        );
+    }
+
+    #[test]
+    fn matching_viewer_completion_clears_the_loading_transition() {
+        let mut app = test_app_with_entries();
+        app.editor.select_entry(0, false, false);
+        app.begin_viewer_load((0, 0), "first.dff".to_string());
+
+        let _ = app.update(Message::Viewer3dLoadCompleted {
+            archive_index: 0,
+            entry_index: 0,
+            result: Err("intentional failure".to_string()),
+            ide_map: None,
+        });
+
+        assert!(app.viewer_load.is_none());
+        assert_eq!(app.viewer_load_phase, 0.0);
     }
 
     #[test]
