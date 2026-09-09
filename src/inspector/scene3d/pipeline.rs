@@ -119,6 +119,12 @@ pub fn scene_color_format() -> wgpu::TextureFormat {
     wgpu::TextureFormat::Rgba8UnormSrgb
 }
 
+/// Multisample count used by the embedded viewer's scene pass (Phase 17
+/// plan: MSAA 4x). 4x is the maximum sample count guaranteed by WebGPU
+/// on every backend, so no feature negotiation is needed. The headless
+/// renderer stays at 1x to keep its test output deterministic.
+pub const SCENE_MSAA_SAMPLES: u32 = 4;
+
 pub fn create_depth_texture(
     device: &wgpu::Device,
     width: u32,
@@ -160,6 +166,32 @@ fn create_scene_color_texture(
         dimension: wgpu::TextureDimension::D2,
         format: scene_color_format(),
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    (tex, view)
+}
+
+/// Multisampled color target rendered by the scene pass and resolved
+/// into the 1x `scene_color` texture at the end of the pass. Never
+/// sampled directly, so `RENDER_ATTACHMENT` is its only usage.
+pub fn create_msaa_color_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("imgeditor-scene3d/msaa_color"),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: SCENE_MSAA_SAMPLES,
+        dimension: wgpu::TextureDimension::D2,
+        format: scene_color_format(),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -477,6 +509,7 @@ impl ScenePipelines {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
+        scene_sample_count: u32,
     ) -> Self {
         let lit_module = lit_shader_module(device);
         let wire_module = wireframe_shader_module(device);
@@ -573,6 +606,7 @@ impl ScenePipelines {
             true,
             wgpu::CompareFunction::Less,
             wgpu::BlendState::REPLACE,
+            scene_sample_count,
             "imgeditor-scene3d/lit_pipeline",
         );
         let lit_cull_back = build_lit_pipeline(
@@ -586,6 +620,7 @@ impl ScenePipelines {
             true,
             wgpu::CompareFunction::Less,
             wgpu::BlendState::REPLACE,
+            scene_sample_count,
             "imgeditor-scene3d/lit_cull_back_pipeline",
         );
 
@@ -600,6 +635,7 @@ impl ScenePipelines {
             false,
             wgpu::CompareFunction::LessEqual,
             wgpu::BlendState::ALPHA_BLENDING,
+            scene_sample_count,
             "imgeditor-scene3d/wireframe_pipeline",
         );
 
@@ -732,7 +768,7 @@ impl ScenePipelines {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState {
-                count: 1,
+                count: scene_sample_count,
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
@@ -784,7 +820,7 @@ impl ScenePipelines {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState {
-                count: 1,
+                count: scene_sample_count,
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
@@ -868,6 +904,20 @@ impl ScenePipelines {
     }
 }
 
+/// Largest single GPU buffer this scene will allocate, across the
+/// vertex, index, and wire-edge index buffers. Mirrors the buffer split
+/// in `GpuMesh::from_scene_mesh_at_offset`, including the 2x upper
+/// bound on wire indices. `None` when any size computation overflows.
+fn max_mesh_buffer_bytes(scene: &Scene) -> Option<u64> {
+    scene.meshes.iter().try_fold(0_u64, |largest, mesh| {
+        let vertices = (mesh.vertices.len() as u64).checked_mul(VERTEX_STRIDE as u64)?;
+        let indices =
+            (mesh.indices.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64)?;
+        let wire = indices.checked_mul(2)?;
+        Some(largest.max(vertices).max(indices).max(wire))
+    })
+}
+
 /// Validate scene data against both the CPU-side safety policy and the
 /// actual limits negotiated for this device.
 pub fn validate_scene_for_device(
@@ -878,6 +928,19 @@ pub fn validate_scene_for_device(
 ) -> Result<(), String> {
     validate_scene_data(scene)?;
     let limits = device.limits();
+    // The 512 MiB total admission cap in `validate_scene_data` is larger
+    // than the single-buffer limit on downlevel devices (256 MiB), so a
+    // monolithic mesh could still trip a validation error at upload time.
+    // Reject it here with a clear message instead.
+    let largest_buffer = max_mesh_buffer_bytes(scene)
+        .ok_or_else(|| "scene buffer size overflowed".to_string())?;
+    if largest_buffer > limits.max_buffer_size {
+        return Err(format!(
+            "the largest mesh buffer needs about {:.1} MiB but this GPU supports at most {:.0} MiB per buffer",
+            largest_buffer as f64 / (1024.0 * 1024.0),
+            limits.max_buffer_size as f64 / (1024.0 * 1024.0),
+        ));
+    }
     if width == 0 || height == 0 {
         return Err("3D viewer received a zero-sized viewport".to_string());
     }
@@ -959,6 +1022,7 @@ fn build_lit_pipeline(
     depth_write_enabled: bool,
     depth_compare: wgpu::CompareFunction,
     blend: wgpu::BlendState,
+    sample_count: u32,
     label: &str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -997,7 +1061,7 @@ fn build_lit_pipeline(
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState {
-            count: 1,
+            count: sample_count,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
@@ -1144,5 +1208,46 @@ mod tests {
     #[test]
     fn wire_indices_skip_degenerate_and_incomplete_triangles() {
         assert_eq!(build_wire_indices(&[0, 0, 1, 1]), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn max_mesh_buffer_bytes_reflects_largest_single_buffer() {
+        use crate::inspector::scene3d::camera::BaseOrientation;
+        use crate::inspector::scene3d::mesh::{Aabb, Vertex};
+        let verts = |n: usize| {
+            vec![
+                Vertex {
+                    position: [0.0; 3],
+                    normal: [0.0; 3],
+                    uv: [0.0; 2],
+                };
+                n
+            ]
+        };
+        let scene = Scene {
+            meshes: vec![
+                SceneMesh {
+                    name: "a".to_string(),
+                    texture_name: None,
+                    vertices: verts(10),
+                    indices: vec![0, 1, 2],
+                    diffuse: None,
+                    aabb: Aabb::default(),
+                },
+                SceneMesh {
+                    name: "b".to_string(),
+                    texture_name: None,
+                    vertices: verts(4),
+                    indices: vec![0; 900],
+                    diffuse: None,
+                    aabb: Aabb::default(),
+                },
+            ],
+            ..Scene::empty(BaseOrientation::Yup)
+        };
+        // mesh "a": vertex 320 B, index 12 B, wire 24 B -> 320
+        // mesh "b": vertex 128 B, index 3600 B, wire 7200 B -> 7200
+        assert_eq!(max_mesh_buffer_bytes(&scene), Some(7200));
+        assert_eq!(max_mesh_buffer_bytes(&Scene::empty(BaseOrientation::Yup)), Some(0));
     }
 }

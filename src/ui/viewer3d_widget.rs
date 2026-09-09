@@ -40,8 +40,9 @@ use iced_widget::renderer::wgpu::primitive::{self, Pipeline as PrimitivePipeline
 use crate::inspector::scene3d::camera::OrbitCamera;
 use crate::inspector::scene3d::mesh::Aabb;
 use crate::inspector::scene3d::pipeline::{
-    GpuMesh, GpuTexture, RenderFlags, ScenePipelines, create_depth_texture, effective_texture_flag,
-    register_gpu_error_handlers, validate_scene_for_device,
+    GpuMesh, GpuTexture, RenderFlags, SCENE_MSAA_SAMPLES, ScenePipelines, create_depth_texture,
+    create_msaa_color_texture, effective_texture_flag, register_gpu_error_handlers,
+    validate_scene_for_device,
 };
 use crate::inspector::scene3d::scene::Scene;
 
@@ -580,6 +581,10 @@ pub struct ScenePipeline {
     pub render_pipelines: ScenePipelines,
     pub depth_tex: Option<wgpu::Texture>,
     pub depth_view: Option<wgpu::TextureView>,
+    /// Multisampled color target for the scene pass; resolved into the
+    /// 1x `scene_color` texture at the end of every pass.
+    pub msaa_color_tex: Option<wgpu::Texture>,
+    pub msaa_color_view: Option<wgpu::TextureView>,
     pub width: u32,
     pub height: u32,
     /// Cached from the most recent `prepare` call so `render` can build a
@@ -604,9 +609,14 @@ impl ScenePipeline {
         if self.depth_tex.is_some() && self.width == width && self.height == height {
             return;
         }
-        let (tex, view) = create_depth_texture(device, width, height, 1);
+        // Depth and the MSAA color target are both viewport-sized
+        // multisampled attachments, so they are created together.
+        let (tex, view) = create_depth_texture(device, width, height, SCENE_MSAA_SAMPLES);
         self.depth_tex = Some(tex);
         self.depth_view = Some(view);
+        let (msaa_tex, msaa_view) = create_msaa_color_texture(device, width, height);
+        self.msaa_color_tex = Some(msaa_tex);
+        self.msaa_color_view = Some(msaa_view);
         self.width = width;
         self.height = height;
     }
@@ -690,6 +700,8 @@ impl ScenePipeline {
         self.cached_origin_offset = [0.0; 3];
         self.depth_view = None;
         self.depth_tex = None;
+        self.msaa_color_view = None;
+        self.msaa_color_tex = None;
         self.width = 0;
         self.height = 0;
         self.render_pipelines.release_scene_color();
@@ -716,8 +728,9 @@ impl ScenePipeline {
     ) {
         let _ = scene;
         let _ = camera;
-        let (Some(depth_view), Some(scene_color_view)) = (
+        let (Some(depth_view), Some(msaa_color_view), Some(scene_color_view)) = (
             self.depth_view.as_ref(),
+            self.msaa_color_view.as_ref(),
             self.render_pipelines.scene_color_view.as_ref(),
         ) else {
             return;
@@ -735,9 +748,14 @@ impl ScenePipeline {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("imgeditor-scene3d/render_offscreen"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: scene_color_view,
+                view: msaa_color_view,
                 depth_slice: None,
-                resolve_target: None,
+                // The multisampled image resolves into the 1x scene
+                // color texture, which the compositor samples. The
+                // resolve target is always written regardless of the
+                // attachment's store op, so the MSAA image itself can
+                // be discarded after the pass.
+                resolve_target: Some(scene_color_view),
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
                         r: 0.06,
@@ -745,7 +763,7 @@ impl ScenePipeline {
                         b: 0.09,
                         a: 1.0,
                     }),
-                    store: wgpu::StoreOp::Store,
+                    store: wgpu::StoreOp::Discard,
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -906,11 +924,14 @@ impl ScenePipeline {
 
 impl PrimitivePipeline for ScenePipeline {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        let render_pipelines = ScenePipelines::new(device, queue, format);
+        let render_pipelines =
+            ScenePipelines::new(device, queue, format, SCENE_MSAA_SAMPLES);
         Self {
             render_pipelines,
             depth_tex: None,
             depth_view: None,
+            msaa_color_tex: None,
+            msaa_color_view: None,
             width: 0,
             height: 0,
             last_viewport: (1, 1),

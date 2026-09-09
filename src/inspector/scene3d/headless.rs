@@ -60,7 +60,10 @@ impl HeadlessRenderer {
             trace: wgpu::Trace::Off,
         }))
         .map_err(|e| format!("device request failed: {e}"))?;
-        let pipelines = ScenePipelines::new(&device, &queue, color_format);
+        // 1x sample count keeps the headless output byte-deterministic
+        // for the pixel-diff tests; the embedded viewer renders at
+        // SCENE_MSAA_SAMPLES instead.
+        let pipelines = ScenePipelines::new(&device, &queue, color_format, 1);
         Ok(Self {
             instance,
             adapter,
@@ -425,6 +428,145 @@ mod tests {
         let frame = render_frame(&renderer, &scene, &camera, 17, 9, RenderFlags::empty())
             .expect("unaligned render");
         assert_eq!(frame.rgba.len(), 17 * 9 * 4);
+    }
+
+    #[test]
+    fn msaa_scene_pass_renders_and_resolves() {
+        // The embedded viewer renders its scene pass at SCENE_MSAA_SAMPLES
+        // and resolves into a 1x color texture. This exercises that exact
+        // wiring headlessly: 4x pipelines + 4x attachments + resolve. Any
+        // sample-count, format, or usage mismatch raises a wgpu validation
+        // error and fails the test.
+        let renderer = gpu().expect("renderer");
+        let device = &renderer.device;
+        let queue = &renderer.queue;
+
+        let pipelines = pipeline::ScenePipelines::new(
+            device,
+            queue,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            pipeline::SCENE_MSAA_SAMPLES,
+        );
+        let scene = triangle_scene();
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 64,
+            height: 64,
+        });
+        camera.reset_to_aabb(&scene.aabb);
+        pipelines.update_camera(queue, &camera, scene.key_light, scene.ambient, RenderFlags::empty());
+
+        let width = 64u32;
+        let height = 64u32;
+        let (_msaa_tex, msaa_view) = pipeline::create_msaa_color_texture(device, width, height);
+        let (_depth_tex, depth_view) =
+            pipeline::create_depth_texture(device, width, height, pipeline::SCENE_MSAA_SAMPLES);
+        // 1x resolve target with the same usage flags as the widget's
+        // scene color texture, plus COPY_SRC for the readback below.
+        let resolve = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("imgeditor-scene3d-msaa-test/resolve"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let resolve_view = resolve.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mesh_gpu = GpuMesh::from_scene_mesh(device, queue, &scene.meshes[0]);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("imgeditor-scene3d-msaa-test/encoder"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("imgeditor-scene3d-msaa-test/pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &msaa_view,
+                    depth_slice: None,
+                    resolve_target: Some(&resolve_view),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.06,
+                            g: 0.07,
+                            b: 0.09,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Discard,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipelines.lit);
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+            pass.set_bind_group(1, &pipelines.default_diffuse.bind_group, &[]);
+            pass.set_vertex_buffer(0, mesh_gpu.vertex_buffer.slice(..));
+            pass.set_index_buffer(mesh_gpu.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh_gpu.index_count, 0, 0..1);
+        }
+        // 64 * 4 bytes per row already satisfies the copy row alignment.
+        let read_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("imgeditor-scene3d-msaa-test/read"),
+            size: (width * height * 4) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &resolve,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &read_buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let submit_info = queue.submit(std::iter::once(encoder.finish()));
+        let slice = read_buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: Some(submit_info),
+            timeout: None,
+        });
+        let mapped = slice.get_mapped_range();
+        // The triangle covers a solid chunk of the frame; count pixels
+        // that differ from the pure-background corner pixel.
+        let bg = &mapped[0..4];
+        let lit_pixels = mapped
+            .chunks_exact(4)
+            .filter(|px| *px != bg)
+            .count();
+        drop(mapped);
+        read_buf.unmap();
+        assert!(
+            lit_pixels > (width * height) as usize / 10,
+            "resolved image should show the triangle (lit pixels: {lit_pixels})"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v3.15.0** (smoother 3D camera zoom/panning, synchronized texture overlays, and continued archive/UI refinements). 291 tests passing.
+Last shipped: **v3.15.0** (smoother 3D camera zoom/panning, synchronized texture overlays, and continued archive/UI refinements). 293 tests passing.
 
 Next phase: **supporting other game formats**.
 
@@ -8,6 +8,10 @@ On master (post-v3.15.0, unreleased):
 
 - Byte-budgeted `quick_cache` LRU for decoded 3D scenes (256 MiB desktop / 64 MiB mobile, keyed by `(archive, generation, entry)`) and texture previews (128 MiB / 32 MiB, keyed by entry index); `ArchiveInfo::generation` invalidates both on entry mutations. `Arc<Scene>` / `Arc<Vec<DecodedTexture>>` values are shared zero-copy with the viewer handle and per-frame lookups.
 - Memoized `IdeMap` per game root so only the first 3D load per root walks the directory.
+- GPU test stabilization: headless tests share one renderer behind a lock (concurrent `wgpu::Instance` creation raced the driver loaders); suite ~4.8s → ~1.5s.
+- Renderer trims: camera UBO written without a per-frame heap copy; depth attachments discarded instead of stored.
+- MSAA 4x scene rendering per the Phase 17 plan: the scene pass renders into 4x multisampled color + depth targets and resolves into the 1x scene color texture; the headless renderer stays at 1x for deterministic pixel-diff tests.
+- Scalability guard: `validate_scene_for_device` rejects scenes whose largest single mesh buffer exceeds `limits.max_buffer_size` (256 MiB on downlevel devices) with a clear error instead of a raw wgpu validation failure at upload time.
 
 ---
 
