@@ -2,7 +2,7 @@ use crate::archive::{ExportStatus, SortColumn};
 use crate::sort::SortDirection;
 use iced::widget::{
     Column, Container, Float, Row, Scrollable, Space, button, canvas, checkbox, column, container,
-    image, mouse_area, pane_grid, progress_bar, row, stack, text_input, tooltip,
+    image, mouse_area, pane_grid, progress_bar, responsive, row, stack, text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length, Rectangle, Vector};
 
@@ -1536,20 +1536,36 @@ pub fn build(app: &App) -> Element<'_, Message> {
         .into()
     } else {
         let show_search = app.config.show_search_bar;
-        let search_area: Option<Element<'_, Message>> = show_search.then(|| {
+        let search_strip: Option<Element<'_, Message>> = show_search.then(|| {
+            // The label column is pinned so the text input's x position
+            // is deterministic: SEARCH_DROPDOWN_X anchors the floating
+            // dropdown under the input, not under the strip's left edge.
+            let label = container(
+                row![
+                    icons::search().size(15),
+                    fonts::header("Search:"),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            )
+            .width(Length::Fixed(SEARCH_LABEL_WIDTH))
+            .align_y(Alignment::Center);
             let search = row![
-                w::icon_label(icons::search().size(15), fonts::header("Search:")),
+                mouse_area(label).on_press(Message::FocusSearchInput),
                 text_input("", &app.search)
                     .id(iced::widget::Id::new("search_input"))
                     .on_input(Message::SearchChanged)
                     .width(Length::Fill),
             ]
             .spacing(8)
-            .padding(8);
+            .padding([6, 8])
+            .height(Length::Fill)
+            .align_y(Alignment::Center);
 
             let search_bg = design.chrome();
             Container::new(search)
                 .width(Length::Fill)
+                .height(Length::Fixed(SEARCH_STRIP_HEIGHT))
                 .style(move |_| iced::widget::container::Style {
                     background: Some(iced::Background::Color(search_bg)),
                     ..Default::default()
@@ -1597,8 +1613,48 @@ pub fn build(app: &App) -> Element<'_, Message> {
         })
         .height(Length::Fill);
 
-        match search_area {
-            Some(search) => column![search, main_row].into(),
+        match search_strip {
+            Some(strip) => {
+                let open = app.predictions_open();
+                let (accent, surface, divider) =
+                    (design.accent(), design.surface(), design.divider());
+                // The Float is an overlay child of the workspace stack:
+                // it renders above the pane grid at the translated
+                // position and still receives clicks there, while the
+                // grid below keeps its exact layout. The stack + Float
+                // are ALWAYS present (the card is an empty placeholder
+                // when closed) so toggling predictions never reshapes
+                // the widget tree — reshaping would drop the text
+                // input's focus state.
+                let dropdown =
+                    Float::new(responsive(move |size| {
+                        if open {
+                            search_prediction_dropdown(
+                                app,
+                                size.width - SEARCH_DROPDOWN_X,
+                                accent,
+                                surface,
+                                divider,
+                            )
+                        } else {
+                            container(column![]).into()
+                        }
+                    }))
+                    .translate(move |bounds, viewport| {
+                        if !open {
+                            return Vector::ZERO;
+                        }
+                        // Anchor just below the search strip and inside
+                        // the window on short viewports.
+                        let y = if bounds.height + SEARCH_STRIP_HEIGHT > viewport.height {
+                            (viewport.height - bounds.height).max(0.0)
+                        } else {
+                            SEARCH_STRIP_HEIGHT
+                        };
+                        Vector::new(SEARCH_DROPDOWN_X, y)
+                    });
+                stack(vec![column![strip, main_row].into(), dropdown.into()]).into()
+            }
             None => main_row.into(),
         }
     };
@@ -2109,6 +2165,109 @@ fn with_alpha(color: Color, factor: f32) -> Color {
         a: color.a * factor,
         ..color
     }
+}
+
+/// Height (px) of a single prediction row in the search dropdown.
+const PREDICTION_ROW_HEIGHT: f32 = 26.0;
+/// Height (px) of the pinned search strip. The floating prediction
+/// dropdown anchors at this offset below the workspace top.
+const SEARCH_STRIP_HEIGHT: f32 = 34.0;
+/// Width (px) of the pinned "Search:" label column inside the strip.
+const SEARCH_LABEL_WIDTH: f32 = 88.0;
+/// X offset of the floating dropdown: strip padding + label column +
+/// row spacing. Keeps the card under the text input, not the whole
+/// strip.
+const SEARCH_DROPDOWN_X: f32 = 104.0;
+
+/// The fuzzy-search prediction dropdown, rendered between the search
+/// strip and the pane grid while the search input is focused. Lists the
+/// best subsequence matches; when the query matched nothing, shows the
+/// single "Did you mean …" typo suggestion instead.
+fn search_prediction_dropdown(
+    app: &App,
+    width: f32,
+    accent: Color,
+    surface: Color,
+    divider: Color,
+) -> Element<'_, Message> {
+    let prediction_button = |name: String, message: Message, active: bool, hint: Option<&'static str>| {
+        let label = if let Some(hint) = hint {
+            row![fonts::caption(hint), fonts::body(name)]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        } else {
+            row![fonts::body(name)].align_y(Alignment::Center)
+        };
+        let hover_bg = with_alpha(accent, 0.16);
+        let active_bg = with_alpha(accent, 0.28);
+        button(
+            container(label)
+                .width(Length::Fill)
+                .align_x(Alignment::Start)
+                .padding([2, 8]),
+        )
+        .height(Length::Fixed(PREDICTION_ROW_HEIGHT))
+        .width(Length::Fill)
+        .style(move |theme, status| {
+            let highlighted = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            let background = if highlighted {
+                Some(iced::Background::Color(hover_bg))
+            } else if active {
+                Some(iced::Background::Color(active_bg))
+            } else {
+                None
+            };
+            let palette = theme.extended_palette();
+            iced::widget::button::Style {
+                background,
+                text_color: w::readable_text_color(surface, palette.background.base.text),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: 3.0.into(),
+                },
+                ..Default::default()
+            }
+        })
+        .on_press(message)
+    };
+
+    let mut list = Column::new().spacing(2);
+    let match_count = app.search_predictions.len();
+    for (index, (_, name)) in app.search_predictions.iter().enumerate() {
+        list = list.push(prediction_button(
+            name.clone(),
+            Message::SearchPredictPick(index),
+            app.prediction_index == Some(index),
+            None,
+        ));
+    }
+    if let Some((_, name)) = &app.did_you_mean {
+        list = list.push(prediction_button(
+            name.clone(),
+            Message::SearchPickDidYouMean,
+            app.prediction_index.is_some_and(|i| i >= match_count),
+            Some("Did you mean"),
+        ));
+    }
+
+    container(container(list).padding([4, 4]))
+        .width(Length::Fixed(width.max(0.0)))
+        .style(move |_| iced::widget::container::Style {
+            background: Some(iced::Background::Color(surface)),
+            border: Border {
+                color: divider,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            shadow: iced::Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
+                offset: iced::Vector::new(0.0, 3.0),
+                blur_radius: 8.0,
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 /// Floating toast snackbar pinned to the bottom-right corner. Slides up and

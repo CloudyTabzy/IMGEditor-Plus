@@ -1455,6 +1455,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fuzzt"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a15f3d0fa42283a765e5fb609683ddab4ee4ff245d8db66a24d926c05e518c6"
+
+[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2138,7 +2144,7 @@ checksum = "edcd27d72f2f071c64249075f42e205ff93c9a4c5f6c6da53e79ed9f9832c285"
 
 [[package]]
 name = "imgeditor"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "anyhow",
  "bitflags 2.13.0",
@@ -2147,6 +2153,7 @@ dependencies = [
  "compact_str",
  "dark-light",
  "embed-resource",
+ "fuzzt",
  "glam 0.29.3",
  "iced",
  "iced_aw",

@@ -390,7 +390,7 @@ impl ArchiveInfo {
 
     pub fn update_selected_list(&mut self, filter: &str) {
         self.sync_sort_state_from_chain();
-        let filter = filter.to_lowercase();
+        let filter = filter.trim().to_lowercase();
         self.selected_indices.clear();
         self.selected_lookup.clear();
 
@@ -399,12 +399,35 @@ impl ArchiveInfo {
         // any borrowed `EntryInfo` references from `self.entries`.
         let unique_types = self.unique_file_types().to_vec();
 
-        let mut matches: Vec<(usize, &EntryInfo)> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.file_name_lower.contains(&filter))
-            .collect();
+        let mut matches: Vec<(usize, &EntryInfo, Option<i64>)> = if filter.is_empty() {
+            self.entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (i, e, None))
+                .filter(|(_, e, _)| e.file_name_lower.contains(&filter))
+                .collect()
+        } else {
+            // Fuzzy filter: scored subsequence matches first. When the
+            // query matches nothing, fall back to Jaro-Winkler typo
+            // matches so misspelled names still surface results.
+            let mut scored: Vec<(i64, usize, &EntryInfo)> = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| {
+                    crate::search::fuzzy_score(&e.file_name_lower, &filter)
+                        .map(|score| (score, i, e))
+                })
+                .collect();
+            if scored.is_empty() {
+                for (i, e) in self.entries.iter().enumerate() {
+                    if let Some(score) = crate::search::typo_score(&e.file_name_lower, &filter) {
+                        scored.push((score, i, e));
+                    }
+                }
+            }
+            scored.into_iter().map(|(score, i, e)| (i, e, Some(score))).collect()
+        };
 
         // Build the IDE/COL sort context once per sort so the
         // comparator can resolve labels for the entry names we're
@@ -428,13 +451,19 @@ impl ArchiveInfo {
             ..crate::sort::SortContext::empty()
         };
 
-        // Use the multi-key chain for the actual ordering. The
-        // legacy single-column `sort` field is only used to drive
-        // the "primary type" bubble via `primary_type` above; the
-        // full chain takes over from there.
-        matches.sort_by(|(_, a), (_, b)| self.sort_chain.cmp(a, b, &sort_ctx));
+        // Use the multi-key chain for the actual ordering. With an
+        // active fuzzy filter, relevance (score) comes first and the
+        // chain only breaks ties. The legacy single-column `sort` field
+        // is only used to drive the "primary type" bubble via
+        // `primary_type` above; the full chain takes over from there.
+        matches.sort_by(|(_, a, a_score), (_, b, b_score)| match (a_score, b_score) {
+            (Some(a_score), Some(b_score)) => {
+                b_score.cmp(a_score).then_with(|| self.sort_chain.cmp(a, b, &sort_ctx))
+            }
+            _ => self.sort_chain.cmp(a, b, &sort_ctx),
+        });
 
-        for (display_row, (entry_index, _)) in matches.into_iter().enumerate() {
+        for (display_row, (entry_index, _, _)) in matches.into_iter().enumerate() {
             self.selected_lookup.insert(entry_index, display_row);
             self.selected_indices.push(entry_index);
         }
@@ -688,6 +717,40 @@ mod tests {
 
         archive.update_selected_list("txd");
         assert_eq!(archive.selected_indices.as_slice(), &[1]);
+    }
+
+    #[test]
+    fn update_selected_list_orders_fuzzy_matches_by_relevance() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("police_car.dff"));
+        archive.entries.push(EntryInfo::new("taxi.dff"));
+        archive.entries.push(EntryInfo::new("polmav.dff"));
+
+        // "pol" prefixes "police_car" and "polmav", but the shorter
+        // name is denser; the scattered match on "taxi" must lose.
+        archive.update_selected_list("pol");
+        assert_eq!(archive.selected_indices.first(), Some(&2));
+        assert!(archive.selected_indices.contains(&0));
+        assert!(!archive.selected_indices.contains(&1));
+
+        // Scattered initials still match the subsequence scan.
+        archive.update_selected_list("pff");
+        assert!(
+            archive.selected_indices.contains(&0),
+            "p.c.dff subsequence"
+        );
+    }
+
+    #[test]
+    fn update_selected_list_falls_back_to_typo_matches() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.entries.push(EntryInfo::new("police_car.dff"));
+        archive.entries.push(EntryInfo::new("taxi.dff"));
+
+        // Not a subsequence ("r" never appears after "s"), but close
+        // enough for Jaro-Winkler to rescue.
+        archive.update_selected_list("policastr");
+        assert_eq!(archive.selected_indices.as_slice(), &[0]);
     }
 
     #[test]

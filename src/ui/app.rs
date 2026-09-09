@@ -41,6 +41,8 @@ use crate::updater::{UpdateResult, UpdateState, check_updates_future};
 const REPO_URL: &str = "https://github.com/CloudyTabzy/IMGEditor-Plus";
 const UPDATER_REPO: &str = "CloudyTabzy/IMGEditor-Plus";
 const SEARCH_INPUT_ID: &str = "search_input";
+/// Rows shown in the search prediction dropdown.
+const MAX_SEARCH_PREDICTIONS: usize = 8;
 const RENAME_INPUT_ID: &str = "rename_input";
 
 fn is_renderable_model_name(name: &str) -> bool {
@@ -172,6 +174,17 @@ pub enum Message {
     CancelActive,
 
     SearchChanged(String),
+    SearchPredictMove(i32),
+    SearchPredictCommit,
+    SearchPredictDismiss,
+    SearchPredictPick(usize),
+    SearchPickDidYouMean,
+    /// A left click that no widget captured: dismiss the search
+    /// prediction dropdown if it is open.
+    UncapturedPress,
+    /// Click on the search strip's label area: focus the input and keep
+    /// the prediction dropdown alive.
+    FocusSearchInput,
     SearchFocusChanged(bool),
     RenameFocusChanged(bool),
     DebounceTick,
@@ -441,6 +454,20 @@ pub struct App {
     pub rename_buffer: String,
     search_focused: bool,
     rename_focused: bool,
+    /// Fuzzy-search prediction rows: `(entry index, display name)`,
+    /// best match first. Only the top few are kept.
+    pub(crate) search_predictions: Vec<(usize, String)>,
+    /// Index into the virtual prediction list (`search_predictions`
+    /// plus the optional did-you-mean row) highlighted by keyboard
+    /// navigation.
+    pub(crate) prediction_index: Option<usize>,
+    /// "Did you mean …" suggestion: `(entry index, display name)`,
+    /// populated when the query matches nothing but a Jaro-Winkler
+    /// near-miss exists.
+    pub(crate) did_you_mean: Option<(usize, String)>,
+    /// Set when the user dismisses the prediction dropdown with
+    /// Escape; reset on the next query change.
+    predictions_dismissed: bool,
     pending_shortcut: Option<Shortcut>,
     pending_search_focus: Option<bool>,
     pending_rename_focus: Option<bool>,
@@ -597,6 +624,10 @@ impl App {
             rename_buffer: String::new(),
             search_focused: false,
             rename_focused: false,
+            search_predictions: Vec::new(),
+            prediction_index: None,
+            did_you_mean: None,
+            predictions_dismissed: false,
             pending_shortcut: None,
             pending_search_focus: None,
             pending_rename_focus: None,
@@ -834,7 +865,113 @@ impl App {
 
     fn run_refresh_filter(&mut self) -> Task<Message> {
         self.editor.update_filtered_list(&self.search);
+        self.refresh_search_predictions();
         Task::none()
+    }
+
+    /// True when the prediction dropdown should be rendered: the search
+    /// input has focus, the query produced suggestions, and the user
+    /// has not dismissed them with Escape.
+    pub(crate) fn predictions_open(&self) -> bool {
+        self.search_focused
+            && !self.predictions_dismissed
+            && (!self.search_predictions.is_empty() || self.did_you_mean.is_some())
+    }
+
+    /// Recompute the prediction dropdown from the current query. Cheap
+    /// enough to run on every debounced filter refresh (one scored pass
+    /// over the selected archive's entry names).
+    fn refresh_search_predictions(&mut self) {
+        self.prediction_index = None;
+        self.did_you_mean = None;
+        self.search_predictions.clear();
+        let query = self.search.trim().to_lowercase();
+        if query.is_empty() || !self.config.show_search_bar {
+            return;
+        }
+        let Some(archive_index) = self.editor.selected_archive() else {
+            return;
+        };
+        let Some(archive) = self.editor.archives().get(archive_index) else {
+            return;
+        };
+
+        let mut scored: Vec<(i64, usize)> = archive
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                crate::search::fuzzy_score(&entry.file_name_lower, &query)
+                    .map(|score| (score, index))
+            })
+            .collect();
+        scored.sort_by(|a, b| {
+            b.0.cmp(&a.0).then_with(|| {
+                archive.entries[a.1]
+                    .file_name
+                    .cmp(&archive.entries[b.1].file_name)
+            })
+        });
+        scored.truncate(MAX_SEARCH_PREDICTIONS);
+        self.search_predictions = scored
+            .iter()
+            .map(|&(_, index)| (index, archive.entries[index].file_name.to_string()))
+            .collect();
+
+        if self.search_predictions.is_empty() {
+            let mut best: Option<(f64, usize)> = None;
+            for (index, entry) in archive.entries.iter().enumerate() {
+                let similarity =
+                    fuzzt::algorithms::jaro_winkler(&entry.file_name_lower, &query);
+                if best.is_none_or(|(current, _)| similarity > current) {
+                    best = Some((similarity, index));
+                }
+            }
+            if let Some((similarity, index)) = best
+                && similarity >= crate::search::DID_YOU_MEAN_MIN_SIMILARITY
+            {
+                self.did_you_mean = Some((index, archive.entries[index].file_name.to_string()));
+            }
+        }
+    }
+
+    /// Commit a prediction: adopt its full name as the query, filter to
+    /// it, select it like a row click, and scroll the table to the top
+    /// (the exact match always sorts first).
+    fn commit_search_prediction(&mut self, entry_index: usize) -> Task<Message> {
+        self.close_predictions();
+        let Some(archive_index) = self.editor.selected_archive() else {
+            return Task::none();
+        };
+        let name = self
+            .editor
+            .archives()[archive_index]
+            .entries
+            .get(entry_index)
+            .map(|entry| entry.file_name.to_string());
+        let Some(name) = name else {
+            return Task::none();
+        };
+        self.search = name;
+        self.editor.update_filtered_list(&self.search);
+        let click_task = self.update(Message::EntryClicked(0));
+        Task::batch(vec![
+            click_task,
+            iced::advanced::widget::operate(scroll_to(
+                iced::widget::Id::new("entry_table"),
+                AbsoluteOffset {
+                    x: None,
+                    y: Some(0.0),
+                },
+            )),
+        ])
+    }
+
+    fn close_predictions(&mut self) {
+        self.search_predictions.clear();
+        self.did_you_mean = None;
+        self.prediction_index = None;
+        self.predictions_dismissed = true;
     }
 
     /// Like `iced::widget::operation::is_focused`, but always completes:
@@ -1970,8 +2107,82 @@ impl App {
                     self.search = value;
                     self.filter_pending = true;
                 }
+                self.predictions_dismissed = false;
+                self.prediction_index = None;
                 self.search_focused = true;
                 Task::none()
+            }
+            Message::SearchPredictMove(direction) => {
+                if !self.predictions_open() {
+                    return Task::none();
+                }
+                let count =
+                    self.search_predictions.len() + usize::from(self.did_you_mean.is_some());
+                if count == 0 {
+                    return Task::none();
+                }
+                let current = match self.prediction_index {
+                    Some(index) => index as i32,
+                    // Down selects the first row, Up selects the last.
+                    None => {
+                        if direction < 0 {
+                            count as i32
+                        } else {
+                            -1
+                        }
+                    }
+                };
+                let next = (current + direction).clamp(0, count as i32 - 1);
+                self.prediction_index = Some(next as usize);
+                Task::none()
+            }
+            Message::SearchPredictCommit => {
+                if !self.predictions_open() {
+                    return Task::none();
+                }
+                let match_count = self.search_predictions.len();
+                let entry_index = match self.prediction_index {
+                    Some(index) if index < match_count => Some(self.search_predictions[index].0),
+                    Some(_) => self.did_you_mean.as_ref().map(|(entry, _)| *entry),
+                    None => {
+                        if match_count > 0 {
+                            Some(self.search_predictions[0].0)
+                        } else {
+                            self.did_you_mean.as_ref().map(|(entry, _)| *entry)
+                        }
+                    }
+                };
+                match entry_index {
+                    Some(entry_index) => self.commit_search_prediction(entry_index),
+                    None => Task::none(),
+                }
+            }
+            Message::SearchPredictDismiss => {
+                self.predictions_dismissed = true;
+                self.prediction_index = None;
+                Task::none()
+            }
+            Message::SearchPredictPick(index) => {
+                match self.search_predictions.get(index) {
+                    Some(&(entry_index, _)) => self.commit_search_prediction(entry_index),
+                    None => Task::none(),
+                }
+            }
+            Message::SearchPickDidYouMean => {
+                match self.did_you_mean.as_ref() {
+                    Some(&(entry_index, _)) => self.commit_search_prediction(entry_index),
+                    None => Task::none(),
+                }
+            }
+            Message::UncapturedPress => {
+                if self.predictions_open() {
+                    self.close_predictions();
+                }
+                Task::none()
+            }
+            Message::FocusSearchInput => {
+                self.search_focused = true;
+                iced::widget::operation::focus(iced::widget::Id::new(SEARCH_INPUT_ID))
             }
             Message::SearchFocusChanged(focused) => {
                 self.search_focused = focused;
@@ -2033,6 +2244,9 @@ impl App {
             }
 
             Message::EntryClicked(display_row) => {
+                if self.predictions_open() {
+                    self.close_predictions();
+                }
                 if let Some(entry_index) = self.display_row_to_entry(display_row) {
                     if let Some(archive_index) = self.editor.selected_archive() {
                         self.start_entry_feedback((archive_index, entry_index));
@@ -2836,6 +3050,7 @@ impl App {
                     self.search.clear();
                     self.filter_pending = true;
                     self.search_focused = false;
+                    self.close_predictions();
                 }
                 self.save_config();
                 Task::none()
@@ -3630,6 +3845,14 @@ impl App {
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
                 Message::PointerMoved(position)
             }
+            // Only UNCAPTURED presses reach this listener. Widgets that
+            // own a press (text input, prediction buttons, entry rows)
+            // capture it and handle it themselves, so an uncaptured
+            // press is a click on inert space — the right moment to
+            // dismiss the floating search dropdown.
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+                iced::mouse::Button::Left,
+            )) => Message::UncapturedPress,
             _ => Message::Noop,
         });
 
@@ -3642,6 +3865,30 @@ impl App {
                 .map(Message::ShortcutPressed)
                 .unwrap_or(Message::Noop),
             _ => Message::Noop,
+        });
+
+        // Search-prediction keyboard navigation. These fire on every key
+        // press regardless of focus; the update handlers no-op unless
+        // the prediction dropdown is actually open.
+        let search_keys = iced::event::listen_with(|event, _status, _window| {
+            match event {
+                iced::Event::Keyboard(KeyboardEvent::KeyPressed { key, .. }) => match key {
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowUp) => {
+                        Some(Message::SearchPredictMove(-1))
+                    }
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowDown) => {
+                        Some(Message::SearchPredictMove(1))
+                    }
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter) => {
+                        Some(Message::SearchPredictCommit)
+                    }
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => {
+                        Some(Message::SearchPredictDismiss)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            }
         });
 
         let tick = iced::time::every(Duration::from_millis(250)).map(|_| Message::TickProgress);
@@ -3690,6 +3937,7 @@ impl App {
         Subscription::batch([
             mod_tracker,
             key,
+            search_keys,
             tick,
             anim_tick,
             debounce,
@@ -4685,6 +4933,87 @@ mod tests {
         let _ = app.handle_shortcut(Shortcut::FocusSearch);
         assert!(app.config.show_search_bar);
         assert!(app.search_focused);
+    }
+
+    #[test]
+    fn typing_computes_fuzzy_predictions() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::SearchChanged("firs".to_string()));
+        let _ = app.update(Message::DebounceTick);
+
+        assert!(app.predictions_open());
+        assert_eq!(
+            app.search_predictions,
+            vec![(0, "first.dff".to_string())]
+        );
+        assert!(app.did_you_mean.is_none());
+    }
+
+    #[test]
+    fn no_matches_surface_did_you_mean() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::SearchChanged("fistr".to_string()));
+        let _ = app.update(Message::DebounceTick);
+
+        assert!(app.search_predictions.is_empty());
+        assert_eq!(
+            app.did_you_mean,
+            Some((0, "first.dff".to_string()))
+        );
+        assert!(app.predictions_open());
+    }
+
+    #[test]
+    fn keyboard_navigates_and_commits_predictions() {
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0]
+            .entries
+            .push(EntryInfo::new("firstaid.dff"));
+
+        let _ = app.update(Message::SearchChanged("firs".to_string()));
+        let _ = app.update(Message::DebounceTick);
+        assert_eq!(app.search_predictions.len(), 2);
+
+        // Down twice: clamps at the last row.
+        let _ = app.update(Message::SearchPredictMove(1));
+        assert_eq!(app.prediction_index, Some(0));
+        let _ = app.update(Message::SearchPredictMove(1));
+        assert_eq!(app.prediction_index, Some(1));
+        let _ = app.update(Message::SearchPredictMove(1));
+        assert_eq!(app.prediction_index, Some(1));
+
+        // Enter commits the highlighted prediction.
+        let _ = app.update(Message::SearchPredictCommit);
+        assert_eq!(app.search, "firstaid.dff");
+        assert_eq!(app.editor.selected_entry(), Some(2));
+        assert!(!app.predictions_open(), "dropdown closes after commit");
+    }
+
+    #[test]
+    fn escape_dismisses_predictions_until_query_changes() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::SearchChanged("firs".to_string()));
+        let _ = app.update(Message::DebounceTick);
+        assert!(app.predictions_open());
+
+        let _ = app.update(Message::SearchPredictDismiss);
+        assert!(!app.predictions_open());
+
+        // Typing again re-opens the dropdown.
+        let _ = app.update(Message::SearchChanged("first".to_string()));
+        let _ = app.update(Message::DebounceTick);
+        assert!(app.predictions_open());
+    }
+
+    #[test]
+    fn prediction_keys_noop_without_dropdown() {
+        let mut app = test_app_with_entries();
+        // No query, no focus: all prediction messages must be inert.
+        let _ = app.update(Message::SearchPredictMove(1));
+        let _ = app.update(Message::SearchPredictCommit);
+        let _ = app.update(Message::SearchPickDidYouMean);
+        assert_eq!(app.prediction_index, None);
+        assert_eq!(app.editor.selected_entry(), None);
     }
 
     #[test]

@@ -5,6 +5,7 @@ pub mod editor;
 pub mod inspector;
 pub mod parser;
 pub mod runtime;
+pub mod search;
 pub mod session;
 pub mod sort;
 pub mod tasks;

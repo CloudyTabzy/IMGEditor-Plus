@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v4.0.0
+# 🎮 IMG Editor Plus v4.1.0
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -62,6 +62,11 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
 - ✅ **Automated regression tests** — cover parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, six-axis navigation, alpha rendering, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
 
+**v4.1.0 release highlights:**
+- ✅ **Fuzzy search** — the entry filter now matches scattered initials and partial names (`pld` → `police_car.dff`), ranks results by relevance (prefix and word-boundary hits, consecutive runs, shorter names first), and falls back to Jaro-Winkler typo matching when nothing matches (`policastr` still finds `police_car.dff`)
+- ✅ **Search prediction dropdown** — a floating overlay under the search box lists the top matches while you type; click a row or use `↑`/`↓` + `Enter` to jump straight to the entry (auto-selected with previews loaded), `Esc` dismisses, and a **"Did you mean …"** suggestion appears for near-miss queries
+- ✅ **Hideable search bar** — `View → Search bar` toggles the strip to free vertical space for the table and info panels; hiding it clears any active filter, and `Ctrl+F` reveals and focuses it again (preference persists in `settings.ini`)
+
 **v4.0.0 release highlights:**
 - ✅ **Proper GTA IMG content rendering** — entries inside IMG v1/v2 archives now open natively in the in-app 3D viewer and texture viewer: PC DFF models with frame/atomic transforms and TXD diffuse resolution (GTA III/VC/SA-style RenderWare assets), Bully NIF/NFT models and texture catalogs, plus COL collision meshes
 - ✅ **UI overhaul** — full design-token refresh with Affinity-style shade hierarchy, hairline chrome dividers, inset log well, and a pane layout with custom split styling
@@ -106,7 +111,8 @@ head-to-head numbers and [docs/export-optimization-lessons.md](docs/export-optim
 for the engineering story.
 ### 🔍 Entry Table
 - ✅ **Virtualised scrolling** — smooth even at 10,000+ entries
-- ✅ **Real-time search filter** with debounced input (150ms)
+- ✅ **Fuzzy search filter** — subsequence matching with relevance ranking, debounced input (150ms), and Jaro-Winkler typo fallback plus a "Did you mean …" prediction dropdown
+- ✅ **Hideable search bar** — toggle from the View menu to reclaim screen space
 - ✅ **Sort by Name / Type / Size** with arrow indicators
 - ✅ **Multi-selection** — Ctrl+click toggle, Shift+click range
 - ✅ **Inline rename** — double-click to edit
@@ -276,6 +282,7 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 | `tokio 1.40` | Async runtime (multi-thread, fs, sync) |
 | `memmap2` | Zero-copy archive reads |
 | `rayon` | Parallel entry export |
+| `fuzzt` | Jaro-Winkler typo matching (search) |
 | `rfd` | Native Windows file dialogs |
 | `ureq` | Update checker (HTTP) |
 

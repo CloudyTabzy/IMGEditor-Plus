@@ -1,6 +1,6 @@
 [package]
 name = "imgeditor"
-version = "4.0.0"
+version = "4.1.0"
 edition = "2024"
 rust-version = "1.96"
 
@@ -47,6 +47,7 @@ webbrowser = "1"
 rfd = { version = "0.15", default-features = false, features = ["tokio", "common-controls-v6"], optional = true }
 bytemuck = { version = "1", features = ["derive"] }
 bitflags = "2"
+fuzzt = { version = "0.3.1", default-features = false, features = ["jaro"] }
 iced_widget = { version = "0.14", features = ["wgpu", "canvas"] }
 log = "0.4"
 pollster = "0.4"

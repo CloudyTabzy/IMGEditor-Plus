@@ -1,3 +1,11 @@
+## IMG Editor Plus v4.1.0
+
+### Highlights
+
+- **Fuzzy search:** the entry filter now uses a scored subsequence matcher tuned for game file names — scattered initials (`pld`) and partial names match, results rank by relevance (prefix and word-boundary bonuses, consecutive runs, gap penalties, shorter/denser names first), and the sort chain breaks ties. When nothing matches, a Jaro-Winkler typo fallback (via the feature-gated, zero-dependency `fuzzt` crate) still surfaces near-misses like `policastr` → `police_car.dff`.
+- **Search prediction dropdown:** a floating overlay anchored under the search box lists the top 8 matches while typing. Click a row (or `↑`/`↓` + `Enter`) to adopt the full name, select the entry like a row click, and scroll to it; `Esc` dismisses; a "Did you mean …" suggestion appears for queries with no subsequence match. The overlay is rendered through a window-level `Float` over an always-stable widget tree, so toggling it never drops the text input's focus.
+- **Hideable search bar:** `View → Search bar` hides the strip to free vertical space for the table and info panels; hiding clears any active filter so entries are never silently hidden, and `Ctrl+F` reveals and focuses it again. The preference persists in `settings.ini`.
+
 ## IMG Editor Plus v4.0.0
 
 ### Highlights
