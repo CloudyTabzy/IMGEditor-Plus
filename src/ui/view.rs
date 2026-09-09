@@ -807,27 +807,30 @@ impl App {
                 .width(Length::Shrink)
                 .height(Length::Fixed(32.0))
                 .align_y(Alignment::Center);
-            for (i, _) in textures.iter().enumerate() {
+            for (i, texture) in textures.iter().enumerate() {
                 let label = if i == tex_idx {
                     format!("● {}", i + 1)
                 } else {
                     format!("○ {}", i + 1)
                 };
-                sel_row = sel_row.push(
-                    button(
-                        fonts::caption(label)
-                            .width(Length::Fill)
-                            .align_x(Alignment::Center),
-                    )
-                    // Keep the slot label in one line even for slots 10+.
-                    // The default button padding leaves too little content
-                    // width inside a compact fixed-width button.
-                    .width(Length::Fixed(42.0))
-                    .height(Length::Fixed(32.0))
-                    .padding([4.0, 5.0])
-                    .on_press(Message::TextureSelect(i))
-                    .style(button::text),
-                );
+                let slot_button = button(
+                    fonts::caption(label)
+                        .width(Length::Fill)
+                        .align_x(Alignment::Center),
+                )
+                // Keep the slot label in one line even for slots 10+.
+                // The default button padding leaves too little content
+                // width inside a compact fixed-width button.
+                .width(Length::Fixed(42.0))
+                .height(Length::Fixed(32.0))
+                .padding([4.0, 5.0])
+                .on_press(Message::TextureSelect(i))
+                .style(button::text);
+                sel_row = sel_row.push(w::styled_tooltip(
+                    slot_button,
+                    fonts::body(texture.name.clone()),
+                    tooltip::Position::Bottom,
+                ));
             }
             let slot_rail = Scrollable::new(sel_row)
                 .width(Length::Fill)
@@ -903,20 +906,33 @@ impl App {
             fonts::caption(format!("{} triangles", uv_triangles.len()))
         };
         let texture_only_notice: Element<'_, Message> = if texture_only_preview {
-            let design = self.design();
-            let background = design.info();
+            // Keep the notice semantic without hard-coding a blue surface:
+            // the active theme's primary weak color gives Everforest and
+            // custom themes their own accent while the base surface keeps it
+            // legible in both light and dark palettes.
+            let theme = self.theme();
+            let palette = theme.extended_palette();
+            let background = iced::theme::palette::mix(
+                palette.background.base.color,
+                palette.primary.weak.color,
+                0.32,
+            );
             w::badge(
                 "Texture-only preview".to_string(),
                 background,
-                w::readable_text_color(background, Color::WHITE),
+                w::readable_text_color(background, palette.background.base.text),
             )
             .into()
         } else {
             Space::new().into()
         };
-        let grid_toggle = checkbox(self.show_texture_grid)
-            .label("Grid")
-            .on_toggle(Message::ViewTextureGridToggled);
+        let grid_toggle = w::styled_tooltip(
+            checkbox(self.show_texture_grid)
+                .label("Grid")
+                .on_toggle(Message::ViewTextureGridToggled),
+            fonts::caption("Show a reference grid over the texture preview."),
+            tooltip::Position::Top,
+        );
         let mut grid_size_row = Row::new().spacing(3).align_y(Alignment::Center);
         for divisions in crate::config::ALLOWED_GRID_DIVISIONS {
             let size_button = button(fonts::caption(format!("{divisions}×{divisions}")))
@@ -927,7 +943,13 @@ impl App {
             } else {
                 size_button.style(button::text)
             };
-            grid_size_row = grid_size_row.push(size_button);
+            grid_size_row = grid_size_row.push(w::styled_tooltip(
+                size_button,
+                fonts::caption(format!(
+                    "Use a {divisions}×{divisions} reference grid for the texture."
+                )),
+                tooltip::Position::Top,
+            ));
         }
         col = col.push(
             row![
@@ -989,12 +1011,16 @@ impl App {
         if !scene_matches {
             return row![
                 w::icon_label(icons::model().size(14), fonts::caption("3D:")),
-                button(w::icon_label(
-                    icons::refresh().size(14),
-                    fonts::caption("Load selected"),
-                ))
-                .on_press(Message::Viewer3dLoadSelected)
-                .height(Length::Fixed(28.0)),
+                w::styled_tooltip(
+                    button(w::icon_label(
+                        icons::refresh().size(14),
+                        fonts::caption("Load selected"),
+                    ))
+                    .on_press(Message::Viewer3dLoadSelected)
+                    .height(Length::Fixed(28.0)),
+                    fonts::caption("Load the selected model into the 3D viewer."),
+                    tooltip::Position::Bottom,
+                ),
             ]
             .spacing(4)
             .padding(2)
@@ -1036,21 +1062,27 @@ impl App {
             fonts::caption("Drop the loaded scene"),
             tooltip::Position::Right,
         ));
-        row = row.push(
+        row = row.push(w::styled_tooltip(
             checkbox(flags.contains(RenderFlags::WIREFRAME))
                 .label("Wire overlay")
                 .on_toggle(|_| Message::Viewer3dToggleWireframe),
-        );
-        row = row.push(
+            fonts::caption("Show triangle edges over the shaded model."),
+            tooltip::Position::Bottom,
+        ));
+        row = row.push(w::styled_tooltip(
             checkbox(flags.contains(RenderFlags::CULL_BACK))
                 .label("Cull backfaces")
                 .on_toggle(|_| Message::Viewer3dToggleCullBackfaces),
-        );
-        row = row.push(
+            fonts::caption("Hide back-facing triangles to inspect surface winding."),
+            tooltip::Position::Bottom,
+        ));
+        row = row.push(w::styled_tooltip(
             checkbox(flags.contains(RenderFlags::HAS_TEXTURE))
                 .label("Textured")
                 .on_toggle(|_| Message::Viewer3dToggleTextured),
-        );
+            fonts::caption("Use the model's decoded textures instead of a neutral material."),
+            tooltip::Position::Bottom,
+        ));
         let alpha_available = flags.contains(RenderFlags::HAS_TEXTURE) && has_textures;
         let alpha_checked = alpha_available && flags.contains(RenderFlags::ALPHA_BLEND);
         let alpha_hint = if alpha_available {
@@ -1065,16 +1097,22 @@ impl App {
             fonts::caption(alpha_hint),
             tooltip::Position::Bottom,
         ));
-        row = row.push(
+        row = row.push(w::styled_tooltip(
             checkbox(origin_mode == SceneOriginMode::Centered)
                 .label("Center origin")
                 .on_toggle(|_| Message::Viewer3dToggleCenterOrigin),
-        );
-        row = row.push(
+            fonts::caption(
+                "Recenter the model for inspection; disable to preserve world coordinates.",
+            ),
+            tooltip::Position::Bottom,
+        ));
+        row = row.push(w::styled_tooltip(
             checkbox(flags.contains(RenderFlags::SHOW_GRID))
                 .label("Grid floor")
                 .on_toggle(|_| Message::Viewer3dToggleGrid),
-        );
+            fonts::caption("Show the world reference grid and XYZ axes."),
+            tooltip::Position::Bottom,
+        ));
         row.wrap().vertical_spacing(4).into()
     }
 
