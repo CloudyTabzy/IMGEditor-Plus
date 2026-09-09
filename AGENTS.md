@@ -202,6 +202,22 @@ to avoid panics that surface as silent crashes:
 
 ## Building / cleaning
 
+### Locked imgeditor.exe (user-authorized force close)
+
+A running app instance locks `target/debug/imgeditor.exe`, which makes
+`cargo build` fail with "Access is denied (os error 5)" on link. When a
+build is blocked this way, the agent is **pre-authorized by the user to
+force-terminate the process without asking**, under these conditions:
+
+1. Verify the process actually points into this workspace before
+   killing it:
+   `Get-Process | Where-Object { $_.Path -like "*IMGEditor-rs*" }`
+2. Kill only that PID (`Stop-Process -Id <pid> -Force`). Never kill
+   anything whose path does not resolve under this workspace.
+3. Record the termination (what was killed and why) in the response to
+   the user.
+4. Rerun the build.
+
 The full build can spike to 24 GiB of disk + several GiB of RAM
 (release profile). If the toolchain runs out of either, run:
 

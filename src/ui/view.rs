@@ -72,18 +72,48 @@ impl App {
         );
 
         let headers = row![
-            button(fonts::header(name_label))
-                .on_press(Message::SortBy(SortColumn::Name))
-                .width(Length::FillPortion(6))
-                .style(button::text),
-            button(fonts::header(type_label))
-                .on_press(Message::SortBy(SortColumn::Type))
-                .width(Length::FillPortion(2))
-                .style(button::text),
-            button(fonts::header(size_label))
-                .on_press(Message::SortBy(SortColumn::Size))
-                .width(Length::FillPortion(2))
-                .style(button::text),
+            container(w::styled_tooltip(
+                button(fonts::header(name_label))
+                    .on_press(Message::SortBy(SortColumn::Name))
+                    .width(Length::Fill)
+                    .style(button::text),
+                fonts::caption(sort_tooltip_text(
+                    SortColumn::Name,
+                    archive.sort.column == SortColumn::Name,
+                    archive.sort.direction,
+                    archive.primary_type_label(),
+                )),
+                tooltip::Position::Bottom,
+            ))
+            .width(Length::FillPortion(6)),
+            container(w::styled_tooltip(
+                button(fonts::header(type_label))
+                    .on_press(Message::SortBy(SortColumn::Type))
+                    .width(Length::Fill)
+                    .style(button::text),
+                fonts::caption(sort_tooltip_text(
+                    SortColumn::Type,
+                    archive.sort.column == SortColumn::Type,
+                    archive.sort.direction,
+                    archive.primary_type_label(),
+                )),
+                tooltip::Position::Bottom,
+            ))
+            .width(Length::FillPortion(2)),
+            container(w::styled_tooltip(
+                button(fonts::header(size_label))
+                    .on_press(Message::SortBy(SortColumn::Size))
+                    .width(Length::Fill)
+                    .style(button::text),
+                fonts::caption(sort_tooltip_text(
+                    SortColumn::Size,
+                    archive.sort.column == SortColumn::Size,
+                    archive.sort.direction,
+                    archive.primary_type_label(),
+                )),
+                tooltip::Position::Bottom,
+            ))
+            .width(Length::FillPortion(2)),
         ]
         .spacing(8)
         .padding(6)
@@ -2442,6 +2472,36 @@ fn sort_label(name: &str, active: bool, direction: SortDirection) -> String {
         SortDirection::Descending => "▼",
     };
     format!("{name} {arrow}")
+}
+
+/// Short, state-aware hint for a table header sort button, matching the
+/// behaviour in the `SortBy` handler (Size starts largest-first; Type
+/// cycles the primary type).
+fn sort_tooltip_text(
+    column: SortColumn,
+    active: bool,
+    direction: SortDirection,
+    primary_type: Option<&str>,
+) -> String {
+    match column {
+        SortColumn::Name => match (active, direction) {
+            (true, SortDirection::Ascending) => "Sorted by file name (A → Z).",
+            (true, SortDirection::Descending) => "Sorted by file name (Z → A).",
+            (false, _) => "Sort by file name (A → Z).",
+        }
+        .to_string(),
+        SortColumn::Type => match (active, primary_type) {
+            (true, Some(primary)) => format!("Sorted by file type, {primary} first."),
+            (true, None) => "Sorted by file type alphabetically.".to_string(),
+            (false, _) => "Sort by file type (alphabetical).".to_string(),
+        },
+        SortColumn::Size => match (active, direction) {
+            (true, SortDirection::Descending) => "Sorted by size (largest first).",
+            (true, SortDirection::Ascending) => "Sorted by size (smallest first).",
+            (false, _) => "Sort by size (largest first).",
+        }
+        .to_string(),
+    }
 }
 
 pub fn menu_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {

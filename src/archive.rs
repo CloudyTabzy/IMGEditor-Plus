@@ -567,6 +567,18 @@ impl ArchiveInfo {
         self.cached_file_types = None;
     }
 
+    /// The file type currently bubbled to the top by the Type sort.
+    /// `None` when the Type sort is inactive or the type cache is cold
+    /// (it warms on the first `update_selected_list` after opening).
+    pub fn primary_type_label(&self) -> Option<&str> {
+        if self.sort.column != SortColumn::Type {
+            return None;
+        }
+        let types = self.cached_file_types.as_ref()?;
+        let primary = types.get(self.sort.type_index % types.len().max(1))?;
+        (!primary.is_empty()).then_some(primary.as_str())
+    }
+
     /// Current mutation generation. See [`Self::generation`].
     pub fn generation(&self) -> u64 {
         self.generation
