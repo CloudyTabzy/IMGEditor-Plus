@@ -825,12 +825,12 @@ impl ScenePipelines {
     ) {
         let mut uniform = CameraUniform::from_camera(camera, key_light, ambient);
         uniform.flags = flags.bits();
-        // Pad to 256 bytes so the UBO write always satisfies the WGSL
-        // struct-size minimum and the buffer's min_binding_size (the
-        // Rust struct is exactly 256 B).
-        let mut bytes = bytemuck::bytes_of(&uniform).to_vec();
-        bytes.resize(256, 0);
-        queue.write_buffer(&self.camera_buffer, 0, &bytes);
+        // The UBO write must be 256 bytes to satisfy the WGSL struct-size
+        // minimum and the layout's min_binding_size. `CameraUniform` is
+        // repr(C) with fields summing to exactly 256 B, so the uniform can
+        // be written directly without a padded heap copy.
+        const _: () = assert!(std::mem::size_of::<CameraUniform>() == 256);
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
     pub fn ensure_scene_color(&mut self, device: &wgpu::Device, width: u32, height: u32) {

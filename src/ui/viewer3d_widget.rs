@@ -752,7 +752,11 @@ impl ScenePipeline {
                 view: depth_view,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
+                    // Nothing reads depth after this pass (the wireframe
+                    // overlay shares it, and the compositor is depthless),
+                    // and the next frame clears it again — skipping the
+                    // store saves bandwidth for free.
+                    store: wgpu::StoreOp::Discard,
                 }),
                 stencil_ops: None,
             }),

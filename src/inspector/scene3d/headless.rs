@@ -14,6 +14,14 @@ use crate::inspector::scene3d::camera::{OrbitCamera, Viewport};
 use crate::inspector::scene3d::pipeline::{self, GpuMesh, GpuTexture, RenderFlags, ScenePipelines};
 use crate::inspector::scene3d::scene::Scene;
 
+/// Headless wgpu context: instance, adapter, device, queue, and the
+/// scene pipelines for one output format.
+///
+/// Constructing an instance initializes the platform graphics drivers;
+/// creating several renderers concurrently can race the driver loaders
+/// (seen as STATUS_ACCESS_VIOLATION on Windows Vulkan). Construct on a
+/// single thread, or share one renderer behind a lock — the test module
+/// below does the latter.
 pub struct HeadlessRenderer {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
@@ -179,7 +187,9 @@ pub fn render_frame(
                 view: &depth_view,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
+                    // Only the color attachment is read back; depth is
+                    // never sampled after the pass.
+                    store: wgpu::StoreOp::Discard,
                 }),
                 stencil_ops: None,
             }),
@@ -313,6 +323,43 @@ mod tests {
     use crate::inspector::scene3d::camera::{OrbitCamera, Viewport};
     use crate::inspector::scene3d::mesh::{Aabb, SceneMesh, Vertex};
     use crate::inspector::scene3d::scene::Scene;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// Shared GPU context guard for headless tests.
+    ///
+    /// Each `HeadlessRenderer::new()` creates a `wgpu::Instance`, and
+    /// concurrent instance creation races the platform driver loaders —
+    /// on Windows this intermittently aborts the whole test process
+    /// with STATUS_ACCESS_VIOLATION. All tests therefore render against
+    /// one lazily-created shared renderer. The guard's mutex also
+    /// serializes the GPU work itself: `render_frame` stores the camera
+    /// uniform in the shared `ScenePipelines` buffer, so two concurrent
+    /// renders would overwrite each other's camera mid-frame.
+    struct Gpu<'a> {
+        renderer: &'a HeadlessRenderer,
+        _lock: MutexGuard<'a, ()>,
+    }
+
+    impl std::ops::Deref for Gpu<'_> {
+        type Target = HeadlessRenderer;
+
+        fn deref(&self) -> &HeadlessRenderer {
+            self.renderer
+        }
+    }
+
+    fn gpu() -> Result<Gpu<'static>, String> {
+        static RENDERER: OnceLock<Result<HeadlessRenderer, String>> = OnceLock::new();
+        static LOCK: Mutex<()> = Mutex::new(());
+        let renderer = RENDERER
+            .get_or_init(HeadlessRenderer::new)
+            .as_ref()
+            .map_err(|e| e.clone())?;
+        Ok(Gpu {
+            renderer,
+            _lock: LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+        })
+    }
 
     fn triangle_scene() -> Scene {
         let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
@@ -349,7 +396,7 @@ mod tests {
 
     #[test]
     fn render_triangle_to_png() {
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let scene = triangle_scene();
         let mut camera = OrbitCamera::new(Viewport {
             width: 256,
@@ -369,7 +416,7 @@ mod tests {
 
     #[test]
     fn readback_strips_alignment_padding() {
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let scene = triangle_scene();
         let camera = OrbitCamera::new(Viewport {
             width: 17,
@@ -382,7 +429,7 @@ mod tests {
 
     #[test]
     fn grid_visibility_flag_changes_rendered_frame() {
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let scene = triangle_scene();
         let mut camera = OrbitCamera::new(Viewport {
             width: 128,
@@ -400,7 +447,7 @@ mod tests {
 
     #[test]
     fn render_wireframe_flag_changes_pipeline() {
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let scene = triangle_scene();
         let mut camera = OrbitCamera::new(Viewport {
             width: 128,
@@ -418,7 +465,7 @@ mod tests {
 
     #[test]
     fn render_textured_mesh_uses_path() {
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let mut scene = triangle_scene();
         // 2x2 solid red texture
         scene.meshes[0].diffuse = Some(crate::inspector::scene3d::mesh::SceneTexture {
@@ -445,7 +492,7 @@ mod tests {
         // leaving a black void. The headless target is Rgba8UnormSrgb:
         // the dimmed minor/major grid lines store as ~(101, 106, 115)
         // and ~(128, 134, 143).
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let scene = triangle_scene();
         let mut cam = OrbitCamera::new(Viewport {
             width: 256,
@@ -478,7 +525,7 @@ mod tests {
 
     #[test]
     fn floor_does_not_occlude_geometry_below_world_plane() {
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let positions = [[-0.8, -2.0, 0.0], [0.8, -2.0, 0.0], [0.0, -0.5, 0.0]];
         let aabb = Aabb::from_points(&positions).unwrap();
         let vertices = positions
@@ -540,7 +587,7 @@ mod tests {
 
     #[test]
     fn zero_viewport_is_rejected() {
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let scene = triangle_scene();
         let camera = OrbitCamera::new(Viewport {
             width: 0,
@@ -556,7 +603,7 @@ mod tests {
         // model behind it are fully covered. Any pixel change there
         // after orbiting can only come from the axes tracking the
         // camera's view rotation.
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let scene = triangle_scene();
         let mut cam_a = OrbitCamera::new(Viewport {
             width: 256,
@@ -653,7 +700,7 @@ mod tests {
             height: 512,
         });
         camera.reset_to_aabb(&scene.aabb);
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let frame = render_frame(&renderer, &scene, &camera, 512, 512, RenderFlags::empty())
             .expect("frame");
         let out = std::path::Path::new("target").join("scene3d-bully-1950fridge.png");
@@ -694,7 +741,7 @@ mod tests {
             height: 512,
         });
         camera.reset_to_aabb(&scene.aabb);
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let frame = render_frame(&renderer, &scene, &camera, 512, 512, RenderFlags::empty())
             .expect("adm_lamp frame rendered");
         let out = std::path::Path::new("target").join("scene3d-adm-lamp.png");
@@ -729,7 +776,7 @@ mod tests {
             &archive.entries,
             archive.path.as_deref(),
         );
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         for name in names {
             let Ok(bytes) = std::fs::read(root.join(name)) else {
                 continue;
@@ -813,7 +860,7 @@ mod tests {
 
         let width = 800u32;
         let height = 600u32;
-        let renderer = HeadlessRenderer::new().expect("renderer");
+        let renderer = gpu().expect("renderer");
         let device = &renderer.device;
         let queue = &renderer.queue;
         let pipelines = &renderer.pipelines;
@@ -902,7 +949,7 @@ mod tests {
                     view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+                        store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
                 }),
