@@ -94,12 +94,17 @@ pub struct OrbitCamera {
     pub distance: f32,
     /// Yaw around the world-up (Y) axis, radians.
     pub yaw: f32,
-    /// Pitch above the horizon, radians (clamped to avoid gimbal lock).
+    /// Pitch above the horizon, radians; axis views may use exact poles.
     pub pitch: f32,
     pub fov_y_deg: f32,
     pub near: f32,
     pub far: f32,
     pub viewport: Viewport,
+    pub orthographic: bool,
+    pub base_orientation: BaseOrientation,
+    /// Physical pixels per logical UI pixel for the navigation overlay.
+    pub ui_scale: f32,
+    pub navigation_hover: u32,
 }
 
 impl Default for OrbitCamera {
@@ -129,12 +134,15 @@ impl OrbitCamera {
             // units and we want some headroom after orbit/zoom.
             far: 10_000.0,
             viewport,
+            orthographic: false,
+            base_orientation: BaseOrientation::Yup,
+            ui_scale: 1.0,
+            navigation_hover: 0,
         }
     }
 
-    /// Eye position in world space. Pitch is clamped so we never look
-    /// straight up or down (which collapses the look-at basis). The
-    /// convention is `eye = target + distance * (sin(yaw)*cos(pitch),
+    /// Eye position in world space. The convention is
+    /// `eye = target + distance * (sin(yaw)*cos(pitch),
     /// sin(pitch), cos(yaw)*cos(pitch))` so that yaw=0 places the
     /// camera on the +Z axis (consistent with right-handed
     /// `look_at_rh`) and yaw rotates around world Y.
@@ -153,19 +161,60 @@ impl OrbitCamera {
 
     /// View matrix that puts the camera at `eye()` looking at `target`.
     pub fn view(&self) -> Mat4 {
-        Mat4::look_at_rh(
-            self.eye().into(),
-            self.target.into(),
-            glam::Vec3::new(0.0, 1.0, 0.0),
+        Mat4::look_to_rh(self.eye().into(), -self.backward(), self.screen_up())
+    }
+
+    pub fn backward(&self) -> glam::Vec3 {
+        glam::Vec3::new(
+            self.yaw.sin() * self.pitch.cos(),
+            self.pitch.sin(),
+            self.yaw.cos() * self.pitch.cos(),
         )
     }
 
-    /// Perspective matrix built from `fov_y_deg` and the viewport.
+    fn screen_up(&self) -> glam::Vec3 {
+        // Analytic basis stays defined at exact top/bottom views, unlike
+        // cross(world_up, view_direction), which vanishes at the poles.
+        glam::Vec3::new(
+            -self.yaw.sin() * self.pitch.sin(),
+            self.pitch.cos(),
+            -self.yaw.cos() * self.pitch.sin(),
+        )
+    }
+
+    pub fn snap_to_axis(&mut self, axis: super::navigation::AxisView) {
+        let mut direction = axis.direction(self.base_orientation);
+        if self.orthographic && self.backward().dot(direction) > 0.9999 {
+            direction = -direction;
+        }
+        self.yaw = if direction.x.abs() + direction.z.abs() < 0.0001 {
+            0.0
+        } else {
+            direction.x.atan2(direction.z)
+        };
+        self.pitch = direction.y.clamp(-1.0, 1.0).asin();
+        self.orthographic = true;
+    }
+
+    /// Perspective or orthographic projection. Both have the same scale
+    /// at the orbit target, so switching projection preserves framing.
     /// Returns an identity placeholder if the viewport is zero-area;
     /// the widget treats that as "skip the draw for this frame".
     pub fn projection(&self) -> Mat4 {
         if self.viewport.is_zero_area() {
             return Mat4::IDENTITY;
+        }
+        if self.orthographic {
+            let half_height = self.distance * (self.fov_y_deg.to_radians() * 0.5).tan();
+            let half_width = half_height * self.viewport.aspect();
+            return Mat4::orthographic_rh(
+                -half_width,
+                half_width,
+                -half_height,
+                half_height,
+                self.near,
+                self.far,
+            );
         }
         Mat4::perspective_rh(
             self.fov_y_deg.to_radians(),
@@ -208,6 +257,8 @@ impl OrbitCamera {
         };
         self.yaw = 0.0;
         self.pitch = 0.3;
+        self.orthographic = false;
+        self.navigation_hover = 0;
     }
 
     /// Apply an orbit delta given in pixels. `sensitivity` is radians per
@@ -216,6 +267,10 @@ impl OrbitCamera {
     /// the left around the model (and dragging down drops it), so the
     /// model appears to rotate with the cursor.
     pub fn orbit(&mut self, dx: f32, dy: f32, sensitivity: f32) {
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+        self.orthographic = false;
         self.yaw -= dx * sensitivity;
         self.pitch = (self.pitch - dy * sensitivity).clamp(-1.55, 1.55);
     }
@@ -228,12 +283,9 @@ impl OrbitCamera {
         let s = (self.distance * sensitivity).max(f32::EPSILON);
         // Forward vector (from eye to target); we use the camera's
         // local right and up to move the target in screen space.
-        let eye: glam::Vec3 = self.eye().into();
         let target: glam::Vec3 = self.target.into();
-        let forward = (target - eye).normalize_or_zero();
-        let world_up = glam::Vec3::Y;
-        let right = forward.cross(world_up).normalize_or_zero();
-        let up = right.cross(forward).normalize_or_zero();
+        let right = glam::Vec3::new(self.yaw.cos(), 0.0, -self.yaw.sin());
+        let up = self.screen_up();
         let delta = (-right * dx + up * dy) * s;
         self.target = (target + delta).into();
     }

@@ -23,6 +23,7 @@ pub mod camera;
 pub mod decode;
 pub mod headless;
 pub mod mesh;
+pub mod navigation;
 pub mod pipeline;
 pub mod scene;
 

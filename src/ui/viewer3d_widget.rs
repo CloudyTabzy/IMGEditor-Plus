@@ -39,6 +39,7 @@ use iced_widget::renderer::wgpu::primitive::{self, Pipeline as PrimitivePipeline
 
 use crate::inspector::scene3d::camera::OrbitCamera;
 use crate::inspector::scene3d::mesh::Aabb;
+use crate::inspector::scene3d::navigation::{NavigationAction, NavigationUniform};
 use crate::inspector::scene3d::pipeline::{
     GpuMesh, GpuTexture, RenderFlags, SCENE_MSAA_SAMPLES, ScenePipelines, create_depth_texture,
     create_msaa_color_texture, effective_texture_flag, register_gpu_error_handlers,
@@ -133,6 +134,7 @@ impl SceneHandle {
     /// clone.
     pub fn set_scene(&self, scene: std::sync::Arc<Scene>) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
+        inner.camera.base_orientation = scene.base_orientation;
         let offset = scene_display_offset(&scene, inner.origin_mode);
         inner
             .camera
@@ -246,6 +248,7 @@ impl DragMode {
 
 #[derive(Default)]
 struct DragState {
+    navigation_pending: Option<(NavigationAction, Point)>,
     mode: Option<DragMode>,
     last: Option<Point>,
     cursor_inside: bool,
@@ -303,6 +306,49 @@ impl Scene3dWidget {
         self.height = height.into();
         self
     }
+}
+
+fn handle_navigation_event(
+    camera: &mut OrbitCamera,
+    state: &mut DragState,
+    event: &Event,
+    hit: Option<NavigationAction>,
+    pointer: Option<Point>,
+) -> bool {
+    if let Some((action, start)) = state.navigation_pending {
+        match event {
+            Event::Mouse(MouseEvent::CursorMoved { position })
+                if position.distance(start) >= 4.0 =>
+            {
+                state.navigation_pending = None;
+                state.mode = Some(DragMode::Orbit);
+                state.last = Some(start);
+                handle_event(camera, state, event, true);
+            }
+            Event::Mouse(MouseEvent::ButtonReleased(MouseButton::Left)) => {
+                state.navigation_pending = None;
+                if hit == Some(action) {
+                    action.apply(camera);
+                }
+            }
+            Event::Window(iced::window::Event::Unfocused) => {
+                state.navigation_pending = None;
+            }
+            _ => {}
+        }
+        return true;
+    }
+    if !state.is_dragging()
+        && matches!(
+            event,
+            Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left))
+        )
+        && let (Some(action), Some(point)) = (hit, pointer)
+    {
+        state.navigation_pending = Some((action, point));
+        return true;
+    }
+    false
 }
 
 fn handle_event(
@@ -399,6 +445,25 @@ where
         state.cursor_inside = cursor_inside;
         let mut dirty = false;
         self.handle.with_mut(|inner| {
+            let navigation =
+                NavigationUniform::new(&inner.camera, bounds.width, bounds.height, 1.0);
+            let hit = cursor
+                .position_in(bounds)
+                .and_then(|p| navigation.hit_test(glam::Vec2::new(p.x, p.y)));
+            let hover = hit.map_or(0, |action| action.id());
+            if hover != inner.camera.navigation_hover {
+                inner.camera.navigation_hover = hover;
+                inner.dirty = true;
+                dirty = true;
+            }
+            if inner.scene.is_some()
+                && handle_navigation_event(&mut inner.camera, state, event, hit, cursor.position())
+            {
+                inner.dirty = true;
+                dirty = true;
+                shell.capture_event();
+                return;
+            }
             let mut needs_redraw = handle_event(&mut inner.camera, state, event, cursor_inside);
             if !state.is_dragging() {
                 state.last = None;
@@ -454,11 +519,22 @@ where
         if cursor.position_in(bounds).is_none() {
             return mouse::Interaction::Idle;
         }
-        let has_scene = self.handle.with(|i| i.scene.is_some());
+        let (has_scene, over_navigation) = self.handle.with(|i| {
+            let nav = NavigationUniform::new(&i.camera, bounds.width, bounds.height, 1.0);
+            (
+                i.scene.is_some(),
+                cursor
+                    .position_in(bounds)
+                    .and_then(|p| nav.hit_test(glam::Vec2::new(p.x, p.y)))
+                    .is_some(),
+            )
+        });
         if !has_scene {
             return mouse::Interaction::Idle;
         }
-        if state.is_dragging() {
+        if over_navigation && !state.is_dragging() {
+            mouse::Interaction::Pointer
+        } else if state.is_dragging() {
             mouse::Interaction::Grabbing
         } else {
             mouse::Interaction::Grab
@@ -516,6 +592,7 @@ impl primitive::Primitive for ScenePrimitive {
             inner
                 .camera
                 .set_viewport(crate::inspector::scene3d::camera::Viewport { width, height });
+            inner.camera.ui_scale = scale;
             let scene = inner.scene.clone();
             let offset = scene
                 .as_ref()
@@ -728,7 +805,7 @@ impl ScenePipeline {
     ///   2. draw the optional procedural infinity grid as a depth-neutral backdrop
     ///   3. draw the model meshes (lit shader, depth-tested and depth-owning)
     ///   4. draw optional polygon edges over the solid model
-    ///   5. draw the XYZ axis gizmo in the bottom-right (overlay, no depth)
+    ///   5. draw the navigation gizmo in the top-right (overlay, no depth)
     pub fn render_to_offscreen(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -854,7 +931,7 @@ impl ScenePipeline {
             }
         }
 
-        // 5. the XYZ axis gizmo in the bottom-right of the pane.
+        // 5. source-coordinate navigation overlay in the top-right.
         pass.set_pipeline(&self.render_pipelines.gizmo);
         pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
         pass.set_vertex_buffer(0, self.render_pipelines.quad_vertex_buffer.slice(..));
@@ -1010,6 +1087,70 @@ fn _type_asserts() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_click_snaps_on_release_and_drag_orbits_instead() {
+        use crate::inspector::scene3d::navigation::AxisView;
+        let mut camera = OrbitCamera::default();
+        let mut state = DragState::default();
+        let hit = Some(NavigationAction::Axis(AxisView::PositiveX));
+        let start = Point::new(100.0, 100.0);
+        let press = Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left));
+        let release = Event::Mouse(MouseEvent::ButtonReleased(MouseButton::Left));
+        assert!(handle_navigation_event(
+            &mut camera,
+            &mut state,
+            &press,
+            hit,
+            Some(start)
+        ));
+        assert!(!camera.orthographic);
+        assert!(!state.is_dragging());
+        assert!(handle_navigation_event(
+            &mut camera,
+            &mut state,
+            &release,
+            hit,
+            Some(start)
+        ));
+        assert!(camera.orthographic);
+        assert!(camera.backward().abs_diff_eq(glam::Vec3::X, 1e-6));
+
+        handle_navigation_event(&mut camera, &mut state, &press, hit, Some(start));
+        let moved = Event::Mouse(MouseEvent::CursorMoved {
+            position: Point::new(115.0, 105.0),
+        });
+        assert!(handle_navigation_event(
+            &mut camera,
+            &mut state,
+            &moved,
+            None,
+            None
+        ));
+        assert!(!camera.orthographic);
+        assert!(state.is_dragging());
+        assert!(state.navigation_pending.is_none());
+        assert!(handle_event(&mut camera, &mut state, &release, false));
+        assert!(!state.is_dragging());
+    }
+
+    #[test]
+    fn projection_button_preserves_camera_and_cancelled_click_does_nothing() {
+        let mut camera = OrbitCamera::default();
+        let before = camera.view();
+        let mut state = DragState::default();
+        let hit = Some(NavigationAction::ToggleProjection);
+        let point = Some(Point::new(200.0, 150.0));
+        let press = Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left));
+        let release = Event::Mouse(MouseEvent::ButtonReleased(MouseButton::Left));
+        handle_navigation_event(&mut camera, &mut state, &press, hit, point);
+        handle_navigation_event(&mut camera, &mut state, &release, None, None);
+        assert!(!camera.orthographic);
+        handle_navigation_event(&mut camera, &mut state, &press, hit, point);
+        handle_navigation_event(&mut camera, &mut state, &release, hit, point);
+        assert!(camera.orthographic);
+        assert_eq!(camera.view(), before);
+    }
     #[test]
     fn handle_creates_with_no_scene() {
         let h = SceneHandle::new();

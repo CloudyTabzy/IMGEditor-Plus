@@ -45,6 +45,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **In-app wgpu renderer** — same wgpu device Iced uses, no second window or thread battle
 - ✅ **Tab split in the right pane** — `Model 3D` (new) | `Texture` (TXD/NFT preview)
 - ✅ **Orbit / pan / zoom camera** — LMB drag to orbit, MMB drag to pan, wheel to zoom
+- ✅ **Interactive axis navigation** — labeled ±X/±Y/±Z gizmo with hover feedback, exact orthographic views, and a perspective/orthographic button; axis colors follow the model's source coordinates
 - ✅ **Lit + wireframe pipelines** — single WGSL shader, `W` cycles wireframe (toolbar)
 - ✅ **MSAA 4x anti-aliasing** — the scene pass renders into multisampled color + depth targets and resolves for smooth model edges
 - ✅ **Textured paths** — DFF/TXD diffuse mapping plus DXT1/2/3/4/5 decoding on `spawn_blocking` so the UI thread stays responsive
@@ -55,10 +56,10 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 
 **v3.5 viewer polish:**
 - ✅ **Blender-style orbit** — mouse-right moves the view left (matching Blender's turntable feel)
-- ✅ **Rotating view-axis gizmo** — the small XYZ widget in the corner tracks the camera as it orbits
+- ✅ **Rotating navigation gizmo** — click an axis circle in the top-right to view along that axis; click the facing circle again for the opposite side. Drag the gizmo to orbit, or click `PERSP`/`ORTHO` below it to switch projection without changing framing. Orbiting returns to perspective; panning and zooming also work in orthographic views. `Reset view` restores the fitted perspective camera.
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
-- ✅ **308 tests passing** — covers parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, alpha rendering, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
+- ✅ **Automated regression tests** — cover parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, six-axis navigation, alpha rendering, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
 
 **v3.16.0 release highlights:**
 - ✅ **GTA RenderWare preview** — in-app PC DFF model parsing with frame/atomic transforms and TXD diffuse texture resolution for GTA III/VC/SA-style assets

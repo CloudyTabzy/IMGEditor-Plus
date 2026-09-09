@@ -145,6 +145,7 @@ pub fn render_frame(
 
     let mut frustum_cam = camera.clone();
     frustum_cam.set_viewport(Viewport { width, height });
+    frustum_cam.base_orientation = scene.base_orientation;
 
     renderer
         .pipelines
@@ -668,20 +669,30 @@ mod tests {
         )
         .expect("alpha textured render");
 
-        let opaque_red = opaque
+        let mut background_scene = scene.clone();
+        background_scene.meshes.clear();
+        let background = render_frame(
+            &renderer,
+            &background_scene,
+            &camera,
+            128,
+            128,
+            RenderFlags::empty(),
+        )
+        .expect("background including navigation overlay");
+        let opaque_model_pixels = opaque
             .rgba
             .chunks_exact(4)
-            .filter(|pixel| pixel[0] > 100 && pixel[1] < 100 && pixel[2] < 100)
+            .zip(background.rgba.chunks_exact(4))
+            .filter(|(pixel, background)| pixel != background)
             .count();
-        let alpha_red = alpha
-            .rgba
-            .chunks_exact(4)
-            .filter(|pixel| pixel[0] > 100 && pixel[1] < 100 && pixel[2] < 100)
-            .count();
-        assert!(opaque_red > 100, "opaque mode should draw the red triangle");
         assert!(
-            alpha_red < opaque_red / 4,
-            "transparent texels should reveal the background (opaque={opaque_red}, alpha={alpha_red})"
+            opaque_model_pixels > 100,
+            "opaque mode should draw the triangle"
+        );
+        assert_eq!(
+            alpha.rgba, background.rgba,
+            "fully transparent texels must reveal the unchanged background"
         );
     }
 
@@ -799,11 +810,7 @@ mod tests {
 
     #[test]
     fn gizmo_axes_follow_camera_orbit() {
-        // The gizmo box is opaque (alpha = 1 inside), so within its
-        // screen region only gizmo content is visible — the grid and
-        // model behind it are fully covered. Any pixel change there
-        // after orbiting can only come from the axes tracking the
-        // camera's view rotation.
+        // Sample only the opaque navigation disc, excluding scene pixels.
         let renderer = gpu().expect("renderer");
         let scene = triangle_scene();
         let mut cam_a = OrbitCamera::new(Viewport {
@@ -817,34 +824,16 @@ mod tests {
             .expect("frame a");
         let fb = render_frame(&renderer, &scene, &cam_b, 256, 256, RenderFlags::empty())
             .expect("frame b");
-        // Locate the gizmo box by its border ring. The headless target
-        // is Rgba8UnormSrgb, so the shader's linear border (0.55, 0.58,
-        // 0.62) is stored as sRGB bytes ~(196, 200, 206) — distinct
-        // from anything else in the frame. Axis strokes and the box bg
-        // sit inside the ring, so the box region is the bounding rect
-        // of the border pixels.
-        let is_border = |f: &RenderedFrame, i: usize| {
-            (f.rgba[i] as i32 - 196).abs() < 8
-                && (f.rgba[i + 1] as i32 - 200).abs() < 8
-                && (f.rgba[i + 2] as i32 - 206).abs() < 8
-        };
-        let (mut r0, mut r1, mut c0, mut c1) = (u32::MAX, 0u32, u32::MAX, 0u32);
+        let nav = crate::inspector::scene3d::navigation::NavigationUniform::new(
+            &cam_a, 256.0, 256.0, 1.0,
+        );
+        let [cx, cy, scale, _] = nav.layout;
+        let mut box_pixels = Vec::new();
         for row in 0..256u32 {
             for col in 0..256u32 {
-                let i = ((row * 256 + col) * 4) as usize;
-                if is_border(&fa, i) {
-                    r0 = r0.min(row);
-                    r1 = r1.max(row);
-                    c0 = c0.min(col);
-                    c1 = c1.max(col);
+                if (col as f32 - cx).hypot(row as f32 - cy) < 57.0 * scale {
+                    box_pixels.push(((row * 256 + col) * 4) as usize);
                 }
-            }
-        }
-        assert!(r0 <= r1, "gizmo box border not found in frame");
-        let mut box_pixels = Vec::new();
-        for row in r0..=r1 {
-            for col in c0..=c1 {
-                box_pixels.push(((row * 256 + col) * 4) as usize);
             }
         }
 
@@ -873,6 +862,126 @@ mod tests {
             diffs > 50,
             "gizmo box should visibly change after orbiting (diffs = {diffs})"
         );
+    }
+
+    #[test]
+    fn navigation_renders_at_hit_targets_in_all_axis_views() {
+        use crate::inspector::scene3d::navigation::{AxisView, NavigationUniform};
+        let renderer = gpu().expect("renderer");
+        let mut scene = triangle_scene();
+        scene.base_orientation = crate::inspector::scene3d::camera::BaseOrientation::Zup;
+        for axis in AxisView::ALL {
+            let mut camera = OrbitCamera::new(Viewport {
+                width: 640,
+                height: 480,
+            });
+            camera.base_orientation = scene.base_orientation;
+            camera.reset_to_aabb(&scene.aabb);
+            camera.snap_to_axis(axis);
+            let frame = render_frame(&renderer, &scene, &camera, 640, 480, RenderFlags::SHOW_GRID)
+                .expect("orthographic GPU render");
+            let nav = NavigationUniform::new(&camera, 640.0, 480.0, 1.0);
+            // The axis facing the camera is the last disc drawn and the
+            // first hit target. Its highlight ring must land at that point.
+            let tip = nav.tips.last().unwrap();
+            let mut bright = 0;
+            for y in tip[1] as u32 - 12..=tip[1] as u32 + 12 {
+                for x in tip[0] as u32 - 12..=tip[0] as u32 + 12 {
+                    let pixel = &frame.rgba[((y * 640 + x) * 4) as usize..][..3];
+                    if pixel.iter().all(|v| *v > 210) {
+                        bright += 1;
+                    }
+                }
+            }
+            assert!(
+                bright > 25,
+                "selected {axis:?} highlight did not render at its hit target"
+            );
+            write_png(&frame, format!("target/navigation-{axis:?}.png"))
+                .expect("navigation snapshot");
+        }
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 640,
+            height: 480,
+        });
+        camera.reset_to_aabb(&scene.aabb);
+        camera.yaw = 0.65;
+        let plain =
+            render_frame(&renderer, &scene, &camera, 640, 480, RenderFlags::SHOW_GRID).unwrap();
+        camera.navigation_hover = 7;
+        let hover =
+            render_frame(&renderer, &scene, &camera, 640, 480, RenderFlags::SHOW_GRID).unwrap();
+        assert_ne!(
+            plain.rgba, hover.rgba,
+            "projection button hover must be visible"
+        );
+        write_png(&plain, "target/navigation-perspective.png").unwrap();
+    }
+
+    #[test]
+    fn navigation_fixture_views_when_present() {
+        use crate::inspector::scene3d::camera::BaseOrientation;
+        use crate::inspector::scene3d::navigation::AxisView;
+        let fixtures = [
+            (
+                "gta-tank",
+                "C:/Dev/IMGEditor-master/Gta_3_img/Exported/ci_watertank.dff",
+            ),
+            (
+                "bully-lamp",
+                "C:/Games/Bully - Scholarship Edition/Stream/NIF/adm_lamp.nif",
+            ),
+        ];
+        for (name, path) in fixtures {
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let mut scene = if path.ends_with(".dff") {
+                crate::inspector::scene3d::decode::parse_and_build_scene_from_dff(
+                    &bytes,
+                    BaseOrientation::Zup,
+                    |_| None,
+                )
+            } else {
+                crate::inspector::scene3d::decode::parse_and_build_scene(
+                    &bytes,
+                    BaseOrientation::Zup,
+                    |_| None,
+                )
+            }
+            .expect("fixture scene");
+            // Match the GUI's centered mode without changing the source file.
+            let center = glam::Vec3::from(scene.aabb.center());
+            for mesh in &mut scene.meshes {
+                for vertex in &mut mesh.vertices {
+                    vertex.position = (glam::Vec3::from(vertex.position) - center).into();
+                }
+            }
+            scene.aabb.min = (glam::Vec3::from(scene.aabb.min) - center).into();
+            scene.aabb.max = (glam::Vec3::from(scene.aabb.max) - center).into();
+            let renderer = gpu().expect("renderer");
+            for (label, axis) in [
+                ("perspective", None),
+                ("top", Some(AxisView::PositiveZ)),
+                ("front", Some(AxisView::NegativeY)),
+            ] {
+                let mut camera = OrbitCamera::new(Viewport {
+                    width: 800,
+                    height: 600,
+                });
+                camera.base_orientation = BaseOrientation::Zup;
+                camera.reset_to_aabb(&scene.aabb);
+                camera.yaw = 0.65;
+                camera.pitch = 0.45;
+                if let Some(axis) = axis {
+                    camera.snap_to_axis(axis);
+                }
+                let frame =
+                    render_frame(&renderer, &scene, &camera, 800, 600, RenderFlags::SHOW_GRID)
+                        .expect("fixture navigation render");
+                write_png(&frame, format!("target/navigation-{name}-{label}.png")).unwrap();
+            }
+        }
     }
 
     #[test]

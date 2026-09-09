@@ -49,6 +49,7 @@ pub struct CameraUniform {
     /// the camera; kept at the end so the earlier fields keep their
     /// offsets for the lit/grid/wireframe structs.
     pub view: [[f32; 4]; 4],
+    pub navigation: super::navigation::NavigationUniform,
 }
 
 impl CameraUniform {
@@ -67,6 +68,12 @@ impl CameraUniform {
             flags: 0,
             _pad: [0; 3],
             view: view.to_cols_array_2d(),
+            navigation: super::navigation::NavigationUniform::new(
+                camera,
+                camera.viewport.width as f32,
+                camera.viewport.height as f32,
+                camera.ui_scale,
+            ),
         }
     }
 }
@@ -531,7 +538,9 @@ impl ScenePipelines {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(256),
+                    min_binding_size: wgpu::BufferSize::new(
+                        std::mem::size_of::<CameraUniform>() as u64
+                    ),
                 },
                 count: None,
             }],
@@ -713,7 +722,7 @@ impl ScenePipelines {
 
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("imgeditor-scene3d/camera_ubo"),
-            size: 256,
+            size: std::mem::size_of::<CameraUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -897,11 +906,7 @@ impl ScenePipelines {
     ) {
         let mut uniform = CameraUniform::from_camera(camera, key_light, ambient);
         uniform.flags = flags.bits();
-        // The UBO write must be 256 bytes to satisfy the WGSL struct-size
-        // minimum and the layout's min_binding_size. `CameraUniform` is
-        // repr(C) with fields summing to exactly 256 B, so the uniform can
-        // be written directly without a padded heap copy.
-        const _: () = assert!(std::mem::size_of::<CameraUniform>() == 256);
+        const _: () = assert!(std::mem::size_of::<CameraUniform>() == 384);
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
@@ -1185,7 +1190,7 @@ mod tests {
     #[test]
     fn camera_uniform_is_pod_and_aligned() {
         let size = std::mem::size_of::<CameraUniform>();
-        assert!(size <= 256, "size {size} exceeded padded 256 budget");
+        assert_eq!(size, 384);
         let mut u = CameraUniform::from_camera(
             &OrbitCamera::new(crate::inspector::scene3d::camera::Viewport {
                 width: 800,

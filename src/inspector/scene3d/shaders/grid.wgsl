@@ -5,7 +5,13 @@ struct CameraUniform {
     ambient: vec4<f32>,
     eye_pos: vec4<f32>,
     flags: u32,
-    pad: vec4<u32>,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
+    view: mat4x4<f32>,
+    navigation_layout: vec4<f32>,
+    tips: array<vec4<f32>, 6>,
+    navigation_state: vec4<f32>,
 }
 
 struct VertexIn {
@@ -43,7 +49,7 @@ fn fs_main(input: VertexOut) -> FragOut {
     let ndc_far = vec3<f32>(input.world_pos.x, input.world_pos.y, 1.0);
     let world_pos_far = camera.inverse_view_proj * vec4<f32>(ndc_far, 1.0);
     let world_far = world_pos_far.xyz / world_pos_far.w;
-    let ndc_near = vec3<f32>(input.world_pos.x, input.world_pos.y, -1.0);
+    let ndc_near = vec3<f32>(input.world_pos.x, input.world_pos.y, 0.0);
     let world_pos_near = camera.inverse_view_proj * vec4<f32>(ndc_near, 1.0);
     let world_near = world_pos_near.xyz / world_pos_near.w;
     let ray_dir = world_far - world_near;
@@ -92,17 +98,21 @@ fn fs_main(input: VertexOut) -> FragOut {
         color = mix(bg_color, minor_color, minor_line * minor_fade * fade);
         color = mix(color, major_color, major_line * major_fade * fade);
 
-        // Origin axes on the floor (world Y=0), also pixel-width:
-        // - X axis (red) along z=0
-        // - Z axis (green) along x=0
+        // The floor uses renderer Y=0, but its colors follow the source
+        // coordinate system, matching the navigation gizmo.
         let axis_wx = max(fwidth(world_pos.x), 1e-6);
         let axis_wz = max(fwidth(world_pos.z), 1e-6);
         let on_x_axis = (1.0 - smoothstep(0.8, 1.8, abs(world_pos.z) / axis_wz)) *
                         (1.0 - smoothstep(11.0, 12.0, abs(world_pos.x)));
         let on_z_axis = (1.0 - smoothstep(0.8, 1.8, abs(world_pos.x) / axis_wx)) *
                         (1.0 - smoothstep(11.0, 12.0, abs(world_pos.z)));
-        color = mix(color, vec3<f32>(0.96, 0.27, 0.27), on_x_axis * fade);
-        color = mix(color, vec3<f32>(0.40, 0.85, 0.50), on_z_axis * fade);
+        let colors = array<vec3<f32>, 3>(
+            vec3<f32>(0.94, 0.20, 0.24),
+            vec3<f32>(0.30, 0.78, 0.20),
+            vec3<f32>(0.16, 0.43, 0.98),
+        );
+        color = mix(color, colors[u32(camera.navigation_state.y)], on_x_axis * fade);
+        color = mix(color, colors[u32(camera.navigation_state.z)], on_z_axis * fade);
 
         // The orbit is unrestricted, so the eye can drop below the
         // floor plane. The ray-cast still hits the plane from
@@ -124,5 +134,5 @@ fn fs_main(input: VertexOut) -> FragOut {
         depth = 1.0;
     }
 
-    return FragOut(vec4<f32>(color, 1.0), depth * 0.5 + 0.5);
+    return FragOut(vec4<f32>(color, 1.0), clamp(depth, 0.0, 1.0));
 }
