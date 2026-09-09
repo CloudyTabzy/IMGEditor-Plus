@@ -138,6 +138,22 @@ to avoid panics that surface as silent crashes:
   MUST use the surface format. A mismatch produces a
   "Render pipeline targets are incompatible with render pass" panic
   the next time the user enters the 3D view tab.
+- **Sample counts must match too (MSAA).** The widget builds its scene
+  pipelines at `SCENE_MSAA_SAMPLES` (4x) and its depth/MSAA-color
+  attachments at the same count; the scene pass resolves into the 1x
+  `scene_color` texture (resolve targets need `RENDER_ATTACHMENT`
+  usage). The headless renderer deliberately uses 1x pipelines +
+  1x attachments so pixel-diff tests stay byte-deterministic — pass the
+  sample count to `ScenePipelines::new`; never assume it.
+- **Headless GPU tests must use the shared `gpu()` helper in
+  `inspector/scene3d/headless.rs`.** Constructing a
+  `HeadlessRenderer` creates a `wgpu::Instance`, and concurrent
+  instance creation races the driver loaders (intermittent
+  STATUS_ACCESS_VIOLATION that kills the whole test process). The
+  helper shares one renderer behind `OnceLock` + a mutex (the mutex
+  also stops tests from overwriting each other's camera UBO
+  mid-frame). A 0xc0000005 test crash is now a regression, not a
+  flake.
 - **Bind groups must match the pipeline layout.** The grid and gizmo
   pipelines don't sample a texture. Sharing the model's 2-bind-group
   layout produces a "BindGroup to be set at index 1" panic. Each
@@ -161,7 +177,7 @@ cargo clean           # remove target/
 cargo build           # fresh release + debug artefacts
 ```
 
-The 143-test unit suite + the headless GPU smoke render pass on a
+The 293-test unit suite + the headless GPU smoke render pass on a
 real Bully NIF (`python tools/smoke_3d_viewer.py`) takes ~60 s on a
 debug build and produces a 9 KiB PNG with a real model + grid + gizmo
 visible.
