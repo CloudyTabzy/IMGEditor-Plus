@@ -232,40 +232,42 @@ fn iii_vc_verdict(
     profile: &RasterProfile,
 ) -> (Verdict, Evidence, String) {
     // Retail evidence base: GTA III PC 1.0 (gta3.img + txd.img,
-    // 15,372 textures measured 2026-09-11, zero parse failures and
-    // zero header anomalies).
+    // 15,372 textures) and GTA VC PC 1.0 (gta3.img, 12,023 textures)
+    // measured 2026-09-11, zero parse failures and zero header
+    // anomalies.
     match profile.logical {
-        // Retail III world textures are 96.5% PAL8 (7,421 rasters in
-        // gta3.img, BGRA palettes) - the engine-native form.
+        // PAL is the III world-texture form (96.5% PAL8); VC barely
+        // uses it (27 rasters) in favor of 565/4444.
         LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
             Verdict::Native,
             Evidence::Retail,
-            "retail III: PAL8 is the dominant world-texture form".to_string(),
+            "retail III: 96.5% PAL8; retail VC: 27 rasters - accepted but rare".to_string(),
         ),
-        // Retail III ships zero compressed rasters; DXT1 rides on D3D8
-        // hardware support but is not the game's data dialect.
+        // III and VC ship zero compressed rasters; DXT1 rides on D3D8
+        // hardware support but is not either game's data dialect.
         LogicalFormat::Dxt1 => (
             Verdict::Supported,
             Evidence::Retail,
-            "retail III ships no compressed rasters (0/15,372)".to_string(),
+            "retail III+VC ship no compressed rasters (0/27,395)".to_string(),
         ),
         LogicalFormat::Dxt2 | LogicalFormat::Dxt3 | LogicalFormat::Dxt4 | LogicalFormat::Dxt5 => {
             (
                 Verdict::Untested,
                 Evidence::Retail,
-                "retail III ships none; engine acceptance unmeasured".to_string(),
+                "retail III+VC ship none; engine acceptance unmeasured".to_string(),
             )
         }
         // Question 5 answered: retail III stores 888 exclusively as
         // 32-bit X8R8G8B8 (6,806 rasters; the txd.img player/vehicle
-        // set is 87% of this class). True 24-bit never ships.
+        // set is 87% of this class). True 24-bit never ships. VC
+        // agrees (1 raster, 32bpp).
         LogicalFormat::R888 if profile.storage_bpp == 4 => {
             (Verdict::Native, Evidence::Retail, String::new())
         }
         LogicalFormat::R888 => (
             Verdict::Untested,
             Evidence::Retail,
-            "retail III never ships true 24-bit 888; D3D8 R8G8B8 acceptance unmeasured"
+            "retail III+VC never ship true 24-bit 888; D3D8 R8G8B8 acceptance unmeasured"
                 .to_string(),
         ),
         LogicalFormat::R8888 => (
@@ -273,7 +275,13 @@ fn iii_vc_verdict(
             Evidence::Retail,
             "retail III ships 8888 in both archives (1,121 rasters)".to_string(),
         ),
-        LogicalFormat::R1555 | LogicalFormat::R565 | LogicalFormat::R4444 => {
+        // VC is the 565/4444 game: 10,682 + 1,149 rasters.
+        LogicalFormat::R565 => (
+            Verdict::Native,
+            Evidence::Retail,
+            "retail VC: 565 is the dominant world-texture form".to_string(),
+        ),
+        LogicalFormat::R1555 | LogicalFormat::R4444 => {
             (Verdict::Native, Evidence::Retail, String::new())
         }
         LogicalFormat::R555 | LogicalFormat::Lum8 | LogicalFormat::A8l8 => {
