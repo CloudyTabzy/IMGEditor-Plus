@@ -50,6 +50,10 @@ pub fn check<'a>() -> Text<'a> {
     lucide::check()
 }
 
+pub fn shield_check<'a>() -> Text<'a> {
+    lucide::shield_check()
+}
+
 pub fn invert_selection<'a>() -> Text<'a> {
     lucide::refresh_cw()
 }

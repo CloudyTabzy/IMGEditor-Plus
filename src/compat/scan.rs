@@ -19,7 +19,7 @@ use crate::parser::ImgParser;
 use super::games::{classify, ALL_GAMES};
 use super::raster::{LogicalFormat, RasterProfile, Severity};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ScanReport {
     pub archive_path: String,
     pub archive_kind: String,
@@ -71,32 +71,119 @@ pub fn scan_archive(path: &Path, options: &ScanOptions) -> anyhow::Result<ScanRe
         entry_count: archive.entries.len(),
         ..ScanReport::default()
     };
+    profile_entries(&archive, &mut report, options, None)?;
+    Ok(report)
+}
 
-    for entry in &archive.entries {
+/// Validate an already-open archive: the app-facing path. Reports
+/// progress through the archive's own [`ProgressInfo`] (which drives
+/// the toolbar progress bar and the cancel button) and bails with a
+/// "cancelled" error when the user cancels.
+pub fn validate_open_archive(
+    archive: &ArchiveInfo,
+    options: &ScanOptions,
+) -> anyhow::Result<ScanReport> {
+    let progress = archive.progress.clone();
+    progress.start();
+    let source = archive
+        .path
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
+    let mut report = ScanReport {
+        archive_path: source.display().to_string(),
+        archive_kind: version_text(archive.version).to_string(),
+        entry_count: archive.entries.len(),
+        ..ScanReport::default()
+    };
+    let result = profile_entries(archive, &mut report, options, Some(&progress));
+    progress.finish();
+    result?;
+    Ok(report)
+}
+
+impl ScanReport {
+    /// Total textures carrying ERROR-severity anomalies.
+    pub fn error_count(&self) -> usize {
+        self.anomaly_counts
+            .iter()
+            .filter(|(code, _)| self.anomaly_severity.get(*code) == Some(&Severity::Error))
+            .map(|(_, count)| *count)
+            .sum()
+    }
+
+    /// Total textures carrying WARN-severity anomalies.
+    pub fn warning_count(&self) -> usize {
+        self.anomaly_counts
+            .iter()
+            .filter(|(code, _)| self.anomaly_severity.get(*code) == Some(&Severity::Warn))
+            .map(|(_, count)| *count)
+            .sum()
+    }
+}
+
+/// Shared profiling loop: reads each TXD entry (mmap slice when the
+/// archive is mapped), parses it, and accumulates the report.
+fn profile_entries(
+    archive: &ArchiveInfo,
+    report: &mut ScanReport,
+    options: &ScanOptions,
+    progress: Option<&crate::archive::ProgressInfo>,
+) -> anyhow::Result<()> {
+    let total = archive.entries.len();
+    for (index, entry) in archive.entries.iter().enumerate() {
+        if let Some(progress) = progress {
+            if progress.is_cancelled() {
+                anyhow::bail!("Validation cancelled");
+            }
+            if index % 16 == 0 || index + 1 == total {
+                progress.set_percentage((index + 1) as f32 / total.max(1) as f32);
+            }
+        }
         if !entry.file_name_lower.ends_with(".txd") {
             continue;
         }
         report.txd_entries += 1;
-        let bytes = match read_entry_data_from_source(entry, Some(path)) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                report.parse_failures += 1;
-                record_anomaly(
-                    &mut report,
-                    "TXD_READ_FAIL",
-                    Severity::Error,
-                    &entry.file_name,
-                    format!("{err}"),
-                );
-                continue;
+        let bytes: Vec<u8> = match (&archive.source_mmap, &archive.path) {
+            (Some(mmap), _) => {
+                let start = entry.offset as usize * crate::parser::SECTOR_SIZE as usize;
+                let end = start + entry.sector as usize * crate::parser::SECTOR_SIZE as usize;
+                match mmap.get(start..end) {
+                    Some(slice) => slice.to_vec(),
+                    None => {
+                        report.parse_failures += 1;
+                        record_anomaly(
+                            report,
+                            "TXD_READ_FAIL",
+                            Severity::Error,
+                            &entry.file_name,
+                            "entry range lies outside the archive".to_string(),
+                        );
+                        continue;
+                    }
+                }
             }
+            (None, Some(source)) => match read_entry_data_from_source(entry, Some(source)) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    report.parse_failures += 1;
+                    record_anomaly(
+                        report,
+                        "TXD_READ_FAIL",
+                        Severity::Error,
+                        &entry.file_name,
+                        format!("{err}"),
+                    );
+                    continue;
+                }
+            },
+            (None, None) => anyhow::bail!("archive has no source to read from"),
         };
         let parsed = match parse_txd(&bytes) {
             Ok(parsed) => parsed,
             Err(err) => {
                 report.parse_failures += 1;
                 record_anomaly(
-                    &mut report,
+                    report,
                     "TXD_PARSE_FAIL",
                     Severity::Error,
                     &entry.file_name,
@@ -118,7 +205,7 @@ pub fn scan_archive(path: &Path, options: &ScanOptions) -> anyhow::Result<ScanRe
 
             for anomaly in profile.anomalies() {
                 record_anomaly(
-                    &mut report,
+                    report,
                     anomaly.code,
                     anomaly.severity,
                     texture.diffuse_name.as_str(),
@@ -144,7 +231,7 @@ pub fn scan_archive(path: &Path, options: &ScanOptions) -> anyhow::Result<ScanRe
                     Ok(_) => {}
                     Err(err) => {
                         record_anomaly(
-                            &mut report,
+                            report,
                             "TXD_DECODE_FAIL",
                             Severity::Error,
                             texture.diffuse_name.as_str(),
@@ -155,8 +242,10 @@ pub fn scan_archive(path: &Path, options: &ScanOptions) -> anyhow::Result<ScanRe
             }
         }
     }
-
-    Ok(report)
+    if let Some(progress) = progress {
+        progress.set_percentage(1.0);
+    }
+    Ok(())
 }
 
 fn unique_color_count(rgba: &[u8]) -> usize {
@@ -383,8 +472,47 @@ mod tests {
     }
 
     #[test]
-    fn scanner_profiles_fixtures_and_counts_verdicts() {
+    fn validate_open_archive_reports_and_finishes_progress() {
         let dir = tempfile::tempdir().unwrap();
+        let path = fixture_archive(dir.path());
+        let mut archive = ArchiveInfo::new("fixture.img", false, ImgVersion::Two);
+        archive.path = Some(path.clone());
+        PcV2Parser.open(&mut archive).unwrap();
+
+        let report = validate_open_archive(&archive, &ScanOptions::default()).unwrap();
+        assert_eq!(report.txd_entries, 1);
+        assert_eq!(report.textures, 1);
+        assert_eq!(report.archive_kind, "IMG v2");
+        assert!(!archive.progress.in_use(), "progress must be released");
+
+        // Re-running works: the progress slot is not stuck in use.
+        let again = validate_open_archive(&archive, &ScanOptions::default()).unwrap();
+        assert_eq!(again.textures, 1);
+    }
+
+    #[test]
+    fn validate_loop_respects_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fixture_archive(dir.path());
+        let mut archive = ArchiveInfo::new("fixture.img", false, ImgVersion::Two);
+        archive.path = Some(path);
+        PcV2Parser.open(&mut archive).unwrap();
+
+        // Cancel while the loop is running (start() clears stale flags,
+        // so the request must land after it).
+        let progress = archive.progress.clone();
+        progress.start();
+        progress.request_cancel();
+        let mut report = ScanReport::default();
+        let error = profile_entries(&archive, &mut report, &ScanOptions::default(), Some(&progress))
+            .expect_err("cancelled validation must fail");
+        progress.finish();
+        assert!(format!("{error}").contains("cancelled"));
+        assert!(!archive.progress.in_use(), "cancel must release the slot");
+    }
+
+    #[test]
+    fn scanner_profiles_fixtures_and_counts_verdicts() {        let dir = tempfile::tempdir().unwrap();
         let path = fixture_archive(dir.path());
         let report = scan_archive(&path, &ScanOptions::default()).unwrap();
 

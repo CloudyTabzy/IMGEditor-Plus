@@ -352,6 +352,14 @@ pub enum Message {
 
     FilesDropped(PathBuf),
 
+    /// Toolbar "Validate textures": profile every TXD in the selected
+    /// archive against the per-game compatibility tables.
+    ValidateCompatibility,
+    CompatibilityValidated {
+        archive_index: usize,
+        result: Result<crate::compat::scan::ScanReport, String>,
+    },
+
     TextureDecodeRequested,
     TextureDecoded {
         archive_index: usize,
@@ -3073,6 +3081,93 @@ impl App {
                 Task::none()
             }
 
+            Message::ValidateCompatibility => {
+                let Some(archive_index) = self.editor.selected_archive() else {
+                    self.toast = Some("Open an archive first to validate it.".into());
+                    return Task::none();
+                };
+                if self.editor.archives()[archive_index].progress.in_use() {
+                    self.toast = Some("Another task is still running.".into());
+                    return Task::none();
+                }
+                // The snapshot shares the archive's ProgressInfo (Arc), so
+                // the toolbar progress bar and its cancel button drive the
+                // background scan.
+                let snapshot = self.editor.archives()[archive_index].clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            crate::compat::scan::validate_open_archive(
+                                &snapshot,
+                                &crate::compat::scan::ScanOptions::default(),
+                            )
+                        })
+                        .await
+                        .unwrap_or_else(|err| Err(anyhow::anyhow!("task panicked: {err}")))
+                    },
+                    move |result| Message::CompatibilityValidated {
+                        archive_index,
+                        result: result.map_err(|err| format!("{err}")),
+                    },
+                )
+            }
+            Message::CompatibilityValidated { archive_index, result } => {
+                match result {
+                    Ok(report) => {
+                        let Some(archive) = self.editor.archives_mut().get_mut(archive_index) else {
+                            self.toast = Some("The validated archive was closed.".into());
+                            return Task::none();
+                        };
+                        let errors = report.error_count();
+                        let warnings = report.warning_count();
+                        let target = match archive.version {
+                            ImgVersion::Two => "sa",
+                            _ => "gta3",
+                        };
+                        let verdict_summary = report
+                            .verdicts
+                            .get(target)
+                            .map(|counts| {
+                                counts
+                                    .iter()
+                                    .map(|(verdict, count)| format!("{verdict} {count}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_else(|| "no textures".to_string());
+                        let summary = format!(
+                            "Validated {} TXDs ({} textures): {errors} errors, {warnings} warnings; {target} target — {verdict_summary}",
+                            report.txd_entries, report.textures
+                        );
+                        archive.add_log(format!("Compatibility check: {summary}"));
+                        for (code, count) in &report.anomaly_counts {
+                            archive.add_log(format!(
+                                "  {code}: {count} (e.g. {})",
+                                report
+                                    .anomaly_examples
+                                    .get(code)
+                                    .and_then(|examples| examples.first())
+                                    .cloned()
+                                    .unwrap_or_default()
+                            ));
+                        }
+                        archive.compat_report = Some(report);
+                        self.toast = Some(if errors == 0 && warnings == 0 {
+                            format!("No compatibility issues found — {summary}")
+                        } else {
+                            summary
+                        });
+                    }
+                    Err(err) if err.contains("cancelled") => {
+                        self.toast = Some("Validation cancelled.".into());
+                    }
+                    Err(err) => {
+                        self.toast = Some(format!("Validation failed: {err}"));
+                    }
+                }
+                Task::none()
+            }
+
             Message::FilesDropped(path) => {
                 if path
                     .extension()
@@ -5287,6 +5382,81 @@ mod tests {
             "a decode already in flight must not be duplicated"
         );
         drop(guard);
+    }
+
+    #[test]
+    fn compatibility_validation_stores_report_and_toasts_summary() {
+        use crate::compat::scan::ScanReport;
+        use crate::compat::raster::Severity;
+
+        let mut app = test_app_with_entries();
+        let mut report = ScanReport {
+            archive_path: "fixture.img".into(),
+            archive_kind: "IMG v1".into(),
+            entry_count: 3,
+            ..ScanReport::default()
+        };
+        report.txd_entries = 2;
+        report.textures = 5;
+        report
+            .class_counts
+            .insert("DXT1".to_string(), 4);
+        report
+            .class_counts
+            .insert("888 (32bpp storage)".to_string(), 1);
+        report
+            .verdicts
+            .entry("gta3")
+            .or_default()
+            .insert("convertible (lossless)", 5);
+        report
+            .verdicts
+            .entry("sa")
+            .or_default()
+            .insert("native", 4);
+        report
+            .verdicts
+            .entry("sa")
+            .or_default()
+            .insert("supported", 1);
+        report
+            .anomaly_counts
+            .insert("DIMS_NOT_POT", 2);
+        report
+            .anomaly_severity
+            .insert("DIMS_NOT_POT", Severity::Error);
+
+        let _ = app.update(Message::CompatibilityValidated {
+            archive_index: 0,
+            result: Ok(report),
+        });
+
+        let archive = &app.editor.archives()[0];
+        assert!(archive.compat_report.is_some(), "report stored");
+        let stored = archive.compat_report.as_ref().unwrap();
+        assert_eq!(stored.textures, 5);
+        assert_eq!(stored.error_count(), 2);
+        let toast = app.toast.as_deref().unwrap_or_default();
+        assert!(
+            toast.contains("Validated 2 TXDs (5 textures)"),
+            "toast should summarize: {toast}"
+        );
+        assert!(toast.contains("2 errors"), "toast should count errors: {toast}");
+        assert!(toast.contains("gta3 target"), "toast names the target: {toast}");
+
+        // Mutating entries invalidates the stored report.
+        app.editor.archives_mut()[0].invalidate_entry_caches();
+        assert!(app.editor.archives()[0].compat_report.is_none());
+    }
+
+    #[test]
+    fn validate_button_without_archive_toasts_guidance() {
+        let mut app = test_app();
+        let _ = app.update(Message::ValidateCompatibility);
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("Open an archive first to validate it.")
+        );
     }
 
     #[test]

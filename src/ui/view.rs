@@ -1517,6 +1517,12 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
             fonts::body("Delete selected"),
             tooltip::Position::Bottom,
         ),
+        w::vhairline(divider),
+        w::styled_tooltip(
+            toolbar_button(icons::shield_check().size(18).into(), Message::ValidateCompatibility),
+            fonts::body("Validate textures"),
+            tooltip::Position::Bottom,
+        ),
     ]
     .spacing(4)
     .padding(4)

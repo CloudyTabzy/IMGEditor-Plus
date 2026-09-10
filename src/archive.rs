@@ -329,6 +329,9 @@ pub struct ArchiveInfo {
     /// Cache for `unique_file_types()` invalidated whenever entries are added,
     /// removed, or renamed.
     cached_file_types: Option<Vec<CompactString>>,
+    /// Latest texture-compatibility report (see `compat::scan`); cleared
+    /// by `invalidate_entry_caches` so it never describes stale entries.
+    pub compat_report: Option<crate::compat::scan::ScanReport>,
     /// Reverse lookup from entry index to its position in `selected_indices`.
     /// Rebuilt by `update_selected_list` so shift+click and similar operations
     /// avoid linear scans of the filtered list.
@@ -379,6 +382,7 @@ impl ArchiveInfo {
                 Default::default(),
             )),
             cached_file_types: None,
+            compat_report: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
             generation: 0,
@@ -430,6 +434,7 @@ impl ArchiveInfo {
                 Default::default(),
             )),
             cached_file_types: None,
+            compat_report: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
             generation: 0,
@@ -657,6 +662,7 @@ impl ArchiveInfo {
         self.cached_file_types = None;
         self.inspection_cache.clear();
         self.texture_cache.clear();
+        self.compat_report = None;
         self.generation = self.generation.wrapping_add(1);
     }
 
