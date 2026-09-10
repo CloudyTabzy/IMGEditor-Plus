@@ -231,35 +231,50 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
 fn iii_vc_verdict(
     profile: &RasterProfile,
 ) -> (Verdict, Evidence, String) {
+    // Retail evidence base: GTA III PC 1.0 (gta3.img + txd.img,
+    // 15,372 textures measured 2026-09-11, zero parse failures and
+    // zero header anomalies).
     match profile.logical {
-        // III ships paletted rasters (PAL8, BGRA palettes) — the
-        // engine-native form for skins and tiles (docs evidence; retail
-        // corpus confirmation pending).
+        // Retail III world textures are 96.5% PAL8 (7,421 rasters in
+        // gta3.img, BGRA palettes) - the engine-native form.
         LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
             Verdict::Native,
-            Evidence::Docs,
-            "III-era engines are the native palette consumers".to_string(),
+            Evidence::Retail,
+            "retail III: PAL8 is the dominant world-texture form".to_string(),
         ),
-        LogicalFormat::Dxt1 => (Verdict::Native, Evidence::Docs, String::new()),
-        // DXT3/4/5 in a 3.3/3.4-era archive is plausible but
-        // unverified against a retail corpus.
-        LogicalFormat::Dxt3 | LogicalFormat::Dxt4 | LogicalFormat::Dxt5 | LogicalFormat::Dxt2 => {
-            (Verdict::Untested, Evidence::Untested, String::new())
+        // Retail III ships zero compressed rasters; DXT1 rides on D3D8
+        // hardware support but is not the game's data dialect.
+        LogicalFormat::Dxt1 => (
+            Verdict::Supported,
+            Evidence::Retail,
+            "retail III ships no compressed rasters (0/15,372)".to_string(),
+        ),
+        LogicalFormat::Dxt2 | LogicalFormat::Dxt3 | LogicalFormat::Dxt4 | LogicalFormat::Dxt5 => {
+            (
+                Verdict::Untested,
+                Evidence::Retail,
+                "retail III ships none; engine acceptance unmeasured".to_string(),
+            )
         }
-        // True 24-bit 888 is the D3D8-era storage; the 32-bit X8R8G8B8
-        // form (the dwayne class) rewrites losslessly to either.
-        LogicalFormat::R888 if profile.storage_bpp == 3 => {
-            (Verdict::Native, Evidence::Docs, String::new())
+        // Question 5 answered: retail III stores 888 exclusively as
+        // 32-bit X8R8G8B8 (6,806 rasters; the txd.img player/vehicle
+        // set is 87% of this class). True 24-bit never ships.
+        LogicalFormat::R888 if profile.storage_bpp == 4 => {
+            (Verdict::Native, Evidence::Retail, String::new())
         }
         LogicalFormat::R888 => (
-            Verdict::ConvertibleLossless,
-            Evidence::Docs,
-            "32-bit X8R8G8B8 storage: rewrite to true 24-bit or 8888 — pixels unchanged"
+            Verdict::Untested,
+            Evidence::Retail,
+            "retail III never ships true 24-bit 888; D3D8 R8G8B8 acceptance unmeasured"
                 .to_string(),
         ),
-        LogicalFormat::R8888 => (Verdict::Native, Evidence::Docs, String::new()),
+        LogicalFormat::R8888 => (
+            Verdict::Native,
+            Evidence::Retail,
+            "retail III ships 8888 in both archives (1,121 rasters)".to_string(),
+        ),
         LogicalFormat::R1555 | LogicalFormat::R565 | LogicalFormat::R4444 => {
-            (Verdict::Native, Evidence::Docs, String::new())
+            (Verdict::Native, Evidence::Retail, String::new())
         }
         LogicalFormat::R555 | LogicalFormat::Lum8 | LogicalFormat::A8l8 => {
             (Verdict::Untested, Evidence::Untested, String::new())
