@@ -111,7 +111,7 @@ head-to-head numbers and [docs/export-optimization-lessons.md](docs/export-optim
 for the engineering story.
 ### 🔍 Entry Table
 - ✅ **Virtualised scrolling** — smooth even at 10,000+ entries
-- ✅ **Firefox-style middle-click autoscroll** — click MMB once for anchored, distance-controlled scrolling with a visible directional badge; move back to the neutral zone to stop immediately, click to keep the current position, or right-click to restore the start; hold-drag keeps direct control
+- ✅ **Firefox-style middle-click autoscroll** — click MMB once for anchored, distance-controlled scrolling with Iced's circular up/down indicator; move back to the neutral zone to stop, and click, middle-click, right-click, scroll, or press a key to keep the current position
 - ✅ **Fuzzy search filter** — subsequence matching with relevance ranking, debounced input (150ms), and Jaro-Winkler typo fallback plus a "Did you mean …" prediction dropdown
 - ✅ **Hideable search bar** — toggle from the View menu to reclaim screen space
 - ✅ **Sort by Name / Type / Size** with arrow indicators

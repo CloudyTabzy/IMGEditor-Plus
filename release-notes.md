@@ -1,6 +1,6 @@
 ## Unreleased
 
-- **Firefox-style middle-click autoscroll:** a single MMB click in the entry table starts anchored autoscrolling with the badge at the actual click point. Its distance response follows Firefox's neutral-zone acceleration curve without temporal momentum, so returning to the anchor stops immediately and makes precise positioning predictable. Hold-drag MMB keeps direct proportional control; a regular click, MMB, Escape, or wheel keeps the current position, while right-click restores the pre-scroll offset. Internally the table tracks a virtual scroll offset because Iced's scrollable does not emit `on_scroll` for operation-driven `scroll_to` calls.
+- **Firefox-style middle-click autoscroll:** the entry table now uses Iced's native `Scrollable::auto_scroll` controller, which keeps the table's scroll state and its circular up/down anchor indicator together. It no longer replaces the table's widget tree on MMB, preventing the former snap-to-top failure. The one-time toast confirms activation; clicking, middle-clicking, right-clicking, scrolling, or pressing a key stops in place.
 
 ## IMG Editor Plus v4.1.0
 

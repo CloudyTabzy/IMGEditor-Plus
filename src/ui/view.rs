@@ -49,7 +49,6 @@ const HEADER_HEIGHT: f32 = 32.0;
 /// Number of rows to keep rendered above and below the scroll viewport. 10 rows ≈ 320 px of
 /// over-render — negligible cost, eliminates any chance of a blank band at the edges.
 const OVERSCAN_ROWS: i32 = 10;
-const AUTOSCROLL_BADGE_SIZE: f32 = 34.0;
 
 impl App {
     pub(crate) fn build_entry_table(&self) -> Element<'_, Message> {
@@ -186,6 +185,7 @@ impl App {
         let scrollable = Scrollable::new(content)
             .id(iced::widget::Id::new("entry_table"))
             .height(Length::Fill)
+            .auto_scroll(self.context_menu.is_none())
             .direction(iced::widget::scrollable::Direction::Vertical(
                 iced::widget::scrollable::Scrollbar::new().scroller_width(16.0),
             ))
@@ -210,33 +210,16 @@ impl App {
             layers.push(overlay);
         }
 
-        let table_body: Element<'_, Message> = stack(layers).into();
-
-        // Middle-click anywhere in the table body to start autoscroll mode.
-        let table_body = mouse_area(table_body)
-            .on_middle_press(Message::AutoScrollStarted)
-            .into();
-
-        // In sticky mode a full-panel backdrop commits ordinary clicks,
-        // restores on RMB, and suppresses row actions while autoscrolling.
-        let table_body: Element<'_, Message> = if let Some(state) = self.autoscroll {
-            let indicator = build_autoscroll_indicator(state.anchor, state.sticky_direction());
-            if state.sticky {
-                let backdrop = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
-                    .on_press(Message::AutoScrollEnded)
-                    .on_right_press(Message::AutoScrollCancel)
-                    .on_middle_press(Message::AutoScrollEnded)
-                    // Keep releases from reaching table rows after the
-                    // autoscroll action has already consumed the press.
-                    .on_release(Message::Noop)
-                    .on_right_release(Message::Noop);
-                stack(vec![table_body, backdrop.into(), indicator]).into()
-            } else {
-                stack(vec![table_body, indicator]).into()
-            }
-        } else {
-            table_body
-        };
+        // Keep this wrapper and its base Scrollable present regardless of
+        // autoscroll state. Iced retains Scrollable offsets by widget-tree
+        // position, so inserting a different root on MMB would reset it.
+        let table_body = mouse_area(
+            stack(layers)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .on_enter(Message::EntryTableHoverChanged(true))
+        .on_exit(Message::EntryTableHoverChanged(false));
 
         column![headers, w::hairline(design.divider()), table_body]
             .width(Length::Fill)
@@ -253,7 +236,8 @@ impl App {
     ) -> Element<'a, Message> {
         use std::borrow::Cow;
 
-        let is_renaming = entry.rename;
+        let row_interactive = !self.autoscroll;
+        let is_renaming = entry.rename && row_interactive;
         let is_selected = entry.selected;
         let literal_types = self.config.literal_file_types;
 
@@ -405,16 +389,21 @@ impl App {
             cell.into()
         };
 
-        // Per-row mouse_area so the click is attributed to this exact row.
-        // Iced 0.14's MouseArea only carries a Message (no position), so the
-        // right-click absolute position is captured separately by a global
-        // event subscription and read by the context menu.
-        mouse_area(cell)
-            .on_press(Message::EntryClicked(display_row))
-            .on_double_click(Message::EntryDoubleClicked(display_row))
-            .on_right_press(Message::EntryRightClicked(display_row))
-            .on_middle_press(Message::AutoScrollStarted)
-            .into()
+        if row_interactive {
+            // Per-row mouse_area so the click is attributed to this exact row.
+            // Iced 0.14's MouseArea only carries a Message (no position), so the
+            // right-click absolute position is captured separately by a global
+            // event subscription and read by the context menu.
+            mouse_area(cell)
+                .on_press(Message::EntryClicked(display_row))
+                .on_double_click(Message::EntryDoubleClicked(display_row))
+                .on_right_press(Message::EntryRightClicked(display_row))
+                .into()
+        } else {
+            // Let the native Scrollable receive the stopping click before a
+            // row can react, matching browser autoscroll behavior.
+            cell
+        }
     }
 
     pub(crate) fn build_info_panel(&self) -> Element<'_, Message> {
@@ -2483,92 +2472,6 @@ fn build_toast_overlay(app: &App) -> Option<Element<'_, Message>> {
     )
 }
 
-/// Firefox-style autoscroll badge placed at the actual MMB anchor.
-fn build_autoscroll_indicator(
-    anchor: Option<iced::Point>,
-    direction: Option<i32>,
-) -> Element<'static, Message> {
-    let chevron = |up: bool| -> iced::widget::Text<'static> {
-        let icon = if up {
-            icons::chevrons_up().size(14)
-        } else {
-            icons::chevrons_down().size(14)
-        };
-        let active = direction == Some(if up { -1 } else { 1 });
-        icon.style(move |theme: &iced::Theme| {
-            let palette = theme.extended_palette();
-            let color = if active {
-                palette.primary.strong.color
-            } else {
-                Color {
-                    a: 0.35,
-                    ..palette.background.base.text
-                }
-            };
-            iced::widget::text::Style {
-                color: Some(color),
-            }
-        })
-    };
-
-    let badge = container(
-        column![chevron(true), chevron(false)]
-            .spacing(0)
-            .align_x(Alignment::Center),
-    )
-    .width(Length::Fixed(AUTOSCROLL_BADGE_SIZE))
-    .height(Length::Fixed(AUTOSCROLL_BADGE_SIZE))
-    // align_* centers the CONTENT without resizing the container —
-    // `center_x(Fill)` would set the container's width to Fill and
-    // stretch the translucent circle across the whole pane.
-    .align_x(Alignment::Center)
-    .align_y(Alignment::Center)
-    .style(|theme: &iced::Theme| iced::widget::container::Style {
-        background: Some(iced::Background::Color(Color {
-            a: 0.92,
-            ..theme.extended_palette().background.base.color
-        })),
-        border: Border {
-            color: theme.extended_palette().background.strong.color,
-            width: 1.0,
-            radius: (AUTOSCROLL_BADGE_SIZE / 2.0).into(),
-        },
-        shadow: iced::Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
-            offset: iced::Vector::new(0.0, 2.0),
-            blur_radius: 6.0,
-        },
-        ..Default::default()
-    });
-
-    let Some(anchor) = anchor else {
-        return Space::new().into();
-    };
-
-    Float::new(badge)
-        .translate(move |bounds, viewport| {
-            autoscroll_indicator_translation(anchor, bounds, viewport)
-        })
-        .into()
-}
-
-fn autoscroll_indicator_translation(
-    anchor: iced::Point,
-    bounds: Rectangle,
-    viewport: Rectangle,
-) -> Vector {
-    let half_width = bounds.width / 2.0;
-    let half_height = bounds.height / 2.0;
-    let min_x = viewport.x + half_width;
-    let min_y = viewport.y + half_height;
-    let max_x = (viewport.x + viewport.width - half_width).max(min_x);
-    let max_y = (viewport.y + viewport.height - half_height).max(min_y);
-    let x = anchor.x.clamp(min_x, max_x);
-    let y = anchor.y.clamp(min_y, max_y);
-
-    Vector::new(x - (bounds.x + half_width), y - (bounds.y + half_height))
-}
-
 fn context_button(label: &str, message: Message) -> iced::widget::Button<'_, Message> {
     button(w::icon_label(
         context_icon(&message),
@@ -2719,52 +2622,6 @@ fn empty_state() -> Element<'static, Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn autoscroll_badge_is_centered_on_the_middle_click_anchor() {
-        let bounds = Rectangle {
-            x: 24.0,
-            y: 48.0,
-            width: AUTOSCROLL_BADGE_SIZE,
-            height: AUTOSCROLL_BADGE_SIZE,
-        };
-        let viewport = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 960.0,
-            height: 640.0,
-        };
-        let anchor = iced::Point::new(420.0, 300.0);
-
-        let translation = autoscroll_indicator_translation(anchor, bounds, viewport);
-
-        assert_eq!(bounds.x + translation.x + bounds.width / 2.0, anchor.x);
-        assert_eq!(bounds.y + translation.y + bounds.height / 2.0, anchor.y);
-    }
-
-    #[test]
-    fn autoscroll_badge_stays_visible_at_a_viewport_edge() {
-        let bounds = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: AUTOSCROLL_BADGE_SIZE,
-            height: AUTOSCROLL_BADGE_SIZE,
-        };
-        let viewport = Rectangle {
-            x: 100.0,
-            y: 80.0,
-            width: 240.0,
-            height: 160.0,
-        };
-
-        let translation =
-            autoscroll_indicator_translation(iced::Point::new(0.0, 400.0), bounds, viewport);
-        let left = bounds.x + translation.x;
-        let top = bounds.y + translation.y;
-
-        assert_eq!(left, viewport.x);
-        assert_eq!(top + bounds.height, viewport.y + viewport.height);
-    }
 
     #[test]
     fn context_menu_stays_below_when_the_viewport_has_room() {
