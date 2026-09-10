@@ -89,7 +89,7 @@ Format labels now distinguish "X8R8G8B8 (888 RGB, 32bpp)" from
 
 ## Cross-check discipline for future format bugs
 
-When a texture decodes to noise, compare these four independent claims in
+When a texture decodes to noise, compare these five independent claims in
 order of reliability:
 
 1. **Mip data length** (`len == w * h * bytes_per_px`) — the strongest
@@ -98,12 +98,70 @@ order of reliability:
 3. **D3D format word / FourCC** — authoritative on D3D9.
 4. **RW raster-format nibble** — describes the logical format, which
    platforms reinterpret for storage (888 → X8R8G8B8 on D3D9).
+5. **Content fingerprints** — unique-color count (≤ 256 ⇒ decoded
+   palette), alpha-channel usage, intact mip chains. Header fields can
+   all be stale from a tool pass; the pixels are what remains.
 
 Two independent fields agreeing is not proof (888 nibble + "22 = bigger
 888" assumption both said 24-bit); a field that *contradicts* the others
 (depth 32, or the data length) is. For palette rasters, also verify the
 palette-size derivation from the extension bits matches the depth
 (4-bit vs 8-bit palettes).
+
+## Corpus provenance forensics — what this archive is made of
+
+The unique-color test turns the modded `gta3.img` survey from a format
+table into a provenance reconstruction. A lossless re-encode preserves the
+original color count, so **an uncompressed raster with ≤ 256 unique colors
+is provably a decoded palette** — no header claim required.
+
+Full-corpus results (first texture per TXD, all 2,759 files classified):
+
+| Class | Count | Content | Provenance evidence |
+|---|---|---|---|
+| DXT1, no mips | 1,508 | world props (a51_*, ammo*, arch_plx) | SA ships these compressed; sizes 64²–256² |
+| DXT1 + mip ext (`0x8200`) | 413 | big world, 512²/256², intact 8–10 level chains | SA's own mip convention — untouched originals |
+| DXT3 | 378 | alpha props (kmb_chute, law_coffinfl) | SA alpha-compressed originals |
+| "1555" | 53 | small alpha bits | **actually DXT1** — stale 1555 raster nibble, DXT1 FourCC wins |
+| 888 → X8R8G8B8 | 355 | interior/building tiles (bistro, hospital2, liberty*), skins (dwayne, player) | 217 files ≤ 256 unique colors → decoded palettes |
+| 8888 (A8R8G8B8) | 33 | alpha tiles (bistro_alpha, trees2) + alpha peds (bmycr, bmydrug) | 24 of 26 parsed ≤ 256 colors; 26/26 use real palette alpha |
+| no raster (child 0x3) | 19 | SA generic dictionaries (gb_la, gb_sf, gb_vegas) | different structure, unexamined |
+
+Interpretation: the conversion pipeline that produced this archive
+(1) copied DXT-compressed content verbatim — SA ships its world compressed,
+so there was nothing to do; (2) re-encoded SA's **paletted** rasters
+(ped skins, player parts, interior tiles — famously PAL8/PAL4 in SA) into
+uncompressed RGB(A), losslessly; and (3) stored author-imported RGBA art
+as-is. It split by alpha: paletted-no-alpha → 888 (→ X8R8G8B8 storage,
+the dwayne bug), paletted-with-alpha → 8888. **Zero paletted rasters
+survive** in the archive; `player.txd`'s texture name `torso8bit` is a
+fossil of the original 8-bit form.
+
+Two forensic fingerprints worth remembering:
+
+- **The 257/258/259-color cluster** (84/35/18 files in the 888 class):
+  a decoded 256-entry palette plus 1–3 stray pixels — the converter's
+  own signature (likely colorkey or padding artifacts written outside
+  the palette). A pile of files at exactly N and N+1..N+3 colors is a
+  re-encode tell, not organic art.
+- **Perceptual non-uniqueness**: 888 and 8888 files pair naturally
+  (`bistro` / `bistro_alpha`) — one paletted raster family split by the
+  converter's alpha check.
+
+Provenance table for this archive:
+
+| Content | Original form | Converter action | Result |
+|---|---|---|---|
+| SA world/props (already DXT) | DXT1/DXT3 + mips | verbatim passthrough | decodes fine |
+| SA paletted, no alpha (skins, tiles) | PAL8, ~4–256 colors | palette → 888 RGB | X8R8G8B8 32-bit storage |
+| SA paletted, with alpha (trees, fences, peds) | PAL8 + RGBA palette | → 8888 | fine |
+| Custom imported art (dwayne, etc.) | authored RGBA | stored as 888/8888 | >256 colors, many colors |
+
+Practical consequence: **~60%+ of this archive's uncompressed texture
+content is palette-reconstructible** — the original palette can be
+recovered from the decoded pixels, which matters for any future
+edit/replace feature (see discussion in the repo history; the decoder's
+unique-color analysis is the detection primitive).
 
 ## Related observations from the same archive
 
