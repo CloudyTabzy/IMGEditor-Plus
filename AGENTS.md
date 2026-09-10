@@ -42,6 +42,9 @@ Rules when building or testing here:
    immediately retry at full parallelism — rerun with `-j 2`.
 6. **Never run the full test suite and a release build concurrently**,
    and never leave background builds running while doing other work.
+7. **Local/manual testing means the debug profile.** Use `cargo build -j 2`
+   and test `target/debug/imgeditor.exe`; reserve `cargo build --release`
+   for packaging or a specifically requested release artifact.
 
 If artifacts were corrupted by an OOM kill, `cargo clean` followed by
 `cargo test -j 2` is the reliable recovery path (done 2026-09-10).
@@ -163,6 +166,19 @@ to make those failures debuggable.
 - Do **not** swallow wgpu errors. If you must catch them, log via
   `log::error!` AND re-emit / re-panic — the dev logger does NOT
   replace wgpu's panic path; it's purely additive.
+
+## RenderWare texture format mismatches
+
+D3D9-platform rasters store RW "888" textures as `D3DFMT_X8R8G8B8`
+(32-bit RGBX) — D3D9 has no practical 24-bit texture format. Treating the
+D3D format word 22 as 24-bit garbles every pixel (progressive 1-byte
+shift). The decoder dispatches on the format word first, falls back to the
+depth byte, and the legacy path falls back to data length. Full case study
+(`dwayne.txd`, 355 affected textures in a modded `gta3.img`), the
+D3DFMT table, and the cross-check discipline live in
+[docs/renderware-format-mismatches.md](docs/renderware-format-mismatches.md).
+When a texture decodes to noise, check the mip data length against
+`w * h * bytes_per_px` before trusting any declared format field.
 
 ## Virtual scroll offset (entry table)
 

@@ -202,6 +202,12 @@ Those are tracked in [`TODO.md`](../TODO.md). They should be implemented only
 with representative fixtures and per-format tests; falling back to an
 approximate PC decode would be worse than reporting an unsupported stream.
 
+## Related docs
+
+- [renderware-format-mismatches.md](renderware-format-mismatches.md) — case
+  study and detection rules for rasters whose declared format disagrees
+  with their stored layout (the D3D9 "888 = X8R8G8B8 32-bit" conversion).
+
 ## References
 
 The implementation was compared against these public format readers and

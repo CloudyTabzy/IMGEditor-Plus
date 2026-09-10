@@ -369,6 +369,28 @@ fn decode_888(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
     Ok(rgba)
 }
 
+/// D3DFMT_X8R8G8B8: 32-bit RGBX. The X byte is undefined; real rasters
+/// fill it with 0xFF, but forcing opaque alpha is the format-correct
+/// reading and keeps "Alpha: No" claims true regardless of the X bytes.
+fn decode_x8r8g8b8(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
+    let pixel_count = checked_pixel_count(w, h)?;
+    let needed = pixel_count * 4;
+    if data.len() < needed {
+        return Err(DecodeError::BufferTooSmall {
+            need: needed,
+            have: data.len(),
+        });
+    }
+    let mut rgba = vec![0u8; pixel_count * 4];
+    for i in 0..pixel_count {
+        rgba[i * 4] = data[i * 4 + 2]; // R
+        rgba[i * 4 + 1] = data[i * 4 + 1]; // G
+        rgba[i * 4 + 2] = data[i * 4]; // B
+        rgba[i * 4 + 3] = 255;
+    }
+    Ok(rgba)
+}
+
 fn decode_555(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, DecodeError> {
     let pixel_count = checked_pixel_count(w, h)?;
     let needed = pixel_count * 2;
@@ -612,7 +634,17 @@ pub fn decode_raster(
             format::FORMAT_4444 => decode_4444(data, width, height),
             format::FORMAT_LUM8 => decode_lum8(data, width, height),
             format::FORMAT_8888 => decode_8888(data, width, height),
-            format::FORMAT_888 => decode_888(data, width, height),
+            format::FORMAT_888 => {
+                // The legacy path has no depth byte to consult. Tight rows
+                // of true 24-bit data are exactly 3 bytes/px; anything with
+                // 4 bytes/px or more is an X8R8G8B8-style 32-bit storage.
+                let pixel_count = checked_pixel_count(width, height)?;
+                if data.len() >= pixel_count * 4 {
+                    decode_x8r8g8b8(data, width, height)
+                } else {
+                    decode_888(data, width, height)
+                }
+            }
             format::FORMAT_555 => decode_555(data, width, height),
             _ => Err(DecodeError::UnsupportedFormat(base)),
         }
@@ -622,7 +654,14 @@ pub fn decode_raster(
 const PLATFORM_D3D8: u32 = 8;
 const PLATFORM_D3D9: u32 = 9;
 const D3D_8888: u32 = 21;
-const D3D_888: u32 = 22;
+/// D3DFMT_R8G8B8: true 24-bit RGB. Practically unrenderable on D3D9
+/// hardware, so almost no raster uses it — see [`D3D_X8R8G8B8`].
+const D3D_R8G8B8: u32 = 20;
+/// D3DFMT_X8R8G8B8: 32-bit RGBX. This is what RenderWare stores for "888"
+/// rasters on the D3D9 platform, because D3D9 has no practical 24-bit
+/// texture format. The X byte is undefined by the format and filled with
+/// 0xFF by real assets; treating it as 24-bit misreads every pixel.
+const D3D_X8R8G8B8: u32 = 22;
 const D3D_565: u32 = 23;
 const D3D_555: u32 = 24;
 const D3D_1555: u32 = 25;
@@ -696,13 +735,20 @@ pub fn decode_native_raster(
     let raster = raster_type_code(raster_format);
     match (platform_id, d3d_format) {
         (PLATFORM_D3D9, D3D_8888) => decode_8888(data, width, height),
-        (PLATFORM_D3D9, D3D_888) => decode_888(data, width, height),
+        (PLATFORM_D3D9, D3D_X8R8G8B8) => decode_x8r8g8b8(data, width, height),
+        (PLATFORM_D3D9, D3D_R8G8B8) => decode_888(data, width, height),
         (PLATFORM_D3D9, D3D_565) => decode_565(data, width, height),
         (PLATFORM_D3D9, D3D_555) => decode_555(data, width, height),
         (PLATFORM_D3D9, D3D_1555) => decode_1555(data, width, height),
         (PLATFORM_D3D9, D3D_4444) => decode_4444(data, width, height),
         (PLATFORM_D3D9, D3D_L8) => decode_lum8(data, width, height),
         (PLATFORM_D3D9, D3D_A8L8) => decode_a8l8(data, width, height),
+        // A raster flagged "888" whose depth byte says 32 is a D3D9-style
+        // conversion stored as X8R8G8B8: honor the pixel width over the
+        // legacy nibble.
+        _ if raster == format::RASTER_TYPE_888 && depth == 32 => {
+            decode_x8r8g8b8(data, width, height)
+        }
         _ => match raster {
             format::RASTER_TYPE_1555 => decode_1555(data, width, height),
             format::RASTER_TYPE_565 => decode_565(data, width, height),
@@ -826,7 +872,8 @@ pub fn native_format_name(
     }
     match d3d_format {
         D3D_8888 => "8888 ARGB",
-        D3D_888 => "888 RGB",
+        D3D_X8R8G8B8 => "X8R8G8B8 (888 RGB, 32bpp)",
+        D3D_R8G8B8 => "R8G8B8 (888 RGB, 24bpp)",
         D3D_565 => "565 RGB",
         D3D_555 => "555 XRGB",
         D3D_1555 => "1555 ARGB",
@@ -972,5 +1019,87 @@ mod tests {
             native_dxt_type(format::FORMAT_1555, PLATFORM_D3D8, 0, 0, 0x12,),
             Some(DxtType::Dxt1)
         );
+    }
+
+    #[test]
+    fn decode_x8r8g8b8_forces_the_undefined_alpha_byte_opaque() {
+        // One pixel, X byte deliberately not 0xFF.
+        let data = [0x8C, 0x64, 0x54, 0x7F];
+        let rgba = decode_x8r8g8b8(&data, 1, 1).unwrap();
+        assert_eq!(rgba, vec![0x54, 0x64, 0x8C, 0xFF]);
+    }
+
+    #[test]
+    fn d3d9_format_22_is_x8r8g8b8_not_24bit_888() {
+        // Regression: dwayne.txd-class rasters (RW raster format 0x600 =
+        // "888", D3D9 format word 22 = D3DFMT_X8R8G8B8, depth 32) store
+        // 4 bytes per pixel. Decoding them as 24-bit 888 garbles every
+        // pixel with a progressive 1-byte misalignment.
+        let data = [
+            0x8C, 0x64, 0x54, 0xFF, // pixel 0: B=8C G=64 R=54
+            0x74, 0x54, 0x44, 0xFF, // pixel 1
+            0x74, 0x54, 0x3C, 0xFF, // pixel 2
+            0x6C, 0x4C, 0x3C, 0xFF, // pixel 3
+        ];
+        let desc = RasterDescriptor {
+            width: 2,
+            height: 2,
+            depth: 32,
+            raster_format: format::FORMAT_888,
+            palette: &[],
+            platform_id: PLATFORM_D3D9,
+            d3d_format: D3D_X8R8G8B8,
+            platform_properties: 0,
+            raster_type: format::RASTER_TYPE_888 as u8,
+        };
+        let rgba = decode_native_raster(&data, &desc).unwrap();
+        assert_eq!(&rgba[..4], &[0x54, 0x64, 0x8C, 0xFF]);
+        assert_eq!(&rgba[4..8], &[0x44, 0x54, 0x74, 0xFF]);
+        assert_eq!(&rgba[8..12], &[0x3C, 0x54, 0x74, 0xFF]);
+        assert_eq!(&rgba[12..16], &[0x3C, 0x4C, 0x6C, 0xFF]);
+    }
+
+    #[test]
+    fn d3d9_format_20_is_true_24bit_r8g8b8() {
+        let data = [0x8C, 0x64, 0x54, 0x74, 0x54, 0x44];
+        let desc = RasterDescriptor {
+            width: 2,
+            height: 1,
+            depth: 24,
+            raster_format: format::FORMAT_888,
+            palette: &[],
+            platform_id: PLATFORM_D3D9,
+            d3d_format: D3D_R8G8B8,
+            platform_properties: 0,
+            raster_type: format::RASTER_TYPE_888 as u8,
+        };
+        let rgba = decode_native_raster(&data, &desc).unwrap();
+        assert_eq!(&rgba[..4], &[0x54, 0x64, 0x8C, 0xFF]);
+        assert_eq!(&rgba[4..8], &[0x44, 0x54, 0x74, 0xFF]);
+    }
+
+    #[test]
+    fn raster_888_with_depth_32_reads_32bpp_even_without_a_d3d_format() {
+        // Mixed-import rasters can carry the legacy "888" nibble with a
+        // stale/zero D3D format word; the depth byte then carries the
+        // truth about the pixel width.
+        let data = [
+            0x8C, 0x64, 0x54, 0x00, // X byte junk must not shift the read
+            0x74, 0x54, 0x44, 0x00,
+        ];
+        let desc = RasterDescriptor {
+            width: 2,
+            height: 1,
+            depth: 32,
+            raster_format: format::FORMAT_888,
+            palette: &[],
+            platform_id: PLATFORM_D3D9,
+            d3d_format: 0,
+            platform_properties: 0,
+            raster_type: format::RASTER_TYPE_888 as u8,
+        };
+        let rgba = decode_native_raster(&data, &desc).unwrap();
+        assert_eq!(&rgba[..4], &[0x54, 0x64, 0x8C, 0xFF]);
+        assert_eq!(&rgba[4..8], &[0x44, 0x54, 0x74, 0xFF]);
     }
 }

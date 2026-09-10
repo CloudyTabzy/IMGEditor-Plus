@@ -28,9 +28,13 @@ const MAX_TEXTURES: u32 = 16_384;
 const MAX_PI_MIPMAPS: u32 = 16;
 
 /// D3D9 format values used by RenderWare's PC native texture stream.
+/// These are `D3DFMT_*` codes, not bit counts: 20 is the only true 24-bit
+/// RGB format and is practically unused on D3D9; RW stores "888" rasters
+/// as X8R8G8B8 (22) because D3D9 has no renderable 24-bit texture format.
 pub mod d3d_format {
     pub const _8888: u32 = 21;
-    pub const _888: u32 = 22;
+    pub const R8G8B8: u32 = 20;
+    pub const X8R8G8B8: u32 = 22;
     pub const _565: u32 = 23;
     pub const _555: u32 = 24;
     pub const _1555: u32 = 25;
