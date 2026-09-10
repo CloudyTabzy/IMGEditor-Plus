@@ -6,10 +6,12 @@ rasters produced by different tools and platforms, so the decoder must
 cross-check every format claim against the fields that cannot lie cheaply:
 the D3D format word, the depth byte, and the mip data length.
 
-## Case study: `dwayne.txd` in a modded `gta3.img`
+## Case study: `dwayne.txd` in an SA-dialect `gta3.img`
 
-Archive: an IMG **v2** (`VER2`) archive named `gta3.img` (GTA SA-style
-container holding GTA III assets, rebuilt by a mod tool — no `.dir` file,
+Archive: an IMG **v2** (`VER2`) archive named `gta3.img` (a GTA SA-style
+container with SA content — entry-name forensics 2026-09-11 settled it:
+SA ped/gang names throughout, every III-unique name absent; not a modified
+retail III despite the folder name — no `.dir` file,
 16,316 entries, D3D9 platform rasters throughout).
 
 `dwayne.txd` previewed as a progressive-misalignment checkerboard: the
@@ -110,7 +112,7 @@ palette-size derivation from the extension bits matches the depth
 
 ## Corpus provenance forensics — what this archive is made of
 
-The unique-color test turns the modded `gta3.img` survey from a format
+The unique-color test turns the SA-dialect `gta3.img` survey from a format
 table into a provenance reconstruction. A lossless re-encode preserves the
 original color count, so **an uncompressed raster with ≤ 256 unique colors
 is provably a decoded palette** — no header claim required.
