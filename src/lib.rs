@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod compat;
 pub mod config;
 pub mod dev_logger;
 pub mod editor;

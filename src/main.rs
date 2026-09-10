@@ -3,20 +3,24 @@
 fn main() -> anyhow::Result<()> {
     imgeditor::dev_logger::init_dev_log();
     install_panic_hook();
-    clean_temp_preview();
-
-    #[cfg(all(windows, not(feature = "bench")))]
-    hide_console_window();
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         match args[1].as_str() {
+            "--scan-corpus" => {
+                ensure_console();
+                return imgeditor::compat::scan::run_cli_args(&args);
+            }
             "-h" | "--help" => {
                 println!("IMGEditor {}", env!("CARGO_PKG_VERSION"));
                 println!("Usage: imgeditor [OPTIONS]");
                 println!();
                 println!("Options:");
-
+                println!("  --scan-corpus <archive.img> [--target gta3|vc|sa|bully] [--colors]");
+                println!("              Profile every texture in an archive: raster classes,");
+                println!("              header anomalies, and per-game compatibility verdicts.");
+                println!("              --colors also decodes pixels to test palette");
+                println!("              reconstructibility (slower).");
                 println!("  -h, --help    Print help");
                 return Ok(());
             }
@@ -24,10 +28,35 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    #[cfg(all(windows, not(feature = "bench")))]
+    hide_console_window();
+
+    clean_temp_preview();
+
     let config = imgeditor::config::Config::load();
     imgeditor::ui::run_app(config).map_err(|err| anyhow::anyhow!("{err}"))?;
     Ok(())
 }
+
+/// The scanner is a console tool, but the GUI binary ships with the
+/// Windows subsystem. Attach to the parent console (or allocate one for
+/// double-click launches) so the report is actually visible.
+#[cfg(all(windows, not(feature = "bench")))]
+fn ensure_console() {
+    unsafe extern "system" {
+        fn GetConsoleWindow() -> *mut std::ffi::c_void;
+        fn AllocConsole() -> i32;
+    }
+
+    unsafe {
+        if GetConsoleWindow().is_null() {
+            AllocConsole();
+        }
+    }
+}
+
+#[cfg(any(not(windows), feature = "bench"))]
+fn ensure_console() {}
 
 #[cfg(all(windows, not(feature = "bench")))]
 fn hide_console_window() {
