@@ -2107,8 +2107,7 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
                     ))),
                     ..Default::default()
                 }),
-        )
-        .into(),
+        ),
     )
 }
 

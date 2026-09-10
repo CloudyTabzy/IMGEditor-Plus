@@ -377,7 +377,7 @@ pub fn import_entry_with_result(
         .ok_or_else(|| anyhow::anyhow!("import path is not valid UTF-8"))?;
 
     let name_capacity = entry_name_capacity(archive.version);
-    if file_name.as_bytes().len() > name_capacity {
+    if file_name.len() > name_capacity {
         let reason = format!("name exceeds {name_capacity} bytes");
         archive.add_log(format!("Skipping {file_name}. {reason}."));
         return Ok(ImportEntryResult::Skipped { reason });

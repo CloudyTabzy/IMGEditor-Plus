@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use compact_str::CompactString;
 use memmap2::Mmap;
@@ -374,12 +375,14 @@ fn inspect_generic(header: &[u8], inspection: &mut EntryInspection) {
 
 pub fn inspect_entry_cached(archive: &mut ArchiveInfo, index: usize) -> Option<EntryInspection> {
     if let Some(cached) = archive.inspection_cache.get(&index) {
-        return Some(cached.clone());
+        return Some((*cached).clone());
     }
 
     let entry = archive.entries.get(index)?.clone();
     let inspection = inspect_entry(archive, &entry);
-    archive.inspection_cache.insert(index, inspection.clone());
+    archive
+        .inspection_cache
+        .insert(index, Arc::new(inspection.clone()));
     Some(inspection)
 }
 
@@ -470,7 +473,26 @@ mod tests {
         archive.entries.push(entry);
 
         let first = inspect_entry_cached(&mut archive, 0).unwrap();
-        let cached = archive.inspection_cache.get(&0).cloned().unwrap();
+        let cached = archive.inspection_cache.get(&0).map(|c| (*c).clone()).unwrap();
         assert_eq!(first.file_name, cached.file_name);
+    }
+
+    #[test]
+    fn inspection_cache_is_byte_bounded() {
+        let archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        // ~4 KiB of summary text per inspection; 16 MiB desktop budget
+        // holds a few thousand of these, not all 8000.
+        for i in 0..8000 {
+            let inspection = EntryInspection {
+                summary: vec![("k".to_string(), "v".repeat(4096))],
+                ..EntryInspection::default()
+            };
+            archive.inspection_cache.insert(i, Arc::new(inspection));
+        }
+        assert!(archive.inspection_cache.len() < 8000, "LRU must evict");
+        assert!(
+            archive.inspection_cache.weight() <= 16 * 1024 * 1024,
+            "weight must stay within the budget"
+        );
     }
 }

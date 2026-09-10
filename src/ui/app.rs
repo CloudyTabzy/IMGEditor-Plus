@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use quick_cache::sync::GuardResult;
 
 use iced::advanced::widget::operation::scrollable::{AbsoluteOffset, scroll_to};
 use iced::keyboard::{Event as KeyboardEvent, Modifiers};
@@ -9,9 +10,8 @@ use iced::widget::{Space, container, pane_grid};
 use iced::{Element, Point, Subscription, Task, Theme};
 use iced_aw::menu::{Item, Menu, MenuBar};
 use iced_fonts::LUCIDE_FONT_BYTES;
-use memmap2::Mmap;
 
-use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn};
+use crate::archive::{ArchiveInfo, ExportStatus, SortColumn};
 use crate::dev_logger;
 use crate::sort::{SortChain, SortDirection, SortKey, SortPriority};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,7 +21,7 @@ use crate::editor::Editor;
 use crate::inspector::scene3d::mesh::SceneTexture;
 use crate::inspector::viewer3d::{self, ViewerEvent};
 use crate::parser::{
-    DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached, inspect_entry_standalone,
+    DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached,
 };
 use crate::tasks::{
     ExportMode, ExportTask, FolderDuplicatePolicy, FolderImportOutcome, FolderImportPlan,
@@ -349,10 +349,6 @@ pub enum Message {
         y: f32,
         max_y: f32,
     },
-    EntryInspected {
-        index: usize,
-        inspection: EntryInspection,
-    },
 
     FilesDropped(PathBuf),
 
@@ -360,7 +356,7 @@ pub enum Message {
     TextureDecoded {
         archive_index: usize,
         index: usize,
-        result: Result<Vec<DecodedTexture>, String>,
+        result: Result<Arc<Vec<DecodedTexture>>, String>,
     },
     TextureSelect(usize),
     TextureExport,
@@ -401,7 +397,11 @@ pub enum Message {
     Viewer3dLoadCompleted {
         archive_index: usize,
         entry_index: usize,
-        result: Result<crate::inspector::scene3d::Scene, String>,
+        /// The archive generation at request time. A completion from an
+        /// older generation (entries mutated while the load ran) must not
+        /// resolve onto the new data at the same entry index.
+        generation: u64,
+        result: Result<Arc<crate::inspector::scene3d::Scene>, String>,
         /// An `IdeMap` freshly built by the load task, so the app can
         /// memoize it per game root. `None` when a cached map was reused or
         /// the archive has no game root.
@@ -701,8 +701,18 @@ pub struct App {
 /// closing an archive cannot re-key stale scenes onto a different archive.
 /// The generation counter folds in entry-list mutations.
 type SceneCacheKey = (String, u64, usize);
-type SceneCache =
-    quick_cache::sync::Cache<SceneCacheKey, Arc<crate::inspector::scene3d::Scene>, SceneCpuWeight>;
+/// The scene cache doubles as the single-flight registry for scene loads:
+/// `get_value_or_guard` hands out a placeholder guard to exactly one loader,
+/// concurrent requesters see a zero-timeout `Timeout`, and the loader
+/// publishes the scene atomically with `guard.insert`. `Arc`-wrapped so a
+/// guard can be claimed inside an async load task.
+type SceneCache = std::sync::Arc<
+    quick_cache::sync::Cache<
+        SceneCacheKey,
+        Arc<crate::inspector::scene3d::Scene>,
+        SceneCpuWeight,
+    >,
+>;
 
 /// Weighs a cached scene by its estimated CPU memory (mesh buffers + decoded
 /// RGBA textures), reusing the same estimate the GPU admission check uses.
@@ -821,13 +831,13 @@ impl App {
             empty_state_phase: 0.0,
             selected_inspector_tab: InspectorTab::Export,
             viewer3d_handle,
-            scene_cache: quick_cache::sync::Cache::with(
+            scene_cache: std::sync::Arc::new(quick_cache::sync::Cache::with(
                 SCENE_CACHE_ITEM_CAPACITY,
                 SCENE_CACHE_WEIGHT_CAPACITY,
                 SceneCpuWeight,
                 Default::default(),
                 Default::default(),
-            ),
+            )),
             ide_maps: HashMap::new(),
         }
     }
@@ -935,71 +945,18 @@ impl App {
             return Task::none();
         };
 
-        // Fast path: serve from the per-archive cache (mmap reads -> instant).
-        struct Miss {
-            entry: EntryInfo,
-            archive_path: Option<PathBuf>,
-            mmap: Option<Arc<Mmap>>,
-            archive_file_name: String,
-        }
-
-        let miss = {
+        // Inspections are served synchronously: the parse reads only an
+        // 8 KiB header slice from the mmap, and the per-archive cache
+        // keeps repeat selections instant. A previous async fallback here
+        // was unreachable (the cached lookup always resolves for a valid
+        // entry index) and has been removed.
+        self.inspected_entry = {
             let archive = self.editor.archives_mut().get_mut(archive_index);
-            let archive = match archive {
-                Some(a) => a,
-                None => {
-                    self.inspected_entry = None;
-                    return Task::none();
-                }
-            };
-            if let Some(inspection) = inspect_entry_cached(archive, entry_index) {
-                self.inspected_entry = Some((entry_index, inspection));
-                return Task::none();
-            }
-            // Cache miss: capture minimal data while the borrow is live.
-            let entry = archive.entries.get(entry_index).cloned();
-            let archive_path = archive.path.clone();
-            let mmap = archive.source_mmap.clone();
-            let archive_file_name = archive.file_name.clone();
-            entry.map(|entry| Miss {
-                entry,
-                archive_path,
-                mmap,
-                archive_file_name,
-            })
+            archive
+                .and_then(|archive| inspect_entry_cached(archive, entry_index))
+                .map(|inspection| (entry_index, inspection))
         };
-
-        let Some(miss) = miss else {
-            self.inspected_entry = None;
-            return Task::none();
-        };
-
-        self.inspected_entry = None;
-
-        Task::perform(
-            async move {
-                tokio::task::spawn_blocking(move || {
-                    let mmap_ref = miss.mmap.as_deref();
-                    inspect_entry_standalone(
-                        &miss.entry,
-                        miss.archive_path.as_deref(),
-                        mmap_ref,
-                        &miss.archive_file_name,
-                    )
-                })
-                .await
-                .ok()
-            },
-            move |maybe| {
-                let Some(inspection) = maybe else {
-                    return Message::Noop;
-                };
-                Message::EntryInspected {
-                    index: entry_index,
-                    inspection,
-                }
-            },
-        )
+        Task::none()
     }
 
     fn display_row_to_entry(&self, display_row: usize) -> Option<usize> {
@@ -1692,6 +1649,23 @@ impl App {
         self.scene_cache.retain(|key, _| key.0 != archive_name);
     }
 
+    /// `Cache::retain` skips in-flight placeholders, so closing the archive
+    /// that owns a load would otherwise let the late decode publish into
+    /// the closed archive's key. Removing the key drops the placeholder;
+    /// the worker's `guard.insert` then fails and discards the stale scene.
+    fn drop_in_flight_placeholder(
+        &self,
+        archive_name: &str,
+        generation: u64,
+        in_flight: Option<(usize, usize)>,
+        closed_index: usize,
+    ) {
+        if let Some(target) = in_flight.filter(|target| target.0 == closed_index) {
+            self.scene_cache
+                .remove(&(archive_name.to_string(), generation, target.1));
+        }
+    }
+
     /// Look up a decoded scene for the selected entry, keyed by the
     /// archive's stable file name + generation so stale entries miss.
     fn cached_scene_for(
@@ -2006,33 +1980,36 @@ impl App {
             | Message::PackCompleted { .. } => Task::none(),
 
             Message::CloseSelectedArchive => {
-                let closed_name = self
-                    .editor
-                    .selected_archive()
+                let closed_index = self.editor.selected_archive();
+                let closing = closed_index
                     .and_then(|index| self.editor.archives().get(index))
-                    .map(|archive| archive.file_name.clone());
+                    .map(|archive| (archive.file_name.clone(), archive.generation()));
+                let in_flight = self.viewer_load.as_ref().map(|load| load.target);
                 self.editor.close_selected_archive();
                 self.active_viewer_entry = None;
                 self.clear_viewer_load();
                 self.viewer3d_handle.clear();
-                if let Some(name) = closed_name {
+                if let (Some(closed_index), Some((name, generation))) = (closed_index, closing) {
                     self.drop_scene_cache_for_archive(&name);
+                    self.drop_in_flight_placeholder(&name, generation, in_flight, closed_index);
                 }
                 let task = self.refresh_inspection();
                 Task::batch(vec![task, Task::none()])
             }
             Message::CloseArchiveTab(index) => {
-                let closed_name = self
+                let closing = self
                     .editor
                     .archives()
                     .get(index)
-                    .map(|archive| archive.file_name.clone());
+                    .map(|archive| (archive.file_name.clone(), archive.generation()));
+                let in_flight = self.viewer_load.as_ref().map(|load| load.target);
                 self.editor.close_archive(index);
                 self.active_viewer_entry = None;
                 self.clear_viewer_load();
                 self.viewer3d_handle.clear();
-                if let Some(name) = closed_name {
+                if let Some((name, generation)) = closing {
                     self.drop_scene_cache_for_archive(&name);
+                    self.drop_in_flight_placeholder(&name, generation, in_flight, index);
                 }
                 let task = self.refresh_inspection();
                 Task::batch(vec![task, Task::none()])
@@ -2954,12 +2931,6 @@ impl App {
                 self.scroll_y = y.clamp(0.0, self.entry_table_max_scroll_y);
                 Task::none()
             }
-            Message::EntryInspected { index, inspection } => {
-                if self.editor.selected_entry() == Some(index) {
-                    self.inspected_entry = Some((index, inspection));
-                }
-                Task::none()
-            }
             Message::HideContextMenu => {
                 self.context_menu = None;
                 Task::none()
@@ -3136,8 +3107,13 @@ impl App {
                 match result {
                     Ok(textures) => {
                         if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
+                            // The decode task already published via its
+                            // placeholder guard; re-insert only if the entry
+                            // was evicted between publish and completion.
+                            if !archive.texture_cache.contains_key(&index) {
+                                archive.texture_cache.insert(index, Arc::clone(&textures));
+                            }
                             let count = textures.len();
-                            archive.texture_cache.insert(index, Arc::new(textures));
                             archive.add_log(format!("Decoded {count} texture preview(s)"));
                             if is_active {
                                 self.toast = Some(format!("Decoded {count} texture(s)"));
@@ -3427,14 +3403,19 @@ impl App {
                 archive_index,
                 entry_index,
             } => {
-                let (entry_clone, archive_path, archive_entries) = {
+                let (entry_clone, archive_path, archive_entries, cache_key) = {
                     let Some(archive) = self.editor.archives().get(archive_index) else {
                         return Task::none();
                     };
                     let Some(entry) = archive.entries.get(entry_index) else {
                         return Task::none();
                     };
-                    (entry.clone(), archive.path.clone(), archive.entries.clone())
+                    (
+                        entry.clone(),
+                        archive.path.clone(),
+                        archive.entries.clone(),
+                        (archive.file_name.clone(), archive.generation(), entry_index),
+                    )
                 };
                 let nif_basename = std::path::Path::new(&entry_clone.file_name)
                     .file_stem()
@@ -3455,15 +3436,27 @@ impl App {
                         None => None,
                     }
                 };
+                let scene_cache = Arc::clone(&self.scene_cache);
                 Task::perform(
                     async move {
-                        tokio::task::spawn_blocking(move || {
-                            let (ide_map, ide_map_new): (
-                                Option<Arc<crate::inspector::texture::IdeMap>>,
-                                Option<BuiltIdeMap>,
-                            ) = match ide_map_hit {
-                                Some((_, map)) => (Some(map), None),
-                                None => match archive_path
+                        // Single-flight: the scene cache hands the
+                        // placeholder guard to exactly one loader per
+                        // (archive, generation, entry). A zero-timeout turn
+                        // into `Timeout` while another load runs and into
+                        // `Value` if the scene landed meanwhile - both skip
+                        // the work. Holding the guard across the build also
+                        // deduplicates the fallback `IdeMap` scan below.
+                        match scene_cache.get_value_or_guard(&cache_key, Some(Duration::ZERO)) {
+                            GuardResult::Value(_) | GuardResult::Timeout => Message::Noop,
+                            GuardResult::Guard(guard) => {
+                                let (result, ide_map_new) =
+                                    tokio::task::spawn_blocking(move || {
+                                        let (ide_map, ide_map_new): (
+                                            Option<Arc<crate::inspector::texture::IdeMap>>,
+                                            Option<BuiltIdeMap>,
+                                        ) = match ide_map_hit {
+                                            Some((_, map)) => (Some(map), None),
+                                            None => match archive_path
                                     .as_deref()
                                     .and_then(|p| p.parent().and_then(|stream| stream.parent()))
                                     .map(|p| p.to_path_buf())
@@ -3561,19 +3554,49 @@ impl App {
                         .await
                         .unwrap_or_else(|e| {
                             (Err(format!("join: {e}")), None)
-                        })
+                        });
+                                match result {
+                                    Ok(scene) => {
+                                        let scene = Arc::new(scene);
+                                        // Publishing through the placeholder
+                                        // keeps the single-flight atomic with
+                                        // the insert. An `Err` means the cache
+                                        // was invalidated mid-load (entries
+                                        // changed), so the scene is stale.
+                                        if guard.insert(Arc::clone(&scene)).is_err() {
+                                            return Message::Noop;
+                                        }
+                                        Message::Viewer3dLoadCompleted {
+                                            archive_index,
+                                            entry_index,
+                                            generation: cache_key.1,
+                                            result: Ok(scene),
+                                            ide_map: ide_map_new,
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // Release the placeholder so a retry
+                                        // can claim the load.
+                                        drop(guard);
+                                        Message::Viewer3dLoadCompleted {
+                                            archive_index,
+                                            entry_index,
+                                            generation: cache_key.1,
+                                            result: Err(e),
+                                            ide_map: ide_map_new,
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     },
-                    move |(result, ide_map_new)| Message::Viewer3dLoadCompleted {
-                        archive_index,
-                        entry_index,
-                        result,
-                        ide_map: ide_map_new,
-                    },
+                    |message| message,
                 )
             }
             Message::Viewer3dLoadCompleted {
                 archive_index,
                 entry_index,
+                generation,
                 result,
                 ide_map,
             } => {
@@ -3581,6 +3604,25 @@ impl App {
                     self.ide_maps.entry(root).or_insert(map);
                 }
                 let completed_target = (archive_index, entry_index);
+                // The scene cache is generation-keyed but not cleared on
+                // entry mutations, so an in-flight load completing after
+                // entries changed must not resolve onto the new data at
+                // the same index.
+                let generation_matches = self
+                    .editor
+                    .archives()
+                    .get(archive_index)
+                    .is_some_and(|archive| archive.generation() == generation);
+                if !generation_matches {
+                    if self
+                        .viewer_load
+                        .as_ref()
+                        .is_some_and(|load| load.target == completed_target)
+                    {
+                        self.clear_viewer_load();
+                    }
+                    return Task::none();
+                }
                 if self.editor.selected_archive() != Some(archive_index)
                     || self.editor.selected_entry() != Some(entry_index)
                 {
@@ -3602,11 +3644,15 @@ impl App {
                             scene.total_triangles(),
                             scene.textured_mesh_count()
                         ));
-                        let scene = Arc::new(scene);
                         if let Some(archive) = self.editor.archives().get(archive_index) {
                             let key =
                                 (archive.file_name.clone(), archive.generation(), entry_index);
-                            self.scene_cache.insert(key, Arc::clone(&scene));
+                            // The load task published via its placeholder
+                            // guard; re-insert only if the entry was evicted
+                            // between publish and completion.
+                            if !self.scene_cache.contains_key(&key) {
+                                self.scene_cache.insert(key, Arc::clone(&scene));
+                            }
                         }
                         self.store_scene_texture_previews(&scene, archive_index, entry_index);
                         self.viewer3d_handle.set_scene(scene);
@@ -3998,78 +4044,116 @@ impl App {
         let Some(archive_index) = self.editor.selected_archive() else {
             return Task::none();
         };
-        let (entry_clone, archive_path, archive_entries) = {
+        let (entry_clone, archive_path, archive_entries, texture_cache) = {
             let Some(archive) = self.editor.archives().get(archive_index) else {
                 return Task::none();
             };
             let Some(entry) = archive.entries.get(entry_index) else {
                 return Task::none();
             };
-            (entry.clone(), archive.path.clone(), archive.entries.clone())
+            (
+                entry.clone(),
+                archive.path.clone(),
+                archive.entries.clone(),
+                Arc::clone(&archive.texture_cache),
+            )
         };
 
         Task::perform(
             async move {
-                let result = tokio::task::spawn_blocking(move || -> Result<Vec<DecodedTexture>, String> {
-                    let data = crate::parser::read_entry_data_from_source(
-                        &entry_clone,
-                        archive_path.as_deref(),
-                    ).map_err(|e| format!("Failed to read entry: {e}"))?;
-                    let extension = std::path::Path::new(entry_clone.file_name.as_str())
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .unwrap_or_default()
-                        .to_ascii_lowercase();
-
-                    match extension.as_str() {
-                        "txd" => {
-                            let txd = crate::parser::txd::parse_txd(&data)
-                                .map_err(|e| format!("TXD parse failed: {e}"))?;
-
-                            let mut decoded = Vec::new();
-                            for tex in &txd.textures {
-                                let rgba = tex
-                                    .decode_rgba()
-                                    .map_err(|e| format!("Texture decode failed: {e}"))?;
-                                decoded.push(DecodedTexture {
-                                    name: tex.diffuse_name.clone(),
-                                    width: tex.width,
-                                    height: tex.height,
-                                    rgba,
-                                    has_alpha: tex.has_alpha_channel(),
-                                    format_name: tex.format_name().to_string(),
-                                    mipmap_count: tex.num_mipmaps as u32,
-                                    handle: std::sync::OnceLock::new(),
-                                });
-                            }
-                            Ok(decoded)
-                        }
-                        "nft" => {
-                            let archive_texture_index =
-                                crate::inspector::texture::ArchiveTextureIndex::from_entries(
-                                    &archive_entries,
+                // Single-flight: the cache hands the placeholder guard to
+                // exactly one decoder. A zero-timeout turn into `Timeout`
+                // when a decode is already running, and `Value` when the
+                // entry was decoded meanwhile — both skip the work.
+                match texture_cache.get_value_or_guard(&entry_index, Some(Duration::ZERO)) {
+                    GuardResult::Value(_) | GuardResult::Timeout => Message::Noop,
+                    GuardResult::Guard(guard) => {
+                        let result = tokio::task::spawn_blocking(
+                            move || -> Result<Vec<DecodedTexture>, String> {
+                                let data = crate::parser::read_entry_data_from_source(
+                                    &entry_clone,
                                     archive_path.as_deref(),
-                                );
-                            crate::inspector::texture::decode_nft_textures_with_resolver(
-                                &data,
-                                |source_path| archive_texture_index.read(source_path),
-                            )
-                        }
-                        _ => Err(format!(
-                            "Texture preview supports TXD and NFT entries; '{}' is not a supported texture container.",
-                            entry_clone.file_name
-                        )),
-                    }
-                })
-                .await;
+                                ).map_err(|e| format!("Failed to read entry: {e}"))?;
+                                let extension = std::path::Path::new(entry_clone.file_name.as_str())
+                                    .extension()
+                                    .and_then(|ext| ext.to_str())
+                                    .unwrap_or_default()
+                                    .to_ascii_lowercase();
 
-                result.unwrap_or_else(|e| Err(format!("task panicked: {e}")))
+                                match extension.as_str() {
+                                    "txd" => {
+                                        let txd = crate::parser::txd::parse_txd(&data)
+                                            .map_err(|e| format!("TXD parse failed: {e}"))?;
+
+                                        let mut decoded = Vec::new();
+                                        for tex in &txd.textures {
+                                            let rgba = tex
+                                                .decode_rgba()
+                                                .map_err(|e| format!("Texture decode failed: {e}"))?;
+                                            decoded.push(DecodedTexture {
+                                                name: tex.diffuse_name.clone(),
+                                                width: tex.width,
+                                                height: tex.height,
+                                                rgba,
+                                                has_alpha: tex.has_alpha_channel(),
+                                                format_name: tex.format_name().to_string(),
+                                                mipmap_count: tex.num_mipmaps as u32,
+                                                handle: std::sync::OnceLock::new(),
+                                            });
+                                        }
+                                        Ok(decoded)
+                                    }
+                                    "nft" => {
+                                        let archive_texture_index =
+                                            crate::inspector::texture::ArchiveTextureIndex::from_entries(
+                                                &archive_entries,
+                                                archive_path.as_deref(),
+                                            );
+                                        crate::inspector::texture::decode_nft_textures_with_resolver(
+                                            &data,
+                                            |source_path| archive_texture_index.read(source_path),
+                                        )
+                                    }
+                                    _ => Err(format!(
+                                        "Texture preview supports TXD and NFT entries; '{}' is not a supported texture container.",
+                                        entry_clone.file_name
+                                    )),
+                                }
+                            },
+                        )
+                        .await;
+
+                        match result.unwrap_or_else(|e| Err(format!("task panicked: {e}"))) {
+                            Ok(textures) => {
+                                let textures = Arc::new(textures);
+                                // Publishing through the placeholder keeps the
+                                // dedup atomic with the insert. An `Err` means
+                                // the cache was invalidated mid-decode (entries
+                                // changed), so the decode is stale - drop it.
+                                if guard.insert(Arc::clone(&textures)).is_err() {
+                                    return Message::Noop;
+                                }
+                                Message::TextureDecoded {
+                                    archive_index,
+                                    index: entry_index,
+                                    result: Ok(textures),
+                                }
+                            }
+                            Err(err) => {
+                                // Dropping the guard releases the placeholder so
+                                // the user can retry the decode.
+                                drop(guard);
+                                Message::TextureDecoded {
+                                    archive_index,
+                                    index: entry_index,
+                                    result: Err(err),
+                                }
+                            }
+                        }
+                    }
+                }
             },
-            move |result| Message::TextureDecoded {
-                archive_index,
-                index: entry_index,
-                result,
-            },
+            |message| message,
         )
     }
 
@@ -4682,6 +4766,7 @@ fn _force_space_use(_: Space) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::archive::EntryInfo;
 
     fn test_app() -> App {
         let mut app = App::new(Config::default());
@@ -5021,6 +5106,7 @@ mod tests {
         let _ = app.update(Message::Viewer3dLoadCompleted {
             archive_index: 0,
             entry_index: 0,
+            generation: 0,
             result: Err("stale completion".to_string()),
             ide_map: None,
         });
@@ -5040,12 +5126,177 @@ mod tests {
         let _ = app.update(Message::Viewer3dLoadCompleted {
             archive_index: 0,
             entry_index: 0,
+            generation: 0,
             result: Err("intentional failure".to_string()),
             ide_map: None,
         });
 
         assert!(app.viewer_load.is_none());
         assert_eq!(app.viewer_load_phase, 0.0);
+    }
+
+    #[test]
+    fn stale_generation_completion_does_not_display_the_old_scene() {
+        use crate::inspector::scene3d::{BaseOrientation, Scene};
+
+        let mut app = test_app_with_entries();
+        app.editor.select_entry(0, false, false);
+        app.begin_viewer_load((0, 0), "first.dff".to_string());
+        // Entries mutated while the load was in flight: generation 0 -> 1.
+        app.editor.archives_mut()[0].invalidate_entry_caches();
+
+        let _ = app.update(Message::Viewer3dLoadCompleted {
+            archive_index: 0,
+            entry_index: 0,
+            generation: 0,
+            result: Ok(Arc::new(Scene::empty(BaseOrientation::Yup))),
+            ide_map: None,
+        });
+
+        // The stale scene must not resolve onto the entry index's new
+        // data: no viewer scene, no cache backfill, and the loading
+        // transition for this target is released.
+        assert!(app.active_viewer_entry.is_none());
+        assert_eq!(app.scene_cache.len(), 0);
+        assert!(app.viewer_load.is_none());
+    }
+
+    #[test]
+    fn closing_an_archive_drops_its_in_flight_placeholder() {
+        let mut app = test_app_with_entries();
+        let archive = &app.editor.archives()[0];
+        let key = (archive.file_name.clone(), archive.generation(), 0);
+        let scene_cache = Arc::clone(&app.scene_cache);
+        let guard = match scene_cache.get_value_or_guard(&key, Some(Duration::ZERO)) {
+            GuardResult::Guard(guard) => guard,
+            _ => panic!("fresh cache must yield a guard"),
+        };
+        app.begin_viewer_load((0, 0), "first.dff".to_string());
+
+        let _ = app.update(Message::CloseSelectedArchive);
+
+        // `retain` skips placeholders; the close must remove the key
+        // explicitly so the late decode is discarded, not published.
+        drop(guard);
+        assert!(matches!(
+            app.scene_cache.get_value_or_guard(&key, Some(Duration::ZERO)),
+            GuardResult::Guard(_)
+        ));
+    }
+
+    #[test]
+    fn placeholder_guard_publishes_atomically_and_blocks_duplicate_claims() {
+        let cache: quick_cache::sync::Cache<u32, Arc<String>, quick_cache::UnitWeighter> =
+            quick_cache::sync::Cache::new(4);
+        match cache.get_value_or_guard(&1, Some(Duration::ZERO)) {
+            GuardResult::Guard(guard) => {
+                // While the guard is alive, a concurrent requester sees
+                // the load in flight instead of claiming a second decode.
+                assert!(matches!(
+                    cache.get_value_or_guard(&1, Some(Duration::ZERO)),
+                    GuardResult::Timeout
+                ));
+                guard
+                    .insert(Arc::new("decoded".to_string()))
+                    .expect("placeholder still in the cache");
+            }
+            _ => panic!("fresh cache must yield a guard"),
+        }
+        let published = cache.get(&1).expect("value must be published");
+        assert_eq!(published.as_str(), "decoded");
+    }
+
+    #[test]
+    fn scene_load_single_flights_duplicate_requests() {
+        let mut app = test_app_with_entries();
+        app.editor.select_entry(0, false, false);
+        let archive = &app.editor.archives()[0];
+        let key = (archive.file_name.clone(), archive.generation(), 0);
+        // Clone the Arc so the guard borrows the local handle, not `app`.
+        let scene_cache = Arc::clone(&app.scene_cache);
+        let guard = match scene_cache.get_value_or_guard(&key, Some(Duration::ZERO)) {
+            GuardResult::Guard(guard) => guard,
+            _ => panic!("fresh cache must yield a guard"),
+        };
+
+        let task = app.update(Message::Viewer3dRequestLoad {
+            archive_index: 0,
+            entry_index: 0,
+        });
+        assert!(
+            matches!(drain_task(task).as_slice(), [Message::Noop]),
+            "a load already in flight must not be duplicated"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn scene_load_failure_releases_the_placeholder_for_retry() {
+        let mut app = test_app_with_entries();
+        app.editor.select_entry(0, false, false);
+        let archive = &app.editor.archives()[0];
+        let key = (archive.file_name.clone(), archive.generation(), 0);
+
+        // The synthetic entry cannot be parsed: the task must report the
+        // failure and release its placeholder so a retry can claim it.
+        let task = app.update(Message::Viewer3dRequestLoad {
+            archive_index: 0,
+            entry_index: 0,
+        });
+        let messages = drain_task(task);
+        assert!(matches!(
+            messages.as_slice(),
+            [Message::Viewer3dLoadCompleted {
+                result: Err(_),
+                ..
+            }]
+        ));
+        assert!(app.scene_cache.get(&key).is_none());
+        assert!(matches!(
+            app.scene_cache.get_value_or_guard(&key, Some(Duration::ZERO)),
+            GuardResult::Guard(_)
+        ));
+    }
+
+    #[test]
+    fn texture_decode_single_flights_duplicate_requests() {
+        let mut app = test_app_with_entries();
+        app.editor.select_entry(0, false, false);
+        let texture_cache = Arc::clone(&app.editor.archives()[0].texture_cache);
+        let guard = match texture_cache.get_value_or_guard(&0, Some(Duration::ZERO)) {
+            GuardResult::Guard(guard) => guard,
+            _ => panic!("fresh cache must yield a guard"),
+        };
+
+        let messages = drain_task(app.decode_texture_entry(0));
+        assert!(
+            matches!(messages.as_slice(), [Message::Noop]),
+            "a decode already in flight must not be duplicated"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn texture_decode_failure_releases_the_placeholder_for_retry() {
+        let mut app = test_app_with_entries();
+        app.editor.select_entry(0, false, false);
+        let texture_cache = Arc::clone(&app.editor.archives()[0].texture_cache);
+
+        // The synthetic entry is not a TXD/NFT container: the decode fails,
+        // which must release the placeholder instead of wedging the entry.
+        let messages = drain_task(app.decode_texture_entry(0));
+        assert!(matches!(
+            messages.as_slice(),
+            [Message::TextureDecoded {
+                result: Err(_),
+                ..
+            }]
+        ));
+        assert!(texture_cache.get(&0).is_none());
+        assert!(matches!(
+            texture_cache.get_value_or_guard(&0, Some(Duration::ZERO)),
+            GuardResult::Guard(_)
+        ));
     }
 
     #[test]

@@ -1,5 +1,8 @@
 ## Unreleased
 
+- **Single-flight decodes:** rapid repeated loads of the same entry (3D model, TXD/NFT textures) can no longer spawn duplicate background decodes. Each decode is claimed through a `quick_cache` placeholder guard, the result is published atomically on completion, failures release the slot for retry, and results decoded after an entry-list change are discarded instead of polluting the cache.
+- **Bounded inspection cache:** inspector summaries (header hex, format details, TXD texture lists) now live in a byte-budgeted LRU (16 MiB desktop / 4 MiB mobile) instead of an unbounded map.
+
 - **Bully Xbox 360 IMG v1:** added structural auto-detection for big-endian `.dir`/`.img` pairs, 24-byte filename preservation, export/import/rename support, and big-endian round-trip saves. The optional XMemDecompress image variant is documented as a future task.
 - **Firefox-style middle-click autoscroll:** the entry table now uses Iced's native `Scrollable::auto_scroll` controller, which keeps the table's scroll state and its circular up/down anchor indicator together. It no longer replaces the table's widget tree on MMB, preventing the former snap-to-top failure. The one-time toast confirms activation; clicking, middle-clicking, right-clicking, scrolling, or pressing a key stops in place.
 - **Autoscroll momentum:** `View → Autoscroll momentum` enables a short, physically damped glide after fast scrolling returns to the native neutral zone. It samples speed once, caps both initial velocity and total travel, and cancels instantly on new input or renewed cursor movement—no speed multiplier can accumulate while held at an edge.

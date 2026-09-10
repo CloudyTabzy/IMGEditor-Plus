@@ -194,15 +194,46 @@ Everything lives in `src/ui/app.rs` unless noted:
   `SCENE_CACHE_WEIGHT_CAPACITY` (256 MiB desktop, 64 MiB mobile via `cfg`).
   Cache hits restore the scene synchronously (`In-app 3D viewer ready
   (cached)` in the archive log); misses take the async load path.
+- **The caches double as single-flight registries.** Load tasks claim a
+  `get_value_or_guard(&key, Some(Duration::ZERO))` placeholder guard on the
+  value cache itself: `Value` = already decoded (skip), `Timeout` = another
+  task is decoding (skip), `Guard` = we are the loader; the guard is held
+  across the decode and the result is published with `guard.insert(...)`,
+  which is atomic with the dedup. Dropping the guard without inserting
+  (failure) releases the slot for retry. `guard.insert` returning `Err`
+  means the cache was invalidated mid-decode (entries changed) — the task
+  must drop the stale result silently (send `Message::Noop`). Applies to
+  scene loads, texture decodes, and (via the plain sync path) inspections.
+  Handlers no longer insert on success; they only backfill if
+  `contains_key` says the entry was evicted in the completion window.
+- **Two placeholder caveats drive app-level invariants:** (1) the scene
+  cache is *not* cleared by `invalidate_entry_caches` (it relies on
+  generation keying), so a placeholder survives entry mutations —
+  `Viewer3dLoadCompleted` therefore carries the request-time `generation`
+  and the handler discards stale completions before they can resolve onto
+  new data at the same index. (2) `Cache::retain` *skips* placeholders, so
+  closing an archive calls `App::drop_in_flight_placeholder` to remove the
+  in-flight key explicitly (the worker's `guard.insert` then fails and
+  discards the scene). `Cache::clear` (used by texture/inspection
+  invalidation) drains placeholders, so no extra handling is needed there.
+- Inspections are served **synchronously** (`refresh_inspection` →
+  `inspect_entry_cached`): the parse reads an 8 KiB header slice, so no
+  async fallback exists and no single-flight is needed.
+- `ArchiveInfo::inspection_cache` — same `quick_cache` treatment, weighted
+  by the inspection's string payload (`InspectionWeight`), 16 MiB desktop /
+  4 MiB mobile. Served synchronously via `inspect_entry_cached`.
 - `ArchiveInfo::generation` (src/archive.rs) — bumped by
   `invalidate_entry_caches()` on every entry add/remove/rename/import;
-  folding it into the key makes stale scenes miss. That hook also clears
-  `inspection_cache`/`texture_cache`.
+  folding it into the scene key makes stale scenes miss. That hook also
+  clears `inspection_cache`/`texture_cache` (and any in-flight
+  placeholders, whose later `guard.insert` then fails harmlessly).
 - Closing an archive evicts its scenes via
-  `App::drop_scene_cache_for_archive` (cache `retain`), since the cache
-  is app-global, not per-archive.
+  `App::drop_scene_cache_for_archive` (cache `retain`), since the cache is
+  app-global, not per-archive.
 - The per-game-root `IdeMap` is memoized in `App::ide_maps`; the first 3D
-  load per game root builds it, later loads reuse it.
+  load per game root builds it, later loads reuse it. Holding the scene
+  placeholder guard across the load also deduplicates concurrent
+  `IdeMap::build` scans for the same root.
 - `ArchiveInfo::texture_cache` (src/archive.rs) — same `quick_cache`
   treatment as the scene cache, weighted by decoded RGBA bytes (128 MiB
   desktop / 32 MiB mobile). Values are `Arc<Vec<DecodedTexture>>` because

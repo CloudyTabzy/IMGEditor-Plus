@@ -290,7 +290,7 @@ fn validate_v1_directory(
     img_len: u64,
     byte_order: V1ByteOrder,
 ) -> std::result::Result<(), String> {
-    if dir_bytes.len() % crate::parser::ENTRY_SIZE != 0 {
+    if !dir_bytes.len().is_multiple_of(crate::parser::ENTRY_SIZE) {
         return Err("directory size is not a multiple of 32 bytes".to_string());
     }
 

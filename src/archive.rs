@@ -23,6 +23,37 @@ const TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY: u64 = 32 * 1024 * 1024;
 const TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY: u64 = 128 * 1024 * 1024;
 const TEXTURE_PREVIEW_CACHE_ITEM_CAPACITY: usize = 256;
 
+/// Soft memory budget for the entry-inspection cache, weighted by the
+/// estimated string payload of each inspection. Inspections are small
+/// (header hex, summaries, TXD texture lists), so the ceiling is far
+/// lower than the texture cache.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+const INSPECTION_CACHE_WEIGHT_CAPACITY: u64 = 4 * 1024 * 1024;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const INSPECTION_CACHE_WEIGHT_CAPACITY: u64 = 16 * 1024 * 1024;
+const INSPECTION_CACHE_ITEM_CAPACITY: usize = 4096;
+
+/// Weighs a cached entry inspection by its estimated string payload.
+#[derive(Clone)]
+pub struct InspectionWeight;
+
+impl quick_cache::Weighter<usize, Arc<EntryInspection>> for InspectionWeight {
+    fn weight(&self, _key: &usize, val: &Arc<EntryInspection>) -> u64 {
+        let text_bytes = val
+            .summary
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum::<usize>();
+        let total = val.file_name.len()
+            + val.file_type.len()
+            + val.source.len()
+            + val.preview_hex.as_deref().map(str::len).unwrap_or(0)
+            + val.txd_textures.iter().map(String::len).sum::<usize>()
+            + text_bytes;
+        (total as u64).max(1)
+    }
+}
+
 /// Weighs a cached texture preview list by its decoded RGBA byte size.
 #[derive(Clone)]
 pub struct TexturePreviewWeight;
@@ -281,7 +312,12 @@ pub struct ArchiveInfo {
     /// `Config::default_sort_chain` when the archive is opened, so
     /// archives don't bleed sort state into each other.
     pub sort_chain: SortChain,
-    pub inspection_cache: std::collections::HashMap<usize, EntryInspection>,
+    /// Parsed inspector summaries keyed by archive entry index.
+    /// Byte-budgeted LRU (see [`INSPECTION_CACHE_WEIGHT_CAPACITY`]); values
+    /// are `Arc`-shared so cache hits clone small strings, not the summary
+    /// blob. Cleared by `invalidate_entry_caches`.
+    pub inspection_cache:
+        Arc<quick_cache::sync::Cache<usize, Arc<EntryInspection>, InspectionWeight>>,
     /// Decoded texture previews keyed by archive entry index. The cache is
     /// shared by RenderWare TXD dictionaries, Bully NFT catalogs, and NIF
     /// scenes whose companion textures were resolved by the 3D viewer.
@@ -328,7 +364,13 @@ impl ArchiveInfo {
             last_export_folder: None,
             sort: SortState::default(),
             sort_chain: SortChain::default(),
-            inspection_cache: std::collections::HashMap::new(),
+            inspection_cache: Arc::new(quick_cache::sync::Cache::with(
+                INSPECTION_CACHE_ITEM_CAPACITY,
+                INSPECTION_CACHE_WEIGHT_CAPACITY,
+                InspectionWeight,
+                Default::default(),
+                Default::default(),
+            )),
             texture_cache: Arc::new(quick_cache::sync::Cache::with(
                 TEXTURE_PREVIEW_CACHE_ITEM_CAPACITY,
                 TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY,
@@ -373,7 +415,13 @@ impl ArchiveInfo {
             last_export_folder: None,
             sort: SortState::default(),
             sort_chain: SortChain::default(),
-            inspection_cache: std::collections::HashMap::new(),
+            inspection_cache: Arc::new(quick_cache::sync::Cache::with(
+                INSPECTION_CACHE_ITEM_CAPACITY,
+                INSPECTION_CACHE_WEIGHT_CAPACITY,
+                InspectionWeight,
+                Default::default(),
+                Default::default(),
+            )),
             texture_cache: Arc::new(quick_cache::sync::Cache::with(
                 TEXTURE_PREVIEW_CACHE_ITEM_CAPACITY,
                 TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY,
