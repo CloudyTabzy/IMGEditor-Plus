@@ -46,6 +46,44 @@ Rules when building or testing here:
 If artifacts were corrupted by an OOM kill, `cargo clean` followed by
 `cargo test -j 2` is the reliable recovery path (done 2026-09-10).
 
+## Know the framework before building on it (IMPORTANT)
+
+Before implementing *any* non-trivial behavior, do a genuine research pass
+on the framework: check the crate's docs, changelog/release notes, and —
+critically — **read the widget/module source end to end**, not just the
+section that answers the first question you had. A framework feature
+often lives far from the part you're inspecting.
+
+Canonical failure (2026-09-10): to add middle-click autoscroll, an agent
+verified only how `Scrollable` notifies scroll changes, then hand-rolled
+a ~590-line parallel system (sticky state, backdrop, momentum, custom
+cursor) on top of `mouse_area` interception — while **Iced 0.14's
+`Scrollable` already shipped native middle-click autoscroll**, including
+the origin-anchored cursor icon (see `Interaction::AutoScrolling` and
+`AutoScrollIcon` in iced_widget's scrollable.rs). The hand-rolled
+interception actively fought the widget (swallowed MMB presses it needed)
+and produced a chain of bugs; the native-based replacement is ~30 lines
+of state mirroring and net-deleted ~440 lines.
+
+Rules:
+
+1. Before adding infrastructure that duplicates behavior near a widget,
+   **assume the widget may already do it** — search its full interaction
+   code (`update`, `draw`, overlay, `Interaction` enum) for it.
+2. Search the crate changelog / release notes for the feature area
+   (iced 0.14 alone added autoscroll, and other headline behaviors).
+3. If you find yourself intercepting and re-dispatching events the
+   framework widget also consumes, stop — you are likely fighting it.
+   Prefer mirroring its state (`Status::Captured` observation) over
+   capturing events out from under it.
+4. Prefer the smallest layer on top of framework behavior over a
+   parallel implementation, even when the parallel one seems quicker to
+   prototype. Prototype time is not delivered time — bug-fixing a
+   fighting architecture cost several full iterations here.
+5. When user feedback repeatedly contradicts your implementation, stop
+   iterating on guesses; ask one clarifying question before the next
+   build.
+
 ## Dependency decisions (do not re-add without reading this)
 
 These choices were audited deliberately; re-adding or "upgrading" them
@@ -130,16 +168,20 @@ to make those failures debuggable.
 
 `App.scroll_y` is a **virtual offset maintained by the app**, not a live
 readout of the scrollable. Iced 0.14's `Scrollable` publishes `on_scroll`
-only for interactive scrolling (wheel, scrollbar drag, touch) —
-**operation-driven `scroll_to` calls never fire it**. Consequences:
+only for interactive scrolling (wheel, scrollbar drag, native autoscroll)
+— **operation-driven `scroll_to` calls never fire it**. Consequences:
 
 - Every code path that calls `scroll_to("entry_table", …)` MUST also
-  update `self.scroll_y` to the target (sticky tick, drag mode,
-  prediction commit, cancel-restore). Rebasing on a stale
-  `self.scroll_y` snaps the view back to the last wheel position.
-- Sticky autoscroll integrates its own running offset
-  (`AutoScroll::sticky_scroll_y`) and mirrors it into `self.scroll_y`;
-  wheel deltas arrive through `Message::ScrollOffsetChanged` and fold in.
+  update `self.scroll_y` to the target. Currently two such sites exist:
+  the autoscroll momentum tail (`advance_autoscroll_momentum`) and the
+  search-prediction commit (scroll to top). Rebasing on a stale
+  `self.scroll_y` snaps the view back to the last interactive position.
+- Interactive scrolling reports the true offset through
+  `Message::ScrollOffsetChanged`, which keeps `scroll_y` in sync
+  (src/ui/app.rs, `Message::ScrollOffsetChanged` arm).
+- Middle-click autoscroll itself is **native** Iced behavior (the
+  `Scrollable` widget runs it); the app only mirrors its state — see
+  "Know the framework before building on it" before touching this area.
 
 ## 3D scene cache (quick_cache) + telemetry
 
