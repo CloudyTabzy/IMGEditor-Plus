@@ -1582,17 +1582,20 @@ pub fn build(app: &App) -> Element<'_, Message> {
                     style
                 });
             // Accent bar on the left of the active tab
-            if is_selected {
-                tab_rows.push(
-                    Row::new()
-                        .push(w::accent_bar(design.accent(), 32.0))
-                        .push(tab)
-                        .align_y(Alignment::Center)
-                        .into(),
-                );
+            let tab: Element<'_, Message> = if is_selected {
+                Row::new()
+                    .push(w::accent_bar(design.accent(), 32.0))
+                    .push(tab)
+                    .align_y(Alignment::Center)
+                    .into()
             } else {
-                tab_rows.push(tab.into());
-            }
+                tab.into()
+            };
+            tab_rows.push(
+                mouse_area(tab)
+                    .on_middle_press(Message::CloseArchiveTab(index))
+                    .into(),
+            );
         }
         let row = Row::with_children(tab_rows).spacing(4).padding(4);
         let row: Element<'_, Message> =

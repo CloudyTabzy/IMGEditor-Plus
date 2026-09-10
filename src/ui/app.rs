@@ -5185,6 +5185,19 @@ mod tests {
     }
 
     #[test]
+    fn closing_archive_by_tab_index_repairs_selection() {
+        let mut app = test_app();
+        app.editor.new_archive();
+        app.editor.new_archive();
+        app.editor.select_archive(1);
+
+        let _ = app.update(Message::CloseArchiveTab(0));
+
+        assert_eq!(app.editor.archives().len(), 1);
+        assert_eq!(app.editor.selected_archive(), Some(0));
+    }
+
+    #[test]
     fn placeholder_guard_publishes_atomically_and_blocks_duplicate_claims() {
         let cache: quick_cache::sync::Cache<u32, Arc<String>, quick_cache::UnitWeighter> =
             quick_cache::sync::Cache::new(4);
