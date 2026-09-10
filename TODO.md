@@ -1,6 +1,6 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v3.16.0** (PC RenderWare DFF/TXD preview support, safer raster decoding, smoother 3D camera zoom/panning, synchronized texture overlays, and continued archive/UI refinements).
+Last shipped: **v4.1.0** (search prediction, themed UI refinement, and continued archive/3D viewer improvements).
 
 Next phase: **validating and hardening GTA III/VC/SA IMG and RenderWare support** before
 considering other container families.
@@ -13,6 +13,9 @@ On master (post-v3.16.0, unreleased):
 - Renderer trims: camera UBO written without a per-frame heap copy; depth attachments discarded instead of stored.
 - MSAA 4x scene rendering per the Phase 17 plan: the scene pass renders into 4x multisampled color + depth targets and resolves into the 1x scene color texture; the headless renderer stays at 1x for deterministic pixel-diff tests.
 - Scalability guard: `validate_scene_for_device` rejects scenes whose largest single mesh buffer exceeds `limits.max_buffer_size` (256 MiB on downlevel devices) with a clear error instead of a raw wgpu validation failure at upload time.
+- Xbox 360 Bully IMG v1 support: auto-detected big-endian `.dir`/`.img` pairs,
+  validated sector ranges, 24-byte filename preservation, and big-endian
+  round-trip saves. See [`docs/gta-img-reference-audit.md`](docs/gta-img-reference-audit.md).
 
 ---
 
@@ -48,9 +51,15 @@ San Andreas archives before we expand the supported container scope.
 
 - [ ] Preserve IMG v2 `streaming_size` and `archive_size` as separate fields;
   expose a checked effective size for reads and preserve both words on save.
-- [ ] Validate archive structure before mapping: complete v1 records, v2 header
-  and table arithmetic, checked sector-to-byte conversion, and every entry range
-  against the image length.
+- [x] Validate IMG v1 structure before mapping: complete records, checked
+  sector-to-byte conversion, printable names, non-overlapping ranges, and every
+  entry range against the image length.
+- [ ] Complete IMG v2 open-time validation: header/table arithmetic, checked
+  sector-to-byte conversion, and every entry range against the image length.
+- [x] Add the Bully Xbox 360 big-endian IMG v1 variant with automatic format
+  detection and format-aware save/import/rename behavior.
+- [ ] Add XMemDecompress support for the compressed Xbox 360/Wii image variant
+  identified by `0x0FF512ED` (the supplied `Scripts.img` is uncompressed).
 - [ ] Canonicalize v1 input supplied as either `.img` or `.dir`; map the sibling
   `.img` as data, include `.dir` in open/drop filters, and test both entry paths.
 - [ ] Make extraction path-safe by rejecting absolute paths, separators, and

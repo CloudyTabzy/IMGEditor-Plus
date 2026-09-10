@@ -7,38 +7,65 @@ use std::sync::Arc;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{
-    ImgParser, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE, decode_entry_name, export_entry_to_file,
-    import_entry,
+    ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE, decode_entry_name,
+    export_entry_to_file, import_entry,
 };
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PcV1Parser;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum V1ByteOrder {
+    Little,
+    Big,
+}
+
+impl V1ByteOrder {
+    fn read_u32(self, bytes: &[u8]) -> u32 {
+        let bytes: [u8; 4] = bytes.try_into().expect("four-byte IMG v1 field");
+        match self {
+            Self::Little => u32::from_le_bytes(bytes),
+            Self::Big => u32::from_be_bytes(bytes),
+        }
+    }
+
+    fn write_u32(self, value: u32) -> [u8; 4] {
+        match self {
+            Self::Little => value.to_le_bytes(),
+            Self::Big => value.to_be_bytes(),
+        }
+    }
+}
+
 impl PcV1Parser {
-    fn dir_path(img_path: &Path) -> PathBuf {
+    pub(crate) fn dir_path(img_path: &Path) -> PathBuf {
         let mut path = img_path.to_path_buf();
         path.set_extension("dir");
         path
     }
-}
 
-impl ImgParser for PcV1Parser {
-    fn open(&self, archive: &mut ArchiveInfo) -> Result<()> {
+    pub(crate) fn open_with_endian(
+        &self,
+        archive: &mut ArchiveInfo,
+        byte_order: V1ByteOrder,
+    ) -> Result<()> {
         let Some(path) = archive.path.as_ref() else {
             anyhow::bail!("new archives do not have a source path");
         };
         let dir_path = Self::dir_path(path);
         let dir_bytes = std::fs::read(&dir_path)
             .with_context(|| format!("failed to read IMG v1 directory: {}", dir_path.display()))?;
+        let img_len = std::fs::metadata(path)
+            .with_context(|| format!("failed to stat IMG v1 archive: {}", path.display()))?
+            .len();
 
-        if dir_bytes.len() % crate::parser::ENTRY_SIZE != 0 {
-            anyhow::bail!("invalid IMG v1 directory size");
-        }
+        validate_v1_directory(&dir_bytes, img_len, byte_order)
+            .map_err(|reason| anyhow::anyhow!("invalid IMG v1 directory: {reason}"))?;
 
         archive.entries.clear();
         for chunk in dir_bytes.chunks_exact(crate::parser::ENTRY_SIZE) {
-            let offset = u32::from_le_bytes(chunk[0..4].try_into().expect("4 bytes"));
-            let sector = u32::from_le_bytes(chunk[4..8].try_into().expect("4 bytes"));
+            let offset = byte_order.read_u32(&chunk[0..4]);
+            let sector = byte_order.read_u32(&chunk[4..8]);
 
             let mut raw = [0u8; MAX_ENTRY_NAME_BYTES];
             raw.copy_from_slice(&chunk[8..8 + MAX_ENTRY_NAME_BYTES]);
@@ -55,6 +82,24 @@ impl ImgParser for PcV1Parser {
 
         archive.add_log("Opened archive".to_string());
         Ok(())
+    }
+
+    pub(crate) fn is_valid_with_endian(&self, path: &Path, byte_order: V1ByteOrder) -> bool {
+        let Ok(img_len) = std::fs::metadata(path).map(|metadata| metadata.len()) else {
+            return false;
+        };
+        let dir_path = Self::dir_path(path);
+        let Ok(dir_bytes) = std::fs::read(dir_path) else {
+            return false;
+        };
+
+        validate_v1_directory(&dir_bytes, img_len, byte_order).is_ok()
+    }
+}
+
+impl ImgParser for PcV1Parser {
+    fn open(&self, archive: &mut ArchiveInfo) -> Result<()> {
+        self.open_with_endian(archive, V1ByteOrder::Little)
     }
 
     fn export_entry(
@@ -76,6 +121,33 @@ impl ImgParser for PcV1Parser {
         output_path: &Path,
         remove_existing: bool,
     ) -> Result<()> {
+        self.save_with_endian(
+            archive,
+            output_path,
+            remove_existing,
+            V1ByteOrder::Little,
+            ImgVersion::One,
+        )
+    }
+
+    fn version_text(&self) -> &'static str {
+        "PC v1"
+    }
+
+    fn is_valid(&self, path: &Path) -> bool {
+        self.is_valid_with_endian(path, V1ByteOrder::Little)
+    }
+}
+
+impl PcV1Parser {
+    pub(crate) fn save_with_endian(
+        &self,
+        archive: &mut ArchiveInfo,
+        output_path: &Path,
+        remove_existing: bool,
+        byte_order: V1ByteOrder,
+        version: ImgVersion,
+    ) -> Result<()> {
         let source_path = archive.path.clone();
         let dir_path = Self::dir_path(output_path);
 
@@ -87,7 +159,14 @@ impl ImgParser for PcV1Parser {
         temp_dir.push(".temp");
         let temp_dir = PathBuf::from(temp_dir);
 
-        let result = self.save_internal(archive, output_path, &temp_img, &temp_dir, &source_path);
+        let result = self.save_internal(
+            archive,
+            output_path,
+            &temp_img,
+            &temp_dir,
+            &source_path,
+            byte_order,
+        );
 
         if result.is_err() {
             let _ = std::fs::remove_file(&temp_img);
@@ -117,7 +196,7 @@ impl ImgParser for PcV1Parser {
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Untitled".to_string());
-        archive.version = crate::parser::ImgVersion::One;
+        archive.version = version;
         let img_file =
             std::fs::File::open(output_path).context("failed to reopen packed IMG v1 archive")?;
         archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
@@ -125,16 +204,6 @@ impl ImgParser for PcV1Parser {
         Ok(())
     }
 
-    fn version_text(&self) -> &'static str {
-        "PC v1"
-    }
-
-    fn is_valid(&self, path: &Path) -> bool {
-        path.exists() && Self::dir_path(path).exists()
-    }
-}
-
-impl PcV1Parser {
     fn save_internal(
         &self,
         archive: &mut ArchiveInfo,
@@ -142,6 +211,7 @@ impl PcV1Parser {
         temp_img: &Path,
         temp_dir: &Path,
         _source_path: &Option<PathBuf>,
+        byte_order: V1ByteOrder,
     ) -> Result<()> {
         const WRITE_BUF: usize = 1024 * 1024;
 
@@ -179,8 +249,8 @@ impl PcV1Parser {
                 anyhow::bail!("Rebuild cancelled");
             }
 
-            dir_out.write_all(&((offset / SECTOR_SIZE) as u32).to_le_bytes())?;
-            dir_out.write_all(&((size / SECTOR_SIZE) as u32).to_le_bytes())?;
+            dir_out.write_all(&byte_order.write_u32((offset / SECTOR_SIZE) as u32))?;
+            dir_out.write_all(&byte_order.write_u32((size / SECTOR_SIZE) as u32))?;
             dir_out.write_all(&entry.file_name_raw)?;
 
             crate::parser::stream_entry_data(
@@ -213,6 +283,76 @@ impl PcV1Parser {
         archive.progress.set_percentage(1.0);
         Ok(())
     }
+}
+
+fn validate_v1_directory(
+    dir_bytes: &[u8],
+    img_len: u64,
+    byte_order: V1ByteOrder,
+) -> std::result::Result<(), String> {
+    if dir_bytes.len() % crate::parser::ENTRY_SIZE != 0 {
+        return Err("directory size is not a multiple of 32 bytes".to_string());
+    }
+
+    let mut ranges = Vec::with_capacity(dir_bytes.len() / crate::parser::ENTRY_SIZE);
+    let mut named_entries = 0usize;
+
+    for (index, chunk) in dir_bytes
+        .chunks_exact(crate::parser::ENTRY_SIZE)
+        .enumerate()
+    {
+        let offset = byte_order.read_u32(&chunk[0..4]);
+        let sector = byte_order.read_u32(&chunk[4..8]);
+        let raw_name = &chunk[8..8 + MAX_ENTRY_NAME_BYTES];
+        let name_len = raw_name
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(raw_name.len());
+        let name = &raw_name[..name_len];
+
+        if !name.is_empty() {
+            named_entries += 1;
+            if name
+                .iter()
+                .any(|&byte| !(0x20..=0x7E).contains(&byte))
+            {
+                return Err(format!("entry {index} has a non-printable filename"));
+            }
+        }
+
+        let Some(end_sector) = offset.checked_add(sector) else {
+            return Err(format!("entry {index} sector range overflows"));
+        };
+        let Some(end_byte) = u64::from(end_sector).checked_mul(SECTOR_SIZE) else {
+            return Err(format!("entry {index} byte range overflows"));
+        };
+        if end_byte > img_len {
+            return Err(format!(
+                "entry {index} ends at byte {end_byte}, beyond IMG size {img_len}"
+            ));
+        }
+
+        if sector > 0 {
+            ranges.push((offset, end_sector, index));
+        }
+    }
+
+    if !dir_bytes.is_empty() && named_entries == 0 {
+        return Err("directory contains no named entries".to_string());
+    }
+
+    ranges.sort_unstable_by_key(|&(start, _, _)| start);
+    for pair in ranges.windows(2) {
+        let (_, previous_end, previous_index) = pair[0];
+        let (next_start, _, next_index) = pair[1];
+        if next_start < previous_end {
+            return Err(format!(
+                "entries {previous_index} and {next_index} overlap"
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

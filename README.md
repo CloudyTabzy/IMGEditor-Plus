@@ -31,6 +31,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 
 ### 📁 Archive Management
 - ✅ **IMG v1** — GTA III, Vice City, Bully Scholarship Edition
+- ✅ **Bully Xbox 360 IMG v1** — auto-detected big-endian `.dir`/`.img` pairs with validated sector ranges and round-trip saves
 - ✅ **IMG v2** — GTA San Andreas
 - ✅ **Create / Open / Save / Save As** with version selection
 - ✅ **Import files** — single, multiple, or replace mode

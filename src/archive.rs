@@ -10,7 +10,7 @@ use smallvec::SmallVec;
 
 use crate::parser::{
     DecodedTexture, EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE,
-    encode_entry_name, sector_rounded_size,
+    encode_entry_name, encode_entry_name_with_limit, entry_name_capacity, sector_rounded_size,
 };
 
 /// Soft memory budget for the decoded texture-preview cache, weighted by
@@ -200,9 +200,24 @@ pub struct EntryInfo {
 
 impl EntryInfo {
     pub fn new(file_name: impl Into<CompactString>) -> Self {
+        Self::new_with_name_capacity(file_name, crate::parser::MAX_ENTRY_NAME_LEN)
+    }
+
+    pub fn new_for_version(file_name: impl Into<CompactString>, version: ImgVersion) -> Self {
+        Self::new_with_name_capacity(file_name, entry_name_capacity(version))
+    }
+
+    fn new_with_name_capacity(
+        file_name: impl Into<CompactString>,
+        name_capacity: usize,
+    ) -> Self {
         let file_name: CompactString = file_name.into();
         let file_name_lower = CompactString::new(file_name.to_lowercase());
-        let file_name_raw = encode_entry_name(&file_name);
+        let file_name_raw = if name_capacity == crate::parser::MAX_ENTRY_NAME_LEN {
+            encode_entry_name(&file_name)
+        } else {
+            encode_entry_name_with_limit(&file_name, name_capacity)
+        };
         let file_type = infer_file_type(&file_name);
         let file_ext = CompactString::new(
             std::path::Path::new(&file_name)
@@ -375,6 +390,7 @@ impl ArchiveInfo {
         match version {
             ImgVersion::One => crate::parser::PcV1Parser.open(&mut archive)?,
             ImgVersion::Two => crate::parser::PcV2Parser.open(&mut archive)?,
+            ImgVersion::Xbox360 => crate::parser::Xbox360Parser.open(&mut archive)?,
             ImgVersion::Unknown => crate::parser::UnknownParser.open(&mut archive)?,
         }
 
@@ -635,7 +651,7 @@ impl ArchiveInfo {
         })?;
 
         let header_bytes: u64 = match self.version {
-            ImgVersion::One => 0,
+            ImgVersion::One | ImgVersion::Xbox360 => 0,
             ImgVersion::Two if self.entries.is_empty() => 8,
             ImgVersion::Two => 0x300000,
             ImgVersion::Unknown => anyhow::bail!("cannot pack unknown archive format"),

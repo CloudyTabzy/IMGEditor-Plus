@@ -1,7 +1,7 @@
 # Independent `gta-img` reference audit
 
-Status: reference notes for future IMGEditor Plus work
-Checked: 2026-09-09
+Status: reference notes and implementation record for IMGEditor Plus
+Checked: 2026-09-10
 Reference: `https://github.com/connorhaigh/gta-img`
 Snapshot: commit `5f63eeb441c73a6bf99190b1c966bff035578bf4` (`v0.2.0`)
 Local checkout: `C:\Dev\IMGEditor-master\gta-img`
@@ -133,6 +133,36 @@ The reference reads a `.dir` stream until EOF. Each record is 32 bytes:
 The image source begins at `offset * 2048`, and the bounded entry length is
 `length * 2048`. The v1 writer starts at sector zero and emits directory records
 in the same order as the payloads.
+
+### Bully Xbox 360 IMG v1 (implemented)
+
+Bully Scholarship Edition's Xbox 360 archive pair uses the same physical v1
+record shape but stores the two directory integers in **big-endian** order:
+
+```text
+Scripts.dir   32-byte records to EOF
+Scripts.img   sector-aligned payload data
+```
+
+The local sample at `C:\Dev\IMGEditor-master\Bully script img xbox 360`
+contains 528 `.lur` records. Its directory is 16,896 bytes and its image is
+5,281,792 bytes (2,579 sectors). The records are contiguous, cover the image
+exactly, and every payload begins with `\x1bLuaP`. These checks establish that
+the sample is a valid parser fixture even though its retail provenance and
+complete game file list are unknown.
+
+The independent [BullyX360img QuickBMS script](https://github.com/EdnessP/scripts/blob/main/bully/BullyX360img.bms)
+matches this layout: it selects big-endian integers, reads 32-byte records,
+multiplies offsets and sizes by 2048, and treats the 24-byte name field as raw
+data. It also recognizes an optional `0x0FF512ED` XMemDecompress marker in the
+image. That marker is absent from the supplied `Scripts.img`, so the current
+implementation supports the uncompressed variant while compressed archive
+support remains a separate follow-up.
+
+IMGEditor Plus now detects this layout before opening the archive, dispatches it
+to `Xbox360Parser`, preserves the payload bytes and sector padding during
+export/rebuild, writes big-endian directory fields, and allows all 24 filename
+bytes for Xbox entries. The existing PC v1 parser remains little-endian.
 
 ### IMG v2
 

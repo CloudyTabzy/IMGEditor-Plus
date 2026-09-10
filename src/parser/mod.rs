@@ -16,13 +16,16 @@ pub mod pc_v2;
 pub mod texture_decoder;
 pub mod txd;
 pub mod unknown;
+pub mod xbox360;
 
 pub use inspector::{EntryInspection, inspect_entry_cached, inspect_entry_standalone};
 pub use iparser::ImgParser;
+pub(crate) use pc_v1::V1ByteOrder;
 pub use pc_v1::PcV1Parser;
 pub use pc_v2::PcV2Parser;
 pub use texture_decoder::DecodedTexture;
 pub use unknown::UnknownParser;
+pub use xbox360::Xbox360Parser;
 
 pub const SECTOR_SIZE: u64 = 2048;
 pub const ENTRY_SIZE: usize = 32;
@@ -33,6 +36,7 @@ pub const MAX_ENTRY_NAME_LEN: usize = MAX_ENTRY_NAME_BYTES - 1;
 pub enum ImgVersion {
     One,
     Two,
+    Xbox360,
     Unknown,
 }
 
@@ -43,10 +47,12 @@ pub enum ImportEntryResult {
 }
 
 pub fn detect_version(path: &Path) -> ImgVersion {
-    if PcV1Parser.is_valid(path) {
-        ImgVersion::One
-    } else if PcV2Parser.is_valid(path) {
+    if PcV2Parser.is_valid(path) {
         ImgVersion::Two
+    } else if PcV1Parser.is_valid(path) {
+        ImgVersion::One
+    } else if Xbox360Parser.is_valid(path) {
+        ImgVersion::Xbox360
     } else {
         ImgVersion::Unknown
     }
@@ -71,13 +77,21 @@ pub fn decode_entry_name(raw: &[u8; MAX_ENTRY_NAME_BYTES]) -> CompactString {
 }
 
 pub fn encode_entry_name(name: &str) -> [u8; MAX_ENTRY_NAME_BYTES] {
+    encode_entry_name_with_limit(name, MAX_ENTRY_NAME_LEN)
+}
+
+pub fn encode_entry_name_with_limit(
+    name: &str,
+    max_bytes: usize,
+) -> [u8; MAX_ENTRY_NAME_BYTES] {
     let mut raw = [0u8; MAX_ENTRY_NAME_BYTES];
     let mut len = 0;
+    let max_bytes = max_bytes.min(MAX_ENTRY_NAME_BYTES);
 
     for c in name.chars() {
         let mut buf = [0u8; 4];
         let encoded = c.encode_utf8(&mut buf);
-        if len + encoded.len() > MAX_ENTRY_NAME_LEN {
+        if len + encoded.len() > max_bytes {
             break;
         }
         raw[len..len + encoded.len()].copy_from_slice(encoded.as_bytes());
@@ -85,6 +99,13 @@ pub fn encode_entry_name(name: &str) -> [u8; MAX_ENTRY_NAME_BYTES] {
     }
 
     raw
+}
+
+pub fn entry_name_capacity(version: ImgVersion) -> usize {
+    match version {
+        ImgVersion::Xbox360 => MAX_ENTRY_NAME_BYTES,
+        _ => MAX_ENTRY_NAME_LEN,
+    }
 }
 
 pub fn unique_output_path(path: &Path) -> PathBuf {
@@ -355,8 +376,9 @@ pub fn import_entry_with_result(
         .and_then(|name| name.to_str())
         .ok_or_else(|| anyhow::anyhow!("import path is not valid UTF-8"))?;
 
-    if file_name.chars().count() > MAX_ENTRY_NAME_LEN {
-        let reason = format!("name exceeds {MAX_ENTRY_NAME_LEN} characters");
+    let name_capacity = entry_name_capacity(archive.version);
+    if file_name.as_bytes().len() > name_capacity {
+        let reason = format!("name exceeds {name_capacity} bytes");
         archive.add_log(format!("Skipping {file_name}. {reason}."));
         return Ok(ImportEntryResult::Skipped { reason });
     }
@@ -368,7 +390,7 @@ pub fn import_entry_with_result(
     }
 
     let byte_len = metadata.len();
-    let mut entry = EntryInfo::new(file_name);
+    let mut entry = EntryInfo::new_for_version(file_name, archive.version);
     entry.source_path = Some(path.to_path_buf());
     entry.imported = true;
     entry.sector = (sector_rounded_size(byte_len) / SECTOR_SIZE) as u32;
@@ -452,10 +474,31 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let img_path = dir.path().join("test.img");
         let dir_path = dir.path().join("test.dir");
-        std::fs::File::create(&img_path).unwrap();
-        std::fs::File::create(&dir_path).unwrap();
+        std::fs::write(&img_path, vec![0_u8; SECTOR_SIZE as usize]).unwrap();
+
+        let mut record = Vec::new();
+        record.extend_from_slice(&0_u32.to_le_bytes());
+        record.extend_from_slice(&1_u32.to_le_bytes());
+        record.extend_from_slice(&encode_entry_name("entry.dff"));
+        std::fs::write(&dir_path, record).unwrap();
 
         assert_eq!(detect_version(&img_path), ImgVersion::One);
+    }
+
+    #[test]
+    fn detect_rejects_out_of_range_v1_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("invalid.img");
+        let dir_path = dir.path().join("invalid.dir");
+        std::fs::write(&img_path, vec![0_u8; SECTOR_SIZE as usize]).unwrap();
+
+        let mut record = Vec::new();
+        record.extend_from_slice(&1_u32.to_le_bytes());
+        record.extend_from_slice(&1_u32.to_le_bytes());
+        record.extend_from_slice(&encode_entry_name("outside.dff"));
+        std::fs::write(&dir_path, record).unwrap();
+
+        assert_eq!(detect_version(&img_path), ImgVersion::Unknown);
     }
 
     #[test]

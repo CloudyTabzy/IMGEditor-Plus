@@ -2554,6 +2554,7 @@ pub fn version_label(version: ImgVersion) -> &'static str {
     match version {
         ImgVersion::One => "PC v1",
         ImgVersion::Two => "PC v2",
+        ImgVersion::Xbox360 => "Xbox 360 IMG v1",
         ImgVersion::Unknown => "Unknown",
     }
 }

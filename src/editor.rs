@@ -281,7 +281,7 @@ impl Editor {
             if let Some(index) = selected
                 && let Some(entry) = archive.entries.get_mut(index)
             {
-                let mut updated = EntryInfo::new(new_name);
+                let mut updated = EntryInfo::new_for_version(new_name, archive.version);
                 updated.offset = entry.offset;
                 updated.sector = entry.sector;
                 updated.source_path = entry.source_path.clone();

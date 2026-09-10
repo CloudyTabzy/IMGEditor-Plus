@@ -1,5 +1,6 @@
 ## Unreleased
 
+- **Bully Xbox 360 IMG v1:** added structural auto-detection for big-endian `.dir`/`.img` pairs, 24-byte filename preservation, export/import/rename support, and big-endian round-trip saves. The optional XMemDecompress image variant is documented as a future task.
 - **Firefox-style middle-click autoscroll:** the entry table now uses Iced's native `Scrollable::auto_scroll` controller, which keeps the table's scroll state and its circular up/down anchor indicator together. It no longer replaces the table's widget tree on MMB, preventing the former snap-to-top failure. The one-time toast confirms activation; clicking, middle-clicking, right-clicking, scrolling, or pressing a key stops in place.
 - **Autoscroll momentum:** `View → Autoscroll momentum` enables a short, physically damped glide after fast scrolling returns to the native neutral zone. It samples speed once, caps both initial velocity and total travel, and cancels instantly on new input or renewed cursor movement—no speed multiplier can accumulate while held at an edge.
 

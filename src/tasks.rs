@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use crate::archive::{ArchiveInfo, EntryInfo, PackStats, ProgressInfo};
 use crate::parser::{
     ImgParser, ImgVersion, ImportEntryResult, PcV1Parser, PcV2Parser, SECTOR_SIZE,
-    import_entry_with_result, unique_output_path,
+    Xbox360Parser, import_entry_with_result, unique_output_path,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -70,6 +70,9 @@ impl SaveTask {
                 .save(&mut archive, &self.path, self.remove_existing)
                 .map_err(anyhow_forward),
             ImgVersion::Two => PcV2Parser
+                .save(&mut archive, &self.path, self.remove_existing)
+                .map_err(anyhow_forward),
+            ImgVersion::Xbox360 => Xbox360Parser
                 .save(&mut archive, &self.path, self.remove_existing)
                 .map_err(anyhow_forward),
             ImgVersion::Unknown => {

@@ -1,8 +1,9 @@
 # IMG v1/v2 validation notes
 
-Status: research baseline for GTA III, Vice City, and San Andreas
-Checked: 2026-09-09
-Scope: IMG v1 and IMG v2 only; IMG v3 and RPF are intentionally out of scope.
+Status: research baseline for GTA III, Vice City, San Andreas, and Bully Xbox 360
+Checked: 2026-09-10
+Scope: PC IMG v1/v2 and the Bully Xbox 360 big-endian IMG v1 variant; IMG v3
+and RPF are intentionally out of scope.
 
 ## Why this document exists
 
@@ -97,21 +98,25 @@ The Rust implementation matches the v1 record shape:
 - `sector_rounded_size` gives empty and sub-sector imported files at least one
   sector, which agrees with the sector-padded archive model.
 
-The Rust parser improves one malformed-input behavior over the original C++
+The Rust parser improves malformed-input handling over the original C++
 implementation: it rejects a `.dir` whose byte length is not divisible by 32,
-instead of silently ignoring a trailing partial record. Data-range validation
-is still incomplete; offsets and sizes should be checked against the `.img`
-length during archive open.
+instead of silently ignoring a trailing partial record, and validates printable
+names, checked sector-to-byte arithmetic, non-overlapping non-empty ranges, and
+each range against the `.img` length before mapping the data file. This same
+validation is used by the Xbox 360 big-endian variant; v2 validation remains a
+separate task.
 
 ### Known v1 compatibility gap
 
 The current UI and detection path are centered on an `.img` input. The parser's
-v1 helper changes an input path's extension to `.dir`, so passing a `.dir` path
-directly would make the later mmap step use the directory file as the data
-source. The C# reference explicitly accepts either `.img` or `.dir` and
-canonicalizes the pair before reading. Future work should canonicalize a v1
-`.dir` input to its sibling `.img`, add `.dir` to the open/drop filters, and
-test both entry points.
+v1 helper changes an input path's extension to `.dir`; passing a `.dir` path
+directly is therefore still a future compatibility task. The C# reference
+explicitly accepts either `.img` or `.dir` and canonicalizes the pair before
+reading. Future work should canonicalize a v1 `.dir` input to its sibling
+`.img`, add `.dir` to the open/drop filters, and test both entry points.
+
+For the Xbox 360 layout, see the implemented format and the deliberately
+uncompressed-only boundary in [`gta-img-reference-audit.md`](gta-img-reference-audit.md).
 
 ## IMG v2 — GTA San Andreas
 
@@ -261,7 +266,7 @@ source/target entry lists.
 ### Recommended next parser work
 
 1. Add v1 `.dir` canonicalization and file-dialog/drag-and-drop coverage.
-2. Add checked open-time table and data-range validation for v1 and v2.
+2. Add checked open-time table and data-range validation for v2.
 3. Introduce v2-specific size metadata instead of overloading one generic
    `EntryInfo::sector` field.
 4. Validate against real GTA III/VC/SA manifests and selected exported bytes.

@@ -19,5 +19,5 @@ Replace `C:\Tools\IMGEditor\imgeditor.exe` with the actual path to your binary.
 
 ## Notes
 
-- This editor supports IMG v1 (GTA III / Vice City / Bully) and IMG v2 (GTA San Andreas). Windows does not distinguish between these formats by extension, so the app detects the format automatically when opening.
+- This editor supports PC IMG v1 (GTA III / Vice City / Bully), the big-endian Bully Xbox 360 IMG v1 variant, and IMG v2 (GTA San Andreas). Windows does not distinguish between these formats by extension, so the app validates the directory/header structure and detects the variant automatically before opening it.
 - File association is not created automatically by the editor; it must be set up by the user or an installer.
