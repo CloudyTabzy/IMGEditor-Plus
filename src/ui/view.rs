@@ -1842,17 +1842,13 @@ pub fn build(app: &App) -> Element<'_, Message> {
     .flatten()
     .collect();
 
-    if overlays.is_empty() {
-        return Container::new(base)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(move |_| iced::widget::container::Style {
-                background: Some(iced::Background::Color(page_bg)),
-                ..Default::default()
-            })
-            .into();
-    }
-
+    // Keep the root widget shape stable while overlays appear and disappear.
+    // Changing from `Container(base)` to `Stack(base, overlay...)` makes Iced
+    // recreate the whole state tree because their tags differ. That silently
+    // resets every nested Scrollable and also destroys the native
+    // Scrollable::AutoScrolling interaction whenever a toast is shown or
+    // dismissed. The base layer must therefore always occupy stack slot 0;
+    // transient notifications can be appended without moving it.
     let mut layers: Vec<Element<'_, Message>> = vec![
         Container::new(base)
             .width(Length::Fill)
@@ -1864,7 +1860,10 @@ pub fn build(app: &App) -> Element<'_, Message> {
             .into(),
     ];
     layers.extend(overlays);
-    stack(layers).into()
+    stack(layers)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 fn build_about(app: &App) -> Option<Element<'_, Message>> {

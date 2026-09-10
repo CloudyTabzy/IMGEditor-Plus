@@ -5728,6 +5728,43 @@ mod tests {
     }
 
     #[test]
+    fn transient_notifications_do_not_recreate_the_workspace_tree() {
+        let mut app = test_app_with_entries();
+        let mut tree = {
+            let view = app.view();
+            iced::advanced::widget::Tree::new(&view)
+        };
+        let root_tag = tree.tag;
+        let base_tag = tree.children[0].tag;
+
+        // A toast is rendered as a temporary layer. Its appearance must not
+        // replace the base workspace, because that would discard native
+        // Scrollable state (including an active middle-click autoscroll).
+        app.toast = Some("Saved".to_string());
+        app.toast_reveal_text = Some("Saved".to_string());
+        {
+            let view = app.view();
+            tree.diff(&view);
+        }
+
+        assert_eq!(tree.tag, root_tag);
+        assert_eq!(tree.children[0].tag, base_tag);
+        assert!(tree.children.len() > 1);
+
+        // Dismissing the toast must preserve the same root and base slots as
+        // well; otherwise the scroll position would jump when the fade ends.
+        app.toast = None;
+        app.toast_reveal_text = None;
+        {
+            let view = app.view();
+            tree.diff(&view);
+        }
+
+        assert_eq!(tree.tag, root_tag);
+        assert_eq!(tree.children[0].tag, base_tag);
+    }
+
+    #[test]
     fn middle_click_again_stops_native_autoscroll_without_rewinding() {
         let mut app = test_app_with_entries();
         app.scroll_y = 500.0;
