@@ -189,7 +189,10 @@ impl App {
             .direction(iced::widget::scrollable::Direction::Vertical(
                 iced::widget::scrollable::Scrollbar::new().scroller_width(16.0),
             ))
-            .on_scroll(|viewport| Message::ScrollOffsetChanged(viewport.absolute_offset().y));
+            .on_scroll(|viewport| Message::ScrollOffsetChanged {
+                y: viewport.absolute_offset().y,
+                max_y: (viewport.content_bounds().height - viewport.bounds().height).max(0.0),
+            });
 
         // Context menu overlay sits above the scrollable but below the rest of
         // the UI. It is anchored to the right-clicked row's position within

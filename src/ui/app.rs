@@ -80,6 +80,128 @@ pub const ABOUT_TEXT: &str = concat!(
     "- Bully Scholarship Edition"
 );
 
+/// Optional inertia layered after Iced's native autoscroll settles in its
+/// neutral zone. It deliberately stores one sampled velocity rather than an
+/// accumulating multiplier, so a long hold at the screen edge cannot run away.
+#[derive(Debug, Clone, Copy, Default)]
+struct AutoScrollMomentum {
+    origin: Option<Point>,
+    last_live_velocity: Option<f32>,
+    tail: Option<AutoScrollMomentumTail>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AutoScrollMomentumTail {
+    velocity: f32,
+    remaining_distance: f32,
+}
+
+impl AutoScrollMomentum {
+    // These match Iced 0.14's native autoscroll curve so the tail begins only
+    // after the native controller has reached its own neutral zone.
+    const DEAD_ZONE: f32 = 20.0;
+    const SMOOTHNESS: f32 = 1.5;
+    const MIN_SOURCE_SPEED: f32 = 750.0;
+    const MAX_SOURCE_SPEED: f32 = 2_400.0;
+    const INITIAL_SPEED_FRACTION: f32 = 0.28;
+    const MAX_INITIAL_SPEED: f32 = 672.0;
+    const DAMPING_PER_SECOND: f32 = 8.5;
+    const MIN_TAIL_SPEED: f32 = 18.0;
+    const MAX_TAIL_DISTANCE: f32 = 96.0;
+
+    fn begin(&mut self, origin: Option<Point>) {
+        self.origin = origin;
+        self.last_live_velocity = None;
+        self.tail = None;
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    fn clear_tail(&mut self) {
+        self.last_live_velocity = None;
+        self.tail = None;
+    }
+
+    fn is_active(&self) -> bool {
+        self.tail.is_some()
+    }
+
+    fn native_velocity_at(&self, position: Point) -> Option<f32> {
+        let origin = self.origin?;
+        let delta = position.y - origin.y;
+        if delta.abs() < Self::DEAD_ZONE {
+            return Some(0.0);
+        }
+
+        Some(
+            delta.signum()
+                * delta
+                    .abs()
+                    .powf(Self::SMOOTHNESS)
+                    .min(Self::MAX_SOURCE_SPEED),
+        )
+    }
+
+    /// Returns true when a tail was armed by re-entering the neutral zone.
+    fn update_pointer(&mut self, position: Point, enabled: bool) -> bool {
+        let Some(velocity) = self.native_velocity_at(position) else {
+            return false;
+        };
+
+        if velocity != 0.0 {
+            self.last_live_velocity = Some(velocity);
+            self.tail = None;
+            return false;
+        }
+
+        let Some(live_velocity) = self.last_live_velocity.take() else {
+            return false;
+        };
+        if !enabled || !live_velocity.is_finite() || live_velocity.abs() < Self::MIN_SOURCE_SPEED {
+            self.tail = None;
+            return false;
+        }
+
+        let initial_speed = (live_velocity.abs() * Self::INITIAL_SPEED_FRACTION)
+            .min(Self::MAX_INITIAL_SPEED);
+        let remaining_distance = (initial_speed / Self::DAMPING_PER_SECOND)
+            .min(Self::MAX_TAIL_DISTANCE);
+        self.tail = Some(AutoScrollMomentumTail {
+            velocity: live_velocity.signum() * initial_speed,
+            remaining_distance,
+        });
+        true
+    }
+
+    /// Advance the exponential decay analytically, keeping it frame-rate
+    /// independent even if the UI misses a frame.
+    fn advance(&mut self, dt: Duration) -> Option<f32> {
+        let tail = self.tail.as_mut()?;
+        let seconds = dt.as_secs_f32();
+        if seconds <= 0.0 {
+            return None;
+        }
+
+        let decay = (-Self::DAMPING_PER_SECOND * seconds).exp();
+        let unconstrained = tail.velocity * (1.0 - decay) / Self::DAMPING_PER_SECOND;
+        if !unconstrained.is_finite() {
+            self.clear_tail();
+            return None;
+        }
+        let delta = unconstrained.signum() * unconstrained.abs().min(tail.remaining_distance);
+        tail.remaining_distance = (tail.remaining_distance - delta.abs()).max(0.0);
+        tail.velocity *= decay;
+
+        if tail.remaining_distance <= f32::EPSILON || tail.velocity.abs() < Self::MIN_TAIL_SPEED {
+            self.tail = None;
+        }
+
+        Some(delta)
+    }
+}
+
 /// The specific scene currently being decoded off the UI thread.
 ///
 /// Keeping the identity with the loading state prevents a late completion for
@@ -223,7 +345,10 @@ pub enum Message {
     PaneResized(pane_grid::ResizeEvent),
     OpenLastExportFolder,
     SortBy(SortColumn),
-    ScrollOffsetChanged(f32),
+    ScrollOffsetChanged {
+        y: f32,
+        max_y: f32,
+    },
     EntryInspected {
         index: usize,
         inspection: EntryInspection,
@@ -244,6 +369,7 @@ pub enum Message {
     ViewTextureGridToggled(bool),
     ViewTextureGridSize(u32),
     SetNavigationGizmoVisible(bool),
+    ToggleAutoscrollMomentum(bool),
     ToggleMotionEffects(bool),
     ToggleSelectionPulse(bool),
     ToggleClickRipple(bool),
@@ -522,6 +648,11 @@ pub struct App {
     /// Mirrors the native Iced scrollable's active autoscroll mode so rows
     /// can stay inert until the next click stops it.
     pub autoscroll: bool,
+    autoscroll_momentum: AutoScrollMomentum,
+    /// Exact vertical range reported by the native Scrollable. The optional
+    /// tail uses it to clamp its virtual offset to the real viewport range.
+    entry_table_max_scroll_y: f32,
+    entry_table_viewport_known: bool,
     entry_table_hovered: bool,
     /// Native-autoscroll control notice shown once per session.
     autoscroll_notice_shown: bool,
@@ -665,6 +796,9 @@ impl App {
             scroll_y: 0.0,
             filter_pending: false,
             autoscroll: false,
+            autoscroll_momentum: AutoScrollMomentum::default(),
+            entry_table_max_scroll_y: 0.0,
+            entry_table_viewport_known: false,
             entry_table_hovered: false,
             autoscroll_notice_shown: false,
             modifiers: Modifiers::default(),
@@ -1113,10 +1247,69 @@ impl App {
             || self.toast_reveal_text.is_some()
             || self.viewer_load.is_some()
             || self.has_active_progress()
+            || self.autoscroll_momentum.is_active()
             || (self.editor.archives().is_empty() && self.config.motion_enabled);
         if !subscription_alive {
             self.prev_tick = None;
         }
+    }
+
+    fn end_autoscroll(&mut self) {
+        self.autoscroll = false;
+        self.autoscroll_momentum.clear();
+    }
+
+    fn update_autoscroll_momentum(&mut self, position: Point) {
+        if !self.autoscroll {
+            return;
+        }
+
+        if self
+            .autoscroll_momentum
+            .update_pointer(position, self.config.autoscroll_momentum_enabled)
+        {
+            self.prepare_interaction_animation();
+        }
+    }
+
+    fn advance_autoscroll_momentum(&mut self, dt: Duration) -> Task<Message> {
+        if !self.autoscroll || !self.config.autoscroll_momentum_enabled {
+            self.autoscroll_momentum.clear_tail();
+            return Task::none();
+        }
+        if !self.entry_table_viewport_known {
+            return Task::none();
+        }
+
+        let max_y = self.entry_table_max_scroll_y;
+        if !max_y.is_finite()
+            || max_y <= 0.0
+            || !self.scroll_y.is_finite()
+            || self.scroll_y < 0.0
+            || self.scroll_y > max_y
+        {
+            self.autoscroll_momentum.clear_tail();
+            return Task::none();
+        }
+
+        let Some(delta) = self.autoscroll_momentum.advance(dt) else {
+            return Task::none();
+        };
+
+        let target_y = (self.scroll_y + delta).clamp(0.0, max_y);
+        if (target_y - self.scroll_y).abs() <= f32::EPSILON {
+            self.autoscroll_momentum.clear_tail();
+            return Task::none();
+        }
+
+        self.scroll_y = target_y;
+        iced::advanced::widget::operate(scroll_to(
+            iced::widget::Id::new("entry_table"),
+            AbsoluteOffset {
+                x: None,
+                y: Some(target_y),
+            },
+        ))
     }
 
     fn start_entry_feedback(&mut self, target: (usize, usize)) {
@@ -2637,6 +2830,7 @@ impl App {
                 Task::none()
             }
             Message::AnimationTick(now) => {
+                let mut autoscroll_task = Task::none();
                 if let Some(prev) = self.prev_tick {
                     // A window can be suspended or the subscription can be
                     // restarted after a long idle period. Cap one frame so a
@@ -2660,6 +2854,7 @@ impl App {
                         self.empty_state_phase =
                             (self.empty_state_phase + dt.as_secs_f32() * 0.15).fract();
                     }
+                    autoscroll_task = self.advance_autoscroll_momentum(dt);
                 }
                 self.prev_tick = Some(now);
 
@@ -2747,14 +2942,16 @@ impl App {
 
                 self.prepare_interaction_animation();
 
-                Task::none()
+                autoscroll_task
             }
             Message::PaneResized(event) => {
                 self.panes.resize(event.split, event.ratio);
                 Task::none()
             }
-            Message::ScrollOffsetChanged(y) => {
-                self.scroll_y = y;
+            Message::ScrollOffsetChanged { y, max_y } => {
+                self.entry_table_max_scroll_y = max_y.max(0.0);
+                self.entry_table_viewport_known = true;
+                self.scroll_y = y.clamp(0.0, self.entry_table_max_scroll_y);
                 Task::none()
             }
             Message::EntryInspected { index, inspection } => {
@@ -2773,6 +2970,7 @@ impl App {
             }
             Message::PointerMoved(position) => {
                 self.last_pointer_position = Some(position);
+                self.update_autoscroll_momentum(position);
                 Task::none()
             }
             Message::EntryTableHoverChanged(hovered) => {
@@ -2781,7 +2979,7 @@ impl App {
             }
             Message::AutoScrollStarted => {
                 if self.autoscroll {
-                    self.autoscroll = false;
+                    self.end_autoscroll();
                     return Task::none();
                 }
 
@@ -2800,6 +2998,7 @@ impl App {
                 }
 
                 self.autoscroll = true;
+                self.autoscroll_momentum.begin(self.last_pointer_position);
                 if !self.autoscroll_notice_shown {
                     self.autoscroll_notice_shown = true;
                     self.toast = Some(
@@ -2811,7 +3010,7 @@ impl App {
                 Task::none()
             }
             Message::AutoScrollEnded => {
-                self.autoscroll = false;
+                self.end_autoscroll();
                 Task::none()
             }
             Message::AutoScrollEscape => {
@@ -2819,7 +3018,7 @@ impl App {
                     self.predictions_dismissed = true;
                     self.prediction_index = None;
                 }
-                self.autoscroll = false;
+                self.end_autoscroll();
                 Task::none()
             }
             Message::OpenLastExportFolder => {
@@ -3061,6 +3260,15 @@ impl App {
                 Task::none()
             }
 
+            Message::ToggleAutoscrollMomentum(enabled) => {
+                self.config.autoscroll_momentum_enabled = enabled;
+                if !enabled {
+                    self.autoscroll_momentum.clear_tail();
+                    self.prepare_interaction_animation();
+                }
+                self.save_config();
+                Task::none()
+            }
             Message::ToggleMotionEffects(enabled) => {
                 self.config.motion_enabled = enabled;
                 if !enabled {
@@ -3972,6 +4180,7 @@ impl App {
             || self.toast_reveal_text.is_some()
             || self.viewer_load.is_some()
             || self.has_active_progress()
+            || self.autoscroll_momentum.is_active()
             || (self.editor.archives().is_empty() && self.config.motion_enabled)
         {
             iced::time::every(Duration::from_millis(16)).map(Message::AnimationTick)
@@ -4217,6 +4426,13 @@ impl App {
                     view_toggle(self.config.context_selection_accumulates)
                 ),
                 Message::ToggleContextAccumulate(!self.config.context_selection_accumulates),
+            )),
+            Item::new(menu_button(
+                format!(
+                    "{}Autoscroll momentum",
+                    view_toggle(self.config.autoscroll_momentum_enabled)
+                ),
+                Message::ToggleAutoscrollMomentum(!self.config.autoscroll_momentum_enabled),
             )),
             Item::new(menu_button(
                 format!(
@@ -5279,9 +5495,130 @@ mod tests {
         let _ = app.update(Message::EntryTableHoverChanged(true));
         let _ = app.update(Message::AutoScrollStarted);
 
-        let _ = app.update(Message::ScrollOffsetChanged(200.0));
+        let _ = app.update(Message::ScrollOffsetChanged {
+            y: 200.0,
+            max_y: 1_000.0,
+        });
         assert!(app.autoscroll, "native scrolling must not hide its indicator");
         assert_eq!(app.scroll_y, 200.0);
+    }
+
+    #[test]
+    fn autoscroll_momentum_samples_once_instead_of_accumulating_at_speed() {
+        let origin = Point::new(50.0, 100.0);
+        let mut momentum = AutoScrollMomentum::default();
+        momentum.begin(Some(origin));
+
+        // Holding the cursor far away only refreshes the one live sample.
+        // It must not compound a multiplier every animation frame.
+        for _ in 0..120 {
+            assert!(!momentum.update_pointer(Point::new(50.0, 700.0), true));
+        }
+        assert!(momentum.tail.is_none());
+        assert_eq!(
+            momentum.last_live_velocity,
+            Some(AutoScrollMomentum::MAX_SOURCE_SPEED)
+        );
+
+        assert!(momentum.update_pointer(origin, true));
+        let tail = momentum.tail.expect("fast source motion arms one tail");
+        assert_eq!(tail.velocity.abs(), AutoScrollMomentum::MAX_INITIAL_SPEED);
+        assert!(tail.remaining_distance <= AutoScrollMomentum::MAX_TAIL_DISTANCE);
+    }
+
+    #[test]
+    fn autoscroll_momentum_tail_is_bounded_and_reaches_rest() {
+        let mut app = test_app_with_entries();
+        let origin = Point::new(50.0, 100.0);
+        let start_offset = 400.0;
+        let _ = app.update(Message::ScrollOffsetChanged {
+            y: start_offset,
+            max_y: 10_000.0,
+        });
+        let _ = app.update(Message::PointerMoved(origin));
+        let _ = app.update(Message::EntryTableHoverChanged(true));
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::PointerMoved(Point::new(50.0, 700.0)));
+        let _ = app.update(Message::PointerMoved(origin));
+        assert!(app.autoscroll_momentum.is_active());
+
+        let start = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(start));
+        for step in 1..=20 {
+            let _ = app.update(Message::AnimationTick(
+                start + Duration::from_millis(50 * step),
+            ));
+        }
+
+        assert!(app.scroll_y > start_offset);
+        assert!(
+            app.scroll_y <= start_offset + AutoScrollMomentum::MAX_TAIL_DISTANCE + 0.1,
+            "tail traveled too far: {}",
+            app.scroll_y - start_offset
+        );
+        assert!(!app.autoscroll_momentum.is_active());
+    }
+
+    #[test]
+    fn autoscroll_momentum_waits_for_the_native_viewport_range() {
+        let mut app = test_app_with_entries();
+        let origin = Point::new(50.0, 100.0);
+        let _ = app.update(Message::PointerMoved(origin));
+        let _ = app.update(Message::EntryTableHoverChanged(true));
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::PointerMoved(Point::new(50.0, 700.0)));
+        let _ = app.update(Message::PointerMoved(origin));
+        let initial_velocity = app
+            .autoscroll_momentum
+            .tail
+            .expect("fast source motion arms one tail")
+            .velocity;
+
+        let start = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(start));
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(50)));
+        assert_eq!(app.scroll_y, 0.0);
+        assert_eq!(
+            app.autoscroll_momentum
+                .tail
+                .expect("tail waits for native bounds")
+                .velocity,
+            initial_velocity
+        );
+
+        let _ = app.update(Message::ScrollOffsetChanged {
+            y: 0.0,
+            max_y: 10_000.0,
+        });
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(100)));
+        assert!(app.scroll_y > 0.0);
+    }
+
+    #[test]
+    fn autoscroll_momentum_cancels_immediately_on_fresh_input_or_toggle() {
+        let mut app = test_app_with_entries();
+        let origin = Point::new(50.0, 100.0);
+        let _ = app.update(Message::ScrollOffsetChanged {
+            y: 400.0,
+            max_y: 10_000.0,
+        });
+        let _ = app.update(Message::PointerMoved(origin));
+        let _ = app.update(Message::EntryTableHoverChanged(true));
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::PointerMoved(Point::new(50.0, 700.0)));
+        let _ = app.update(Message::PointerMoved(origin));
+        assert!(app.autoscroll_momentum.is_active());
+
+        // Moving out of the neutral zone hands control back to Iced's native
+        // autoscroll and discards the residual tail before it can add speed.
+        let _ = app.update(Message::PointerMoved(Point::new(50.0, 700.0)));
+        assert!(!app.autoscroll_momentum.is_active());
+
+        let _ = app.update(Message::PointerMoved(origin));
+        assert!(app.autoscroll_momentum.is_active());
+        let _ = app.update(Message::ToggleAutoscrollMomentum(false));
+        assert!(!app.config.autoscroll_momentum_enabled);
+        assert!(!app.autoscroll_momentum.is_active());
     }
 
     #[test]

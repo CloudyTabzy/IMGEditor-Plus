@@ -236,6 +236,9 @@ pub struct Config {
     pub texture_grid_divisions: u32,
     /// Show the interactive axis/navigation overlay in the 3D viewer.
     pub show_navigation_gizmo: bool,
+    /// Continue a fast entry-table middle-click autoscroll with a short,
+    /// capped inertial tail after the cursor returns to the neutral zone.
+    pub autoscroll_momentum_enabled: bool,
     /// Enable the interaction motion layer (selection feedback, ripples,
     /// and icon micro-motion).
     pub motion_enabled: bool,
@@ -284,6 +287,7 @@ impl Default for Config {
             show_texture_grid: false,
             texture_grid_divisions: 16,
             show_navigation_gizmo: true,
+            autoscroll_momentum_enabled: true,
             motion_enabled: true,
             selection_pulse_enabled: true,
             click_ripple_enabled: true,
@@ -448,6 +452,9 @@ impl Config {
                 "show_navigation_gizmo" => {
                     config.show_navigation_gizmo = value.eq_ignore_ascii_case("true");
                 }
+                "autoscroll_momentum_enabled" => {
+                    config.autoscroll_momentum_enabled = value.eq_ignore_ascii_case("true");
+                }
                 "motion_enabled" => {
                     config.motion_enabled = value.eq_ignore_ascii_case("true");
                 }
@@ -583,6 +590,15 @@ impl Config {
         )?;
         writeln!(
             file,
+            "autoscroll_momentum_enabled={}",
+            if self.autoscroll_momentum_enabled {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
+        writeln!(
+            file,
             "motion_enabled={}",
             if self.motion_enabled { "true" } else { "false" }
         )?;
@@ -679,6 +695,7 @@ mod tests {
         assert!(config.window.size.is_none());
         assert!(config.window.position.is_none());
         assert!(config.show_navigation_gizmo);
+        assert!(config.autoscroll_momentum_enabled);
         assert!(config.motion_enabled);
         assert!(config.selection_pulse_enabled);
         assert!(config.click_ripple_enabled);
@@ -710,6 +727,7 @@ mod tests {
             show_texture_grid: true,
             texture_grid_divisions: 32,
             show_navigation_gizmo: false,
+            autoscroll_momentum_enabled: false,
             motion_enabled: false,
             selection_pulse_enabled: false,
             click_ripple_enabled: false,
@@ -745,6 +763,7 @@ mod tests {
         assert!(loaded.show_texture_grid);
         assert_eq!(loaded.texture_grid_divisions, 32);
         assert!(!loaded.show_navigation_gizmo);
+        assert!(!loaded.autoscroll_momentum_enabled);
         assert!(!loaded.motion_enabled);
         assert!(!loaded.selection_pulse_enabled);
         assert!(!loaded.click_ripple_enabled);
