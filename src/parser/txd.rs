@@ -605,6 +605,17 @@ fn parse_native_struct(bytes: &[u8]) -> Result<NativeTexture, String> {
 
     let palette_size = match (raster_format >> 13) & 0x3 {
         1 => Some(1024usize),
+        // PC D3D8/D3D9 natives store the full 256-entry palette even for
+        // PAL4 rasters (only the first 16 entries are meaningful) — the
+        // mip data follows the palette, so a short read misparses the
+        // whole texture. Non-PC platforms pack the used entries only.
+        // See docs/research-inu-tools-gta.md.
+        2 | 3
+            if platform_id == texture_decoder::PLATFORM_D3D8
+                || platform_id == texture_decoder::PLATFORM_D3D9 =>
+        {
+            Some(1024usize)
+        }
         2 | 3 => Some(if depth == 4 { 64 } else { 128 }),
         _ => None,
     };
@@ -751,6 +762,40 @@ mod tests {
         section(rw::TEXTURE_DICTIONARY, 0x1803_FFFF, &dict_body)
     }
 
+    fn paletted_d3d8_txd_fixture(raster_format: u32, indices: &[u8]) -> Vec<u8> {
+        let mut native = Vec::new();
+        native.extend_from_slice(&texture_decoder::PLATFORM_D3D8.to_le_bytes());
+        native.extend_from_slice(&[6, 17, 0, 0]);
+        native.extend_from_slice(&{
+            let mut name = [0_u8; 32];
+            name[..4].copy_from_slice(b"pal8");
+            name.to_vec()
+        });
+        native.extend_from_slice(&[0; 32]);
+        native.extend_from_slice(&raster_format.to_le_bytes());
+        native.extend_from_slice(&0_u32.to_le_bytes());
+        native.extend_from_slice(&2_u16.to_le_bytes());
+        native.extend_from_slice(&1_u16.to_le_bytes());
+        native.extend_from_slice(&[8, 1, 4, 0]);
+        // PC palettes: full 256 BGRA entries. Entries are BGRA (D3D ARGB
+        // surface byte order); after the platform swap: entry 0 = blue,
+        // entry 1 = red, entry 2 = yellow, entry 3 = gray-blue.
+        let mut palette = vec![0_u8; 1024];
+        palette[0..4].copy_from_slice(&[255, 0, 0, 255]);
+        palette[4..8].copy_from_slice(&[0, 0, 255, 255]);
+        palette[8..12].copy_from_slice(&[0, 255, 255, 255]);
+        palette[12..16].copy_from_slice(&[128, 64, 32, 255]);
+        native.extend_from_slice(&palette);
+        native.extend_from_slice(&(indices.len() as u32).to_le_bytes());
+        native.extend_from_slice(indices);
+
+        let native_struct = section(rw::STRUCT, 0x1803_FFFF, &native);
+        let native_section = section(rw::TEXTURE_NATIVE, 0x1803_FFFF, &native_struct);
+        let mut dict_body = section(rw::STRUCT, 0x1803_FFFF, &[1, 0, 0, 0]);
+        dict_body.extend_from_slice(&native_section);
+        section(rw::TEXTURE_DICTIONARY, 0x1803_FFFF, &dict_body)
+    }
+
     fn platform_independent_txd_fixture() -> Vec<u8> {
         let version = 0x1803_FFFF;
         let mut image_struct = Vec::new();
@@ -790,6 +835,33 @@ mod tests {
     fn reject_non_txd_section() {
         let bytes = section(rw::STRUCT, 0x1003_FFFF, &[]);
         assert!(parse_txd(&bytes).is_err());
+    }
+
+    #[test]
+    fn d3d8_pal8_palette_swaps_bgra_to_rgba() {
+        // GTA III/VC palettized rasters store palette entries as BGRA.
+        // Entry 0 is BGRA blue; without the swap it would decode as red.
+        let bytes = paletted_d3d8_txd_fixture(0x2000 | 0x0600, &[0, 1]);
+        let txd = parse_txd(&bytes).unwrap();
+        assert_eq!(txd.textures.len(), 1);
+        let texture = &txd.textures[0];
+        assert_eq!(texture.platform_id, 8);
+        let rgba = texture.decode_rgba().unwrap();
+        assert_eq!(&rgba[..4], &[0, 0, 255, 255], "BGRA blue -> RGBA blue");
+        assert_eq!(&rgba[4..8], &[255, 0, 0, 255], "BGRA red -> RGBA red");
+    }
+
+    #[test]
+    fn pc_pal4_uses_a_full_256_entry_palette_and_byte_indices() {
+        // PC PAL4 rasters: 1024-byte palette + one index byte per pixel.
+        // A short (64/128-byte) palette read would misalign the mip data.
+        let bytes = paletted_d3d8_txd_fixture(0x4000 | 0x0600, &[1, 2]);
+        let txd = parse_txd(&bytes).expect("PAL4 native must parse fully");
+        let texture = &txd.textures[0];
+        assert_eq!(texture.palette.len(), 1024, "full PC palette stored");
+        let rgba = texture.decode_rgba().unwrap();
+        assert_eq!(&rgba[..4], &[255, 0, 0, 255], "palette entry 1 (red)");
+        assert_eq!(&rgba[4..8], &[255, 255, 0, 255], "palette entry 2 (yellow)");
     }
 
     #[test]

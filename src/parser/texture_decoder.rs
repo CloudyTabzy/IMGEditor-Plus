@@ -651,8 +651,8 @@ pub fn decode_raster(
     }
 }
 
-const PLATFORM_D3D8: u32 = 8;
-const PLATFORM_D3D9: u32 = 9;
+pub(crate) const PLATFORM_D3D8: u32 = 8;
+pub(crate) const PLATFORM_D3D9: u32 = 9;
 const D3D_8888: u32 = 21;
 /// D3DFMT_R8G8B8: true 24-bit RGB. Practically unrenderable on D3D9
 /// hardware, so almost no raster uses it — see [`D3D_X8R8G8B8`].
@@ -712,11 +712,32 @@ pub fn decode_native_raster(
         raster_type,
     } = *desc;
     let palette_type = (raster_format >> 13) & 0x3;
+    // PC palettized rasters (D3D8/D3D9) store palette entries as BGRA —
+    // the D3D ARGB surface byte order. The legacy device-independent
+    // path stores RGBA and is swapped nowhere. Without the swap every
+    // paletted GTA III texture renders with red and blue exchanged.
+    // See docs/research-inu-tools-gta.md.
+    let palette_storage;
+    let palette: &[u8] = if palette_type != 0
+        && (platform_id == PLATFORM_D3D8 || platform_id == PLATFORM_D3D9)
+    {
+        let mut swapped = palette.to_vec();
+        for entry in swapped.chunks_exact_mut(4) {
+            entry.swap(0, 2);
+        }
+        palette_storage = swapped;
+        &palette_storage
+    } else {
+        palette
+    };
     if palette_type == 1 {
         return decode_pal8(data, palette, width, height);
     }
     if palette_type == 2 || palette_type == 3 {
-        if depth == 4 {
+        // PC PAL4 rasters use one index byte per pixel into the 256-entry
+        // palette (only the first 16 entries are meaningful); the packed
+        // 4-bit form is a non-PC/legacy convention.
+        if depth == 4 && platform_id != PLATFORM_D3D8 && platform_id != PLATFORM_D3D9 {
             return decode_pal4(data, palette, width, height);
         }
         return decode_pal8(data, palette, width, height);
