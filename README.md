@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v4.1.0
+# 🎮 IMG Editor Plus v4.2.0
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -39,7 +39,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Zero-copy exports** — mmap-direct writes with in-memory path resolution and a buffered parallel fallback when a memory map is unavailable
 - ✅ **Two-pass sequential save** — rebuilds stream entry data straight from the source memory map; ~23 % faster rebuilds on large archives
 - ✅ **Memory-mapped reads** — instant open on large archives
-- ✅ **Multiple archive tabs** with dirty-file indicator
+- ✅ **Multiple archive tabs** with dirty-file indicator; middle-click a tab to close it
 - ✅ **Drag-and-drop** — open `.img` archives or import files from Explorer
 
 ### 🎨 Embedded 3D Model Viewer (v3.4+)
@@ -62,6 +62,14 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
 - ✅ **Automated regression tests** — cover parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, six-axis navigation, alpha rendering, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
+
+**v4.2.0 release highlights:**
+- 🎮 **Bully Xbox 360 IMG v1** — auto-detected big-endian `.dir`/`.img` pairs with validated sector ranges, 24-byte filename preservation, export/import/rename, and round-trip saves
+- 🧠 **RenderWare texture correctness** — D3D9-platform rasters claiming 24-bit "888" are stored as 32-bit X8R8G8B8; 355 textures in a modded GTA III archive decoded as checkerboard noise and now render correctly. The decoder cross-checks the D3D format word, depth byte, and mip data length, and format labels report the true storage (see `docs/renderware-format-mismatches.md`)
+- 🖱 **Firefox-style middle-click autoscroll** — Iced's native autoscroll controller with an origin-anchored circular indicator, plus opt-in bounded momentum (`View → Autoscroll momentum`) that glides briefly after fast scrolling and can never run away
+- ✅ **Selection & sorting polish** — right-click selection toggle with a context-menu selection count, state-aware sort-header tooltips, literal Bully file-type labels, a centered sort-manager dialog, and refined themed sort controls
+- 🔍 **Search ergonomics** — inline clear button in the search box and caret-to-end after adopting a prediction
+- 📑 **Tab & scroll robustness** — middle-click closes archive tabs, scroll position survives notifications, and rapid repeated loads of the same entry are single-flighted through cache placeholders with a bounded inspection cache
 
 **v4.1.0 release highlights:**
 - ✅ **Fuzzy search** — the entry filter now matches scattered initials and partial names (`pld` → `police_car.dff`), ranks results by relevance (prefix and word-boundary hits, consecutive runs, shorter names first), and falls back to Jaro-Winkler typo matching when nothing matches (`policastr` still finds `police_car.dff`)
@@ -113,10 +121,10 @@ for the engineering story.
 ### 🔍 Entry Table
 - ✅ **Virtualised scrolling** — smooth even at 10,000+ entries
 - ✅ **Firefox-style middle-click autoscroll** — click MMB once for anchored, distance-controlled scrolling with Iced's circular up/down indicator; optional, bounded momentum adds a short glide after fast movement (`View → Autoscroll momentum`), while click, MMB, RMB, scroll, or a key stops in place
-- ✅ **Fuzzy search filter** — subsequence matching with relevance ranking, debounced input (150ms), and Jaro-Winkler typo fallback plus a "Did you mean …" prediction dropdown
+- ✅ **Fuzzy search filter** — subsequence matching with relevance ranking, debounced input (150ms), and Jaro-Winkler typo fallback plus a "Did you mean …" prediction dropdown, an inline clear button, and caret-to-end after adopting a prediction
 - ✅ **Hideable search bar** — toggle from the View menu to reclaim screen space
-- ✅ **Sort by Name / Type / Size** with arrow indicators
-- ✅ **Multi-selection** — Ctrl+click toggle, Shift+click range
+- ✅ **Sort by Name / Type / Size** with arrow indicators, state-aware header tooltips, and literal file-type labels (Bully `.nif` = Model, `.idb` = Definition, `.ipb` = Placement)
+- ✅ **Multi-selection** — Ctrl+click toggle, Shift+click range, right-click accumulation toggle, and a context-menu count of everything selected
 - ✅ **Inline rename** — double-click to edit
 - ✅ **Context menu** — Render, View textures, Export, Rename, Delete
 
