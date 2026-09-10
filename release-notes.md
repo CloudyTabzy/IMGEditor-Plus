@@ -1,6 +1,6 @@
 ## Unreleased
 
-- **Middle-click autoscroll (sticky):** a single MMB click in the entry table starts anchored autoscrolling — scroll speed scales with the cursor's distance from the anchor (6 px dead zone, momentum multiplier that grows while parked at max speed for huge archives). Hold-drag MMB keeps the direct proportional mode. Left-click stops in place, right-click cancels and restores the pre-scroll offset, Escape cancels. A one-time toast explains the controls. Internally the table tracks a virtual scroll offset because Iced's scrollable does not emit `on_scroll` for operation-driven `scroll_to` calls.
+- **Firefox-style middle-click autoscroll:** a single MMB click in the entry table starts anchored autoscrolling with the badge at the actual click point. Its distance response follows Firefox's neutral-zone acceleration curve without temporal momentum, so returning to the anchor stops immediately and makes precise positioning predictable. Hold-drag MMB keeps direct proportional control; a regular click, MMB, Escape, or wheel keeps the current position, while right-click restores the pre-scroll offset. Internally the table tracks a virtual scroll offset because Iced's scrollable does not emit `on_scroll` for operation-driven `scroll_to` calls.
 
 ## IMG Editor Plus v4.1.0
 

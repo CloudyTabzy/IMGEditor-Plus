@@ -82,14 +82,15 @@ pub const ABOUT_TEXT: &str = concat!(
 
 #[derive(Debug, Clone, Copy)]
 pub struct AutoScroll {
+    /// Window-relative point where the middle button entered autoscroll.
     pub anchor: Option<Point>,
     pub initial_scroll_y: f32,
     pub current: Option<Point>,
     /// Sticky (Firefox-style) mode: the MMB was clicked once without
     /// dragging, so scrolling continues from the anchored cursor offset
-    /// until cancelled with any click, the wheel, or Escape.
+    /// until a manual input commits or cancels it.
     pub sticky: bool,
-    /// Total cursor travel while the button was held, used to tell a
+    /// Greatest cursor distance while the button was held, used to tell a
     /// click from a drag on MMB release.
     pub press_travel: f32,
     /// Running scroll offset driven by the sticky-mode velocity.
@@ -100,46 +101,36 @@ pub struct AutoScroll {
     /// — rebasing on it would snap the view back to the last wheel
     /// position every tick.
     pub sticky_scroll_y: f32,
-    /// The externally observed offset at the last sync (wheel events
-    /// during sticky mode fold their delta into `sticky_scroll_y`).
-    pub last_known_scroll_y: f32,
-    /// Speed multiplier that grows while the cursor holds the sticky
-    /// scroll at max speed, so huge archives keep accelerating past the
-    /// base cap. Resets on re-anchor and decays below max speed.
-    pub momentum: f32,
 }
 
 impl AutoScroll {
     /// Distance in px the cursor may travel during a MMB press and
     /// still count as a sticky-mode click instead of a drag.
     pub const CLICK_TRAVEL: f32 = 6.0;
-    /// Cursor distance from the anchor before sticky scrolling starts.
-    pub const DEAD_ZONE: f32 = 6.0;
-    /// Sticky scroll speed in px/s per px of anchor distance.
-    pub const SPEED: f32 = 14.0;
-    /// Upper bound on the sticky scroll speed.
-    pub const MAX_SPEED: f32 = 2400.0;
-    /// Momentum growth per second while the cursor holds max speed.
-    pub const MOMENTUM_RATE: f32 = 0.8;
-    /// Momentum cap: max speed × 5 keeps growing while parked at the
-    /// screen edge, enough to traverse thousands of entries.
-    pub const MOMENTUM_MAX: f32 = 5.0;
-    /// Momentum decay per second when the cursor is below max speed but
-    /// outside the dead zone (5× → 1× in ~0.7 s).
-    pub const MOMENTUM_DECAY: f32 = 6.0;
+    /// Firefox-compatible neutral zone around the autoscroll anchor.
+    pub const DEAD_ZONE: f32 = 12.0;
+    /// Firefox evaluates its response curve every 20 ms. We use the same
+    /// curve but integrate it at Iced's animation cadence for smoother motion.
+    const REFERENCE_FRAME_SECS: f32 = 0.020;
+    /// A guardrail for unusually large pointer deltas; ordinary desktop use
+    /// remains governed entirely by the Firefox-compatible response curve.
+    pub const MAX_SPEED: f32 = 12_000.0;
 
     /// Signed sticky velocity (px/s) for the current cursor offset.
     pub fn sticky_velocity(&self) -> f32 {
         let (Some(anchor), Some(current)) = (self.anchor, self.current) else {
             return 0.0;
         };
-        let dy = current.y - anchor.y;
-        let speed = ((dy.abs() - Self::DEAD_ZONE).max(0.0) * Self::SPEED).min(Self::MAX_SPEED);
-        if dy < 0.0 {
-            -speed
+        let normalized = (current.y - anchor.y) / Self::DEAD_ZONE;
+        let per_reference_frame = if normalized > 1.0 {
+            normalized * normalized.sqrt() - 1.0
+        } else if normalized < -1.0 {
+            normalized * (-normalized).sqrt() + 1.0
         } else {
-            speed
-        }
+            0.0
+        };
+
+        (per_reference_frame / Self::REFERENCE_FRAME_SECS).clamp(-Self::MAX_SPEED, Self::MAX_SPEED)
     }
 
     /// Which direction the sticky indicator should highlight:
@@ -273,15 +264,11 @@ pub enum Message {
     PointerMoved(Point),
     AnimationTick(std::time::Instant),
     AutoScrollStarted,
-    AutoScrollStartedAtRow(usize),
     AutoScrollMoved(Point),
     /// MMB released: converts a click (short travel) into sticky
     /// autoscroll, ends a drag, or no-ops when already sticky.
     AutoScrollMiddleReleased,
     AutoScrollEnded,
-    /// LMB during sticky autoscroll: move the anchor to the current
-    /// cursor position and keep scrolling.
-    AutoScrollReanchor,
     /// RMB during sticky autoscroll: end autoscroll and restore the
     /// scroll offset from before it started.
     AutoScrollCancel,
@@ -2745,33 +2732,20 @@ impl App {
                         self.empty_state_phase =
                             (self.empty_state_phase + dt.as_secs_f32() * 0.15).fract();
                     }
-                    // Sticky autoscroll: integrate the cursor-distance
-                    // velocity into the sticky offset each frame. The
-                    // offset is self-maintained (Iced does not publish
-                    // on_scroll for operation-driven scroll_to, so
-                    // rebasing on self.scroll_y would snap back to the
-                    // last wheel position); wheel deltas arrive through
-                    // ScrollOffsetChanged and fold in there.
+                    // Sticky autoscroll integrates Firefox's cursor-distance
+                    // response curve into a self-maintained offset. Iced does
+                    // not publish on_scroll for operation-driven scroll_to.
                     if let Some(state) = self.autoscroll.as_mut()
                         && state.sticky
                     {
                         let velocity = state.sticky_velocity();
                         let dt_secs = dt.as_secs_f32();
                         if velocity != 0.0 && dt_secs > 0.0 {
-                            state.momentum = if velocity.abs() >= AutoScroll::MAX_SPEED {
-                                (state.momentum + AutoScroll::MOMENTUM_RATE * dt_secs)
-                                    .min(AutoScroll::MOMENTUM_MAX)
-                            } else {
-                                (state.momentum - AutoScroll::MOMENTUM_DECAY * dt_secs)
-                                    .max(1.0)
-                            };
                             state.sticky_scroll_y =
-                                (state.sticky_scroll_y + velocity * state.momentum * dt_secs)
-                                    .max(0.0);
-                            // Mirror into the virtual offset: drag mode
-                            // and future sticky conversions seed from it
-                            // (programmatic scroll_to never fires
-                            // ScrollOffsetChanged).
+                                (state.sticky_scroll_y + velocity * dt_secs).max(0.0);
+                            // Mirror into the virtual offset: later drags
+                            // and autoscroll runs must start here, not at a
+                            // stale interactive-scroll position.
                             self.scroll_y = state.sticky_scroll_y;
                             tick_task = iced::advanced::widget::operate(scroll_to(
                                 iced::widget::Id::new("entry_table"),
@@ -2780,15 +2754,6 @@ impl App {
                                     y: Some(state.sticky_scroll_y),
                                 },
                             ));
-                        } else if velocity == 0.0 {
-                            // Dead zone: full stop. Momentum collapses
-                            // instantly so the next nudge starts at
-                            // base speed — the reliable way to shed a
-                            // boosted scroll.
-                            state.momentum = 1.0;
-                        } else {
-                            state.momentum =
-                                (state.momentum - AutoScroll::MOMENTUM_DECAY * dt_secs).max(1.0);
                         }
                     }
                 }
@@ -2885,16 +2850,11 @@ impl App {
                 Task::none()
             }
             Message::ScrollOffsetChanged(y) => {
-                // During sticky autoscroll the offset is driven by the
-                // velocity integration; a wheel delta observed here folds
-                // into the running offset instead of being ignored.
-                if let Some(state) = self.autoscroll.as_mut()
-                    && state.sticky
-                {
-                    state.sticky_scroll_y = (state.sticky_scroll_y + (y - state.last_known_scroll_y)).max(0.0);
-                    state.last_known_scroll_y = y;
-                }
+                // A wheel or scrollbar interaction is an explicit manual
+                // navigation action, so it commits the current position and
+                // exits sticky autoscroll just like Firefox does.
                 self.scroll_y = y;
+                self.autoscroll = None;
                 Task::none()
             }
             Message::EntryInspected { index, inspection } => {
@@ -2915,20 +2875,19 @@ impl App {
                 self.last_pointer_position = Some(position);
                 Task::none()
             }
-            Message::AutoScrollStarted | Message::AutoScrollStartedAtRow(_) => {
+            Message::AutoScrollStarted => {
                 // Middle-clicking while the context menu is open just dismisses it.
                 if self.context_menu.take().is_some() {
                     return Task::none();
                 }
+                let anchor = self.last_pointer_position;
                 self.autoscroll = Some(AutoScroll {
-                    anchor: None,
+                    anchor,
                     initial_scroll_y: self.scroll_y,
-                    current: None,
+                    current: anchor,
                     sticky: false,
                     press_travel: 0.0,
                     sticky_scroll_y: self.scroll_y,
-                    last_known_scroll_y: self.scroll_y,
-                    momentum: 1.0,
                 });
                 Task::none()
             }
@@ -2941,10 +2900,11 @@ impl App {
                     state.current = Some(position);
                     return Task::none();
                 };
-                if let Some(previous) = state.current {
-                    state.press_travel += (position.y - previous.y).abs()
-                        + (position.x - previous.x).abs();
-                }
+                let delta_x = position.x - anchor.x;
+                let delta_y = position.y - anchor.y;
+                state.press_travel = state
+                    .press_travel
+                    .max((delta_x * delta_x + delta_y * delta_y).sqrt());
                 state.current = Some(position);
                 if state.sticky {
                     // Velocity scrolling is driven by the animation tick;
@@ -2982,12 +2942,11 @@ impl App {
                     // users learn the controls.
                     state.sticky = true;
                     state.sticky_scroll_y = self.scroll_y;
-                    state.last_known_scroll_y = self.scroll_y;
                     self.prepare_interaction_animation();
                     if !self.autoscroll_notice_shown {
                         self.autoscroll_notice_shown = true;
                         self.toast = Some(
-                            "Sticky autoscroll: move the cursor up/down to scroll, left-click to re-anchor, right-click to cancel.".to_string(),
+                            "Autoscroll: move up/down to scroll; left or middle click keeps this position, right-click restores the start.".to_string(),
                         );
                         self.toast_extended_duration = true;
                     }
@@ -2998,16 +2957,6 @@ impl App {
             }
             Message::AutoScrollEnded => {
                 self.autoscroll = None;
-                Task::none()
-            }
-            Message::AutoScrollReanchor => {
-                if let Some(state) = self.autoscroll.as_mut()
-                    && state.sticky
-                    && let Some(current) = state.current
-                {
-                    state.anchor = Some(current);
-                    state.momentum = 1.0;
-                }
                 Task::none()
             }
             Message::AutoScrollCancel => {
@@ -4203,27 +4152,33 @@ impl App {
         });
 
         let autoscroll = if self.autoscroll.is_some() {
-            iced::event::listen().map(|event| match event {
+            iced::event::listen_with(|event, _status, _window| match event {
                 iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-                    Message::AutoScrollMoved(position)
+                    Some(Message::AutoScrollMoved(position))
                 }
                 iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
                     iced::mouse::Button::Middle,
-                )) => Message::AutoScrollMiddleReleased,
+                )) => Some(Message::AutoScrollMiddleReleased),
+                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+                    iced::mouse::Button::Right,
+                )) => Some(Message::AutoScrollCancel),
+                // listen_with deliberately sees captured interactions too:
+                // a click outside the table must still stop autoscroll
+                // rather than leave it running behind another control.
                 iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_))
                 | iced::Event::Mouse(iced::mouse::Event::ButtonReleased(_))
                 // Wheel events outside the table cancel sticky mode;
-                // over the table the scrollable absorbs them and the
-                // velocity integration rebases on the live offset.
+                // an interactive table scroll exits through
+                // ScrollOffsetChanged instead.
                 | iced::Event::Mouse(iced::mouse::Event::WheelScrolled { .. }) => {
-                    Message::AutoScrollEnded
+                    Some(Message::AutoScrollEnded)
                 }
                 iced::Event::Keyboard(KeyboardEvent::KeyPressed {
                     key:
                         iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                     ..
-                }) => Message::AutoScrollEscape,
-                _ => Message::Noop,
+                }) => Some(Message::AutoScrollEscape),
+                _ => None,
             })
         } else {
             Subscription::none()
@@ -5435,7 +5390,7 @@ mod tests {
     }
 
     #[test]
-    fn sticky_velocity_scales_with_anchor_distance() {
+    fn sticky_velocity_matches_firefox_response_curve() {
         let anchor = Point::new(100.0, 100.0);
         let mut state = AutoScroll {
             anchor: Some(anchor),
@@ -5444,8 +5399,6 @@ mod tests {
             sticky: true,
             press_travel: 0.0,
             sticky_scroll_y: 0.0,
-            last_known_scroll_y: 0.0,
-            momentum: 1.0,
         };
 
         // Inside the dead zone: no velocity.
@@ -5453,13 +5406,15 @@ mod tests {
         assert_eq!(state.sticky_velocity(), 0.0);
         assert_eq!(state.sticky_direction(), None);
 
-        // 56 px below the anchor → (56 - 6) * 14 = 700 px/s downward.
-        state.current = Some(Point::new(100.0, 156.0));
-        assert!((state.sticky_velocity() - 700.0).abs() < 0.01);
+        // Firefox's 20 ms response for a 24 px offset is
+        // (2 * sqrt(2) - 1) px, converted to px/s here.
+        state.current = Some(Point::new(100.0, 124.0));
+        let expected = (2.0_f32 * 2.0_f32.sqrt() - 1.0) / 0.020;
+        assert!((state.sticky_velocity() - expected).abs() < 0.01);
         assert_eq!(state.sticky_direction(), Some(1));
 
         // Above the anchor → upward.
-        state.current = Some(Point::new(100.0, 44.0));
+        state.current = Some(Point::new(100.0, 76.0));
         assert!(state.sticky_velocity() < 0.0);
         assert_eq!(state.sticky_direction(), Some(-1));
     }
@@ -5468,16 +5423,19 @@ mod tests {
     fn middle_click_releases_into_sticky_mode_and_drag_ends() {
         let mut app = test_app_with_entries();
 
-        // Short travel: a clean click converts to sticky mode.
+        // Short travel: a clean click converts to sticky mode at the actual
+        // pointer position instead of waiting for the next cursor move.
+        let pointer = Point::new(50.0, 50.0);
+        let _ = app.update(Message::PointerMoved(pointer));
         let _ = app.update(Message::AutoScrollStarted);
-        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 50.0)));
         let _ = app.update(Message::AutoScrollMiddleReleased);
         let state = app.autoscroll.expect("clean click becomes sticky");
         assert!(state.sticky);
+        assert_eq!(state.anchor, Some(pointer));
+        assert_eq!(state.current, Some(pointer));
 
         // Long travel: a drag ends autoscroll on release.
         let _ = app.update(Message::AutoScrollStarted);
-        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 50.0)));
         let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 120.0)));
         let _ = app.update(Message::AutoScrollMiddleReleased);
         assert!(app.autoscroll.is_none());
@@ -5492,8 +5450,12 @@ mod tests {
         let _ = app.update(Message::AutoScrollMiddleReleased);
         assert!(app.autoscroll.unwrap().sticky);
 
-        // Park the cursor 106 px below the anchor → 1400 px/s.
+        // Park the cursor 106 px below the anchor.
         let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 206.0)));
+        let velocity = app
+            .autoscroll
+            .expect("sticky autoscroll keeps running")
+            .sticky_velocity();
 
         let start = std::time::Instant::now();
         let _ = app.update(Message::AnimationTick(start));
@@ -5501,53 +5463,39 @@ mod tests {
 
         let state = app.autoscroll.expect("sticky autoscroll keeps running");
         assert!(
-            (state.sticky_scroll_y - 70.0).abs() < 0.5,
-            "50 ms at 1400 px/s = 70 px, got {}",
+            (state.sticky_scroll_y - velocity * 0.05).abs() < 0.5,
+            "50 ms should integrate the Firefox response curve, got {}",
             state.sticky_scroll_y
         );
     }
 
     #[test]
-    fn sticky_momentum_grows_at_max_speed_and_decays() {
+    fn sticky_autoscroll_stops_immediately_in_the_neutral_zone() {
         let mut app = test_app_with_entries();
         app.scroll_y = 0.0;
         let _ = app.update(Message::AutoScrollStarted);
         let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
         let _ = app.update(Message::AutoScrollMiddleReleased);
-        // 300 px below the anchor: base velocity caps at MAX_SPEED.
-        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 400.0)));
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 300.0)));
 
         let start = std::time::Instant::now();
         let _ = app.update(Message::AnimationTick(start));
-        // 2 s parked at max speed: momentum 1.0 + 0.8/s * 2 = 2.6.
-        let mut now = start;
-        for _ in 0..40 {
-            now += Duration::from_millis(50);
-            let _ = app.update(Message::AnimationTick(now));
-        }
-        let state = app.autoscroll.expect("sticky keeps running");
-        assert!(
-            (state.momentum - 2.6).abs() < 0.05,
-            "momentum should reach 2.6, got {}",
-            state.momentum
-        );
-        // The offset accumulates across ticks: ~2400 px/s ramping with
-        // momentum over 2 s ≈ 8.6k px traveled.
-        assert!(
-            state.sticky_scroll_y > 8000.0 && state.sticky_scroll_y < 9000.0,
-            "boosted speed should accumulate, got {}",
-            state.sticky_scroll_y
-        );
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(50)));
+        let before_stop = app
+            .autoscroll
+            .expect("sticky keeps running")
+            .sticky_scroll_y;
 
-        // Back into the dead zone: full stop, momentum collapses
-        // instantly so the next nudge starts at base speed.
-        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 102.0)));
-        let _ = app.update(Message::AnimationTick(now + Duration::from_millis(50)));
+        // No hidden time momentum: returning to the neutral zone brakes on
+        // the next frame and preserves the exact current location.
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 111.0)));
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(100)));
         let state = app.autoscroll.expect("sticky keeps running");
         assert!(
-            (state.momentum - 1.0).abs() < f32::EPSILON,
-            "dead zone must reset momentum instantly, got {}",
-            state.momentum
+            (state.sticky_scroll_y - before_stop).abs() < f32::EPSILON,
+            "the neutral zone must stop immediately, got {} -> {}",
+            before_stop,
+            state.sticky_scroll_y
         );
     }
 
@@ -5557,12 +5505,19 @@ mod tests {
         let _ = app.update(Message::AutoScrollStarted);
         let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
         let _ = app.update(Message::AutoScrollMiddleReleased);
-        // 106 px below the anchor → 1400 px/s.
+        // 106 px below the anchor, using the Firefox-compatible response.
         let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 206.0)));
+        let velocity = app
+            .autoscroll
+            .expect("sticky autoscroll keeps running")
+            .sticky_velocity();
         let start = std::time::Instant::now();
         let _ = app.update(Message::AnimationTick(start));
         let _ = app.update(Message::AnimationTick(start + Duration::from_millis(50)));
-        assert!((app.scroll_y - 70.0).abs() < 0.5, "virtual offset tracks");
+        assert!(
+            (app.scroll_y - velocity * 0.05).abs() < 0.5,
+            "virtual offset tracks"
+        );
 
         // Ending sticky and starting a fresh autoscroll (drag or new
         // click) must seed from the current position, not the stale
@@ -5571,15 +5526,16 @@ mod tests {
         let _ = app.update(Message::AutoScrollStarted);
         let state = app.autoscroll.expect("new autoscroll");
         assert!(
-            (state.initial_scroll_y - 70.0).abs() < 0.5,
+            (state.initial_scroll_y - velocity * 0.05).abs() < 0.5,
             "seed offset must be the live position, got {}",
             state.initial_scroll_y
         );
     }
 
     #[test]
-    fn sticky_reanchor_moves_anchor_and_resets_momentum() {
+    fn sticky_left_click_commits_the_current_position() {
         let mut app = test_app_with_entries();
+        app.scroll_y = 500.0;
         let _ = app.update(Message::AutoScrollStarted);
         let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
         let _ = app.update(Message::AutoScrollMiddleReleased);
@@ -5587,39 +5543,30 @@ mod tests {
         let start = std::time::Instant::now();
         let _ = app.update(Message::AnimationTick(start));
         let _ = app.update(Message::AnimationTick(start + Duration::from_millis(50)));
-        assert!(app.autoscroll.unwrap().momentum > 1.0);
+        let committed = app.scroll_y;
+        assert!(committed > 500.0, "autoscroll should advance before commit");
 
-        let _ = app.update(Message::AutoScrollReanchor);
-        let state = app.autoscroll.expect("re-anchor keeps sticky mode");
-        assert_eq!(state.anchor, Some(Point::new(50.0, 300.0)));
-        assert_eq!(state.momentum, 1.0);
-        // Cursor sits on the new anchor: dead zone, no velocity.
-        assert_eq!(state.sticky_velocity(), 0.0);
+        let _ = app.update(Message::AutoScrollEnded);
+        assert!(app.autoscroll.is_none());
+        assert!(
+            (app.scroll_y - committed).abs() < f32::EPSILON,
+            "left click must stop in place instead of re-anchoring"
+        );
     }
 
     #[test]
-    fn wheel_delta_folds_into_sticky_offset() {
+    fn wheel_scroll_stops_sticky_autoscroll_at_the_interactive_offset() {
         let mut app = test_app_with_entries();
         let _ = app.update(Message::AutoScrollStarted);
         let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
         let _ = app.update(Message::AutoScrollMiddleReleased);
-        // 106 px below the anchor → 1400 px/s.
-        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 206.0)));
+        assert!(app.autoscroll.unwrap().sticky);
 
-        // One tick of velocity scrolling: 1400 px/s * 50 ms = 70 px.
-        let start = std::time::Instant::now();
-        let _ = app.update(Message::AnimationTick(start));
-        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(50)));
-        assert!((app.autoscroll.unwrap().sticky_scroll_y - 70.0).abs() < 0.5);
-
-        // A wheel scroll observed at offset 200 folds its delta in.
+        // Iced publishes the wheel's absolute offset. It must become the
+        // current position and exit sticky mode rather than rebasing it.
         let _ = app.update(Message::ScrollOffsetChanged(200.0));
-        let state = app.autoscroll.expect("sticky keeps running");
-        assert!(
-            (state.sticky_scroll_y - 270.0).abs() < 0.5,
-            "wheel delta must fold into the sticky offset, got {}",
-            state.sticky_scroll_y
-        );
+        assert!(app.autoscroll.is_none());
+        assert_eq!(app.scroll_y, 200.0);
     }
 
     #[test]
@@ -5629,10 +5576,16 @@ mod tests {
         let _ = app.update(Message::AutoScrollStarted);
         let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
         let _ = app.update(Message::AutoScrollMiddleReleased);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 300.0)));
+        let start = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(start));
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(50)));
+        assert!(app.scroll_y > 500.0);
         assert!(app.autoscroll.is_some());
 
         let _ = app.update(Message::AutoScrollCancel);
         assert!(app.autoscroll.is_none());
+        assert_eq!(app.scroll_y, 500.0);
     }
 
     #[test]
