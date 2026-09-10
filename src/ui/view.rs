@@ -12,6 +12,7 @@ use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::tasks::FolderDuplicatePolicy;
 use crate::ui::app::{ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget};
+use crate::ui::design::Design;
 use crate::ui::fonts;
 use crate::ui::icons;
 use crate::ui::interaction;
@@ -50,6 +51,21 @@ const HEADER_HEIGHT: f32 = 32.0;
 /// Number of rows to keep rendered above and below the scroll viewport. 10 rows ≈ 320 px of
 /// over-render — negligible cost, eliminates any chance of a blank band at the edges.
 const OVERSCAN_ROWS: i32 = 10;
+
+/// The original editor enabled ImGui's alternating table rows. Use the
+/// design surface rather than a hard-coded color so the separation remains
+/// restrained in both light and dark themes.
+fn alternate_entry_row_background(design: &Design) -> Color {
+    let base = design.page();
+    let contrast = if design.is_dark {
+        design.surface_subtle()
+    } else {
+        design.border()
+    };
+    let strength = if design.is_dark { 0.25 } else { 0.55 };
+
+    iced::theme::palette::mix(base, contrast, strength)
+}
 
 impl App {
     pub(crate) fn build_entry_table(&self) -> Element<'_, Message> {
@@ -243,6 +259,11 @@ impl App {
         let row_interactive = !self.autoscroll;
         let is_renaming = entry.rename && row_interactive;
         let is_selected = entry.selected;
+        // Use the visible-row position so filtering and sorting preserve a
+        // stable zebra pattern instead of making stripes appear to jump.
+        let design = self.design();
+        let alternate_background = (display_row % 2 == 1)
+            .then(|| alternate_entry_row_background(&design));
         let literal_types = self.config.literal_file_types;
 
         // Render display strings on demand for the visible row only. Pre-caching
@@ -279,6 +300,8 @@ impl App {
                 peak_background,
                 extended.primary.weak.text,
             )
+        } else if let Some(background) = alternate_background {
+            w::readable_text_color(background, extended.background.base.text)
         } else {
             extended.background.base.text
         };
@@ -366,6 +389,12 @@ impl App {
                             peak_background,
                             palette.primary.weak.text,
                         )),
+                        ..Default::default()
+                    }
+                } else if let Some(background) = alternate_background {
+                    iced::widget::container::Style {
+                        background: Some(background.into()),
+                        text_color: Some(row_text_color),
                         ..Default::default()
                     }
                 } else {
@@ -2678,5 +2707,21 @@ mod tests {
 
         assert_eq!(left, viewport.x + CONTEXT_MENU_EDGE_GAP);
         assert_eq!(top, viewport.y + CONTEXT_MENU_EDGE_GAP);
+    }
+
+    #[test]
+    fn alternate_entry_rows_are_subtle_in_light_and_dark_designs() {
+        for design in [Design::light(), Design::dark()] {
+            let base = design.page();
+            let alternate = alternate_entry_row_background(&design);
+
+            assert_ne!(alternate, base);
+            if design.is_dark {
+                assert!(alternate.relative_luminance() > base.relative_luminance());
+            } else {
+                assert!(alternate.relative_luminance() < base.relative_luminance());
+            }
+            assert!(alternate.relative_contrast(base) < 1.4);
+        }
     }
 }

@@ -67,8 +67,6 @@ struct SortManagerColors {
     text: Color,
     muted: Color,
     accent: Color,
-    accent_text: Color,
-    accent_weak: Color,
     surface_subtle: Color,
     border: Color,
 }
@@ -79,8 +77,6 @@ impl SortManagerColors {
             text: design.text(),
             muted: design.text_muted(),
             accent: design.accent(),
-            accent_text: design.accent_text(),
-            accent_weak: design.accent_weak(),
             surface_subtle: design.surface_subtle(),
             border: design.border(),
         }
@@ -147,7 +143,7 @@ pub fn build<'a>(
         Column::new()
             .push(body)
             .push(Space::new().height(LEN_FIXED_12))
-            .push(footer_row(colors))
+            .push(footer_row())
             .padding(Padding::from(18))
             .spacing(4)
             .width(Length::Fill),
@@ -294,10 +290,7 @@ fn slot_row<'a>(
     .text_size(13)
     .width(LEN_FIXED_140);
 
-    let direction_background = match prio.direction {
-        SortDirection::Ascending => colors.accent_weak,
-        SortDirection::Descending => colors.surface_subtle,
-    };
+    let ascending = matches!(prio.direction, SortDirection::Ascending);
     let dir_btn = button(text(dir_label(prio.direction)).size(13))
         .on_press(Message::SortSetSlotDirection(
             slot_idx,
@@ -307,15 +300,14 @@ fn slot_row<'a>(
             },
         ))
         .padding(Padding::from([4, 8]))
-        .style(move |_theme, _status| iced::widget::button::Style {
-            background: Some(iced::Background::Color(direction_background)),
-            text_color: colors.text,
-            border: Border {
-                color: colors.border,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..iced::widget::button::Style::default()
+        .style(move |theme, status| {
+            let mut style = if ascending {
+                iced::widget::button::primary(theme, status)
+            } else {
+                iced::widget::button::secondary(theme, status)
+            };
+            style.border.radius = 4.0.into();
+            style
         });
 
     let remove_btn = button(text("×").size(14))
@@ -403,7 +395,7 @@ fn controls_row<'a>(draft: &'a SortChain, colors: SortManagerColors) -> Element<
 /// Apply / Cancel footer. The "X of N keys active" badge
 /// mirrors the dialog header so the user always knows their
 /// current state.
-fn footer_row<'a>(colors: SortManagerColors) -> Element<'a, Message> {
+fn footer_row<'a>() -> Element<'a, Message> {
     Row::new()
         .push(
             button(text("Cancel"))
@@ -415,15 +407,10 @@ fn footer_row<'a>(colors: SortManagerColors) -> Element<'a, Message> {
             button(text("Apply"))
                 .on_press(Message::SortApplyDraft)
                 .padding(Padding::from([6, 16]))
-                .style(move |_theme, _status| iced::widget::button::Style {
-                    background: Some(iced::Background::Color(colors.accent)),
-                    text_color: colors.accent_text,
-                    border: Border {
-                        color: colors.accent,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..iced::widget::button::Style::default()
+                .style(move |theme, status| {
+                    let mut style = iced::widget::button::primary(theme, status);
+                    style.border.radius = 4.0.into();
+                    style
                 }),
         )
         .align_y(Alignment::Center)
