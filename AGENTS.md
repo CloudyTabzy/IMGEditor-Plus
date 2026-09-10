@@ -126,6 +126,21 @@ to make those failures debuggable.
   `log::error!` AND re-emit / re-panic — the dev logger does NOT
   replace wgpu's panic path; it's purely additive.
 
+## Virtual scroll offset (entry table)
+
+`App.scroll_y` is a **virtual offset maintained by the app**, not a live
+readout of the scrollable. Iced 0.14's `Scrollable` publishes `on_scroll`
+only for interactive scrolling (wheel, scrollbar drag, touch) —
+**operation-driven `scroll_to` calls never fire it**. Consequences:
+
+- Every code path that calls `scroll_to("entry_table", …)` MUST also
+  update `self.scroll_y` to the target (sticky tick, drag mode,
+  prediction commit, cancel-restore). Rebasing on a stale
+  `self.scroll_y` snaps the view back to the last wheel position.
+- Sticky autoscroll integrates its own running offset
+  (`AutoScroll::sticky_scroll_y`) and mirrors it into `self.scroll_y`;
+  wheel deltas arrive through `Message::ScrollOffsetChanged` and fold in.
+
 ## 3D scene cache (quick_cache) + telemetry
 
 The 3D viewer caches decoded scenes so revisiting an entry is instant.

@@ -22,6 +22,14 @@ pub fn pack<'a>() -> Text<'a> {
     lucide::archive()
 }
 
+pub fn chevrons_up<'a>() -> Text<'a> {
+    lucide::chevrons_up()
+}
+
+pub fn chevrons_down<'a>() -> Text<'a> {
+    lucide::chevrons_down()
+}
+
 pub fn import<'a>() -> Text<'a> {
     lucide::download()
 }

@@ -85,6 +85,75 @@ pub struct AutoScroll {
     pub anchor: Option<Point>,
     pub initial_scroll_y: f32,
     pub current: Option<Point>,
+    /// Sticky (Firefox-style) mode: the MMB was clicked once without
+    /// dragging, so scrolling continues from the anchored cursor offset
+    /// until cancelled with any click, the wheel, or Escape.
+    pub sticky: bool,
+    /// Total cursor travel while the button was held, used to tell a
+    /// click from a drag on MMB release.
+    pub press_travel: f32,
+    /// Running scroll offset driven by the sticky-mode velocity.
+    ///
+    /// Integrated independently of `self.scroll_y`: Iced's scrollable
+    /// only publishes `on_scroll` for interactive scrolling, so
+    /// operation-driven `scroll_to` calls never update `self.scroll_y`
+    /// — rebasing on it would snap the view back to the last wheel
+    /// position every tick.
+    pub sticky_scroll_y: f32,
+    /// The externally observed offset at the last sync (wheel events
+    /// during sticky mode fold their delta into `sticky_scroll_y`).
+    pub last_known_scroll_y: f32,
+    /// Speed multiplier that grows while the cursor holds the sticky
+    /// scroll at max speed, so huge archives keep accelerating past the
+    /// base cap. Resets on re-anchor and decays below max speed.
+    pub momentum: f32,
+}
+
+impl AutoScroll {
+    /// Distance in px the cursor may travel during a MMB press and
+    /// still count as a sticky-mode click instead of a drag.
+    pub const CLICK_TRAVEL: f32 = 6.0;
+    /// Cursor distance from the anchor before sticky scrolling starts.
+    pub const DEAD_ZONE: f32 = 6.0;
+    /// Sticky scroll speed in px/s per px of anchor distance.
+    pub const SPEED: f32 = 14.0;
+    /// Upper bound on the sticky scroll speed.
+    pub const MAX_SPEED: f32 = 2400.0;
+    /// Momentum growth per second while the cursor holds max speed.
+    pub const MOMENTUM_RATE: f32 = 0.8;
+    /// Momentum cap: max speed × 5 keeps growing while parked at the
+    /// screen edge, enough to traverse thousands of entries.
+    pub const MOMENTUM_MAX: f32 = 5.0;
+    /// Momentum decay per second when the cursor is below max speed but
+    /// outside the dead zone (5× → 1× in ~0.7 s).
+    pub const MOMENTUM_DECAY: f32 = 6.0;
+
+    /// Signed sticky velocity (px/s) for the current cursor offset.
+    pub fn sticky_velocity(&self) -> f32 {
+        let (Some(anchor), Some(current)) = (self.anchor, self.current) else {
+            return 0.0;
+        };
+        let dy = current.y - anchor.y;
+        let speed = ((dy.abs() - Self::DEAD_ZONE).max(0.0) * Self::SPEED).min(Self::MAX_SPEED);
+        if dy < 0.0 {
+            -speed
+        } else {
+            speed
+        }
+    }
+
+    /// Which direction the sticky indicator should highlight:
+    /// `Some(1)` down, `Some(-1)` up, `None` when inside the dead zone.
+    pub fn sticky_direction(&self) -> Option<i32> {
+        let velocity = self.sticky_velocity();
+        if velocity > 0.0 {
+            Some(1)
+        } else if velocity < 0.0 {
+            Some(-1)
+        } else {
+            None
+        }
+    }
 }
 
 /// The specific scene currently being decoded off the UI thread.
@@ -206,7 +275,19 @@ pub enum Message {
     AutoScrollStarted,
     AutoScrollStartedAtRow(usize),
     AutoScrollMoved(Point),
+    /// MMB released: converts a click (short travel) into sticky
+    /// autoscroll, ends a drag, or no-ops when already sticky.
+    AutoScrollMiddleReleased,
     AutoScrollEnded,
+    /// LMB during sticky autoscroll: move the anchor to the current
+    /// cursor position and keep scrolling.
+    AutoScrollReanchor,
+    /// RMB during sticky autoscroll: end autoscroll and restore the
+    /// scroll offset from before it started.
+    AutoScrollCancel,
+    /// Escape pressed while autoscroll is active: dismisses the search
+    /// prediction dropdown if it is open, otherwise ends autoscroll.
+    AutoScrollEscape,
 
     ShowAbout,
     HideAbout,
@@ -526,6 +607,8 @@ pub struct App {
     /// stays responsive even with large archives.
     pub filter_pending: bool,
     pub autoscroll: Option<AutoScroll>,
+    /// Sticky-autoscroll control notice shown once per session.
+    autoscroll_notice_shown: bool,
     pub modifiers: Modifiers,
     viewer_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>>,
     pub animator: Animator,
@@ -538,6 +621,13 @@ pub struct App {
     toast_pulses_remaining: u32,
     toast_pulse_target: f32,
     toast_start: Option<std::time::Instant>,
+    /// How long the current toast stays up before auto-dismissal. Most
+    /// toasts use the snappy default; the sticky-autoscroll notice uses
+    /// a long duration so users can actually read the controls.
+    toast_dismiss_after: Duration,
+    /// Set by the sticky-autoscroll notice so the next toast-reveal
+    /// tick adopts the long duration instead of the default.
+    toast_extended_duration: bool,
     /// Text of the floating toast snackbar while it is visible or fading
     /// out. Mirrors `toast` but survives dismissal for the fade-out.
     pub(crate) toast_reveal_text: Option<String>,
@@ -659,6 +749,7 @@ impl App {
             scroll_y: 0.0,
             filter_pending: false,
             autoscroll: None,
+            autoscroll_notice_shown: false,
             modifiers: Modifiers::default(),
             viewer_rxs: Vec::new(),
             animator: Animator::new(),
@@ -671,6 +762,8 @@ impl App {
             toast_pulses_remaining: 0,
             toast_pulse_target: 0.0,
             toast_start: None,
+            toast_dismiss_after: Duration::from_millis(2500),
+            toast_extended_duration: false,
             toast_reveal_text: None,
             toast_reveal_fading: false,
             shimmer_phase: 0.0,
@@ -960,6 +1053,9 @@ impl App {
         };
         self.search = name;
         self.editor.update_filtered_list(&self.search);
+        // The exact match sorts first; keep the virtual offset in sync
+        // with the scroll-to-top.
+        self.scroll_y = 0.0;
         let click_task = self.update(Message::EntryClicked(0));
         Task::batch(vec![
             click_task,
@@ -976,7 +1072,6 @@ impl App {
             )),
         ])
     }
-
     fn close_predictions(&mut self) {
         self.search_predictions.clear();
         self.did_you_mean = None;
@@ -1101,6 +1196,7 @@ impl App {
             || self.toast_reveal_text.is_some()
             || self.viewer_load.is_some()
             || self.has_active_progress()
+            || self.autoscroll.as_ref().is_some_and(|state| state.sticky)
             || (self.editor.archives().is_empty() && self.config.motion_enabled);
         if !subscription_alive {
             self.prev_tick = None;
@@ -2625,6 +2721,7 @@ impl App {
                 Task::none()
             }
             Message::AnimationTick(now) => {
+                let mut tick_task = Task::none();
                 if let Some(prev) = self.prev_tick {
                     // A window can be suspended or the subscription can be
                     // restarted after a long idle period. Cap one frame so a
@@ -2648,6 +2745,52 @@ impl App {
                         self.empty_state_phase =
                             (self.empty_state_phase + dt.as_secs_f32() * 0.15).fract();
                     }
+                    // Sticky autoscroll: integrate the cursor-distance
+                    // velocity into the sticky offset each frame. The
+                    // offset is self-maintained (Iced does not publish
+                    // on_scroll for operation-driven scroll_to, so
+                    // rebasing on self.scroll_y would snap back to the
+                    // last wheel position); wheel deltas arrive through
+                    // ScrollOffsetChanged and fold in there.
+                    if let Some(state) = self.autoscroll.as_mut()
+                        && state.sticky
+                    {
+                        let velocity = state.sticky_velocity();
+                        let dt_secs = dt.as_secs_f32();
+                        if velocity != 0.0 && dt_secs > 0.0 {
+                            state.momentum = if velocity.abs() >= AutoScroll::MAX_SPEED {
+                                (state.momentum + AutoScroll::MOMENTUM_RATE * dt_secs)
+                                    .min(AutoScroll::MOMENTUM_MAX)
+                            } else {
+                                (state.momentum - AutoScroll::MOMENTUM_DECAY * dt_secs)
+                                    .max(1.0)
+                            };
+                            state.sticky_scroll_y =
+                                (state.sticky_scroll_y + velocity * state.momentum * dt_secs)
+                                    .max(0.0);
+                            // Mirror into the virtual offset: drag mode
+                            // and future sticky conversions seed from it
+                            // (programmatic scroll_to never fires
+                            // ScrollOffsetChanged).
+                            self.scroll_y = state.sticky_scroll_y;
+                            tick_task = iced::advanced::widget::operate(scroll_to(
+                                iced::widget::Id::new("entry_table"),
+                                AbsoluteOffset {
+                                    x: None,
+                                    y: Some(state.sticky_scroll_y),
+                                },
+                            ));
+                        } else if velocity == 0.0 {
+                            // Dead zone: full stop. Momentum collapses
+                            // instantly so the next nudge starts at
+                            // base speed — the reliable way to shed a
+                            // boosted scroll.
+                            state.momentum = 1.0;
+                        } else {
+                            state.momentum =
+                                (state.momentum - AutoScroll::MOMENTUM_DECAY * dt_secs).max(1.0);
+                        }
+                    }
                 }
                 self.prev_tick = Some(now);
 
@@ -2666,15 +2809,19 @@ impl App {
                     self.ripple = None;
                 }
 
-                // Auto-dismiss toasts after 2.5 seconds so the green status pulse
-                // does not appear to stay on indefinitely.
+                // Auto-dismiss toasts after their duration elapses so the
+                // green status pulse does not appear to stay on
+                // indefinitely. The default is snappy; notices that need
+                // read time opt into a longer duration.
                 if self.toast.is_some() {
                     match self.toast_start {
                         None => self.toast_start = Some(now),
                         Some(start) => {
-                            if now.duration_since(start) >= Duration::from_millis(2500) {
+                            if now.duration_since(start) >= self.toast_dismiss_after {
                                 self.toast = None;
                                 self.toast_start = None;
+                                self.toast_dismiss_after = Duration::from_millis(2500);
+                                self.toast_extended_duration = false;
                             }
                         }
                     }
@@ -2688,6 +2835,14 @@ impl App {
                     let is_new = self.toast_reveal_text.as_ref() != Some(&current);
                     if is_new {
                         self.toast_reveal_text = Some(current);
+                        // A fresh toast resets to the snappy dismissal
+                        // unless the setter opted into a long notice.
+                        self.toast_dismiss_after = if self.toast_extended_duration {
+                            Duration::from_millis(6500)
+                        } else {
+                            Duration::from_millis(2500)
+                        };
+                        self.toast_extended_duration = false;
                     }
                     if is_new || self.toast_reveal_fading {
                         self.toast_reveal_fading = false;
@@ -2723,13 +2878,22 @@ impl App {
 
                 self.prepare_interaction_animation();
 
-                Task::none()
+                tick_task
             }
             Message::PaneResized(event) => {
                 self.panes.resize(event.split, event.ratio);
                 Task::none()
             }
             Message::ScrollOffsetChanged(y) => {
+                // During sticky autoscroll the offset is driven by the
+                // velocity integration; a wheel delta observed here folds
+                // into the running offset instead of being ignored.
+                if let Some(state) = self.autoscroll.as_mut()
+                    && state.sticky
+                {
+                    state.sticky_scroll_y = (state.sticky_scroll_y + (y - state.last_known_scroll_y)).max(0.0);
+                    state.last_known_scroll_y = y;
+                }
                 self.scroll_y = y;
                 Task::none()
             }
@@ -2760,6 +2924,11 @@ impl App {
                     anchor: None,
                     initial_scroll_y: self.scroll_y,
                     current: None,
+                    sticky: false,
+                    press_travel: 0.0,
+                    sticky_scroll_y: self.scroll_y,
+                    last_known_scroll_y: self.scroll_y,
+                    momentum: 1.0,
                 });
                 Task::none()
             }
@@ -2767,16 +2936,28 @@ impl App {
                 let Some(state) = self.autoscroll.as_mut() else {
                     return Task::none();
                 };
-                if state.anchor.is_none() {
+                let Some(anchor) = state.anchor else {
                     state.anchor = Some(position);
                     state.current = Some(position);
                     return Task::none();
+                };
+                if let Some(previous) = state.current {
+                    state.press_travel += (position.y - previous.y).abs()
+                        + (position.x - previous.x).abs();
                 }
                 state.current = Some(position);
-                let anchor = state.anchor.unwrap_or(position);
+                if state.sticky {
+                    // Velocity scrolling is driven by the animation tick;
+                    // moves only refresh the cursor offset.
+                    return Task::none();
+                }
                 let delta_y = position.y - anchor.y;
                 const SENSITIVITY: f32 = 2.5;
                 let new_y = (state.initial_scroll_y + delta_y * SENSITIVITY).max(0.0);
+                // Keep the virtual offset in sync: Iced does not notify
+                // on_scroll for operation-driven scrolling, and the next
+                // autoscroll seeds from it.
+                self.scroll_y = new_y;
                 iced::advanced::widget::operate(scroll_to(
                     iced::widget::Id::new("entry_table"),
                     AbsoluteOffset {
@@ -2785,8 +2966,72 @@ impl App {
                     },
                 ))
             }
+            Message::AutoScrollMiddleReleased => {
+                let Some(state) = self.autoscroll.as_mut() else {
+                    return Task::none();
+                };
+                if state.sticky {
+                    // A second MMB click cancels sticky mode (the press
+                    // already ended it; this is the trailing release).
+                    self.autoscroll = None;
+                    return Task::none();
+                }
+                if state.press_travel <= AutoScroll::CLICK_TRAVEL {
+                    // A clean MMB click: switch to sticky mode anchored
+                    // at the press point. Surface a one-time notice so
+                    // users learn the controls.
+                    state.sticky = true;
+                    state.sticky_scroll_y = self.scroll_y;
+                    state.last_known_scroll_y = self.scroll_y;
+                    self.prepare_interaction_animation();
+                    if !self.autoscroll_notice_shown {
+                        self.autoscroll_notice_shown = true;
+                        self.toast = Some(
+                            "Sticky autoscroll: move the cursor up/down to scroll, left-click to re-anchor, right-click to cancel.".to_string(),
+                        );
+                        self.toast_extended_duration = true;
+                    }
+                } else {
+                    self.autoscroll = None;
+                }
+                Task::none()
+            }
             Message::AutoScrollEnded => {
                 self.autoscroll = None;
+                Task::none()
+            }
+            Message::AutoScrollReanchor => {
+                if let Some(state) = self.autoscroll.as_mut()
+                    && state.sticky
+                    && let Some(current) = state.current
+                {
+                    state.anchor = Some(current);
+                    state.momentum = 1.0;
+                }
+                Task::none()
+            }
+            Message::AutoScrollCancel => {
+                if let Some(state) = self.autoscroll.take() {
+                    // Restore the offset from before autoscroll started
+                    // and keep the virtual offset in sync.
+                    self.scroll_y = state.initial_scroll_y;
+                    return iced::advanced::widget::operate(scroll_to(
+                        iced::widget::Id::new("entry_table"),
+                        AbsoluteOffset {
+                            x: None,
+                            y: Some(state.initial_scroll_y),
+                        },
+                    ));
+                }
+                Task::none()
+            }
+            Message::AutoScrollEscape => {
+                if self.predictions_open() {
+                    self.predictions_dismissed = true;
+                    self.prediction_index = None;
+                } else {
+                    self.autoscroll = None;
+                }
                 Task::none()
             }
             Message::OpenLastExportFolder => {
@@ -3942,6 +4187,7 @@ impl App {
             || self.toast_reveal_text.is_some()
             || self.viewer_load.is_some()
             || self.has_active_progress()
+            || self.autoscroll.as_ref().is_some_and(|state| state.sticky)
             || (self.editor.archives().is_empty() && self.config.motion_enabled)
         {
             iced::time::every(Duration::from_millis(16)).map(Message::AnimationTick)
@@ -3961,12 +4207,22 @@ impl App {
                 iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
                     Message::AutoScrollMoved(position)
                 }
-                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(_)) => {
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Middle,
+                )) => Message::AutoScrollMiddleReleased,
+                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_))
+                | iced::Event::Mouse(iced::mouse::Event::ButtonReleased(_))
+                // Wheel events outside the table cancel sticky mode;
+                // over the table the scrollable absorbs them and the
+                // velocity integration rebases on the live offset.
+                | iced::Event::Mouse(iced::mouse::Event::WheelScrolled { .. }) => {
                     Message::AutoScrollEnded
                 }
-                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
-                    iced::mouse::Button::Left | iced::mouse::Button::Right,
-                )) => Message::AutoScrollEnded,
+                iced::Event::Keyboard(KeyboardEvent::KeyPressed {
+                    key:
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    ..
+                }) => Message::AutoScrollEscape,
                 _ => Message::Noop,
             })
         } else {
@@ -5176,6 +5432,232 @@ mod tests {
             follow_up[0],
             Message::Viewer3dSelectTab(InspectorTab::Model3D)
         ));
+    }
+
+    #[test]
+    fn sticky_velocity_scales_with_anchor_distance() {
+        let anchor = Point::new(100.0, 100.0);
+        let mut state = AutoScroll {
+            anchor: Some(anchor),
+            initial_scroll_y: 0.0,
+            current: Some(anchor),
+            sticky: true,
+            press_travel: 0.0,
+            sticky_scroll_y: 0.0,
+            last_known_scroll_y: 0.0,
+            momentum: 1.0,
+        };
+
+        // Inside the dead zone: no velocity.
+        state.current = Some(Point::new(100.0, 104.0));
+        assert_eq!(state.sticky_velocity(), 0.0);
+        assert_eq!(state.sticky_direction(), None);
+
+        // 56 px below the anchor → (56 - 6) * 14 = 700 px/s downward.
+        state.current = Some(Point::new(100.0, 156.0));
+        assert!((state.sticky_velocity() - 700.0).abs() < 0.01);
+        assert_eq!(state.sticky_direction(), Some(1));
+
+        // Above the anchor → upward.
+        state.current = Some(Point::new(100.0, 44.0));
+        assert!(state.sticky_velocity() < 0.0);
+        assert_eq!(state.sticky_direction(), Some(-1));
+    }
+
+    #[test]
+    fn middle_click_releases_into_sticky_mode_and_drag_ends() {
+        let mut app = test_app_with_entries();
+
+        // Short travel: a clean click converts to sticky mode.
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 50.0)));
+        let _ = app.update(Message::AutoScrollMiddleReleased);
+        let state = app.autoscroll.expect("clean click becomes sticky");
+        assert!(state.sticky);
+
+        // Long travel: a drag ends autoscroll on release.
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 50.0)));
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 120.0)));
+        let _ = app.update(Message::AutoScrollMiddleReleased);
+        assert!(app.autoscroll.is_none());
+    }
+
+    #[test]
+    fn sticky_autoscroll_integrates_velocity_per_tick() {
+        let mut app = test_app_with_entries();
+        app.scroll_y = 0.0;
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
+        let _ = app.update(Message::AutoScrollMiddleReleased);
+        assert!(app.autoscroll.unwrap().sticky);
+
+        // Park the cursor 106 px below the anchor → 1400 px/s.
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 206.0)));
+
+        let start = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(start));
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(50)));
+
+        let state = app.autoscroll.expect("sticky autoscroll keeps running");
+        assert!(
+            (state.sticky_scroll_y - 70.0).abs() < 0.5,
+            "50 ms at 1400 px/s = 70 px, got {}",
+            state.sticky_scroll_y
+        );
+    }
+
+    #[test]
+    fn sticky_momentum_grows_at_max_speed_and_decays() {
+        let mut app = test_app_with_entries();
+        app.scroll_y = 0.0;
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
+        let _ = app.update(Message::AutoScrollMiddleReleased);
+        // 300 px below the anchor: base velocity caps at MAX_SPEED.
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 400.0)));
+
+        let start = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(start));
+        // 2 s parked at max speed: momentum 1.0 + 0.8/s * 2 = 2.6.
+        let mut now = start;
+        for _ in 0..40 {
+            now += Duration::from_millis(50);
+            let _ = app.update(Message::AnimationTick(now));
+        }
+        let state = app.autoscroll.expect("sticky keeps running");
+        assert!(
+            (state.momentum - 2.6).abs() < 0.05,
+            "momentum should reach 2.6, got {}",
+            state.momentum
+        );
+        // The offset accumulates across ticks: ~2400 px/s ramping with
+        // momentum over 2 s ≈ 8.6k px traveled.
+        assert!(
+            state.sticky_scroll_y > 8000.0 && state.sticky_scroll_y < 9000.0,
+            "boosted speed should accumulate, got {}",
+            state.sticky_scroll_y
+        );
+
+        // Back into the dead zone: full stop, momentum collapses
+        // instantly so the next nudge starts at base speed.
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 102.0)));
+        let _ = app.update(Message::AnimationTick(now + Duration::from_millis(50)));
+        let state = app.autoscroll.expect("sticky keeps running");
+        assert!(
+            (state.momentum - 1.0).abs() < f32::EPSILON,
+            "dead zone must reset momentum instantly, got {}",
+            state.momentum
+        );
+    }
+
+    #[test]
+    fn autoscroll_seeds_from_the_live_virtual_offset() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
+        let _ = app.update(Message::AutoScrollMiddleReleased);
+        // 106 px below the anchor → 1400 px/s.
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 206.0)));
+        let start = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(start));
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(50)));
+        assert!((app.scroll_y - 70.0).abs() < 0.5, "virtual offset tracks");
+
+        // Ending sticky and starting a fresh autoscroll (drag or new
+        // click) must seed from the current position, not the stale
+        // wheel offset — otherwise the view snaps back to the top.
+        let _ = app.update(Message::AutoScrollEnded);
+        let _ = app.update(Message::AutoScrollStarted);
+        let state = app.autoscroll.expect("new autoscroll");
+        assert!(
+            (state.initial_scroll_y - 70.0).abs() < 0.5,
+            "seed offset must be the live position, got {}",
+            state.initial_scroll_y
+        );
+    }
+
+    #[test]
+    fn sticky_reanchor_moves_anchor_and_resets_momentum() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
+        let _ = app.update(Message::AutoScrollMiddleReleased);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 300.0)));
+        let start = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(start));
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(50)));
+        assert!(app.autoscroll.unwrap().momentum > 1.0);
+
+        let _ = app.update(Message::AutoScrollReanchor);
+        let state = app.autoscroll.expect("re-anchor keeps sticky mode");
+        assert_eq!(state.anchor, Some(Point::new(50.0, 300.0)));
+        assert_eq!(state.momentum, 1.0);
+        // Cursor sits on the new anchor: dead zone, no velocity.
+        assert_eq!(state.sticky_velocity(), 0.0);
+    }
+
+    #[test]
+    fn wheel_delta_folds_into_sticky_offset() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
+        let _ = app.update(Message::AutoScrollMiddleReleased);
+        // 106 px below the anchor → 1400 px/s.
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 206.0)));
+
+        // One tick of velocity scrolling: 1400 px/s * 50 ms = 70 px.
+        let start = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(start));
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(50)));
+        assert!((app.autoscroll.unwrap().sticky_scroll_y - 70.0).abs() < 0.5);
+
+        // A wheel scroll observed at offset 200 folds its delta in.
+        let _ = app.update(Message::ScrollOffsetChanged(200.0));
+        let state = app.autoscroll.expect("sticky keeps running");
+        assert!(
+            (state.sticky_scroll_y - 270.0).abs() < 0.5,
+            "wheel delta must fold into the sticky offset, got {}",
+            state.sticky_scroll_y
+        );
+    }
+
+    #[test]
+    fn right_click_cancels_sticky_autoscroll() {
+        let mut app = test_app_with_entries();
+        app.scroll_y = 500.0;
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
+        let _ = app.update(Message::AutoScrollMiddleReleased);
+        assert!(app.autoscroll.is_some());
+
+        let _ = app.update(Message::AutoScrollCancel);
+        assert!(app.autoscroll.is_none());
+    }
+
+    #[test]
+    fn sticky_notice_toast_reads_longer_than_regular_toasts() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::AutoScrollStarted);
+        let _ = app.update(Message::AutoScrollMoved(Point::new(50.0, 100.0)));
+        let _ = app.update(Message::AutoScrollMiddleReleased);
+        assert!(app.toast_extended_duration);
+
+        let start = std::time::Instant::now();
+        let _ = app.update(Message::AnimationTick(start));
+        // The reveal tick adopts the long duration for this toast.
+        assert_eq!(app.toast_dismiss_after, Duration::from_millis(6500));
+
+        // Regular toasts would be gone after 2.5 s; the notice survives.
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(3000)));
+        assert!(app.toast.is_some(), "notice must outlive 2.5 s");
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(7000)));
+        assert!(app.toast.is_none(), "notice dismisses after 6.5 s");
+
+        // The next toast returns to the snappy default.
+        app.toast = Some("quick".to_string());
+        let _ = app.update(Message::AnimationTick(start + Duration::from_millis(7100)));
+        assert_eq!(app.toast_dismiss_after, Duration::from_millis(2500));
     }
 
     /// Advance the animation clock in 50 ms steps — the real tick handler

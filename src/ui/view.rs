@@ -216,9 +216,27 @@ impl App {
             .on_middle_press(Message::AutoScrollStarted)
             .into();
 
-        // Autoscroll indicator overlay.
-        let table_body: Element<'_, Message> = if self.autoscroll.is_some() {
-            stack(vec![table_body, build_autoscroll_indicator()]).into()
+        // Autoscroll indicator overlay. In sticky mode a full-panel
+        // backdrop captures clicks so the behavior is deterministic:
+        // LMB re-anchors, RMB cancels and restores, MMB ends — row
+        // buttons underneath stay suppressed while autoscrolling.
+        let table_body: Element<'_, Message> = if let Some(state) = self.autoscroll {
+            let indicator = build_autoscroll_indicator(state.sticky_direction());
+            if state.sticky {
+                let backdrop = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+                    .on_press(Message::AutoScrollReanchor)
+                    .on_right_press(Message::AutoScrollCancel)
+                    .on_middle_press(Message::AutoScrollEnded)
+                    // Swallow the releases too — an uncaptured release
+                    // would reach the autoscroll listener, whose
+                    // "any button release ends autoscroll" arm would
+                    // cancel sticky mode right after a re-anchor.
+                    .on_release(Message::Noop)
+                    .on_right_release(Message::Noop);
+                stack(vec![table_body, backdrop.into(), indicator]).into()
+            } else {
+                stack(vec![table_body, indicator]).into()
+            }
         } else {
             table_body
         };
@@ -2468,22 +2486,64 @@ fn build_toast_overlay(app: &App) -> Option<Element<'_, Message>> {
     )
 }
 
-fn build_autoscroll_indicator() -> Element<'static, Message> {    let dot = container(
-        Space::new()
-            .width(Length::Fixed(8.0))
-            .height(Length::Fixed(8.0)),
+/// Firefox-style autoscroll badge: a circular indicator with up/down
+/// chevrons; the chevron matching the current scroll direction lights
+/// up in the accent color while the other stays dim.
+fn build_autoscroll_indicator(direction: Option<i32>) -> Element<'static, Message> {
+    let chevron = |up: bool| -> iced::widget::Text<'static> {
+        let icon = if up {
+            icons::chevrons_up().size(14)
+        } else {
+            icons::chevrons_down().size(14)
+        };
+        let active = direction == Some(if up { -1 } else { 1 });
+        icon.style(move |theme: &iced::Theme| {
+            let palette = theme.extended_palette();
+            let color = if active {
+                palette.primary.strong.color
+            } else {
+                Color {
+                    a: 0.35,
+                    ..palette.background.base.text
+                }
+            };
+            iced::widget::text::Style {
+                color: Some(color),
+            }
+        })
+    };
+
+    let badge = container(
+        column![chevron(true), chevron(false)]
+            .spacing(0)
+            .align_x(Alignment::Center),
     )
+    .width(Length::Fixed(34.0))
+    .height(Length::Fixed(34.0))
+    // align_* centers the CONTENT without resizing the container —
+    // `center_x(Fill)` would set the container's width to Fill and
+    // stretch the translucent circle across the whole pane.
+    .align_x(Alignment::Center)
+    .align_y(Alignment::Center)
     .style(|theme: &iced::Theme| iced::widget::container::Style {
-        background: Some(theme.extended_palette().primary.strong.color.into()),
+        background: Some(iced::Background::Color(Color {
+            a: 0.92,
+            ..theme.extended_palette().background.base.color
+        })),
         border: Border {
-            color: theme.extended_palette().background.base.color,
+            color: theme.extended_palette().background.strong.color,
             width: 1.0,
-            radius: 4.0.into(),
+            radius: 17.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
+            offset: iced::Vector::new(0.0, 2.0),
+            blur_radius: 6.0,
         },
         ..Default::default()
     });
 
-    container(dot)
+    container(badge)
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
