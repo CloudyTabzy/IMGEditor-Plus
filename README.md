@@ -291,7 +291,11 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 | `iced_aw 0.14` | Menu bar, tabs, context menus |
 | `tokio 1.40` | Async runtime (multi-thread, fs, sync) |
 | `memmap2` | Zero-copy archive reads |
+| `quick_cache` | Byte-budgeted LRU caches (3D scenes, texture previews, inspector summaries) — its placeholder guards also power single-flight decode dedup |
 | `rayon` | Parallel entry export |
+| `glam` | Vector/matrix math for the 3D viewer |
+| `compact_str` | Compact inline strings for 10,000+ entry names |
+| `image` | PNG encoding for texture exports |
 | `fuzzt` | Jaro-Winkler typo matching (search) |
 | `rfd` | Native Windows file dialogs |
 | `ureq` | Update checker (HTTP) |
