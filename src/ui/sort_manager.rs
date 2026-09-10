@@ -83,25 +83,39 @@ impl SortManagerColors {
     }
 }
 
+/// Data used by the live-preview pane. Keeping these related inputs together
+/// keeps the modal builder's public surface small and makes it harder to pair
+/// a preview entry list with the wrong label maps.
+pub struct SortPreview<'a> {
+    pub entries: &'a [EntryInfo],
+    pub primary_type: Option<&'a str>,
+    pub literal_types: bool,
+    pub ide_labels: &'a std::collections::HashMap<
+        compact_str::CompactString,
+        compact_str::CompactString,
+    >,
+    pub col_labels: &'a std::collections::HashMap<
+        compact_str::CompactString,
+        compact_str::CompactString,
+    >,
+}
+
 /// Build the Sort Manager modal. Returns the inner content
 /// element; the caller is responsible for centering and dimming
 /// the background (e.g. via an `iced::widget::modal` wrapper).
 pub fn build<'a>(
     archive_name: Option<&'a str>,
     draft: &'a SortChain,
-    preview_entries: &'a [EntryInfo],
-    primary_type: Option<&'a str>,
-    literal_types: bool,
-    ide_labels: &'a std::collections::HashMap<
-        compact_str::CompactString,
-        compact_str::CompactString,
-    >,
-    col_labels: &'a std::collections::HashMap<
-        compact_str::CompactString,
-        compact_str::CompactString,
-    >,
+    preview: SortPreview<'a>,
     design: &Design,
 ) -> Element<'a, Message> {
+    let SortPreview {
+        entries: preview_entries,
+        primary_type,
+        literal_types,
+        ide_labels,
+        col_labels,
+    } = preview;
     let title = match archive_name {
         Some(name) => format!("Sort by — {name}"),
         None => "Sort by — (no archive open)".to_string(),

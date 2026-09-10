@@ -2061,11 +2061,13 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
     let dialog = crate::ui::sort_manager::build(
         archive_name,
         draft,
-        preview_entries,
-        None, // primary_type - populated for the table view, not the dialog
-        app.config.literal_file_types,
-        &EMPTY_IDE_MAP,
-        &EMPTY_COL_MAP,
+        crate::ui::sort_manager::SortPreview {
+            entries: preview_entries,
+            primary_type: None, // populated for the table view, not the dialog
+            literal_types: app.config.literal_file_types,
+            ide_labels: &EMPTY_IDE_MAP,
+            col_labels: &EMPTY_COL_MAP,
+        },
         &design,
     );
 
