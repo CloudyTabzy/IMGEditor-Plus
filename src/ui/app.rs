@@ -2737,10 +2737,16 @@ impl App {
             Message::TickProgress => {
                 self.poll_viewer_rxs();
                 // Animate the progress bar smoothly towards the current value.
+                // The baseline must fall back to the current value when no
+                // animation is registered (get() reads 0.0 and finished
+                // animations are reaped): comparing against 0 re-armed a
+                // 0 -> current fill every tick, glitching the bar.
                 if let Some(archive_idx) = self.editor.selected_archive() {
                     let current_progress =
                         self.editor.archives()[archive_idx].progress.percentage();
-                    let visual = self.animator.get(ANIM_PROGRESS);
+                    let visual = self
+                        .animator
+                        .get_or(ANIM_PROGRESS, current_progress);
                     if (visual - current_progress).abs() > 0.005 {
                         self.animator.animate_from_current(
                             ANIM_PROGRESS,
@@ -3152,6 +3158,9 @@ impl App {
                             ));
                         }
                         archive.compat_report = Some(report);
+                        // The summary is long; keep it readable (6.5 s
+                        // instead of the snappy default).
+                        self.toast_extended_duration = true;
                         self.toast = Some(if errors == 0 && warnings == 0 {
                             format!("No compatibility issues found — {summary}")
                         } else {
@@ -3162,6 +3171,7 @@ impl App {
                         self.toast = Some("Validation cancelled.".into());
                     }
                     Err(err) => {
+                        self.toast_extended_duration = true;
                         self.toast = Some(format!("Validation failed: {err}"));
                     }
                 }
@@ -5386,8 +5396,8 @@ mod tests {
 
     #[test]
     fn compatibility_validation_stores_report_and_toasts_summary() {
-        use crate::compat::scan::ScanReport;
         use crate::compat::raster::Severity;
+        use crate::compat::scan::ScanReport;
 
         let mut app = test_app_with_entries();
         let mut report = ScanReport {
@@ -5443,10 +5453,37 @@ mod tests {
         );
         assert!(toast.contains("2 errors"), "toast should count errors: {toast}");
         assert!(toast.contains("gta3 target"), "toast names the target: {toast}");
+        assert!(
+            app.toast_extended_duration,
+            "the long summary needs the extended 6.5 s toast"
+        );
 
         // Mutating entries invalidates the stored report.
         app.editor.archives_mut()[0].invalidate_entry_caches();
         assert!(app.editor.archives()[0].compat_report.is_none());
+    }
+
+    #[test]
+    fn progress_tick_does_not_rearm_the_bar_from_zero() {
+        // Regression: TickProgress compared the animated visual against
+        // animator.get(), which reads 0.0 once the finished animation is
+        // reaped — every tick re-armed a 0 -> current fill and the bar
+        // glitched from empty to full repeatedly while a task ran.
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0].progress.start();
+        app.editor.archives_mut()[0].progress.set_percentage(0.98);
+
+        // A tick with no registered animation must not start one from
+        // zero: the visual baseline is the current value when idle.
+        // (Re-arms while an animation is running continue from its
+        // interpolated value by construction of animate_from_current.)
+        let _ = app.update(Message::TickProgress);
+        assert!(
+            !app.animator.is_running(crate::ui::app::ANIM_PROGRESS),
+            "idle tick must not re-arm the progress animation"
+        );
+
+        app.editor.archives_mut()[0].progress.finish();
     }
 
     #[test]
