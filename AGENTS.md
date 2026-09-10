@@ -167,6 +167,17 @@ to make those failures debuggable.
   `log::error!` AND re-emit / re-panic — the dev logger does NOT
   replace wgpu's panic path; it's purely additive.
 
+## Asset Compatibility Engine (next major direction)
+
+The app is moving from viewer/editor toward a validator: encode each
+game's asset dialect as a profile table, validate textures/models against
+the archive's target engine, and convert imports through a never-silent
+loss ladder. Approved design + phasing live in
+[docs/asset-compatibility-engine.md](docs/asset-compatibility-engine.md) —
+Phase 0 (profile tables + verification corpus) is the agreed starting
+point. Existing format rules (palette, texture decoder, `0x23` path) are
+the foundation the validator builds on; do not duplicate them.
+
 ## RenderWare texture format mismatches
 
 D3D9-platform rasters store RW "888" textures as `D3DFMT_X8R8G8B8`
