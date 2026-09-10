@@ -2,7 +2,8 @@ use crate::archive::{ExportStatus, SortColumn};
 use crate::sort::SortDirection;
 use iced::widget::{
     Column, Container, Float, Row, Scrollable, Space, button, canvas, checkbox, column, container,
-    image, mouse_area, pane_grid, progress_bar, responsive, row, stack, text_input, tooltip,
+    image, mouse_area, opaque, pane_grid, progress_bar, responsive, row, stack, text_input,
+    tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length, Rectangle, Vector};
 
@@ -2004,10 +2005,9 @@ fn build_update_status(app: &App) -> Option<Element<'_, Message>> {
     ))
 }
 
-/// `static` empty maps for the IDE/COL fallback. Living for `'static`
-/// lets `build_sort_manager` return `Element<'static, ...>` without
-/// leaking per-call locals. The maps are never mutated, so a shared
-/// global is sound.
+/// `static` empty maps for the IDE/COL fallback. The dialog only presents
+/// in-memory preview data, so IDE/COL labels fall back to their normal name
+/// comparison when no catalog is loaded here.
 static EMPTY_IDE_MAP: std::sync::LazyLock<
     std::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
 > = std::sync::LazyLock::new(std::collections::HashMap::new);
@@ -2021,75 +2021,63 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
     }
     let draft = app.sort_draft.as_ref()?;
 
-    // The preview pane shows the first 10 entries of the active
-    // archive sorted through the draft chain. We pull them from
-    // the in-memory archive state — no disk I/O. The IDE/COL
-    // maps are empty here; the comparator falls back to name
-    // sort when those keys are in the chain, which matches what
-    // the user sees in the actual table.
-    // The dialog's Element lifetime is tied to the borrowed data
-    // (draft, preview, IDE/COL maps). The simplest way to satisfy
-    // the borrow checker is to leak the per-call data — the dialog
-    // is open for at most a few seconds and the cost is bounded by
-    // `PREVIEW_MAX * sizeof(EntryInfo)` per open. The leak is the
-    // "Rust alternative" — we trade a few hundred bytes for the
-    // ability to return an `Element<'static>` from a borrowed
-    // `&App` context without restructuring the entire view layer.
-    // Empty-slice leak shared across all "no archive" invocations
-    // so we never allocate just to leak a 0-byte slice. Same cost
-    // model as the static HashMaps above.
-    static EMPTY_ENTRIES: std::sync::LazyLock<Box<[crate::archive::EntryInfo]>> =
-        std::sync::LazyLock::new(|| Box::new([]));
-
-    let leaked: &'static [crate::archive::EntryInfo] = app
+    let archive = app
         .editor
         .selected_archive()
-        .and_then(|idx| app.editor.archives().get(idx))
-        .map(|a| {
-            Box::leak(
-                a.entries
-                    .iter()
-                    .take(10)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-            ) as &'static [crate::archive::EntryInfo]
-        })
-        .unwrap_or(EMPTY_ENTRIES.as_ref());
-    let archive_name: Option<&'static str> = app
-        .editor
-        .selected_archive()
-        .and_then(|idx| app.editor.archives().get(idx))
-        .map(|a| Box::leak(a.file_name.clone().into_boxed_str()) as &'static str);
+        .and_then(|idx| app.editor.archives().get(idx));
+    let archive_name = archive.map(|archive| archive.file_name.as_str());
+    let preview_entries = archive.map_or(&[][..], |archive| archive.entries.as_slice());
+    let design = app.design();
 
     let dialog = crate::ui::sort_manager::build(
         archive_name,
         draft,
-        leaked,
+        preview_entries,
         None, // primary_type - populated for the table view, not the dialog
         app.config.literal_file_types,
         &EMPTY_IDE_MAP,
         &EMPTY_COL_MAP,
+        &design,
     );
 
-    // Wrap the dialog content in our modal frame. We can't use the
-    // generic `modal_box` helper here because the dialog's lifetime
-    // is tied to the borrowed `&App` context, not `'static`. The
-    // dialog already renders its own title + footer so the modal
-    // frame is just a styled container.
+    let surface = design.surface();
+    let text_color = design.text();
+    let border = design.border();
+    let shadow = design.iced_shadow(&design.tokens.elevation.modal);
+    let card = Container::new(dialog)
+        .width(Length::Fill)
+        .max_width(880.0)
+        .style(move |_| iced::widget::container::Style {
+            background: Some(iced::Background::Color(surface)),
+            text_color: Some(text_color),
+            border: Border {
+                color: border,
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            shadow,
+            ..Default::default()
+        });
+
+    // The full-window opaque layer keeps the entry table inert while the
+    // draft is being edited. The card itself has a capped width, so it stays
+    // centered and never reflows into the file list like an inline panel.
     Some(
-        Container::new(dialog)
-            .style(|_| iced::widget::container::Style {
-                background: Some(iced::Background::Color(Color::from_rgb(0.10, 0.11, 0.13))),
-                text_color: Some(Color::WHITE),
-                border: iced::Border {
-                    color: Color::from_rgb(0.30, 0.32, 0.36),
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..Default::default()
-            })
-            .into(),
+        opaque(
+            Container::new(card)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(24)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(Color::from_rgba(
+                        0.0, 0.0, 0.0, 0.42,
+                    ))),
+                    ..Default::default()
+                }),
+        )
+        .into(),
     )
 }
 

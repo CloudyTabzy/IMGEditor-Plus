@@ -32,22 +32,18 @@
 
 use iced::widget::{
     Column, Container, PickList, Row, Scrollable, Space, button, checkbox, container, pick_list,
-    text,
+    responsive, text,
 };
-use iced::{Alignment, Color, Element, Length, Padding};
+use iced::{Alignment, Border, Color, Element, Length, Padding};
 
 use crate::archive::EntryInfo;
 use crate::sort::{SortChain, SortContext, SortDirection, SortKey, SortPriority, sort_entries};
 use crate::ui::app::{Message, SortPreset, SortSlotIndex};
+use crate::ui::design::Design;
 
 /// Maximum number of preview entries shown on the right pane.
 /// Bounded so the dialog stays compact on small displays.
 const PREVIEW_MAX: usize = 10;
-
-/// Color used to highlight the active sort column. Pulled out as
-/// a constant so the UI can be theme-tweaked from one place.
-const PRIMARY_COLOR: Color = Color::from_rgb(0.40, 0.78, 0.96);
-const SECONDARY_COLOR: Color = Color::from_rgb(0.70, 0.70, 0.70);
 
 /// Pre-resolved `Length` constants. We can't use the unit variants
 /// of `Length` directly in function-call position because Rust's
@@ -60,7 +56,36 @@ const LEN_FIXED_4: Length = Length::Fixed(4.0);
 const LEN_FIXED_8: Length = Length::Fixed(8.0);
 const LEN_FIXED_12: Length = Length::Fixed(12.0);
 const LEN_FIXED_140: Length = Length::Fixed(140.0);
+const LEN_FIXED_180: Length = Length::Fixed(180.0);
 const LEN_FIXED_20: Length = Length::Fixed(20.0);
+const SLOT_LIST_HEIGHT: f32 = 164.0;
+const PREVIEW_HEIGHT: f32 = 224.0;
+const COMPACT_LAYOUT_WIDTH: f32 = 640.0;
+
+#[derive(Debug, Clone, Copy)]
+struct SortManagerColors {
+    text: Color,
+    muted: Color,
+    accent: Color,
+    accent_text: Color,
+    accent_weak: Color,
+    surface_subtle: Color,
+    border: Color,
+}
+
+impl SortManagerColors {
+    fn from_design(design: &Design) -> Self {
+        Self {
+            text: design.text(),
+            muted: design.text_muted(),
+            accent: design.accent(),
+            accent_text: design.accent_text(),
+            accent_weak: design.accent_weak(),
+            surface_subtle: design.surface_subtle(),
+            border: design.border(),
+        }
+    }
+}
 
 /// Build the Sort Manager modal. Returns the inner content
 /// element; the caller is responsible for centering and dimming
@@ -79,85 +104,169 @@ pub fn build<'a>(
         compact_str::CompactString,
         compact_str::CompactString,
     >,
+    design: &Design,
 ) -> Element<'a, Message> {
     let title = match archive_name {
         Some(name) => format!("Sort by — {name}"),
         None => "Sort by — (no archive open)".to_string(),
     };
 
-    // Build the slot list. Each row is its own Column so the
-    // chips wrap on narrow dialogs without horizontal overflow.
-    let slots: Element<'a, Message> = if draft.is_empty() {
-        container(
-            text("No keys yet. Add a key below to start sorting.")
-                .size(13)
-                .style(|_| iced::widget::text::Style {
-                    color: Some(SECONDARY_COLOR),
-                }),
-        )
-        .padding(12)
-        .into()
-    } else {
-        let mut col = Column::new().spacing(6);
-        for (index, prio) in draft.iter().enumerate() {
-            col = col.push(slot_row(index, prio));
-        }
-        Scrollable::new(col).height(Length::Shrink).into()
-    };
+    let colors = SortManagerColors::from_design(design);
+    let body = responsive(move |size| {
+        let editor = editor_pane(&title, draft, colors);
+        let preview = preview_section(
+            preview_entries,
+            draft,
+            primary_type,
+            literal_types,
+            ide_labels,
+            col_labels,
+            colors,
+        );
 
-    // Live preview: sort the preview entries through the current
-    // draft chain. The empty-state placeholder shows what the
-    // current (un-sorted) order looks like, so the user can
-    // see the "no sort" baseline.
-    let preview =
-        preview_pane(preview_entries, draft, primary_type, literal_types, ide_labels, col_labels);
-
-    let preset_picker = preset_picker();
-
-    let controls = controls_row(draft);
-
-    let footer = footer_row();
-
-    let header = Row::new()
-        .push(text(title).size(16))
-        .push(Space::new().width(LEN_FILL))
-        .push(preset_picker)
-        .align_y(Alignment::Center)
-        .spacing(8);
-
-    let body = Row::new()
-        .push(
+        if size.width < COMPACT_LAYOUT_WIDTH {
             Column::new()
-                .push(header)
-                .push(Space::new().height(LEN_FIXED_8))
-                .push(slots)
-                .push(Space::new().height(LEN_FIXED_8))
-                .push(controls)
-                .width(Length::FillPortion(3))
-                .spacing(4),
-        )
-        .push(
-            Column::new()
-                .push(preview_title())
-                .push(Space::new().height(LEN_FIXED_4))
+                .push(editor)
+                .push(Space::new().height(LEN_FIXED_12))
                 .push(preview)
-                .width(Length::FillPortion(2)),
-        )
-        .spacing(12);
+                .width(Length::Fill)
+                .spacing(4)
+                .into()
+        } else {
+            Row::new()
+                .push(Container::new(editor).width(Length::FillPortion(3)))
+                .push(Container::new(preview).width(Length::FillPortion(2)))
+                .width(Length::Fill)
+                .spacing(16)
+                .into()
+        }
+    })
+    .height(Length::Shrink);
 
     Container::new(
         Column::new()
             .push(body)
             .push(Space::new().height(LEN_FIXED_12))
-            .push(footer)
-            .padding(Padding::from(16)),
+            .push(footer_row(colors))
+            .padding(Padding::from(18))
+            .spacing(4)
+            .width(Length::Fill),
     )
-    .style(|_| iced::widget::container::Style {
-        background: Some(iced::Background::Color(Color::from_rgb(0.10, 0.11, 0.13))),
-        text_color: Some(Color::WHITE),
-        ..Default::default()
-    })
+    .width(Length::Fill)
     .into()
+}
+
+fn editor_pane<'a>(
+    title: &str,
+    draft: &'a SortChain,
+    colors: SortManagerColors,
+) -> Element<'a, Message> {
+    let slots: Element<'a, Message> = if draft.is_empty() {
+        container(
+            text("No keys yet. Add a key below to start sorting.")
+                .size(13)
+                .style(move |_| iced::widget::text::Style {
+                    color: Some(colors.muted),
+                }),
+        )
+        .height(Length::Fixed(SLOT_LIST_HEIGHT))
+        .center_y(Length::Fill)
+        .padding(12)
+        .into()
+    } else {
+        let mut col = Column::new().spacing(6).width(Length::Fill);
+        for (index, prio) in draft.iter().enumerate() {
+            col = col.push(slot_row(index, prio, colors));
+        }
+        Scrollable::new(col)
+            .height(Length::Fixed(SLOT_LIST_HEIGHT))
+            .width(Length::Fill)
+            .into()
+    };
+
+    let header =
+        Row::new()
+            .push(
+                Column::new()
+                    .push(text(title.to_owned()).size(18).style(move |_| {
+                        iced::widget::text::Style {
+                            color: Some(colors.text),
+                        }
+                    }))
+                    .push(
+                        text("Set priority rules, then apply them to the current archive.")
+                            .size(12)
+                            .style(move |_| iced::widget::text::Style {
+                                color: Some(colors.muted),
+                            }),
+                    )
+                    .spacing(2),
+            )
+            .push(Space::new().width(LEN_FILL))
+            .push(Container::new(preset_picker()).width(LEN_FIXED_180))
+            .push(
+                button(text("×").size(16))
+                    .on_press(Message::CloseSortManager)
+                    .padding(Padding::from([3, 8])),
+            )
+            .align_y(Alignment::Center)
+            .spacing(12);
+
+    Column::new()
+        .push(header)
+        .push(Space::new().height(LEN_FIXED_8))
+        .push(slots)
+        .push(Space::new().height(LEN_FIXED_8))
+        .push(controls_row(draft, colors))
+        .width(Length::Fill)
+        .spacing(4)
+        .into()
+}
+
+fn preview_section<'a>(
+    entries: &'a [EntryInfo],
+    chain: &'a SortChain,
+    primary_type: Option<&'a str>,
+    literal_types: bool,
+    ide_labels: &'a std::collections::HashMap<
+        compact_str::CompactString,
+        compact_str::CompactString,
+    >,
+    col_labels: &'a std::collections::HashMap<
+        compact_str::CompactString,
+        compact_str::CompactString,
+    >,
+    colors: SortManagerColors,
+) -> Element<'a, Message> {
+    let preview = preview_pane(
+        entries,
+        chain,
+        primary_type,
+        literal_types,
+        ide_labels,
+        col_labels,
+        colors,
+    );
+    let card = Container::new(preview)
+        .width(Length::Fill)
+        .height(Length::Fixed(PREVIEW_HEIGHT))
+        .padding(10)
+        .style(move |_| iced::widget::container::Style {
+            background: Some(iced::Background::Color(colors.surface_subtle)),
+            border: Border {
+                color: colors.border,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        });
+
+    Column::new()
+        .push(preview_title(colors))
+        .push(Space::new().height(LEN_FIXED_4))
+        .push(card)
+        .width(Length::Fill)
+        .into()
 }
 
 /// One priority slot in the dialog list. Layout:
@@ -172,7 +281,11 @@ pub fn build<'a>(
 /// that disabling means "this priority is skipped" — the slot
 /// itself stays in the chain so the user's priority order is
 /// preserved when they re-enable.
-fn slot_row<'a>(index: usize, prio: &'a SortPriority) -> Element<'a, Message> {
+fn slot_row<'a>(
+    index: usize,
+    prio: &'a SortPriority,
+    colors: SortManagerColors,
+) -> Element<'a, Message> {
     let slot_idx = SortSlotIndex(index);
     let key_picker = pick_list(SortKey::ALL, Some(prio.key), move |new_key: SortKey| {
         Message::SortSetSlotKey(slot_idx, new_key)
@@ -181,6 +294,10 @@ fn slot_row<'a>(index: usize, prio: &'a SortPriority) -> Element<'a, Message> {
     .text_size(13)
     .width(LEN_FIXED_140);
 
+    let direction_background = match prio.direction {
+        SortDirection::Ascending => colors.accent_weak,
+        SortDirection::Descending => colors.surface_subtle,
+    };
     let dir_btn = button(text(dir_label(prio.direction)).size(13))
         .on_press(Message::SortSetSlotDirection(
             slot_idx,
@@ -190,16 +307,15 @@ fn slot_row<'a>(index: usize, prio: &'a SortPriority) -> Element<'a, Message> {
             },
         ))
         .padding(Padding::from([4, 8]))
-        .style(move |_theme, _status| {
-            let bg = match prio.direction {
-                SortDirection::Ascending => Color::from_rgb(0.20, 0.45, 0.30),
-                SortDirection::Descending => Color::from_rgb(0.45, 0.30, 0.20),
-            };
-            iced::widget::button::Style {
-                background: Some(iced::Background::Color(bg)),
-                text_color: Color::WHITE,
-                ..iced::widget::button::Style::default()
-            }
+        .style(move |_theme, _status| iced::widget::button::Style {
+            background: Some(iced::Background::Color(direction_background)),
+            text_color: colors.text,
+            border: Border {
+                color: colors.border,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..iced::widget::button::Style::default()
         });
 
     let remove_btn = button(text("×").size(14))
@@ -219,11 +335,11 @@ fn slot_row<'a>(index: usize, prio: &'a SortPriority) -> Element<'a, Message> {
 
     let priority_label = text(format!("{}.", index + 1))
         .size(13)
-        .style(|_| iced::widget::text::Style {
+        .style(move |_| iced::widget::text::Style {
             color: Some(if prio.enabled {
-                PRIMARY_COLOR
+                colors.accent
             } else {
-                SECONDARY_COLOR
+                colors.muted
             }),
         })
         .width(LEN_FIXED_20);
@@ -249,7 +365,7 @@ fn slot_row<'a>(index: usize, prio: &'a SortPriority) -> Element<'a, Message> {
 /// The "Add slot" + "Reset" row. Sits between the slot list and
 /// the footer. `Reset` is "re-seed the draft from the active
 /// archive" — the standard "undo in-progress edits" affordance.
-fn controls_row<'a>(draft: &'a SortChain) -> Element<'a, Message> {
+fn controls_row<'a>(draft: &'a SortChain, colors: SortManagerColors) -> Element<'a, Message> {
     let add_disabled = draft.len() >= crate::sort::SORT_CHAIN_MAX;
     let add_btn = button(text(if add_disabled {
         "+ Add key (max reached)"
@@ -270,8 +386,8 @@ fn controls_row<'a>(draft: &'a SortChain) -> Element<'a, Message> {
     let enabled_count = draft.enabled_count();
     let summary = text(format!("{} of {} keys active", enabled_count, draft.len()))
         .size(12)
-        .style(|_| iced::widget::text::Style {
-            color: Some(SECONDARY_COLOR),
+        .style(move |_| iced::widget::text::Style {
+            color: Some(colors.muted),
         });
 
     Row::new()
@@ -287,7 +403,7 @@ fn controls_row<'a>(draft: &'a SortChain) -> Element<'a, Message> {
 /// Apply / Cancel footer. The "X of N keys active" badge
 /// mirrors the dialog header so the user always knows their
 /// current state.
-fn footer_row<'a>() -> Element<'a, Message> {
+fn footer_row<'a>(colors: SortManagerColors) -> Element<'a, Message> {
     Row::new()
         .push(
             button(text("Cancel"))
@@ -299,9 +415,14 @@ fn footer_row<'a>() -> Element<'a, Message> {
             button(text("Apply"))
                 .on_press(Message::SortApplyDraft)
                 .padding(Padding::from([6, 16]))
-                .style(|_theme, _status| iced::widget::button::Style {
-                    background: Some(iced::Background::Color(PRIMARY_COLOR)),
-                    text_color: Color::WHITE,
+                .style(move |_theme, _status| iced::widget::button::Style {
+                    background: Some(iced::Background::Color(colors.accent)),
+                    text_color: colors.accent_text,
+                    border: Border {
+                        color: colors.accent,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
                     ..iced::widget::button::Style::default()
                 }),
         )
@@ -310,11 +431,11 @@ fn footer_row<'a>() -> Element<'a, Message> {
 }
 
 /// The small "Live preview" header on the right pane.
-fn preview_title<'a>() -> Element<'a, Message> {
+fn preview_title<'a>(colors: SortManagerColors) -> Element<'a, Message> {
     text("Live preview (first 10 entries)")
         .size(13)
-        .style(|_| iced::widget::text::Style {
-            color: Some(SECONDARY_COLOR),
+        .style(move |_| iced::widget::text::Style {
+            color: Some(colors.muted),
         })
         .into()
 }
@@ -336,26 +457,23 @@ fn preview_pane<'a>(
         compact_str::CompactString,
         compact_str::CompactString,
     >,
+    colors: SortManagerColors,
 ) -> Element<'a, Message> {
     if entries.is_empty() {
         return container(
             text("(no entries in the current archive)")
                 .size(12)
-                .style(|_| iced::widget::text::Style {
-                    color: Some(SECONDARY_COLOR),
+                .style(move |_| iced::widget::text::Style {
+                    color: Some(colors.muted),
                 }),
         )
-        .padding(8)
+        .center_y(Length::Fill)
         .into();
     }
 
-    // `Vec<&EntryInfo>` doesn't impl `DerefMut<Target = [&EntryInfo]>`
-    // (the orphan rule blocks it), so we collect the references
-    // into a `Vec<EntryInfo>` *copy* for the preview. The preview
-    // is bounded at 10 entries so the copy is cheap, and it
-    // means the rest of this function can keep the borrow-checks
-    // off the critical path.
-    let mut sorted: Vec<EntryInfo> = entries.to_vec();
+    // The preview never clones or sorts more than its visible ten entries,
+    // keeping the dialog cheap even for large archives.
+    let mut sorted: Vec<EntryInfo> = entries.iter().take(PREVIEW_MAX).cloned().collect();
     let ctx = SortContext {
         primary_type,
         literal_types,
@@ -364,15 +482,14 @@ fn preview_pane<'a>(
     };
     sort_entries(&mut sorted, chain, &ctx);
 
-    let max = sorted.len().min(PREVIEW_MAX);
     let mut col = Column::new().spacing(2);
-    for (i, entry) in sorted.iter().take(max).enumerate() {
+    for (i, entry) in sorted.iter().enumerate() {
         let name = entry.file_name.as_str();
         // Color: 1st item is brightest (top of sort), then dim down.
         let color = match i {
-            0 => PRIMARY_COLOR,
-            1..=2 => Color::from_rgb(0.85, 0.85, 0.85),
-            _ => SECONDARY_COLOR,
+            0 => colors.accent,
+            1..=2 => colors.text,
+            _ => colors.muted,
         };
         col = col.push(
             text(format!("{:>2}. {name}", i + 1))
@@ -380,16 +497,7 @@ fn preview_pane<'a>(
                 .style(move |_| iced::widget::text::Style { color: Some(color) }),
         );
     }
-    if sorted.len() > max {
-        col = col.push(
-            text(format!("… and {} more", sorted.len() - max))
-                .size(11)
-                .style(|_| iced::widget::text::Style {
-                    color: Some(SECONDARY_COLOR),
-                }),
-        );
-    }
-    container(col).padding(8).into()
+    col.into()
 }
 
 /// Preset dropdown. Picking one replaces the draft (Apply
