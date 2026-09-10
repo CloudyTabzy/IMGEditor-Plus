@@ -627,129 +627,58 @@ impl<'a> Reader<'a> {
 
 // ---- Top-level parser ----------------------------------------------------
 
+/// Parsed NIF header and block table without any block payloads.
+/// Enough to locate and read raw blocks (e.g. the corpus scanner's
+/// NiPixelData profiling) without the cost of full payload parsing.
+#[derive(Debug, Clone)]
+pub struct NifHeader {
+    /// Raw header line including the trailing `0x0A`.
+    pub header_line: String,
+    pub endian: Endian,
+    pub user_version: u32,
+    /// String table, indexed by `NiFixedString` values.
+    pub strings: Vec<String>,
+    /// Block type names, indexed by `block_type_index[i]`.
+    pub block_types: Vec<String>,
+    /// Declared block array, in file order.
+    pub blocks: Vec<BlockMeta>,
+    /// Offset just past the header fields (also the footer position
+    /// when the file has no blocks).
+    pub end_pos: usize,
+}
+
+/// One successful endianness-hypothesis reading of the header fields.
+#[derive(Debug, Clone)]
+struct HeaderFields {
+    endian: Endian,
+    user_version: u32,
+    block_types: Vec<String>,
+    block_type_index: Vec<u16>,
+    block_sizes: Vec<u32>,
+    strings: Vec<String>,
+    end_pos: usize,
+}
+
 impl NifFile {
     /// Parse a Gamebryo NIF 20.3.0.9 file. The `bytes` slice may be
     /// longer than the file; only the leading `file_size` bytes are
     /// consumed.
     pub fn parse(bytes: &[u8]) -> NifResult<Self> {
-        if bytes.len() < 6 {
-            return Err(NifError::TooShort(bytes.len()));
-        }
-        let mut header = [0u8; 6];
-        header.copy_from_slice(&bytes[..6]);
-        if !header.starts_with(b"Gamebr") {
-            return Err(NifError::BadHeader(header));
-        }
-
-        // Find the header line terminator (0x0A).
-        let newline_pos = bytes
-            .iter()
-            .position(|&b| b == 0x0A)
-            .ok_or(NifError::UnexpectedEof("header line"))?;
-        let header_line = std::str::from_utf8(&bytes[..newline_pos])
-            .map_err(|e| NifError::InvalidField("header_line", format!("non-UTF8: {e}")))?
-            .to_string();
-
-        let mut r = Reader::new(bytes, Endian::Little); // endian not yet known
-        r.set_position(newline_pos + 1);
-
-        let version = r.read_u32("version")?;
-        if version != BULLY_NIF_VERSION {
-            return Err(NifError::UnsupportedVersion(version));
-        }
-        let endian_byte = r.read_u8("endian")?;
-        let endian = Endian::from_byte(endian_byte);
-        r.endian = endian;
-
-        let user_version = r.read_u32("user_version")?;
-        let num_blocks = r.read_u32("num_blocks")? as usize;
-        let num_block_types = r.read_u16("num_block_types")? as usize;
-
-        // Bully user_version == 0: no BSHeader. If we ever need
-        // 0x10000 (Divinity 2) or higher, insert the BSHeader
-        // reader here. Documented in bully_nif_format.md §"Header".
-        if user_version != 0 {
-            // Skip unknown future formats; treat as still acceptable
-            // for the simple header but mark them as such. Real
-            // parsing will likely fail at the string table.
-        }
-
-        let mut block_types = Vec::with_capacity(num_block_types);
-        for i in 0..num_block_types {
-            block_types.push(r.read_sized_string("block_type")?);
-            let _ = i;
-        }
-
-        let block_type_index = {
-            let mut v = Vec::with_capacity(num_blocks);
-            for _ in 0..num_blocks {
-                v.push(r.read_u16("block_type_index")?);
-            }
-            v
-        };
-        let block_sizes = {
-            let mut v = Vec::with_capacity(num_blocks);
-            for _ in 0..num_blocks {
-                v.push(r.read_u32("block_size")?);
-            }
-            v
-        };
-
-        let num_strings = r.read_u32("num_strings")? as usize;
-        let max_string_length = r.read_u32("max_string_length")? as usize;
-        let mut strings = Vec::with_capacity(num_strings);
-        for _ in 0..num_strings {
-            strings.push(r.read_sized_string("string")?);
-        }
-        let _ = max_string_length;
-
-        let num_groups = r.read_u32("num_groups")? as usize;
-        for _ in 0..num_groups {
-            // Group payload is undocumented in nifxml for 20.3.0.9 and
-            // is always 0 for Bully. Skip conservatively by reading 0
-            // bytes (the XML says `Groups` is `uint[Num Groups]`).
-            for _ in 0..4 {
-                r.read_u8("group")?;
-            }
-        }
-
-        let header_end = r.position() as u64;
-
-        // ---- Build block metadata --------------------------------------
-        let mut blocks = Vec::with_capacity(num_blocks);
-        let mut cursor = header_end;
-        for (i, (&type_index, &size)) in block_type_index.iter().zip(block_sizes.iter()).enumerate()
-        {
-            let type_name = block_types
-                .get(type_index as usize)
-                .cloned()
-                .ok_or_else(|| {
-                    NifError::InvalidField(
-                        "block_type_index",
-                        format!("block {i} references unknown type {type_index}"),
-                    )
-                })?;
-            blocks.push(BlockMeta {
-                type_index,
-                type_name,
-                size,
-                offset: cursor,
-            });
-            cursor = cursor
-                .checked_add(size as u64)
-                .ok_or_else(|| NifError::InvalidField("block_size", "overflow".into()))?;
-        }
+        let header = read_header_and_blocks(bytes)?;
+        let endian = header.endian;
+        let user_version = header.user_version;
 
         // ---- Parse block payloads --------------------------------------
+        let num_blocks = header.blocks.len();
         let mut payloads = Vec::with_capacity(num_blocks);
-        for block in &blocks {
+        for block in &header.blocks {
             let end = block
                 .offset
                 .checked_add(block.size as u64)
                 .ok_or_else(|| NifError::InvalidField("block_size", "overflow".into()))?;
             if end > bytes.len() as u64 {
                 return Err(NifError::TruncatedBlock {
-                    block: blocks.len(),
+                    block: num_blocks,
                     block_type: block.type_name.clone(),
                     offset: block.offset,
                     expected: block.size as u64,
@@ -761,7 +690,11 @@ impl NifFile {
         }
 
         // ---- Parse footer ----------------------------------------------
-        let footer_start = cursor as usize;
+        let footer_start = header
+            .blocks
+            .last()
+            .map(|b| (b.offset + b.size as u64) as usize)
+            .unwrap_or(header.end_pos);
         let mut r2 = Reader::new(bytes, endian);
         r2.set_position(footer_start);
         let num_roots = r2.read_u32("num_roots")? as usize;
@@ -772,16 +705,22 @@ impl NifFile {
         let footer = Footer { roots };
 
         Ok(Self {
-            header_line,
-            version,
+            header_line: header.header_line,
+            version: BULLY_NIF_VERSION,
             endian,
             user_version,
-            strings,
-            block_types,
-            blocks,
+            strings: header.strings,
+            block_types: header.block_types,
+            blocks: header.blocks,
             payloads,
             footer,
         })
+    }
+
+    /// Parse only the header and block table, skipping payload
+    /// parsing entirely. Cheap enough for bulk diagnostics.
+    pub fn parse_header(bytes: &[u8]) -> NifResult<NifHeader> {
+        read_header_and_blocks(bytes)
     }
 
     /// Resolve a string-table index to its text.
@@ -796,6 +735,214 @@ impl NifFile {
     pub fn payload(&self, index: usize) -> Option<&BlockPayload> {
         self.payloads.get(index).and_then(|p| p.as_ref())
     }
+}
+
+fn read_header_and_blocks(bytes: &[u8]) -> NifResult<NifHeader> {
+    if bytes.len() < 6 {
+        return Err(NifError::TooShort(bytes.len()));
+    }
+    let mut header = [0u8; 6];
+    header.copy_from_slice(&bytes[..6]);
+    if !header.starts_with(b"Gamebr") {
+        return Err(NifError::BadHeader(header));
+    }
+
+    // Find the header line terminator (0x0A).
+    let newline_pos = bytes
+        .iter()
+        .position(|&b| b == 0x0A)
+        .ok_or(NifError::UnexpectedEof("header line"))?;
+    let header_line = std::str::from_utf8(&bytes[..newline_pos])
+        .map_err(|e| NifError::InvalidField("header_line", format!("non-UTF8: {e}")))?
+        .to_string();
+
+    let mut r = Reader::new(bytes, Endian::Little); // version is always LE
+    r.set_position(newline_pos + 1);
+
+    let version = r.read_u32("version")?;
+    if version != BULLY_NIF_VERSION {
+        return Err(NifError::UnsupportedVersion(version));
+    }
+
+    // Candidate header layouts. Bully ships three in the wild:
+    //   1. Endianness marker byte, then fields in that endianness
+    //      (the common World.img case).
+    //   2. Markerless little-endian.
+    //   3. Markerless big-endian (the `CS_*` cutscene NFTs).
+    // The first structurally plausible candidate wins: counts in
+    // range, type indices in range, and the block table must fit
+    // inside the file.
+    let marker = bytes.get(newline_pos + 5).copied(); // after the version u32
+    let version_end = newline_pos + 5;
+    let mut candidates: Vec<(usize, Endian)> = Vec::with_capacity(3);
+    if let Some(b) = marker {
+        candidates.push((version_end + 1, Endian::from_byte(b)));
+    }
+    candidates.push((version_end, Endian::Little));
+    candidates.push((version_end, Endian::Big));
+
+    let mut first_err = None;
+    let mut fields = None;
+    for (pos, candidate_endian) in candidates {
+        match try_read_header_fields(bytes, pos, candidate_endian) {
+            Ok(f) => {
+                fields = Some(f);
+                break;
+            }
+            Err(err) => {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+            }
+        }
+    }
+    let fields = fields
+        .ok_or_else(|| first_err.unwrap_or(NifError::UnexpectedEof("header fields")))?;
+
+    // ---- Build block metadata --------------------------------------
+    let num_blocks = fields.block_sizes.len();
+    let mut blocks = Vec::with_capacity(num_blocks);
+    let mut cursor = fields.end_pos as u64;
+    for (i, (&type_index, &size)) in fields
+        .block_type_index
+        .iter()
+        .zip(fields.block_sizes.iter())
+        .enumerate()
+    {
+        let type_name = fields
+            .block_types
+            .get(type_index as usize)
+            .cloned()
+            .ok_or_else(|| {
+                NifError::InvalidField(
+                    "block_type_index",
+                    format!("block {i} references unknown type {type_index}"),
+                )
+            })?;
+        blocks.push(BlockMeta {
+            type_index,
+            type_name,
+            size,
+            offset: cursor,
+        });
+        cursor = cursor
+            .checked_add(size as u64)
+            .ok_or_else(|| NifError::InvalidField("block_size", "overflow".into()))?;
+    }
+
+    Ok(NifHeader {
+        header_line,
+        endian: fields.endian,
+        user_version: fields.user_version,
+        strings: fields.strings,
+        block_types: fields.block_types,
+        blocks,
+        end_pos: fields.end_pos,
+    })
+}
+
+/// Everything after the version line, read under one endianness
+/// hypothesis. Returns `Err` on any structural implausibility so the
+/// caller can try the next candidate layout.
+fn try_read_header_fields(bytes: &[u8], pos: usize, endian: Endian) -> NifResult<HeaderFields> {
+    let mut r = Reader::new(bytes, endian);
+    r.set_position(pos);
+
+    let user_version = r.read_u32("user_version")?;
+    let num_blocks = r.read_u32("num_blocks")? as usize;
+    if num_blocks > 100_000 {
+        return Err(NifError::InvalidField(
+            "num_blocks",
+            format!("implausible block count {num_blocks}"),
+        ));
+    }
+    let num_block_types = r.read_u16("num_block_types")? as usize;
+    if num_block_types > 4096 || (num_blocks > 0 && num_block_types == 0) {
+        return Err(NifError::InvalidField(
+            "num_block_types",
+            format!("implausible type count {num_block_types}"),
+        ));
+    }
+
+    let mut block_types = Vec::with_capacity(num_block_types);
+    for _ in 0..num_block_types {
+        let name = r.read_sized_string("block_type")?;
+        if name.is_empty() || name.len() > 64 {
+            return Err(NifError::InvalidField(
+                "block_type",
+                format!("implausible type name {name:?}"),
+            ));
+        }
+        block_types.push(name);
+    }
+
+    let mut block_type_index = Vec::with_capacity(num_blocks);
+    for _ in 0..num_blocks {
+        let index = r.read_u16("block_type_index")?;
+        if index as usize >= num_block_types {
+            return Err(NifError::InvalidField(
+                "block_type_index",
+                format!("block references unknown type {index}"),
+            ));
+        }
+        block_type_index.push(index);
+    }
+
+    let mut block_sizes = Vec::with_capacity(num_blocks);
+    let mut total: u64 = 0;
+    for _ in 0..num_blocks {
+        let size = r.read_u32("block_size")?;
+        total = total.saturating_add(size as u64);
+        block_sizes.push(size);
+    }
+
+    let num_strings = r.read_u32("num_strings")? as usize;
+    if num_strings > 100_000 {
+        return Err(NifError::InvalidField(
+            "num_strings",
+            format!("implausible string count {num_strings}"),
+        ));
+    }
+    let max_string_length = r.read_u32("max_string_length")?;
+    let mut strings = Vec::with_capacity(num_strings);
+    for _ in 0..num_strings {
+        strings.push(r.read_sized_string("string")?);
+    }
+    let _ = max_string_length;
+
+    let num_groups = r.read_u32("num_groups")? as usize;
+    if num_groups > 1000 {
+        return Err(NifError::InvalidField(
+            "num_groups",
+            format!("implausible group count {num_groups}"),
+        ));
+    }
+    for _ in 0..num_groups {
+        // Group payload is undocumented in nifxml for 20.3.0.9 and
+        // is always 0 for Bully. Skip conservatively by reading 0
+        // bytes (the XML says `Groups` is `uint[Num Groups]`).
+        for _ in 0..4 {
+            r.read_u8("group")?;
+        }
+    }
+
+    // The whole block table must fit inside the file.
+    if total + r.position() as u64 > bytes.len() as u64 {
+        return Err(NifError::InvalidField(
+            "block_sizes",
+            "block table extends past end of file".to_string(),
+        ));
+    }
+
+    Ok(HeaderFields {
+        endian,
+        user_version,
+        block_types,
+        block_type_index,
+        block_sizes,
+        strings,
+        end_pos: r.position(),
+    })
 }
 
 fn parse_block(type_name: &str, raw: &[u8], endian: Endian) -> NifResult<BlockPayload> {
@@ -1405,8 +1552,86 @@ fn read_strips_footer(r: &mut Reader<'_>) -> (u16, u16, Vec<u16>, bool, Vec<u16>
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Build a minimal little-endian NIF 20.3.0.9 file from raw block
+    /// payloads. Shared test fixture for the NIF and compat scanners.
+    pub(crate) fn build_nif(blocks: &[(&str, &[u8])]) -> Vec<u8> {
+        build_nif_with_endian(blocks, 1)
+    }
+
+    pub(crate) fn build_nif_with_endian(blocks: &[(&str, &[u8])], endian_byte: u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"Gamebryo File Format, Version 20.3.0.9\n");
+        out.extend_from_slice(&BULLY_NIF_VERSION.to_le_bytes());
+        out.push(endian_byte);
+        out.extend_from_slice(&0_u32.to_le_bytes()); // user version
+        out.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+
+        let mut types: Vec<&str> = Vec::new();
+        for (name, _) in blocks {
+            if !types.contains(name) {
+                types.push(name);
+            }
+        }
+        out.extend_from_slice(&(types.len() as u16).to_le_bytes());
+        for name in &types {
+            out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+        }
+        for name in blocks {
+            let index = types.iter().position(|t| *t == name.0).unwrap() as u16;
+            out.extend_from_slice(&index.to_le_bytes());
+        }
+        for (_, payload) in blocks {
+            out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        }
+        out.extend_from_slice(&0_u32.to_le_bytes()); // num strings
+        out.extend_from_slice(&0_u32.to_le_bytes()); // max string length
+        out.extend_from_slice(&0_u32.to_le_bytes()); // num groups
+
+        for (_, payload) in blocks {
+            out.extend_from_slice(payload);
+        }
+        out.extend_from_slice(&0_u32.to_le_bytes()); // num roots
+        out
+    }
+
+    #[test]
+    fn parse_header_handles_markerless_big_endian_files() {
+        // Bully's `CS_*` cutscene NFTs omit the endianness marker
+        // byte entirely and store all fields big-endian.
+        let blocks = build_nif(&[
+            ("NiSourceTexture", &[0xAA; 44]),
+            ("NiPixelData", &[0u8; 16]),
+        ]);
+        let mut cs = Vec::new();
+        cs.extend_from_slice(b"Gamebryo File Format, Version 20.3.0.9\n");
+        cs.extend_from_slice(&BULLY_NIF_VERSION.to_le_bytes()); // always LE
+        // No marker: straight into the (big-endian) header fields.
+        cs.extend_from_slice(&0_u32.to_be_bytes()); // user version
+        cs.extend_from_slice(&2_u32.to_be_bytes()); // num blocks
+        cs.extend_from_slice(&2_u16.to_be_bytes()); // num block types
+        for name in ["NiSourceTexture", "NiPixelData"] {
+            cs.extend_from_slice(&(name.len() as u32).to_be_bytes());
+            cs.extend_from_slice(name.as_bytes());
+        }
+        cs.extend_from_slice(&0_u16.to_be_bytes());
+        cs.extend_from_slice(&1_u16.to_be_bytes());
+        cs.extend_from_slice(&44_u32.to_be_bytes());
+        cs.extend_from_slice(&16_u32.to_be_bytes());
+        cs.extend_from_slice(&0_u32.to_be_bytes()); // num strings
+        cs.extend_from_slice(&0_u32.to_be_bytes()); // max string length
+        cs.extend_from_slice(&0_u32.to_be_bytes()); // num groups
+        cs.extend_from_slice(&blocks[blocks.len() - 60..]);
+
+        let header = NifFile::parse_header(&cs).expect("markerless BE parses");
+        assert_eq!(header.endian, Endian::Big);
+        assert_eq!(header.blocks.len(), 2);
+        assert_eq!(header.blocks[1].type_name, "NiPixelData");
+        assert_eq!(header.blocks[1].offset, header.blocks[0].offset + 44);
+    }
 
     fn push_u16(bytes: &mut Vec<u8>, value: u16) {
         bytes.extend_from_slice(&value.to_le_bytes());
