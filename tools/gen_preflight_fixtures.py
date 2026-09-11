@@ -97,6 +97,55 @@ def texture_native(native):
     return section(RW_TEXTURE_NATIVE, native)
 
 
+def name24(name):
+    return name.encode("ascii")[:23].ljust(24, b"\0")
+
+
+def pack_v1(archive_dir, base, entries):
+    """Write a classic IMG v1 pair (`.dir` + `.img`)."""
+    dir_bytes = bytearray()
+    img = bytearray()
+    sector = 1  # sector 0 left blank, matching common archives
+    for name, data in entries:
+        sectors = max(1, (len(data) + 2047) // 2048)
+        dir_bytes += u32(sector) + u32(sectors) + name24(name)
+        img.extend(bytes(sector * 2048 - len(img)))
+        img.extend(data)
+        img.extend(bytes(sectors * 2048 - len(data)))
+        sector += sectors
+    os.makedirs(archive_dir, exist_ok=True)
+    with open(os.path.join(archive_dir, f"{base}.dir"), "wb") as handle:
+        handle.write(dir_bytes)
+    with open(os.path.join(archive_dir, f"{base}.img"), "wb") as handle:
+        handle.write(img)
+    return len(entries), len(img)
+
+
+def pack_v2(archive_dir, base, entries):
+    """Write an IMG v2 archive (`VER2`, embedded directory)."""
+    dir_size = 8 + len(entries) * 32
+    data_start = ((dir_size + 2047) // 2048) * 2048
+    sector = data_start // 2048
+    body = bytearray()
+    index = bytearray()
+    for name, data in entries:
+        sectors = max(1, (len(data) + 2047) // 2048)
+        index += u32(sector) + u32(sectors) + name24(name)
+        body.extend(data)
+        body.extend(bytes(sectors * 2048 - len(data)))
+        sector += sectors
+    blob = bytearray(b"VER2")
+    blob += u32(len(entries))
+    blob += index
+    blob += bytes(data_start - len(blob))
+    blob += body
+    os.makedirs(archive_dir, exist_ok=True)
+    path = os.path.join(archive_dir, f"{base}.img")
+    with open(path, "wb") as handle:
+        handle.write(blob)
+    return len(entries), len(blob)
+
+
 def txd(*natives):
     dict_body = section(RW_STRUCT, u16(len(natives)) + u16(2))
     for native in natives:
@@ -189,6 +238,63 @@ def main():
         print(f"{name:34} {len(data):6} bytes")
 
     print(f"\nWrote {len(files)} fixtures to {out_dir}")
+
+    # ---- Ready-to-open IMG archives for the pre-save report ----------
+    # Each archive is built from the same TXD builders, so opening one in
+    # the app and pressing Ctrl+S exercises a specific save path.
+    archive_root = os.path.join(os.path.dirname(out_dir), "save-test-fixtures")
+    f = files
+
+    # A DXT3 fourcc on an 8888/32-bit header: the gating ERROR anomaly.
+    broken_dxt = txd(
+        native_struct(
+            PLATFORM_D3D9, NIBBLE_8888, FOURCC_DXT3, size, size, 32, 4, 0,
+            noise(64, 42), name="broken_dxt",
+        )
+    )
+    # A8L8 on platform 8: unknown for III without a platform rewrite, so
+    # the dialog shows the unknown category on its own.
+    a8l8_p8 = txd(
+        native_struct(
+            PLATFORM_D3D8, NIBBLE_LUM8, D3DFMT_A8L8, size, size, 16, 4, 0,
+            noise(size * size * 2, 43), name="unknown_a8l8",
+        )
+    )
+
+    archives = [
+        # Clean for a GTA III target: saves silently.
+        ("clean_iii", pack_v1, "gta3", [
+            ("pal8_native.txd", f["01_native_pal8_iii.txd"]),
+            ("8888_native.txd", f["02_native_8888_iii.txd"]),
+            ("565_native.txd", f["07_native_565_vc.txd"]),
+        ]),
+        # Unknown formats + a broken header: opens the Save check dialog.
+        ("issues_iii", pack_v1, "gta3", [
+            ("unknown_888_24.txd", f["04_unknown_888_24bit.txd"]),
+            ("unknown_a8l8.txd", a8l8_p8),
+            ("broken_dxt_header.txd", broken_dxt),
+        ]),
+        # Native content in the wrong container for III: container note.
+        ("container_mismatch", pack_v2, "gta3", [
+            ("pal8_native.txd", f["01_native_pal8_iii.txd"]),
+            ("8888_native.txd", f["02_native_8888_iii.txd"]),
+        ]),
+        # Native content for SA in the SA container: saves silently.
+        ("clean_sa", pack_v2, "gta3", [
+            ("dxt1_sa.txd", f["03_mismatch_dxt1_sa.txd"]),
+            ("dxt3_sa.txd", f["08_mismatch_dxt3_sa.txd"]),
+        ]),
+        # SA-dialect content in a v1 container for a III target:
+        # convertible only, so it still saves silently.
+        ("cross_target", pack_v1, "gta3", [
+            ("dxt1_sa.txd", f["03_mismatch_dxt1_sa.txd"]),
+        ]),
+    ]
+    print(f"\nSave-test archives in {archive_root}:")
+    for name, packer, base, entries in archives:
+        target_dir = os.path.join(archive_root, name)
+        count, size = packer(target_dir, base, entries)
+        print(f"  {name:20} {count} entries, {size} bytes  ->  {target_dir}")
 
 
 if __name__ == "__main__":
