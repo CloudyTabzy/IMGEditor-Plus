@@ -11,6 +11,7 @@
 - **Byte-preserving edits:** replacing or converting a texture re-serializes only that texture's section; every other entry and all container metadata stay verbatim. Untouched retail archives are never rewritten.
 - **Correctness fixes:** Vice City's texture dialect is now classified as DXT1/DXT3 (its "565/4444" headers were DXT data with stale labels), DXT5 alpha decoding follows the spec, and generated entries show their real byte size.
 - **New crates:** `texpresso` (MIT) for BC1/BC2/BC3 compression and `quantette` (MIT or Apache-2.0) for Wu + k-means palette quantization in Oklab.
+- **Credits:** the compatibility engine (profiles, validator, converter, save-side checks) and the UI work in this release were built by **OpenCode**; the window-close white-frame fix came from **Codex**.
 
 ## IMG Editor Plus v4.2.0
 
