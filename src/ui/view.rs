@@ -1876,6 +1876,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_welcome(app),
         build_unsupported(app),
         build_folder_import(app),
+        build_import_preflight(app),
         build_update_status(app),
         build_sort_manager(app),
         build_toast_overlay(app),
@@ -1991,6 +1992,82 @@ fn build_unsupported(app: &App) -> Option<Element<'_, Message>> {
             button(fonts::body("Close")).on_press(Message::HideUnsupported),
         ]
         .spacing(6),
+    ))
+}
+
+/// Pre-flight import dialog: lists the files whose formats the target
+/// engine cannot consume and lets the user import anyway or cancel.
+fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
+    let pending = app.pending_import.as_ref()?;
+    let target = app
+        .editor
+        .archives()
+        .get(pending.index)
+        .and_then(|archive| archive.target_game)
+        .and_then(crate::compat::games::profile_by_id)
+        .map(|game| game.display)
+        .unwrap_or("the selected target");
+
+    let flagged = pending.flagged();
+    let total_files = pending.paths.len();
+    let mut lines = Column::new().spacing(4).width(Length::Fill);
+    for check in flagged.iter().take(12) {
+        let detail = check
+            .offenders
+            .first()
+            .map(|(name, verdict, note)| {
+                if note.is_empty() {
+                    format!("{name}: {}", verdict.label())
+                } else {
+                    format!("{name}: {} - {note}", verdict.label())
+                }
+            })
+            .unwrap_or_default();
+        lines = lines.push(column![
+            fonts::strong(check.file_name.clone()),
+            fonts::caption(format!(
+                "{} texture(s): {}",
+                check.textures,
+                detail
+            )),
+        ]
+        .spacing(1));
+    }
+    if flagged.len() > 12 {
+        lines = lines.push(fonts::caption(format!(
+            "...and {} more flagged file(s).",
+            flagged.len() - 12
+        )));
+    }
+
+    let body = column![
+        fonts::body(format!(
+            "{} of {} file(s) contain formats {target} cannot consume as-is.",
+            flagged.len(),
+            total_files
+        )),
+        Space::new().height(Length::Fixed(4.0)),
+        lines,
+        Space::new().height(Length::Fixed(4.0)),
+        fonts::caption(
+            "The files can still be imported - the format only matters if the game must load them."
+        ),
+        Space::new().height(Length::Fixed(8.0)),
+        row![
+            button(fonts::body("Import anyway")
+                .color(compat_verdict_accent(crate::compat::games::Verdict::Unsupported)))
+            .on_press(Message::ImportCheckConfirmed)
+            .style(button::primary),
+            button(fonts::body("Cancel import")).on_press(Message::ImportCheckCancelled),
+        ]
+        .spacing(8),
+    ]
+    .spacing(4)
+    .width(Length::Fill);
+
+    Some(modal_box(
+        "Import check",
+        container(body).width(Length::Fixed(460.0)),
     ))
 }
 

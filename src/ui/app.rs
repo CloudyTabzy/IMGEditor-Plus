@@ -253,9 +253,22 @@ pub enum Message {
 
     ImportFiles,
     ImportFilesResult(Vec<PathBuf>),
+    /// Pre-flight check finished for a candidate import.
+    ImportPreflightCompleted {
+        index: usize,
+        paths: Vec<PathBuf>,
+        folder: Option<Box<(crate::tasks::FolderImportPlan, crate::tasks::FolderDuplicatePolicy)>>,
+        checks: Vec<crate::compat::scan::ImportFileCheck>,
+    },
+    /// User chose to import despite flagged formats.
+    ImportCheckConfirmed,
+    /// User cancelled the import at the pre-flight dialog.
+    ImportCheckCancelled,
     ImportCompleted {
         index: usize,
         count: usize,
+        /// Whether the pre-flight format check ran (a target was set).
+        checked: bool,
         result: Result<ArchiveInfo, String>,
     },
     ImportFolder,
@@ -586,6 +599,30 @@ pub enum Pane {
     Info,
 }
 
+/// An import paused at the pre-flight format-check dialog because at
+/// least one file carries a format the target engine cannot consume.
+#[derive(Debug, Clone)]
+pub struct PendingImport {
+    pub index: usize,
+    pub paths: Vec<PathBuf>,
+    /// Folder imports resume through their plan + chosen duplicate policy.
+    pub folder: Option<(FolderImportPlan, FolderDuplicatePolicy)>,
+    pub checks: Vec<crate::compat::scan::ImportFileCheck>,
+}
+
+impl PendingImport {
+    /// Files that fail the target's dialect, worst verdict first.
+    pub fn flagged(&self) -> Vec<&crate::compat::scan::ImportFileCheck> {
+        let mut flagged: Vec<_> = self
+            .checks
+            .iter()
+            .filter(|check| check.has_incompatible())
+            .collect();
+        flagged.sort_by_key(|check| std::cmp::Reverse(check.worst));
+        flagged
+    }
+}
+
 pub struct App {
     pub editor: Editor,
     pub config: Config,
@@ -619,6 +656,8 @@ pub struct App {
     pub update_check_manual: bool,
     pub toast: Option<String>,
     pub pending_folder_import: Option<(usize, FolderImportPlan)>,
+    /// Import waiting on the pre-flight format check dialog.
+    pub pending_import: Option<PendingImport>,
     /// Working copy of the sort chain while the Sort Manager
     /// dialog is open. Edits land here first; "Apply" commits the
     /// draft to the live archive + config. `None` when the dialog
@@ -818,6 +857,7 @@ impl App {
             update_check_manual: false,
             toast: None,
             pending_folder_import: None,
+            pending_import: None,
             panes,
             context_menu: None,
             inspected_entry: None,
@@ -945,10 +985,50 @@ impl App {
         )
     }
 
+    /// Start an import. When the archive has a validator target, run the
+    /// pre-flight format check first; only flagged files open the dialog.
+    fn begin_import(
+        &mut self,
+        index: usize,
+        archive: ArchiveInfo,
+        paths: Vec<PathBuf>,
+        folder: Option<(FolderImportPlan, FolderDuplicatePolicy)>,
+    ) -> Task<Message> {
+        let Some(target) = archive
+            .target_game
+            .and_then(crate::compat::games::profile_by_id)
+        else {
+            return match folder {
+                Some((plan, policy)) => self.run_folder_import(index, archive, plan, policy),
+                None => Self::import_archive_task(index, archive, paths, false),
+            };
+        };
+        let check_paths = paths.clone();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    check_paths
+                        .iter()
+                        .map(|path| crate::compat::scan::check_import_file(path, target))
+                        .collect::<Vec<_>>()
+                })
+                .await
+                .map_err(|error| error.to_string())
+            },
+            move |result| Message::ImportPreflightCompleted {
+                index,
+                paths,
+                folder: folder.map(Box::new),
+                checks: result.unwrap_or_default(),
+            },
+        )
+    }
+
     fn import_archive_task(
         index: usize,
         archive: ArchiveInfo,
         paths: Vec<PathBuf>,
+        checked: bool,
     ) -> Task<Message> {
         let count = paths.len();
         Task::perform(
@@ -964,6 +1044,7 @@ impl App {
             move |result| Message::ImportCompleted {
                 index,
                 count,
+                checked,
                 result,
             },
         )
@@ -1194,6 +1275,7 @@ impl App {
             || self.show_welcome
             || self.show_unsupported.is_some()
             || self.pending_folder_import.is_some()
+            || self.pending_import.is_some()
             || self.show_update_status.is_some()
             || self.show_sort_manager
             || self.validator_popup_open
@@ -2085,11 +2167,55 @@ impl App {
                     self.toast = Some("Open an archive first to import into it.".into());
                     return Task::none();
                 };
-                Self::import_archive_task(index, archive, paths)
+                self.begin_import(index, archive, paths, None)
+            }
+            Message::ImportPreflightCompleted {
+                index,
+                paths,
+                folder,
+                checks,
+            } => {
+                if checks.iter().any(|check| check.has_incompatible()) {
+                    self.pending_import = Some(PendingImport {
+                        index,
+                        paths,
+                        folder: folder.map(|boxed| *boxed),
+                        checks,
+                    });
+                    return Task::none();
+                }
+                let Some(archive) = self.editor.archives().get(index).cloned() else {
+                    return Task::none();
+                };
+                match folder.map(|boxed| *boxed) {
+                    Some((plan, policy)) => self.run_folder_import(index, archive, plan, policy),
+                    None => Self::import_archive_task(index, archive, paths, true),
+                }
+            }
+            Message::ImportCheckConfirmed => {
+                let Some(pending) = self.pending_import.take() else {
+                    return Task::none();
+                };
+                let Some(archive) = self.editor.archives().get(pending.index).cloned() else {
+                    self.toast = Some("The target archive is no longer open.".into());
+                    return Task::none();
+                };
+                match pending.folder {
+                    Some((plan, policy)) => {
+                        self.run_folder_import(pending.index, archive, plan, policy)
+                    }
+                    None => Self::import_archive_task(pending.index, archive, pending.paths, true),
+                }
+            }
+            Message::ImportCheckCancelled => {
+                self.pending_import = None;
+                self.toast = Some("Import cancelled.".into());
+                Task::none()
             }
             Message::ImportCompleted {
                 index,
                 count,
+                checked,
                 result,
             } => {
                 match result {
@@ -2101,7 +2227,13 @@ impl App {
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
                             Self::adopt_target(&self.config, archive);
                         }
-                        self.toast = Some(format!("Imported {count} files."));
+                        self.toast = Some(if checked {
+                            format!("Imported {count} files.")
+                        } else {
+                            format!(
+                                "Imported {count} files - no validator target set, formats were not checked."
+                            )
+                        });
                     }
                     Err(error) => {
                         self.toast = Some(format!("Import failed: {error}"));
@@ -2174,7 +2306,7 @@ impl App {
                     self.toast = Some("An archive operation is already running.".into());
                     return Task::none();
                 }
-                self.run_folder_import(index, archive, plan, duplicate_policy)
+                self.begin_import(index, archive, plan.files.clone(), Some((plan, duplicate_policy)))
             }
             Message::CancelFolderImport => {
                 self.pending_folder_import = None;
@@ -3270,7 +3402,7 @@ impl App {
                         Some("Open an archive first to drop non-IMG files into it.".into());
                     return Task::none();
                 };
-                Self::import_archive_task(index, archive, vec![path])
+                self.begin_import(index, archive, vec![path], None)
             }
 
             Message::TextureDecodeRequested => {
@@ -5637,6 +5769,83 @@ mod tests {
         assert!(
             !app.editor.archives()[0].progress.in_use(),
             "a failed scan must release the progress slot"
+        );
+    }
+
+    #[test]
+    fn import_preflight_flags_incompatible_files_and_opens_the_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        // A Gamebryo NFT with a DXT1 raster: harmless for Bully,
+        // incompatible for a GTA III target.
+        let nft = dir.path().join("skin.nft");
+        std::fs::write(
+            &nft,
+            crate::inspector::nif::tests::build_nif(&[(
+                "NiPixelData",
+                &{
+                    let mut block = Vec::new();
+                    block.extend_from_slice(&4_u32.to_le_bytes());
+                    block.push(0);
+                    block.extend_from_slice(&(-1_i32).to_le_bytes());
+                    block.extend_from_slice(&0_u32.to_le_bytes());
+                    block.push(1);
+                    block.extend_from_slice(&0_u32.to_le_bytes());
+                    block.push(0);
+                    block.extend_from_slice(&[4, 0, 0, 0]);
+                    block.extend_from_slice(&(-1_i32).to_le_bytes());
+                    block.extend_from_slice(&1_u32.to_le_bytes());
+                    block.extend_from_slice(&0_u32.to_le_bytes());
+                    block.extend_from_slice(&8_u32.to_le_bytes());
+                    block.extend_from_slice(&8_u32.to_le_bytes());
+                    block.extend_from_slice(&0_u32.to_le_bytes());
+                    block.extend_from_slice(&32_u32.to_le_bytes());
+                    block.extend_from_slice(&1_u32.to_le_bytes());
+                    block.extend(std::iter::repeat_n(0x8A_u8, 32));
+                    block
+                },
+            )]),
+        )
+        .unwrap();
+
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0].target_game = Some("gta3");
+
+        // Not blocked while the check runs.
+        let task = app.begin_import(0, app.editor.archives()[0].clone(), vec![nft.clone()], None);
+        let messages = drain_task(task);
+        assert!(matches!(
+            messages.as_slice(),
+            [Message::ImportPreflightCompleted { .. }]
+        ));
+        for message in messages {
+            let _ = app.update(message);
+        }
+        assert!(app.pending_import.is_some(), "flagged import must pause");
+        assert!(app.modal_open(), "the dialog must gate shortcuts");
+        assert_eq!(app.pending_import.as_ref().unwrap().flagged().len(), 1);
+
+        // Cancelling drops the pending import.
+        let _ = app.update(Message::ImportCheckCancelled);
+        assert!(app.pending_import.is_none());
+        assert_eq!(app.toast.as_deref(), Some("Import cancelled."));
+    }
+
+    #[test]
+    fn import_without_a_target_skips_the_preflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let nft = dir.path().join("skin.nft");
+        std::fs::write(&nft, b"Gamebryo File Format, Version 20.3.0.9\n").unwrap();
+
+        let mut app = test_app_with_entries();
+        assert!(app.editor.archives()[0].target_game.is_none());
+        let task = app.begin_import(0, app.editor.archives()[0].clone(), vec![nft], None);
+        // No pre-flight task is scheduled: the import goes straight in.
+        let messages = drain_task(task);
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::ImportCompleted { checked: false, .. })),
+            "unchecked import must report itself as unchecked: {messages:?}"
         );
     }
 

@@ -291,6 +291,138 @@ fn profile_txd_entry(
     Ok(())
 }
 
+/// Pre-flight result for one candidate import file, checked against a
+/// target game before it is added to an archive.
+#[derive(Debug, Clone)]
+pub struct ImportFileCheck {
+    pub file_name: String,
+    /// Raster/NiPixelData count; 0 when the file has no textures.
+    pub textures: usize,
+    /// Verdict label -> count.
+    pub counts: BTreeMap<&'static str, usize>,
+    /// Most severe verdict; `Untested` when nothing could be judged.
+    pub worst: crate::compat::games::Verdict,
+    /// Non-native textures, worst first (capped).
+    pub offenders: Vec<(String, crate::compat::games::Verdict, String)>,
+    /// True when the file is not a texture container we can check
+    /// (models, scripts, unknown formats): no verdict is claimed.
+    pub skipped: bool,
+    pub note: Option<String>,
+}
+
+impl Default for ImportFileCheck {
+    fn default() -> Self {
+        Self {
+            file_name: String::new(),
+            textures: 0,
+            counts: BTreeMap::new(),
+            worst: crate::compat::games::Verdict::Untested,
+            offenders: Vec::new(),
+            skipped: false,
+            note: None,
+        }
+    }
+}
+
+impl ImportFileCheck {
+    pub fn has_incompatible(&self) -> bool {
+        self.counts
+            .contains_key(crate::compat::games::Verdict::Unsupported.label())
+    }
+
+    pub fn incompatible(&self) -> usize {
+        self.counts
+            .get(crate::compat::games::Verdict::Unsupported.label())
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+/// Check one file on disk against a target game without importing it.
+/// TXDs go through the RenderWare raster path, Gamebryo files through
+/// the NiPixelData path; anything else is reported as skipped.
+pub fn check_import_file(path: &Path, target: &crate::compat::games::GameProfile) -> ImportFileCheck {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut check = ImportFileCheck {
+        file_name,
+        ..ImportFileCheck::default()
+    };
+
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            check.skipped = true;
+            check.note = Some(format!("could not read: {err}"));
+            return check;
+        }
+    };
+
+    if bytes.starts_with(b"Gamebryo File Format") {
+        let header = match nif::NifFile::parse_header(&bytes) {
+            Ok(header) => header,
+            Err(err) => {
+                check.skipped = true;
+                check.note = Some(format!("unreadable NIF header: {err}"));
+                return check;
+            }
+        };
+        for block in &header.blocks {
+            if block.type_name != "NiPixelData" {
+                continue;
+            }
+            let end = block.offset as usize + block.size as usize;
+            let Some(raw) = bytes.get(block.offset as usize..end) else {
+                continue;
+            };
+            let format = info_format_label(raw, header.endian);
+            let report = crate::compat::games::classify_nft_format(target, format);
+            check.textures += 1;
+            *check.counts.entry(report.verdict.label()).or_default() += 1;
+            check.worst = check.worst.max(report.verdict);
+            if report.verdict != crate::compat::games::Verdict::Native && check.offenders.len() < 24
+            {
+                check.offenders.push((
+                    nif_format_name(format).to_string(),
+                    report.verdict,
+                    report.note,
+                ));
+            }
+        }
+        if check.textures == 0 {
+            check.skipped = true;
+            check.note = Some("no NiPixelData blocks (empty stub)".to_string());
+        }
+        return check;
+    }
+
+    let parsed = match parse_txd(&bytes) {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            check.skipped = true;
+            check.note = Some("not a TXD or Gamebryo texture".to_string());
+            return check;
+        }
+    };
+    for texture in &parsed.textures {
+        let profile = RasterProfile::from_native(texture);
+        let report = classify(target, &profile);
+        check.textures += 1;
+        *check.counts.entry(report.verdict.label()).or_default() += 1;
+        check.worst = check.worst.max(report.verdict);
+        if report.verdict != crate::compat::games::Verdict::Native && check.offenders.len() < 24 {
+            check.offenders.push((
+                texture.diffuse_name.to_string(),
+                report.verdict,
+                report.note,
+            ));
+        }
+    }
+    check
+}
+
 /// Read one entry's bytes through the mmap when available. Returns
 /// `Ok(None)` after recording a read-failure anomaly for the entry.
 fn read_entry_bytes(
@@ -1285,5 +1417,38 @@ mod tests {
             Verdict::Untested,
             "an empty stub is unknown, not incompatible"
         );
+    }
+
+    #[test]
+    fn import_preflight_classifies_nft_files_and_skips_others() {
+        use crate::compat::games::{BULLY, GTA3};
+
+        let dir = tempfile::tempdir().unwrap();
+        let nft = dir.path().join("skin.nft");
+        std::fs::write(
+            &nft,
+            nif_nft_bytes(&nif_pixel_data_block(4, &[(8, 8)], -1)),
+        )
+        .unwrap();
+        let garbage = dir.path().join("readme.txt");
+        std::fs::write(&garbage, b"not a texture").unwrap();
+
+        // DXT1 in an NFT is native to Bully, unsupported for a GTA III
+        // target - the pre-flight must flag exactly that.
+        let bully = check_import_file(&nft, &BULLY);
+        assert_eq!(bully.textures, 1);
+        assert_eq!(bully.worst, crate::compat::games::Verdict::Native);
+        assert!(!bully.has_incompatible());
+
+        let gta3 = check_import_file(&nft, &GTA3);
+        assert_eq!(gta3.textures, 1);
+        assert!(gta3.has_incompatible());
+        assert_eq!(gta3.incompatible(), 1);
+        assert_eq!(gta3.offenders.len(), 1);
+
+        let skipped = check_import_file(&garbage, &GTA3);
+        assert!(skipped.skipped);
+        assert_eq!(skipped.textures, 0);
+        assert!(!skipped.has_incompatible());
     }
 }
