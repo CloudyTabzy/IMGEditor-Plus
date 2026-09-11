@@ -400,16 +400,26 @@ pub enum Message {
     SaveCheckCancelled,
     /// Replace the selected texture (opens the image picker).
     TextureReplaceRequested,
-    /// Image picker came back for a replacement.
-    ReplaceImagePicked(Option<PathBuf>),
+    /// Image picker came back for a replacement. `attempt` invalidates
+    /// results from a superseded picker or re-plan.
+    ReplaceImagePicked {
+        attempt: u64,
+        path: Option<PathBuf>,
+    },
     /// Background planning finished for a replacement.
-    ReplacePlanned(Box<Result<ReplacePlanReady, String>>),
+    ReplacePlanned {
+        attempt: u64,
+        result: Box<Result<ReplacePlanReady, String>>,
+    },
     /// The dialog's format pick changed; re-plan.
     ReplaceFormatChanged(crate::compat::encode::EncodeFormat),
     /// Toggle high-quality DXT for the replacement; re-plan.
     ReplaceHighQualityToggled(bool),
     /// Background re-plan finished.
-    ReplacePlanRefreshed(Box<Result<ReplacePlanReady, String>>),
+    ReplacePlanRefreshed {
+        attempt: u64,
+        result: Box<Result<ReplacePlanReady, String>>,
+    },
     /// Apply the replacement.
     ReplaceConfirmed,
     /// Background replacement finished.
@@ -422,10 +432,17 @@ pub enum Message {
     ReplaceCancelled,
     /// Author a new TXD from an image (opens the image picker).
     ImportImageAsTxdRequested,
-    /// Image picker came back for TXD authoring.
-    NewTxdImagePicked(Option<PathBuf>),
+    /// Image picker came back for TXD authoring. `attempt` invalidates
+    /// results from a superseded picker or re-plan.
+    NewTxdImagePicked {
+        attempt: u64,
+        path: Option<PathBuf>,
+    },
     /// Background planning finished for a new TXD.
-    NewTxdPlanned(Box<Result<NewTxdPlanReady, String>>),
+    NewTxdPlanned {
+        attempt: u64,
+        result: Box<Result<NewTxdPlanReady, String>>,
+    },
     /// The dialog's name field changed.
     NewTxdNameChanged(String),
     /// The dialog's format pick changed; re-plan.
@@ -970,6 +987,15 @@ pub struct App {
     pub pending_save: Option<PendingSave>,
     /// (archive, entry) waiting on the image picker for a replacement.
     pub replace_request: Option<(usize, usize)>,
+    /// Attempt counter for the replace flow: background results from a
+    /// superseded picker or re-plan are dropped instead of re-opening
+    /// the dialog.
+    pub replace_attempt: u64,
+    /// Attempt counter for the new-TXD flow (same purpose).
+    pub new_txd_attempt: u64,
+    /// True while the new-TXD image picker is open (guards double
+    /// opens from repeated toolbar clicks).
+    pub new_txd_picker_open: bool,
     /// Open replace-texture dialog state (Phase B).
     pub pending_replace: Option<ReplaceState>,
     /// Open new-TXD dialog state (Phase B).
@@ -1193,6 +1219,9 @@ impl App {
             pending_import: None,
             pending_save: None,
             replace_request: None,
+            replace_attempt: 0,
+            new_txd_attempt: 0,
+            new_txd_picker_open: false,
             pending_replace: None,
             pending_new_txd: None,
             pending_bulk: None,
@@ -2604,6 +2633,10 @@ impl App {
                 self.run_save(archive, path, version, remove_existing)
             }
             Message::TextureReplaceRequested => {
+                // Ignore a second request while one is already in flight.
+                if self.replace_request.is_some() {
+                    return Task::none();
+                }
                 let Some(archive_index) = self.editor.selected_archive() else {
                     self.toast = Some("No archive selected.".into());
                     return Task::none();
@@ -2629,10 +2662,20 @@ impl App {
                     return Task::none();
                 }
                 self.replace_request = Some((archive_index, entry_index));
-                dialogs::pick_image_file().map(Message::ReplaceImagePicked)
+                self.replace_attempt = self.replace_attempt.wrapping_add(1);
+                let attempt = self.replace_attempt;
+                dialogs::pick_image_file()
+                    .map(move |path| Message::ReplaceImagePicked { attempt, path })
             }
-            Message::ReplaceImagePicked(None) => Task::none(),
-            Message::ReplaceImagePicked(Some(path)) => {
+            Message::ReplaceImagePicked { attempt, path } => {
+                if attempt != self.replace_attempt {
+                    return Task::none();
+                }
+                let Some(path) = path else {
+                    // A cancelled picker must not leave the flow armed.
+                    self.replace_request = None;
+                    return Task::none();
+                };
                 let Some((archive_index, entry_index)) = self.replace_request.take() else {
                     return Task::none();
                 };
@@ -2668,10 +2711,16 @@ impl App {
                         .await
                         .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
                     },
-                    |result| Message::ReplacePlanned(Box::new(result)),
+                    move |result| Message::ReplacePlanned {
+                        attempt,
+                        result: Box::new(result),
+                    },
                 )
             }
-            Message::ReplacePlanned(result) => {
+            Message::ReplacePlanned { attempt, result } => {
+                if attempt != self.replace_attempt {
+                    return Task::none();
+                }
                 let ready = match *result {
                     Ok(ready) => ready,
                     Err(error) => {
@@ -2720,6 +2769,10 @@ impl App {
                 };
                 state.chooser = format;
                 state.planning = true;
+                // A fresh attempt invalidates any completion still in
+                // flight from an earlier toggle.
+                self.replace_attempt = self.replace_attempt.wrapping_add(1);
+                let attempt = self.replace_attempt;
                 let archive_index = state.archive_index;
                 let entry_index = state.entry_index;
                 let texture_index = state.texture_index;
@@ -2748,7 +2801,10 @@ impl App {
                         .await
                         .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
                     },
-                    |result| Message::ReplacePlanRefreshed(Box::new(result)),
+                    move |result| Message::ReplacePlanRefreshed {
+                        attempt,
+                        result: Box::new(result),
+                    },
                 )
             }
             Message::ReplaceHighQualityToggled(high_quality) => {
@@ -2757,6 +2813,10 @@ impl App {
                 };
                 state.high_quality = high_quality;
                 state.planning = true;
+                // A fresh attempt invalidates any completion still in
+                // flight from an earlier toggle.
+                self.replace_attempt = self.replace_attempt.wrapping_add(1);
+                let attempt = self.replace_attempt;
                 let archive_index = state.archive_index;
                 let entry_index = state.entry_index;
                 let texture_index = state.texture_index;
@@ -2785,10 +2845,19 @@ impl App {
                         .await
                         .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
                     },
-                    |result| Message::ReplacePlanRefreshed(Box::new(result)),
+                    move |result| Message::ReplacePlanRefreshed {
+                        attempt,
+                        result: Box::new(result),
+                    },
                 )
             }
-            Message::ReplacePlanRefreshed(result) => {
+            Message::ReplacePlanRefreshed {
+                attempt,
+                result,
+            } => {
+                if attempt != self.replace_attempt {
+                    return Task::none();
+                }
                 let ready = match *result {
                     Ok(ready) => ready,
                     Err(error) => {
@@ -2815,6 +2884,8 @@ impl App {
                 let Some(state) = self.pending_replace.take() else {
                     return Task::none();
                 };
+                // Invalidate any re-plan still in flight.
+                self.replace_attempt = self.replace_attempt.wrapping_add(1);
                 let archive_index = state.archive_index;
                 let entry_index = state.entry_index;
                 let texture_index = state.texture_index;
@@ -2873,6 +2944,7 @@ impl App {
                 Task::none()
             }
             Message::ReplaceCancelled => {
+                self.replace_attempt = self.replace_attempt.wrapping_add(1);
                 self.pending_replace = None;
                 Task::none()
             }
@@ -2892,10 +2964,23 @@ impl App {
                     self.toast = Some(error);
                     return Task::none();
                 }
-                dialogs::pick_image_file().map(Message::NewTxdImagePicked)
+                if self.new_txd_picker_open {
+                    return Task::none();
+                }
+                self.new_txd_picker_open = true;
+                self.new_txd_attempt = self.new_txd_attempt.wrapping_add(1);
+                let attempt = self.new_txd_attempt;
+                dialogs::pick_image_file()
+                    .map(move |path| Message::NewTxdImagePicked { attempt, path })
             }
-            Message::NewTxdImagePicked(None) => Task::none(),
-            Message::NewTxdImagePicked(Some(path)) => {
+            Message::NewTxdImagePicked { attempt, path } => {
+                if attempt != self.new_txd_attempt {
+                    return Task::none();
+                }
+                self.new_txd_picker_open = false;
+                let Some(path) = path else {
+                    return Task::none();
+                };
                 let Some(archive_index) = self.editor.selected_archive() else {
                     return Task::none();
                 };
@@ -2924,10 +3009,16 @@ impl App {
                         .await
                         .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
                     },
-                    |result| Message::NewTxdPlanned(Box::new(result)),
+                    move |result| Message::NewTxdPlanned {
+                        attempt,
+                        result: Box::new(result),
+                    },
                 )
             }
-            Message::NewTxdPlanned(result) => {
+            Message::NewTxdPlanned { attempt, result } => {
+                if attempt != self.new_txd_attempt {
+                    return Task::none();
+                }
                 let ready = match *result {
                     Ok(ready) => ready,
                     Err(error) => {
@@ -2979,6 +3070,8 @@ impl App {
                 };
                 state.chooser = format;
                 state.planning = true;
+                self.new_txd_attempt = self.new_txd_attempt.wrapping_add(1);
+                let attempt = self.new_txd_attempt;
                 let archive_index = state.archive_index;
                 let path = state.source_path.clone();
                 let target = state.target;
@@ -3004,7 +3097,10 @@ impl App {
                         .await
                         .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
                     },
-                    |result| Message::NewTxdPlanned(Box::new(result)),
+                    move |result| Message::NewTxdPlanned {
+                        attempt,
+                        result: Box::new(result),
+                    },
                 )
             }
             Message::NewTxdHighQualityToggled(high_quality) => {
@@ -3013,6 +3109,8 @@ impl App {
                 };
                 state.high_quality = high_quality;
                 state.planning = true;
+                self.new_txd_attempt = self.new_txd_attempt.wrapping_add(1);
+                let attempt = self.new_txd_attempt;
                 let archive_index = state.archive_index;
                 let path = state.source_path.clone();
                 let target = state.target;
@@ -3038,7 +3136,10 @@ impl App {
                         .await
                         .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
                     },
-                    |result| Message::NewTxdPlanned(Box::new(result)),
+                    move |result| Message::NewTxdPlanned {
+                        attempt,
+                        result: Box::new(result),
+                    },
                 )
             }
             Message::NewTxdConfirmed => {
@@ -3048,6 +3149,7 @@ impl App {
                 let mut name = state.texture_name.trim().to_string();
                 if name.is_empty() {
                     self.toast = Some("Give the new TXD a name.".into());
+                    self.pending_new_txd = Some(state);
                     return Task::none();
                 }
                 if !name.to_ascii_lowercase().ends_with(".txd") {
@@ -3064,8 +3166,12 @@ impl App {
                     .any(|entry| entry.file_name.eq_ignore_ascii_case(&name))
                 {
                     self.toast = Some(format!("An entry named '{name}' already exists."));
+                    self.pending_new_txd = Some(state);
                     return Task::none();
                 }
+                // The entry is in: invalidate any plan still in flight so
+                // it cannot re-open the dialog.
+                self.new_txd_attempt = self.new_txd_attempt.wrapping_add(1);
                 let mut entry = crate::archive::EntryInfo::new(&name);
                 entry.imported = true;
                 entry.override_bytes = Some(Arc::new(bytes));
@@ -3091,6 +3197,7 @@ impl App {
                 Task::none()
             }
             Message::NewTxdCancelled => {
+                self.new_txd_attempt = self.new_txd_attempt.wrapping_add(1);
                 self.pending_new_txd = None;
                 Task::none()
             }
@@ -3305,17 +3412,17 @@ impl App {
             | Message::SaveFixesReady { .. }
             | Message::SaveCheckCancelled
             | Message::TextureReplaceRequested
-            | Message::ReplaceImagePicked(_)
-            | Message::ReplacePlanned(_)
+            | Message::ReplaceImagePicked { .. }
+            | Message::ReplacePlanned { .. }
             | Message::ReplaceFormatChanged(_)
             | Message::ReplaceHighQualityToggled(_)
-            | Message::ReplacePlanRefreshed(_)
+            | Message::ReplacePlanRefreshed { .. }
             | Message::ReplaceConfirmed
             | Message::ReplaceApplied { .. }
             | Message::ReplaceCancelled
             | Message::ImportImageAsTxdRequested
-            | Message::NewTxdImagePicked(_)
-            | Message::NewTxdPlanned(_)
+            | Message::NewTxdImagePicked { .. }
+            | Message::NewTxdPlanned { .. }
             | Message::NewTxdNameChanged(_)
             | Message::NewTxdFormatChanged(_)
             | Message::NewTxdHighQualityToggled(_)
@@ -7500,6 +7607,124 @@ mod tests {
             "{:?}",
             app.toast
         );
+        assert!(
+            app.pending_new_txd.is_some(),
+            "a rejected name must keep the dialog open for a fix"
+        );
+    }
+
+    #[test]
+    fn stale_new_txd_plans_never_reopen_the_dialog() {
+        let mut app = test_app_with_entries();
+        let ready = || NewTxdPlanReady {
+            archive_index: 0,
+            source_path: PathBuf::from("x.png"),
+            source_name: "x.png".to_string(),
+            texture_name: "x".to_string(),
+            target: &crate::compat::games::GTA3,
+            plan: tiny_plan(&crate::compat::games::GTA3),
+        };
+
+        // After a confirm (or cancel) the attempt was bumped and no
+        // dialog is open: a completion from the superseded attempt must
+        // be dropped instead of re-instating it.
+        app.new_txd_attempt = 7;
+        assert!(app.pending_new_txd.is_none());
+        let _ = app.update(Message::NewTxdPlanned {
+            attempt: 6,
+            result: Box::new(Ok(ready())),
+        });
+        assert!(
+            app.pending_new_txd.is_none(),
+            "a stale plan must not re-open the dialog"
+        );
+
+        // The live attempt still opens it.
+        let _ = app.update(Message::NewTxdPlanned {
+            attempt: 7,
+            result: Box::new(Ok(ready())),
+        });
+        assert!(app.pending_new_txd.is_some());
+    }
+
+    #[test]
+    fn cancelling_new_txd_invalidates_in_flight_plans() {
+        let mut app = test_app_with_entries();
+        app.new_txd_attempt = 3;
+        app.pending_new_txd = Some(NewTxdState {
+            archive_index: 0,
+            source_path: PathBuf::from("x.png"),
+            source_name: "x.png".to_string(),
+            texture_name: "x".to_string(),
+            target: &crate::compat::games::GTA3,
+            chooser: crate::compat::encode::EncodeFormat::Rgb888,
+            high_quality: false,
+            plan: tiny_plan(&crate::compat::games::GTA3),
+            after_handle: iced::widget::image::Handle::from_rgba(4, 4, vec![0, 0, 0, 0]),
+            planning: true,
+        });
+
+        let _ = app.update(Message::NewTxdCancelled);
+        assert!(app.pending_new_txd.is_none());
+        assert_eq!(app.new_txd_attempt, 4);
+
+        let ready = NewTxdPlanReady {
+            archive_index: 0,
+            source_path: PathBuf::from("x.png"),
+            source_name: "x.png".to_string(),
+            texture_name: "x".to_string(),
+            target: &crate::compat::games::GTA3,
+            plan: tiny_plan(&crate::compat::games::GTA3),
+        };
+        let _ = app.update(Message::NewTxdPlanned {
+            attempt: 3,
+            result: Box::new(Ok(ready)),
+        });
+        assert!(
+            app.pending_new_txd.is_none(),
+            "cancel must invalidate plans still in flight"
+        );
+    }
+
+    #[test]
+    fn stale_replace_refresh_does_not_reopen_after_cancel() {
+        let mut app = test_app_with_entries();
+        app.replace_attempt = 4;
+        assert!(app.pending_replace.is_none());
+        let _ = app.update(Message::ReplacePlanRefreshed {
+            attempt: 3,
+            result: Box::new(Err("stale".to_string())),
+        });
+        assert!(app.pending_replace.is_none());
+        assert!(
+            app.toast.is_none(),
+            "a superseded failure must not toast either: {:?}",
+            app.toast
+        );
+    }
+
+    #[test]
+    fn cancelled_pickers_release_their_flow_state() {
+        let mut app = test_app_with_entries();
+
+        // Cancelling the replace picker must not leave the request
+        // armed, or every later replacement would be refused.
+        app.replace_attempt = 1;
+        app.replace_request = Some((0, 1));
+        let _ = app.update(Message::ReplaceImagePicked {
+            attempt: 1,
+            path: None,
+        });
+        assert!(app.replace_request.is_none());
+
+        // Cancelling the new-TXD picker releases the double-open guard.
+        app.new_txd_attempt = 1;
+        app.new_txd_picker_open = true;
+        let _ = app.update(Message::NewTxdImagePicked {
+            attempt: 1,
+            path: None,
+        });
+        assert!(!app.new_txd_picker_open);
     }
 
     #[test]
