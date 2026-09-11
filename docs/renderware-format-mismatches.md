@@ -132,9 +132,11 @@ Full-corpus results (first texture per TXD, all 2,759 files classified):
 
 **Corpus identity (2026-09-11):** this archive is **retail SA `gta3.img` +
 19 entries** — every headline number matches retail exactly (DXT1 23,492,
-DXT3 1,645, 8888 112, 269 stale nibbles); the additions are nine female
-ped-skin `.dff/.txd` pairs (`copgrl1/2`, `crogrl1`, `gangrl1/2`,
-`gungrl1/2`, `nurgrl1/2`) and `sex.ifp`. `dwayne.txd` is **retail**, so
+DXT3 1,645, 8888 112, 269 stale nibbles), and all 16,297 shared entries
+hash byte-identical (MD5), so no original asset was modified: the 19
+additions are nine female ped-skin `.dff/.txd` pairs (`copgrl1/2`,
+`crogrl1`, `gangrl1/2`, `gungrl1/2`, `nurgrl1/2`) and `sex.ifp`, inserted
+mid-archive with all originals repacked. `dwayne.txd` is **retail**, so
 the X8R8G8B8 decoder bug hit vanilla SA assets, not just mods.
 
 Interpretation (revised against the retail scan): retail SA is a
