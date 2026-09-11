@@ -394,8 +394,18 @@ pub enum Message {
     TabResizeEnded,
     /// User acknowledged the pre-save report and wants to write.
     SaveCheckConfirmed,
+    /// Toggle the dialog's lossless header-repair checkbox.
+    SaveCheckFixToggled(bool),
     /// User cancelled at the pre-save report.
     SaveCheckCancelled,
+    /// Background header repair finished; apply the patches and save.
+    SaveFixesReady {
+        index: usize,
+        patches: SavePatches,
+        path: PathBuf,
+        version: crate::parser::ImgVersion,
+        remove_existing: bool,
+    },
     /// Window close button pressed; may open the unsaved-changes guard.
     WindowCloseRequested(iced::window::Id),
     /// Save from the unsaved-changes guard (then close).
@@ -671,6 +681,9 @@ pub struct PendingSave {
     pub version: crate::parser::ImgVersion,
     pub remove_existing: bool,
     pub issue: Option<crate::compat::save::SaveIssue>,
+    /// The dialog's repair checkbox: patch fixable DXT headers before
+    /// writing. Only meaningful when the issue has fixable reports.
+    pub fix: bool,
 }
 
 /// Close or quit waiting on the unsaved-changes guard.
@@ -680,6 +693,27 @@ pub enum PendingClose {
     Archive(usize),
     /// The window close button, with at least one dirty archive open.
     Window(iced::window::Id),
+}
+
+/// Patched entry bytes from the background normalize pass, with a
+/// compact `Debug` so message dumps never print megabytes of pixels.
+#[derive(Clone)]
+pub struct SavePatches(pub Vec<(usize, Arc<Vec<u8>>)>);
+
+impl SavePatches {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for SavePatches {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SavePatches({} entries)", self.0.len())
+    }
 }
 
 pub struct App {
@@ -2019,6 +2053,7 @@ impl App {
                 version,
                 remove_existing,
                 issue: None,
+                fix: false,
             });
             return Task::perform(
                 async move {
@@ -2043,12 +2078,14 @@ impl App {
 
         let issue = crate::compat::save::evaluate_save(report, &archive);
         if issue.needs_review() {
+            let fix = issue.has_fixable();
             self.pending_save = Some(PendingSave {
                 index,
                 path,
                 version,
                 remove_existing,
                 issue: Some(issue),
+                fix,
             });
             Task::none()
         } else {
@@ -2272,7 +2309,70 @@ impl App {
                     self.toast = Some("The archive is no longer open.".into());
                     return Task::none();
                 };
+                if pending.fix
+                    && pending
+                        .issue
+                        .as_ref()
+                        .is_some_and(|issue| issue.has_fixable())
+                {
+                    // Plan and patch on a background task so a big
+                    // archive never freezes the dialog.
+                    let index = pending.index;
+                    let path = pending.path;
+                    let version = pending.version;
+                    let remove_existing = pending.remove_existing;
+                    self.toast = None;
+                    return Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                crate::compat::normalize::collect_fixes(&archive)
+                            })
+                            .await
+                            .unwrap_or_default()
+                        },
+                        move |patches| Message::SaveFixesReady {
+                            index,
+                            patches: SavePatches(patches),
+                            path,
+                            version,
+                            remove_existing,
+                        },
+                    );
+                }
                 self.run_save(archive, pending.path, pending.version, pending.remove_existing)
+            }
+            Message::SaveCheckFixToggled(fix) => {
+                if let Some(pending) = self.pending_save.as_mut() {
+                    pending.fix = fix;
+                }
+                Task::none()
+            }
+            Message::SaveFixesReady {
+                index,
+                patches,
+                path,
+                version,
+                remove_existing,
+            } => {
+                let patched = patches.len();
+                let Some(archive) = self.editor.archives_mut().get_mut(index) else {
+                    self.toast = Some("The archive is no longer open.".into());
+                    return Task::none();
+                };
+                for (entry_index, bytes) in patches.0 {
+                    if let Some(entry) = archive.entries.get_mut(entry_index) {
+                        entry.override_bytes = Some(bytes);
+                    }
+                }
+                if patched > 0 {
+                    archive.dirty = true;
+                    archive.invalidate_entry_caches_keeping_report();
+                    self.toast = Some(format!(
+                        "Repaired {patched} texture header(s); saving."
+                    ));
+                }
+                let archive = archive.clone();
+                self.run_save(archive, path, version, remove_existing)
             }
             Message::SaveCheckCancelled => {
                 self.pending_save = None;
@@ -2370,6 +2470,8 @@ impl App {
             | Message::SaveArchiveAsResult(_)
             | Message::SaveCompleted { .. }
             | Message::SaveCheckConfirmed
+            | Message::SaveCheckFixToggled(_)
+            | Message::SaveFixesReady { .. }
             | Message::SaveCheckCancelled
             | Message::PackArchive
             | Message::PackCompleted { .. } => Task::none(),
@@ -3790,8 +3892,10 @@ impl App {
                                     });
                                 match issue {
                                     Some(issue) if issue.needs_review() => {
+                                        let fix = issue.has_fixable();
                                         self.pending_save = Some(PendingSave {
                                             issue: Some(issue),
+                                            fix,
                                             ..pending
                                         });
                                         self.toast = None;
@@ -6293,10 +6397,87 @@ mod tests {
             version: crate::parser::ImgVersion::One,
             remove_existing: true,
             issue: Some(crate::compat::save::SaveIssue::default()),
+            fix: false,
         });
         let _ = app.update(Message::SaveCheckCancelled);
         assert!(app.pending_save.is_none());
         assert_eq!(app.toast.as_deref(), Some("Save cancelled."));
+    }
+
+    #[test]
+    fn save_check_repair_toggle_plans_in_background_then_applies() {
+        use crate::compat::raster::Severity;
+        use crate::compat::scan::ScanReport;
+
+        let mut app = test_app_with_entries();
+        {
+            let archive = &mut app.editor.archives_mut()[0];
+            archive.target_game = Some("gta3");
+            let mut report = ScanReport::default();
+            report.textures = 1;
+            report.anomaly_counts.insert("CONTRADICTORY_DXT_HEADER", 1);
+            report
+                .anomaly_severity
+                .insert("CONTRADICTORY_DXT_HEADER", Severity::Error);
+            archive.compat_report = Some(report);
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.img");
+        let _ = app.begin_save(
+            app.editor.archives()[0].clone(),
+            path.clone(),
+            crate::parser::ImgVersion::One,
+            true,
+        );
+        assert!(app.pending_save.is_some(), "a broken header must gate");
+        assert!(
+            app.pending_save.as_ref().unwrap().fix,
+            "the repair default follows the fixable reports"
+        );
+
+        let _ = app.update(Message::SaveCheckFixToggled(false));
+        assert!(!app.pending_save.as_ref().unwrap().fix);
+        let _ = app.update(Message::SaveCheckFixToggled(true));
+        assert!(app.pending_save.as_ref().unwrap().fix);
+
+        // Confirming with repair returns a planning task first.
+        let messages = drain_task(app.update(Message::SaveCheckConfirmed));
+        let ready = messages
+            .iter()
+            .find(|message| matches!(message, Message::SaveFixesReady { .. }))
+            .cloned()
+            .expect("confirming with repair must plan before saving");
+        assert!(app.pending_save.is_none());
+
+        // Feeding the plan back starts the save; a synthetic entry has no
+        // readable bytes, so the plan is empty and nothing is patched.
+        let messages = drain_task(app.update(ready));
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::SaveCompleted { .. })),
+            "the save must run after planning: {messages:?}"
+        );
+
+        // A non-empty plan applies the overrides and dirties the archive.
+        let patch = SavePatches(vec![(1, Arc::new(vec![9, 9, 9, 9]))]);
+        let task = app.update(Message::SaveFixesReady {
+            index: 0,
+            patches: patch,
+            path,
+            version: crate::parser::ImgVersion::One,
+            remove_existing: true,
+        });
+        assert!(app.editor.archives()[0].entries[1].override_bytes.is_some());
+        assert!(app.editor.archives()[0].dirty, "a patch changes the archive");
+        let messages = drain_task(task);
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::SaveCompleted { .. })),
+            "the patched archive must still save: {messages:?}"
+        );
     }
 
     #[test]
@@ -6493,6 +6674,7 @@ mod tests {
             version: crate::parser::ImgVersion::One,
             remove_existing: false,
             issue: Some(crate::compat::save::SaveIssue::default()),
+            fix: false,
         });
         let _ = app.update(Message::ClearSelection);
         assert!(app.pending_save.is_none());

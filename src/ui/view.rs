@@ -2148,16 +2148,33 @@ fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
         )));
     }
 
+    let repairing = pending.fix && issue.has_fixable();
+    if issue.has_fixable() {
+        body = body.push(
+            checkbox(pending.fix)
+                .label(format!(
+                    "Repair inconsistent DXT headers before saving ({} report(s), lossless)",
+                    issue.fixable_reports
+                ))
+                .on_toggle(Message::SaveCheckFixToggled),
+        );
+    }
     body = body.push(Space::new().height(Length::Fixed(4.0)));
-    body = body.push(fonts::caption(
-        "Saving writes every entry verbatim; no texture is re-encoded or converted.",
-    ));
+    body = body.push(fonts::caption(if repairing {
+        "Repair patches DXT header fields in place; no pixel is re-encoded."
+    } else {
+        "Saving writes every entry verbatim; no texture is re-encoded or converted."
+    }));
     body = body.push(Space::new().height(Length::Fixed(8.0)));
     body = body.push(
         row![
-            button(fonts::body("Save anyway"))
-                .on_press(Message::SaveCheckConfirmed)
-                .style(button::primary),
+            button(fonts::body(if repairing {
+                "Fix & Save"
+            } else {
+                "Save anyway"
+            }))
+            .on_press(Message::SaveCheckConfirmed)
+            .style(button::primary),
             button(fonts::body("Cancel")).on_press(Message::SaveCheckCancelled),
         ]
         .spacing(8),

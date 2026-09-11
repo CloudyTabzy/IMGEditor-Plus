@@ -60,43 +60,56 @@ pub fn plan_fixes(archive: &ArchiveInfo) -> Vec<HeaderFix> {
 /// Apply the fixes: every entry with a fixable header gets patched bytes
 /// stored as an override. Returns the number of patched entries.
 pub fn apply_fixes(archive: &mut ArchiveInfo) -> usize {
-    let indices: Vec<usize> = archive
-        .entries
-        .iter()
-        .enumerate()
-        .filter(|(_, entry)| entry.file_name_lower.ends_with(".txd"))
-        .map(|(index, _)| index)
-        .collect();
-    let mut patched = 0;
-    for index in indices {
-        let Ok(mut bytes) = crate::parser::read_entry_data(archive, &archive.entries[index])
-        else {
-            continue;
-        };
-        let mut changed = false;
-        for header in walk_native_headers(&bytes) {
-            if let Some(nibble) = fixed_nibble(header.d3d_format) {
-                let want = (header.raster_format & !0x0F00) | nibble;
-                if header.raster_format != want {
-                    bytes[header.raster_pos..header.raster_pos + 4]
-                        .copy_from_slice(&want.to_le_bytes());
-                    changed = true;
-                }
-                if header.depth != 16 {
-                    bytes[header.depth_pos] = 16;
-                    changed = true;
-                }
-            }
-        }
-        if changed {
-            archive.entries[index].override_bytes = Some(Arc::new(bytes));
-            patched += 1;
-        }
+    let patches = collect_fixes(archive);
+    let patched = patches.len();
+    for (index, bytes) in patches {
+        archive.entries[index].override_bytes = Some(bytes);
     }
     if patched > 0 {
         archive.dirty = true;
     }
     patched
+}
+
+/// Compute the patched bytes for every fixable entry without modifying
+/// the archive. The save-check dialog runs this on a background task so
+/// large archives never block the UI; the result is applied when it
+/// returns.
+pub fn collect_fixes(archive: &ArchiveInfo) -> Vec<(usize, Arc<Vec<u8>>)> {
+    let mut patches = Vec::new();
+    for (index, entry) in archive.entries.iter().enumerate() {
+        if !entry.file_name_lower.ends_with(".txd") {
+            continue;
+        }
+        if let Some(bytes) = fixed_entry(archive, entry) {
+            patches.push((index, bytes));
+        }
+    }
+    patches
+}
+
+/// Read one entry, patch every fixable native header in it, and return
+/// the patched bytes when anything changed.
+fn fixed_entry(archive: &ArchiveInfo, entry: &crate::archive::EntryInfo) -> Option<Arc<Vec<u8>>> {
+    let Ok(mut bytes) = crate::parser::read_entry_data(archive, entry) else {
+        return None;
+    };
+    let mut changed = false;
+    for header in walk_native_headers(&bytes) {
+        if let Some(nibble) = fixed_nibble(header.d3d_format) {
+            let want = (header.raster_format & !0x0F00) | nibble;
+            if header.raster_format != want {
+                bytes[header.raster_pos..header.raster_pos + 4]
+                    .copy_from_slice(&want.to_le_bytes());
+                changed = true;
+            }
+            if header.depth != 16 {
+                bytes[header.depth_pos] = 16;
+                changed = true;
+            }
+        }
+    }
+    if changed { Some(Arc::new(bytes)) } else { None }
 }
 
 /// Describe what would change, or `None` when the header is fine.
@@ -295,6 +308,23 @@ mod tests {
         let patched = archive.entries[0].override_bytes.as_ref().unwrap();
         let header = walk_native_headers(patched);
         assert_eq!(header[0].raster_format, 0x8200, "nibble fixed, mip bit kept");
+    }
+
+    #[test]
+    fn collect_fixes_is_read_only_and_returns_patched_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = archive_with(
+            &dir.path().join("bad.txd"),
+            &txd_with(0x0500, 0x3354_5844, 32),
+        );
+
+        let patches = collect_fixes(&archive);
+        assert_eq!(patches.len(), 1);
+        assert!(!archive.dirty, "planning must not dirty the archive");
+        assert!(archive.entries[0].override_bytes.is_none());
+        let header = walk_native_headers(&patches[0].1);
+        assert_eq!(header[0].raster_format, 0x0300);
+        assert_eq!(header[0].depth, 16);
     }
 
     #[test]

@@ -29,9 +29,21 @@ pub struct SaveIssue {
     pub anomalies: Vec<(String, usize, String)>,
     /// Warn-severity anomaly count, informational.
     pub warnings: usize,
+    /// Anomaly reports the header-only normalize pass can repair
+    /// (lossless DXT nibble/depth patches).
+    pub fixable_reports: usize,
     pub textures: usize,
     pub entry_count: usize,
 }
+
+/// Anomaly codes the normalize pass targets. `CONTRADICTORY_DXT_HEADER`
+/// and `STALE_RASTER_NIBBLE` are DXT-specific; `DEPTH_INVALID` can also
+/// come from non-DXT entries, where the plan leaves them alone.
+const FIXABLE_CODES: [&str; 3] = [
+    "CONTRADICTORY_DXT_HEADER",
+    "STALE_RASTER_NIBBLE",
+    "DEPTH_INVALID",
+];
 
 impl SaveIssue {
     /// Whether the save deserves the review dialog. Unknown and
@@ -40,6 +52,11 @@ impl SaveIssue {
     pub fn needs_review(&self) -> bool {
         self.incompatible > 0 || self.unknown > 0 || self.container_note.is_some()
             || !self.anomalies.is_empty()
+    }
+
+    /// Whether offering the lossless header repair makes sense.
+    pub fn has_fixable(&self) -> bool {
+        self.fixable_reports > 0
     }
 }
 
@@ -83,6 +100,11 @@ pub fn evaluate_save(report: &ScanReport, archive: &ArchiveInfo) -> SaveIssue {
         }
     }
     issue.anomalies.sort_by_key(|(_, count, _)| std::cmp::Reverse(*count));
+
+    issue.fixable_reports = FIXABLE_CODES
+        .iter()
+        .map(|code| report.anomaly_counts.get(*code).copied().unwrap_or(0))
+        .sum();
 
     issue
 }
@@ -210,6 +232,23 @@ mod tests {
         assert_eq!(issue.anomalies[0].1, 3);
         assert!(issue.anomalies[0].2.contains("bad.txd"));
         assert_eq!(issue.warnings, 5);
+    }
+
+    #[test]
+    fn fixable_reports_feed_the_repair_checkbox() {
+        let mut report = report_with("gta3", 10, 0, 0);
+        report.anomaly_counts.insert("CONTRADICTORY_DXT_HEADER", 4);
+        report.anomaly_counts.insert("STALE_RASTER_NIBBLE", 7);
+        report.anomaly_counts.insert("DIMS_NOT_POT", 2);
+        let issue = evaluate_save(&report, &archive(Some("gta3"), ImgVersion::One));
+        assert_eq!(issue.fixable_reports, 11);
+        assert!(issue.has_fixable());
+
+        let clean = evaluate_save(
+            &report_with("gta3", 10, 0, 0),
+            &archive(Some("gta3"), ImgVersion::One),
+        );
+        assert!(!clean.has_fixable());
     }
 
     #[test]
