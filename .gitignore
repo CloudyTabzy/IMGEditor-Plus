@@ -39,3 +39,15 @@ $RECYCLE.BIN/
 # Crash/debug logs
 imgeditor-panic.log
 stderr.txt
+
+# Local-only research docs (kept on disk, never published)
+/docs/asset-compatibility-engine.md
+/docs/bullyfury-adaptation-notes.md
+/docs/gta-img-platform-variants.md
+/docs/gta-img-reference-audit.md
+/docs/handoff-white-flash-on-exit.md
+/docs/renderware-gta-preview.md
+/docs/research-handoff-online-format-support.md
+/docs/research-inu-tools-gta.md
+/docs/research-librw-format-support.md
+/docs/research-online-format-support.md
