@@ -336,6 +336,21 @@ impl ImportFileCheck {
             .copied()
             .unwrap_or(0)
     }
+
+    /// Rasters with no evidence either way (amber).
+    pub fn unknown(&self) -> usize {
+        self.counts
+            .get(crate::compat::games::Verdict::Untested.label())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// True when the import deserves a decision: the target either cannot
+    /// consume a format or cannot be judged on it (incompatible/unknown).
+    /// Supported and losslessly convertible content imports silently.
+    pub fn has_issues(&self) -> bool {
+        self.has_incompatible() || self.unknown() > 0
+    }
 }
 
 /// Check one file on disk against a target game without importing it.
@@ -1417,6 +1432,33 @@ mod tests {
             Verdict::Untested,
             "an empty stub is unknown, not incompatible"
         );
+    }
+
+    #[test]
+    fn import_check_issue_predicate_flags_incompatible_and_unknown_only() {
+        let mut check = ImportFileCheck {
+            file_name: "x.txd".to_string(),
+            ..ImportFileCheck::default()
+        };
+        assert!(!check.has_issues(), "nothing judged is not an issue");
+
+        check.counts.insert("native", 2);
+        assert!(!check.has_issues());
+
+        check.counts.insert("convertible (lossless)", 1);
+        assert!(
+            !check.has_issues(),
+            "supported/convertible content imports silently"
+        );
+
+        check.counts.insert("untested", 1);
+        assert!(check.has_issues(), "unknown formats need a decision");
+        assert_eq!(check.unknown(), 1);
+        assert_eq!(check.incompatible(), 0);
+
+        check.counts.insert("unsupported", 1);
+        assert!(check.has_issues());
+        assert_eq!(check.incompatible(), 1);
     }
 
     #[test]

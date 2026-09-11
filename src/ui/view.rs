@@ -2010,6 +2010,8 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
 
     let flagged = pending.flagged();
     let total_files = pending.paths.len();
+    let incompatible: usize = flagged.iter().map(|check| check.incompatible()).sum();
+    let unknown: usize = flagged.iter().map(|check| check.unknown()).sum();
     let mut lines = Column::new().spacing(4).width(Length::Fill);
     for check in flagged.iter().take(12) {
         let detail = check
@@ -2042,7 +2044,7 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
 
     let body = column![
         fonts::body(format!(
-            "{} of {} file(s) contain formats {target} cannot consume as-is.",
+            "{} of {} file(s) need a decision for {target}: {incompatible} incompatible texture(s), {unknown} unknown.",
             flagged.len(),
             total_files
         )),
@@ -2050,7 +2052,7 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
         lines,
         Space::new().height(Length::Fixed(4.0)),
         fonts::caption(
-            "The files can still be imported - the format only matters if the game must load them."
+            "Imports are verbatim either way - the format only matters if the game must load these textures."
         ),
         Space::new().height(Length::Fixed(8.0)),
         row![

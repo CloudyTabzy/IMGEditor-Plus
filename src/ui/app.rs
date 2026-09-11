@@ -616,7 +616,7 @@ impl PendingImport {
         let mut flagged: Vec<_> = self
             .checks
             .iter()
-            .filter(|check| check.has_incompatible())
+            .filter(|check| check.has_issues())
             .collect();
         flagged.sort_by_key(|check| std::cmp::Reverse(check.worst));
         flagged
@@ -2231,7 +2231,7 @@ impl App {
                 folder,
                 checks,
             } => {
-                if checks.iter().any(|check| check.has_incompatible()) {
+                if checks.iter().any(|check| check.has_issues()) {
                     self.pending_import = Some(PendingImport {
                         index,
                         paths,
