@@ -745,8 +745,36 @@ impl Config {
         }
     }
 
+    /// Portable mode wins over the per-user location: a `settings.ini`
+    /// next to the executable (or an empty `portable` marker file) keeps
+    /// the configuration travelling with the app, so it works from a USB
+    /// stick or an unpacked folder. Without either file the app behaves
+    /// like an installed one and uses `%APPDATA%\IMGEditor`.
     pub fn path() -> PathBuf {
-        Self::config_dir().join("settings.ini")
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf));
+        let appdata = std::env::var("APPDATA").ok().map(PathBuf::from);
+        Self::resolve_path(exe_dir.as_deref(), appdata.as_deref())
+    }
+
+    /// Testable core of [`Self::path`]: sidecar `settings.ini` (or a
+    /// `portable` marker) next to the executable wins; otherwise the
+    /// per-user APPDATA location; otherwise the working directory.
+    pub(crate) fn resolve_path(exe_dir: Option<&Path>, appdata: Option<&Path>) -> PathBuf {
+        if let Some(dir) = exe_dir {
+            let sidecar = dir.join("settings.ini");
+            if sidecar.exists() || dir.join("portable").exists() {
+                return sidecar;
+            }
+        }
+        match appdata {
+            Some(dir) => dir.join("IMGEditor").join("settings.ini"),
+            None => std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join("IMGEditor")
+                .join("settings.ini"),
+        }
     }
 }
 
@@ -1072,6 +1100,41 @@ mod tests {
             "Gruvbox".parse::<ThemeMode>().unwrap(),
             ThemeMode::DarkGruvbox
         );
+    }
+
+    #[test]
+    fn portable_sidecar_takes_precedence_over_appdata() {
+        let exe_dir = tempfile::tempdir().unwrap();
+        let appdata = tempfile::tempdir().unwrap();
+        let appdata_path = appdata.path().join("IMGEditor").join("settings.ini");
+
+        // Nothing beside the executable: installed-style location.
+        assert_eq!(
+            Config::resolve_path(Some(exe_dir.path()), Some(appdata.path())),
+            appdata_path
+        );
+
+        // A `portable` marker is enough to opt in.
+        std::fs::write(exe_dir.path().join("portable"), b"").unwrap();
+        let sidecar = exe_dir.path().join("settings.ini");
+        assert_eq!(
+            Config::resolve_path(Some(exe_dir.path()), Some(appdata.path())),
+            sidecar
+        );
+
+        // An existing settings.ini beside the exe also opts in (marker
+        // removed to prove the sidecar alone is sufficient).
+        std::fs::remove_file(exe_dir.path().join("portable")).unwrap();
+        std::fs::write(&sidecar, b"theme=dark\n").unwrap();
+        assert_eq!(
+            Config::resolve_path(Some(exe_dir.path()), Some(appdata.path())),
+            sidecar
+        );
+
+        // No APPDATA at all falls back to the working directory.
+        let fallback = Config::resolve_path(None, None);
+        assert!(fallback.ends_with("IMGEditor\\settings.ini")
+            || fallback.ends_with("IMGEditor/settings.ini"));
     }
 
     #[test]
