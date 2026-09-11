@@ -370,7 +370,7 @@ impl RasterProfile {
     }
 }
 
-fn fourcc_name(d3d_format: u32) -> Option<&'static str> {
+pub(crate) fn fourcc_name(d3d_format: u32) -> Option<&'static str> {
     match d3d_format {
         0x3154_5844 => Some("DXT1"),
         0x3254_5844 => Some("DXT2"),

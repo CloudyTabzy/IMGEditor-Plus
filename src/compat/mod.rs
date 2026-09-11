@@ -6,6 +6,7 @@
 //! converter writes only as an explicit user action with a plan
 //! preview.
 
+pub mod convert;
 pub mod encode;
 pub mod games;
 pub mod hint;
