@@ -6,13 +6,14 @@ rasters produced by different tools and platforms, so the decoder must
 cross-check every format claim against the fields that cannot lie cheaply:
 the D3D format word, the depth byte, and the mip data length.
 
-## Case study: `dwayne.txd` in an SA-dialect `gta3.img`
+## Case study: `dwayne.txd` in an SA `gta3.img`
 
-Archive: an IMG **v2** (`VER2`) archive named `gta3.img` (a GTA SA-style
-container with SA content — entry-name forensics 2026-09-11 settled it:
-SA ped/gang names throughout, every III-unique name absent; not a modified
-retail III despite the folder name — no `.dir` file,
-16,316 entries, D3D9 platform rasters throughout).
+Archive: an IMG **v2** (`VER2`) archive named `gta3.img` — **retail SA
+`gta3.img` plus 19 added ped-skin entries** (library/name forensics
+2026-09-11: DXT1 23,492, DXT3 1,645, 8888 112 and 269 stale nibbles all
+match retail exactly; `gta3.img` is SA's real archive name, inherited from
+GTA III — no `.dir` file, 16,316 entries, D3D9 platform rasters
+throughout).
 
 `dwayne.txd` previewed as a progressive-misalignment checkerboard: the
 model geometry was fine, the texture was not. The raster native header:
@@ -121,46 +122,51 @@ Full-corpus results (first texture per TXD, all 2,759 files classified):
 
 | Class | Count | Content | Provenance evidence |
 |---|---|---|---|
-| DXT1, no mips | 1,508 | world props (a51_*, ammo*, arch_plx) | SA ships these compressed; sizes 64²–256² |
-| DXT1 + mip ext (`0x8200`) | 413 | big world, 512²/256², intact 8–10 level chains | SA's own mip convention — untouched originals |
+| DXT1, no mips | 1,508 | world props (a51_*, ammo*, arch_plx) | SA ships these compressed; sizes 64²-256² |
+| DXT1 + mip ext (`0x8200`) | 413 | big world, 512²/256², intact 8-10 level chains | SA's own mip convention - untouched originals |
 | DXT3 | 378 | alpha props (kmb_chute, law_coffinfl) | SA alpha-compressed originals |
-| "1555" | 53 | small alpha bits | **actually DXT1** — stale 1555 raster nibble, DXT1 FourCC wins |
-| 888 → X8R8G8B8 | 355 | interior/building tiles (bistro, hospital2, liberty*), skins (dwayne, player) | 217 files ≤ 256 unique colors → decoded palettes |
+| "1555" | 53 | small alpha bits | **actually DXT1** - stale 1555 raster nibble, DXT1 FourCC wins (retail SA carries 269 of these itself) |
+| 888 → X8R8G8B8 | 355 | interior/building tiles (bistro, hospital2, liberty*), skins (dwayne, player) | 217 files ≤ 256 unique colors - built from paletted source art, shipped uncompressed by retail SA |
 | 8888 (A8R8G8B8) | 33 | alpha tiles (bistro_alpha, trees2) + alpha peds (bmycr, bmydrug) | 24 of 26 parsed ≤ 256 colors; 26/26 use real palette alpha |
 | no raster (child 0x3) | 19 | SA generic dictionaries (gb_la, gb_sf, gb_vegas) | different structure, unexamined |
 
-Interpretation: the conversion pipeline that produced this archive
-(1) copied DXT-compressed content verbatim — SA ships its world compressed,
-so there was nothing to do; (2) re-encoded SA's **paletted** rasters
-(ped skins, player parts, interior tiles — famously PAL8/PAL4 in SA) into
-uncompressed RGB(A), losslessly; and (3) stored author-imported RGBA art
-as-is. It split by alpha: paletted-no-alpha → 888 (→ X8R8G8B8 storage,
-the dwayne bug), paletted-with-alpha → 8888. **Zero paletted rasters
-survive** in the archive; `player.txd`'s texture name `torso8bit` is a
-fossil of the original 8-bit form.
+**Corpus identity (2026-09-11):** this archive is **retail SA `gta3.img` +
+19 entries** — every headline number matches retail exactly (DXT1 23,492,
+DXT3 1,645, 8888 112, 269 stale nibbles); the additions are nine female
+ped-skin `.dff/.txd` pairs (`copgrl1/2`, `crogrl1`, `gangrl1/2`,
+`gungrl1/2`, `nurgrl1/2`) and `sex.ifp`. `dwayne.txd` is **retail**, so
+the X8R8G8B8 decoder bug hit vanilla SA assets, not just mods.
+
+Interpretation (revised against the retail scan): retail SA is a
+**palette-free dialect** — its archives ship zero PAL8/PAL4 rasters. SA's
+own dialect is "DXT for world/interiors, uncompressed 888/8888 for player
+skins and some tiles", and the 888 class here is exactly that retail
+content (1,015 rasters across SA's archives). So this archive was **not**
+produced by a tool re-encoding palettes: the DXT content is SA's, and the
+uncompressed content is SA's too. The ≤256-color 888s say the *source art*
+was 8-bit, not that a converter touched it — `player.txd`'s texture name
+`torso8bit` is the fossil of that authoring pipeline.
 
 Two forensic fingerprints worth remembering:
 
 - **The 257/258/259-color cluster** (84/35/18 files in the 888 class):
-  a decoded 256-entry palette plus 1–3 stray pixels — the converter's
-  own signature (likely colorkey or padding artifacts written outside
-  the palette). A pile of files at exactly N and N+1..N+3 colors is a
-  re-encode tell, not organic art.
+  a 256-entry source palette plus 1-3 stray pixels. A pile of files at
+  exactly N and N+1..N+3 colors is a paletted-authoring tell.
 - **Perceptual non-uniqueness**: 888 and 8888 files pair naturally
-  (`bistro` / `bistro_alpha`) — one paletted raster family split by the
-  converter's alpha check.
+  (`bistro` / `bistro_alpha`) - one source raster family split by whether
+  the source had alpha.
 
-Provenance table for this archive:
+Provenance table for this archive (retail SA):
 
-| Content | Original form | Converter action | Result |
+| Content | Original form | Storage in retail | Result |
 |---|---|---|---|
-| SA world/props (already DXT) | DXT1/DXT3 + mips | verbatim passthrough | decodes fine |
-| SA paletted, no alpha (skins, tiles) | PAL8, ~4–256 colors | palette → 888 RGB | X8R8G8B8 32-bit storage |
-| SA paletted, with alpha (trees, fences, peds) | PAL8 + RGBA palette | → 8888 | fine |
-| Custom imported art (dwayne, etc.) | authored RGBA | stored as 888/8888 | >256 colors, many colors |
+| SA world/props | DXT1/DXT3 + mips | verbatim | decodes fine |
+| SA uncompressed, no alpha (skins, tiles) | 8-bit source art, ~4-256 colors | 888 stored X8R8G8B8 32-bit | decodes fine after the fmt-22 fix |
+| SA uncompressed, with alpha (trees, fences, peds) | 8-bit + alpha | 8888 | fine |
+| Added ped-skin pack (9 pairs) | authored RGBA | 888/8888 | >256 colors |
 
 Practical consequence: **~60%+ of this archive's uncompressed texture
-content is palette-reconstructible** — the original palette can be
+content is palette-reconstructible** - the source palette can be
 recovered from the decoded pixels, which matters for any future
 edit/replace feature (see discussion in the repo history; the decoder's
 unique-color analysis is the detection primitive).
@@ -168,12 +174,13 @@ unique-color analysis is the detection primitive).
 ## Related observations from the same archive
 
 - `player.txd` (`torso8bit`) carries ~20 bytes of stale, pixel-like junk in
-  its 32-byte alpha/mask-name field — harmless for decoding (alpha texture
-  is optional), presumably leftover padding from the rebuild tool. Expect
-  occasional garbage in nominally-ASCII fields of tool-converted archives.
-- The archive being VER2 while holding GTA III assets means `.dir`-based
-  (IMG v1) tooling assumptions do not apply; entry names live in the IMG
-  header itself.
+  its 32-byte alpha/mask-name field - harmless for decoding (alpha texture
+  is optional), and present in retail SA itself. Expect occasional garbage
+  in nominally-ASCII fields of Rockstar's own archives.
+- The archive is VER2 (SA's container) rather than IMG v1, so `.dir`-based
+  tooling assumptions do not apply; entry names live in the IMG header
+  itself. The `gta3.img` filename is also SA's real name (inherited from
+  GTA III) - not a sign the archive is III content.
 
 ## Validation
 

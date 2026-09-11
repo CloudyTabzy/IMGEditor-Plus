@@ -188,39 +188,52 @@ fn format_verdict(
 }
 
 fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
+    // Retail evidence base: GTA SA PC 1.0 (gta3.img, gta_int.img,
+    // player.img, cutscene.img — 32,157 textures measured 2026-09-11,
+    // zero parse failures, zero header anomalies). SA is a
+    // palette-free dialect: no PAL, no 1555, no DXT5 in retail.
     match profile.logical {
-        LogicalFormat::Dxt1 | LogicalFormat::Dxt3 | LogicalFormat::Dxt2 => {
-            (Verdict::Native, Evidence::Corpus, String::new())
-        }
-        // SA fences/foliage ship as DXT4 (docs-verified against stock
-        // SA TXDs); DXT5 appears in mod tooling.
-        LogicalFormat::Dxt4 => (Verdict::Native, Evidence::Docs, String::new()),
+        LogicalFormat::Dxt1 | LogicalFormat::Dxt3 => (
+            Verdict::Native,
+            Evidence::Retail,
+            "retail SA: 28,807 DXT1 + 2,098 DXT3 rasters".to_string(),
+        ),
+        LogicalFormat::Dxt2 => (Verdict::Untested, Evidence::Retail, String::new()),
+        // The old docs claim that SA fences/foliage ship DXT4 is not
+        // visible in retail (0/32,157).
+        LogicalFormat::Dxt4 => (
+            Verdict::Untested,
+            Evidence::Retail,
+            "retail SA ships no DXT4".to_string(),
+        ),
         LogicalFormat::Dxt5 => (
             Verdict::Supported,
-            Evidence::Docs,
-            "DXT5 exists in SA tooling; stock SA ships DXT1/DXT3".to_string(),
+            Evidence::Retail,
+            "retail SA ships none; DXT5 rides D3D9 support (mod tooling uses it)".to_string(),
         ),
+        // SA abandoned palettes entirely - the III/VC native form has
+        // no retail precedent for an SA target.
         LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
-            Verdict::Native,
-            Evidence::Docs,
-            "palettes accepted; retail SA palette conventions still to verify".to_string(),
+            Verdict::Untested,
+            Evidence::Retail,
+            "retail SA ships zero paletted rasters (0/32,157)".to_string(),
         ),
-        // The "888"-as-X8R8G8B8 storage: engine-accepted but 33% larger
-        // than the 24-bit logical size.
-        LogicalFormat::R888 if profile.storage_bpp == 4 => (
-            Verdict::Supported,
-            Evidence::Corpus,
-            "32-bit X8R8G8B8 storage of a 24-bit format".to_string(),
-        ),
-        LogicalFormat::R888 => (Verdict::Untested, Evidence::Untested, String::new()),
-        LogicalFormat::R8888 => (
-            Verdict::Supported,
-            Evidence::Corpus,
-            "uncompressed 8888: stock SA prefers DXT".to_string(),
-        ),
-        LogicalFormat::R1555 | LogicalFormat::R565 | LogicalFormat::R4444 => {
-            (Verdict::Native, Evidence::Corpus, String::new())
+        // Retail SA ships uncompressed 888 as X8R8G8B8 32bpp storage
+        // (1,015 rasters, mostly player.img ped skins) and 8888 (237).
+        LogicalFormat::R888 if profile.storage_bpp == 4 => {
+            (Verdict::Native, Evidence::Retail, String::new())
         }
+        LogicalFormat::R888 => (
+            Verdict::Untested,
+            Evidence::Retail,
+            "retail SA never ships true 24-bit 888".to_string(),
+        ),
+        LogicalFormat::R8888 => (Verdict::Native, Evidence::Retail, String::new()),
+        LogicalFormat::R1555 | LogicalFormat::R565 | LogicalFormat::R4444 => (
+            Verdict::Untested,
+            Evidence::Retail,
+            "retail SA ships no 16-bit uncompressed rasters".to_string(),
+        ),
         LogicalFormat::R555 | LogicalFormat::Lum8 | LogicalFormat::A8l8 => {
             (Verdict::Untested, Evidence::Untested, String::new())
         }
