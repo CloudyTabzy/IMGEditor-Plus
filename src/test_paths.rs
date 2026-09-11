@@ -7,6 +7,8 @@
 //! Set locally (see AGENTS.md) to run these suites:
 //! `IMGEDITOR_BULLY_STREAM`, `IMGEDITOR_BULLY_NIF`,
 //! `IMGEDITOR_BULLY_NIF_TOOLS`, `IMGEDITOR_GTA3_EXPORTS`.
+//! Set `IMGEDITOR_CORPUS_ROOT` to run the optional supplied GTA/Bully corpus
+//! validation tests.
 
 use std::path::PathBuf;
 

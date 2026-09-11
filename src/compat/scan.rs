@@ -11,7 +11,7 @@ use anyhow::Context;
 use crate::archive::ArchiveInfo;
 use crate::inspector::nif::{self, Endian};
 use crate::parser::txd::parse_txd;
-use crate::parser::{detect_version, read_entry_data_from_source, ImgVersion};
+use crate::parser::{canonical_img_path, detect_version, read_entry_data_from_source, ImgVersion};
 use crate::parser::pc_v1::PcV1Parser;
 use crate::parser::pc_v2::PcV2Parser;
 use crate::parser::xbox360::Xbox360Parser;
@@ -83,7 +83,8 @@ pub struct EntryVerdict {
 
 /// Open any supported archive headlessly and profile its textures.
 pub fn scan_archive(path: &Path, options: &ScanOptions) -> anyhow::Result<ScanReport> {
-    let version = detect_version(path);
+    let path = canonical_img_path(path);
+    let version = detect_version(&path);
     let mut archive = ArchiveInfo::new(
         path.file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -91,7 +92,7 @@ pub fn scan_archive(path: &Path, options: &ScanOptions) -> anyhow::Result<ScanRe
         false,
         version,
     );
-    archive.path = Some(path.to_path_buf());
+    archive.path = Some(path.clone());
     match version {
         ImgVersion::One => PcV1Parser.open(&mut archive)?,
         ImgVersion::Two => PcV2Parser.open(&mut archive)?,

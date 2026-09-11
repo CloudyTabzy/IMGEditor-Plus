@@ -134,6 +134,55 @@ mod tests {
     }
 
     #[test]
+    fn validates_supplied_bully_xbox360_archive_when_present() {
+        let Some(root) = crate::test_paths::corpus_root() else {
+            return;
+        };
+        let img_path = root.join("Bully script img xbox 360/Scripts.img");
+        let dir_path = root.join("Bully script img xbox 360/Scripts.dir");
+        if !img_path.is_file() || !dir_path.is_file() {
+            return;
+        }
+
+        assert_eq!(detect_version(&dir_path), ImgVersion::Xbox360);
+        let archive = ArchiveInfo::open(&dir_path).unwrap();
+        assert_eq!(archive.version, ImgVersion::Xbox360);
+        assert!(!archive.entries.is_empty());
+
+        let sample_indices = [0, archive.entries.len() / 2, archive.entries.len() - 1];
+        let samples = sample_indices
+            .into_iter()
+            .map(|index| {
+                (
+                    index,
+                    archive.entries[index].file_name.clone(),
+                    archive.entries[index].file_name_raw,
+                    archive.entries[index].sector,
+                    read_entry_data(&archive, &archive.entries[index]).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let temp = tempfile::tempdir().unwrap();
+        let saved_path = temp.path().join("Scripts.img");
+        let mut to_save = archive;
+        Xbox360Parser
+            .save(&mut to_save, &saved_path, false)
+            .unwrap();
+        let reopened = ArchiveInfo::open(&saved_path).unwrap();
+        assert_eq!(reopened.version, ImgVersion::Xbox360);
+        assert_eq!(reopened.entries.len(), to_save.entries.len());
+
+        for (index, name, raw, sector, data) in samples {
+            let actual = &reopened.entries[index];
+            assert_eq!(actual.file_name, name);
+            assert_eq!(actual.file_name_raw, raw);
+            assert_eq!(actual.sector, sector);
+            assert_eq!(read_entry_data(&reopened, actual).unwrap(), data);
+        }
+    }
+
+    #[test]
     fn imports_full_24_byte_names_for_xbox_archives() {
         let dir = tempfile::tempdir().unwrap();
         let img_path = create_archive(dir.path());

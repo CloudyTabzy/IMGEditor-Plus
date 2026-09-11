@@ -1915,7 +1915,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
                 Space::new().height(Length::Fixed(8.0)),
                 fonts::display("Open or create an archive to get started."),
                 Space::new().height(Length::Fixed(8.0)),
-                fonts::caption("Or drag and drop an .img file here to open it."),
+                fonts::caption("Or drag and drop an .img or .dir file here to open it."),
                 Space::new().height(Length::Fill),
             ]
             .align_x(Alignment::Center),

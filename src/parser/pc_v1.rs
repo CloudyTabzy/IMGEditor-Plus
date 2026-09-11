@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{
-    ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE, decode_entry_name,
-    export_entry_to_file, import_entry,
+    ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE, canonical_img_path,
+    decode_entry_name, export_entry_to_file, import_entry,
 };
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -39,7 +39,7 @@ impl V1ByteOrder {
 
 impl PcV1Parser {
     pub(crate) fn dir_path(img_path: &Path) -> PathBuf {
-        let mut path = img_path.to_path_buf();
+        let mut path = canonical_img_path(img_path);
         path.set_extension("dir");
         path
     }
@@ -49,13 +49,15 @@ impl PcV1Parser {
         archive: &mut ArchiveInfo,
         byte_order: V1ByteOrder,
     ) -> Result<()> {
-        let Some(path) = archive.path.as_ref() else {
+        let Some(source_path) = archive.path.as_ref() else {
             anyhow::bail!("new archives do not have a source path");
         };
-        let dir_path = Self::dir_path(path);
+        let path = canonical_img_path(source_path);
+        archive.path = Some(path.clone());
+        let dir_path = Self::dir_path(&path);
         let dir_bytes = std::fs::read(&dir_path)
             .with_context(|| format!("failed to read IMG v1 directory: {}", dir_path.display()))?;
-        let img_len = std::fs::metadata(path)
+        let img_len = std::fs::metadata(&path)
             .with_context(|| format!("failed to stat IMG v1 archive: {}", path.display()))?
             .len();
 
@@ -85,10 +87,11 @@ impl PcV1Parser {
     }
 
     pub(crate) fn is_valid_with_endian(&self, path: &Path, byte_order: V1ByteOrder) -> bool {
-        let Ok(img_len) = std::fs::metadata(path).map(|metadata| metadata.len()) else {
+        let path = canonical_img_path(path);
+        let Ok(img_len) = std::fs::metadata(&path).map(|metadata| metadata.len()) else {
             return false;
         };
-        let dir_path = Self::dir_path(path);
+        let dir_path = Self::dir_path(&path);
         let Ok(dir_bytes) = std::fs::read(dir_path) else {
             return false;
         };
@@ -148,8 +151,9 @@ impl PcV1Parser {
         byte_order: V1ByteOrder,
         version: ImgVersion,
     ) -> Result<()> {
+        let output_path = canonical_img_path(output_path);
         let source_path = archive.path.clone();
-        let dir_path = Self::dir_path(output_path);
+        let dir_path = Self::dir_path(&output_path);
 
         let mut temp_img = output_path.as_os_str().to_owned();
         temp_img.push(".temp");
@@ -161,7 +165,7 @@ impl PcV1Parser {
 
         let result = self.save_internal(
             archive,
-            output_path,
+            &output_path,
             &temp_img,
             &temp_dir,
             &source_path,
@@ -179,26 +183,26 @@ impl PcV1Parser {
         // map the file that was actually written.
         archive.source_mmap = None;
 
-        let _ = std::fs::remove_file(output_path);
+        let _ = std::fs::remove_file(&output_path);
         std::fs::rename(&temp_dir, &dir_path).context("failed to write directory file")?;
 
         if remove_existing
             && let Some(ref src) = source_path
-            && src != output_path
+            && src != &output_path
         {
             let _ = std::fs::remove_file(src);
         }
 
-        std::fs::rename(&temp_img, output_path).context("failed to write archive file")?;
+        std::fs::rename(&temp_img, &output_path).context("failed to write archive file")?;
 
-        archive.path = Some(output_path.to_path_buf());
+        archive.path = Some(output_path.clone());
         archive.file_name = output_path
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Untitled".to_string());
         archive.version = version;
         let img_file =
-            std::fs::File::open(output_path).context("failed to reopen packed IMG v1 archive")?;
+            std::fs::File::open(&output_path).context("failed to reopen packed IMG v1 archive")?;
         archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
         archive.add_log("Archive saved".to_string());
         Ok(())
@@ -249,8 +253,14 @@ impl PcV1Parser {
                 anyhow::bail!("Rebuild cancelled");
             }
 
-            dir_out.write_all(&byte_order.write_u32((offset / SECTOR_SIZE) as u32))?;
-            dir_out.write_all(&byte_order.write_u32((size / SECTOR_SIZE) as u32))?;
+            let sector_offset = u32::try_from(offset / SECTOR_SIZE).map_err(|_| {
+                anyhow::anyhow!("IMG v1 output offset is too large for {}", entry.file_name)
+            })?;
+            let sector_count = u32::try_from(size / SECTOR_SIZE).map_err(|_| {
+                anyhow::anyhow!("IMG v1 entry is too large for {}", entry.file_name)
+            })?;
+            dir_out.write_all(&byte_order.write_u32(sector_offset))?;
+            dir_out.write_all(&byte_order.write_u32(sector_count))?;
             dir_out.write_all(&entry.file_name_raw)?;
 
             crate::parser::stream_entry_data(
@@ -261,7 +271,9 @@ impl PcV1Parser {
                 &mut source_file,
             )?;
 
-            offset += size;
+            offset = offset
+                .checked_add(size)
+                .ok_or_else(|| anyhow::anyhow!("IMG v1 output is too large"))?;
             if index % 64 == 0 || index + 1 == total {
                 archive
                     .progress
@@ -275,9 +287,14 @@ impl PcV1Parser {
         // Apply the new layout to the in-memory entries.
         let mut offset = 0u64;
         for (entry, &size) in archive.entries.iter_mut().zip(layout.iter()) {
-            entry.offset = (offset / SECTOR_SIZE) as u32;
-            entry.sector = (size / SECTOR_SIZE) as u32;
-            offset += size;
+            entry.offset = u32::try_from(offset / SECTOR_SIZE).map_err(|_| {
+                anyhow::anyhow!("IMG v1 output offset is too large for {}", entry.file_name)
+            })?;
+            entry.sector = u32::try_from(size / SECTOR_SIZE)
+                .map_err(|_| anyhow::anyhow!("IMG v1 entry is too large for {}", entry.file_name))?;
+            offset = offset
+                .checked_add(size)
+                .ok_or_else(|| anyhow::anyhow!("IMG v1 output is too large"))?;
         }
 
         archive.progress.set_percentage(1.0);
@@ -357,11 +374,15 @@ fn validate_v1_directory(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::io::Write;
 
     use super::*;
-    use crate::archive::ArchiveInfo;
-    use crate::parser::{SECTOR_SIZE, encode_entry_name, sector_rounded_size};
+    use crate::archive::{ArchiveInfo, EntryInfo};
+    use crate::parser::{
+        ImgVersion, SECTOR_SIZE, detect_version, encode_entry_name, read_entry_data,
+        sector_rounded_size,
+    };
 
     fn create_v1_archive(dir: &Path, name: &str, entries: &[(&str, &[u8])]) -> PathBuf {
         let img_path = dir.join(format!("{}.img", name));
@@ -405,6 +426,12 @@ mod tests {
         assert_eq!(archive.entries[0].file_type, "Model");
         assert_eq!(archive.entries[1].file_name, "texture.txd");
         assert_eq!(archive.entries[1].file_type, "Texture");
+
+        let dir_path = PcV1Parser::dir_path(&img_path);
+        assert!(PcV1Parser.is_valid(&dir_path));
+        let opened_from_dir = ArchiveInfo::open(&dir_path).unwrap();
+        assert_eq!(opened_from_dir.path.as_deref(), Some(img_path.as_path()));
+        assert_eq!(opened_from_dir.entries.len(), archive.entries.len());
     }
 
     #[test]
@@ -521,5 +548,177 @@ mod tests {
             .unwrap();
         let exported = std::fs::read(&output).unwrap();
         assert_eq!(&exported[..import_data.len()], import_data.as_slice());
+    }
+
+    #[test]
+    fn retail_gta_iii_and_vc_v1_archives_validate_and_round_trip_when_present() {
+        let Some(root) = crate::test_paths::corpus_root() else {
+            return;
+        };
+
+        let archives = [
+            (
+                "gta3-models",
+                root.join("Gta_3_img/models/gta3.img"),
+                root.join("Gta_3_img/models/gta3.dir"),
+            ),
+            (
+                "gta3-txd",
+                root.join("Gta_3_img/models/txd.img"),
+                root.join("Gta_3_img/models/txd.dir"),
+            ),
+            (
+                "vc-models",
+                root.join("Grand Theft Auto Vice City/models/gta3.img"),
+                root.join("Grand Theft Auto Vice City/models/gta3.dir"),
+            ),
+            (
+                "vc-cuts",
+                root.join("Grand Theft Auto Vice City/anim/cuts.img"),
+                root.join("Grand Theft Auto Vice City/anim/cuts.dir"),
+            ),
+        ];
+        let wanted_extensions = ["DFF", "TXD", "COL", "IFP"];
+        let mut checked_archives = 0;
+
+        for (label, img_path, dir_path) in archives {
+            if !img_path.is_file() || !dir_path.is_file() {
+                continue;
+            }
+
+            checked_archives += 1;
+            assert_eq!(
+                detect_version(&dir_path),
+                ImgVersion::One,
+                "{label} should detect as IMG v1 from its .dir path"
+            );
+            assert!(
+                PcV1Parser.is_valid(&dir_path),
+                "{label} should validate from its .dir path"
+            );
+
+            let archive = ArchiveInfo::open(&dir_path)
+                .unwrap_or_else(|error| panic!("{label} should open from .dir: {error}"));
+            assert_eq!(archive.path.as_deref(), Some(img_path.as_path()));
+            assert!(!archive.entries.is_empty(), "{label} should contain entries");
+
+            let mut first_by_extension = BTreeMap::new();
+            for (index, entry) in archive.entries.iter().enumerate() {
+                first_by_extension
+                    .entry(entry.file_ext.to_string())
+                    .or_insert(index);
+            }
+
+            let roundtrip_dir = tempfile::tempdir().unwrap();
+            let mut sample = ArchiveInfo::new(
+                format!("{label}-sample.img"),
+                false,
+                ImgVersion::One,
+            );
+            let mut expected = Vec::new();
+
+            for extension in wanted_extensions {
+                let Some(&index) = first_by_extension.get(extension) else {
+                    continue;
+                };
+                let entry = &archive.entries[index];
+                let bytes = read_entry_data(&archive, entry).unwrap_or_else(|error| {
+                    panic!("{label}: failed to read {}: {error}", entry.file_name)
+                });
+                assert!(!bytes.is_empty());
+                assert_eq!(
+                    bytes.len() as u64,
+                    u64::from(entry.sector) * SECTOR_SIZE,
+                    "{label}: {} should occupy its complete sector range",
+                    entry.file_name
+                );
+
+                match extension {
+                    "DFF" => {
+                        let meshes = crate::parser::dff::parse_dff(&bytes).unwrap_or_else(|error| {
+                            panic!("{label}: {} should parse as DFF: {error}", entry.file_name)
+                        });
+                        assert!(
+                            meshes
+                                .iter()
+                                .any(|mesh| !mesh.positions.is_empty() && !mesh.indices.is_empty()),
+                            "{label}: {} should contain DFF triangles",
+                            entry.file_name
+                        );
+                    }
+                    "TXD" => {
+                        let txd = crate::parser::txd::parse_txd(&bytes).unwrap_or_else(|error| {
+                            panic!("{label}: {} should parse as TXD: {error}", entry.file_name)
+                        });
+                        assert!(
+                            !txd.textures.is_empty(),
+                            "{label}: {} should contain TXD textures",
+                            entry.file_name
+                        );
+                    }
+                    "COL" => {
+                        let col = crate::parser::col::parse_col(&bytes).unwrap_or_else(|error| {
+                            panic!("{label}: {} should parse as COL: {error}", entry.file_name)
+                        });
+                        assert!(
+                            !col.entries.is_empty(),
+                            "{label}: {} should contain collision entries",
+                            entry.file_name
+                        );
+                    }
+                    "IFP" => {}
+                    _ => unreachable!(),
+                }
+
+                let source_path = roundtrip_dir
+                    .path()
+                    .join(format!("sample-{index}.{extension}"));
+                std::fs::write(&source_path, &bytes).unwrap();
+
+                let mut imported = EntryInfo::new_for_version(
+                    entry.file_name.clone(),
+                    ImgVersion::One,
+                );
+                imported.file_name_raw = entry.file_name_raw;
+                imported.source_path = Some(source_path);
+                imported.imported = true;
+                sample.entries.push(imported);
+                expected.push((
+                    entry.file_name.to_string(),
+                    entry.file_name_raw,
+                    bytes,
+                ));
+            }
+
+            assert!(
+                !expected.is_empty(),
+                "{label} should contain at least one representative asset"
+            );
+            let output_path = roundtrip_dir.path().join(format!("{label}-roundtrip.img"));
+            PcV1Parser
+                .save(&mut sample, &output_path, false)
+                .unwrap_or_else(|error| panic!("{label} round-trip save failed: {error}"));
+            let reopened = ArchiveInfo::open(&output_path)
+                .unwrap_or_else(|error| panic!("{label} round-trip reopen failed: {error}"));
+
+            assert_eq!(reopened.entries.len(), expected.len());
+            for ((expected_name, expected_raw, expected_bytes), actual) in
+                expected.iter().zip(reopened.entries.iter())
+            {
+                assert_eq!(actual.file_name.as_str(), expected_name);
+                assert_eq!(actual.file_name_raw, *expected_raw);
+                let actual_bytes = read_entry_data(&reopened, actual).unwrap();
+                assert_eq!(
+                    actual_bytes.as_slice(),
+                    expected_bytes.as_slice(),
+                    "{label}: round-tripped bytes changed for {expected_name}"
+                );
+            }
+        }
+
+        assert!(
+            checked_archives > 0,
+            "IMGEDITOR_CORPUS_ROOT is set but no GTA III/Vice City IMG v1 pairs were found"
+        );
     }
 }

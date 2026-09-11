@@ -1393,6 +1393,7 @@ impl App {
     }
 
     fn open_archive_path(&mut self, path: PathBuf) -> Task<Message> {
+        let path = crate::parser::canonical_img_path(&path);
         let result_path = path.clone();
         Task::perform(
             async move {
@@ -4933,10 +4934,7 @@ impl App {
             }
 
             Message::FilesDropped(path) => {
-                if path
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("img"))
-                {
+                if crate::parser::is_img_archive_path(&path) {
                     return self.open_archive_path(path);
                 }
                 let Some((index, archive)) = self.editor.clone_selected_archive() else {

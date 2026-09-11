@@ -1,5 +1,5 @@
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use compact_str::CompactString;
 use memmap2::Mmap;
@@ -47,12 +47,40 @@ pub enum ImportEntryResult {
     Skipped { reason: String },
 }
 
+/// Return the data-file path used by a paired IMG v1 archive.
+///
+/// IMG v1 archives are represented by a `.img` data file and a sibling
+/// `.dir` directory file.  Tools commonly let users select either half of
+/// the pair, so all callers should normalize a `.dir` selection before
+/// format detection, path identity checks, or parser dispatch.
+pub fn canonical_img_path(path: &Path) -> PathBuf {
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dir"))
+    {
+        let mut canonical = path.to_path_buf();
+        canonical.set_extension("img");
+        canonical
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Whether a path is one of the paired IMG v1 archive files accepted by the
+/// open/drop surfaces.
+pub fn is_img_archive_path(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("img") || extension.eq_ignore_ascii_case("dir")
+    })
+}
+
 pub fn detect_version(path: &Path) -> ImgVersion {
-    if PcV2Parser.is_valid(path) {
+    let path = canonical_img_path(path);
+    if PcV2Parser.is_valid(&path) {
         ImgVersion::Two
-    } else if PcV1Parser.is_valid(path) {
+    } else if PcV1Parser.is_valid(&path) {
         ImgVersion::One
-    } else if Xbox360Parser.is_valid(path) {
+    } else if Xbox360Parser.is_valid(&path) {
         ImgVersion::Xbox360
     } else {
         ImgVersion::Unknown
@@ -134,6 +162,75 @@ pub fn unique_output_path(path: &Path) -> PathBuf {
     }
 }
 
+/// Validate an archive entry name before using it as an extracted filename.
+///
+/// Archive directory records are fixed-width strings, not paths.  Keeping the
+/// validation at the extraction boundary lets us continue opening old files
+/// while preventing traversal, alternate data streams, and Windows device
+/// names from escaping the selected output directory.
+pub(crate) fn validate_entry_output_name(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("entry name is empty");
+    }
+    if name.as_bytes().contains(&0) {
+        anyhow::bail!("entry name contains a NUL byte");
+    }
+    if name.contains(['/', '\\', ':']) {
+        anyhow::bail!("entry name is not a single safe filename: {name}");
+    }
+    if name.ends_with(['.', ' ']) {
+        anyhow::bail!("entry name has a trailing dot or space: {name}");
+    }
+
+    let mut components = Path::new(name).components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        anyhow::bail!("entry name is not a single safe filename: {name}");
+    }
+
+    let device_name = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .to_ascii_uppercase();
+    if matches!(
+        device_name.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        anyhow::bail!("entry name is a reserved Windows device name: {name}");
+    }
+
+    Ok(())
+}
+
+/// Resolve an archive entry to a path beneath `folder` after validating its
+/// fixed-width directory name as a filename rather than a user-controlled
+/// path.
+pub(crate) fn safe_entry_output_path(folder: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    validate_entry_output_name(name)?;
+    Ok(folder.join(name))
+}
+
 pub fn read_entry_data(archive: &ArchiveInfo, entry: &EntryInfo) -> anyhow::Result<Vec<u8>> {
     read_entry_data_with_source(
         entry,
@@ -212,9 +309,8 @@ fn read_entry_data_with_source(
     let offset = u64::from(entry.offset) * SECTOR_SIZE;
 
     if let Some(mmap) = source_mmap {
-        let end = (offset + size).min(mmap.len() as u64) as usize;
-        let start = offset.min(mmap.len() as u64) as usize;
-        return Ok(mmap[start..end].to_vec());
+        let range = checked_source_entry_range(entry, mmap.len())?;
+        return Ok(mmap[range].to_vec());
     }
 
     let mut file = std::fs::File::open(source)?;
@@ -226,8 +322,8 @@ fn read_entry_data_with_source(
 
 const ZERO_SECTOR: [u8; SECTOR_SIZE as usize] = [0; SECTOR_SIZE as usize];
 
-/// Size of the entry data as written during save, matching the clamping
-/// behavior of `read_entry_data_with_source` without copying anything.
+/// Size of the entry data as written during save, matching
+/// `read_entry_data_with_source` without copying anything.
 pub(crate) fn entry_data_size(
     entry: &EntryInfo,
     source_mmap: Option<&Mmap>,
@@ -245,10 +341,9 @@ pub(crate) fn entry_data_size(
     }
     let size = u64::from(entry.sector) * SECTOR_SIZE;
     if let Some(mmap) = source_mmap {
-        let offset = u64::from(entry.offset) * SECTOR_SIZE;
-        let end = (offset + size).min(mmap.len() as u64);
-        let start = offset.min(mmap.len() as u64);
-        return Ok(end - start);
+        let range = checked_source_entry_range(entry, mmap.len())?;
+        return u64::try_from(range.len())
+            .map_err(|_| anyhow::anyhow!("entry data size does not fit in u64"));
     }
     Ok(size)
 }
@@ -291,9 +386,8 @@ pub(crate) fn stream_entry_data(
     let offset = u64::from(entry.offset) * SECTOR_SIZE;
 
     if let Some(mmap) = source_mmap {
-        let end = (offset + size).min(mmap.len() as u64) as usize;
-        let start = offset.min(mmap.len() as u64) as usize;
-        out.write_all(&mmap[start..end])?;
+        let range = checked_source_entry_range(entry, mmap.len())?;
+        out.write_all(&mmap[range])?;
         return Ok(());
     }
 
@@ -311,6 +405,31 @@ pub(crate) fn stream_entry_data(
         anyhow::bail!("entry data truncated during save");
     }
     Ok(())
+}
+
+fn checked_source_entry_range(entry: &EntryInfo, source_len: usize) -> anyhow::Result<std::ops::Range<usize>> {
+    let start = u64::from(entry.offset)
+        .checked_mul(SECTOR_SIZE)
+        .ok_or_else(|| anyhow::anyhow!("entry {} byte offset overflows", entry.file_name))?;
+    let size = u64::from(entry.sector)
+        .checked_mul(SECTOR_SIZE)
+        .ok_or_else(|| anyhow::anyhow!("entry {} byte size overflows", entry.file_name))?;
+    let end = start
+        .checked_add(size)
+        .ok_or_else(|| anyhow::anyhow!("entry {} byte range overflows", entry.file_name))?;
+    let source_len = u64::try_from(source_len)
+        .map_err(|_| anyhow::anyhow!("source size does not fit in u64"))?;
+    if start > source_len || end > source_len {
+        anyhow::bail!(
+            "entry {} range [{start}, {end}) exceeds source size {source_len}",
+            entry.file_name
+        );
+    }
+    let start = usize::try_from(start)
+        .map_err(|_| anyhow::anyhow!("entry {} start does not fit in usize", entry.file_name))?;
+    let end = usize::try_from(end)
+        .map_err(|_| anyhow::anyhow!("entry {} end does not fit in usize", entry.file_name))?;
+    Ok(start..end)
 }
 
 fn read_imported_file(source: &std::path::Path) -> anyhow::Result<Vec<u8>> {
@@ -352,6 +471,7 @@ pub fn export_entry_to_file(
     entry: &EntryInfo,
     output_path: &Path,
 ) -> anyhow::Result<()> {
+    validate_entry_output_name(entry.file_name.as_str())?;
     let output_path = unique_output_path(output_path);
 
     if entry.imported {
@@ -471,6 +591,49 @@ mod tests {
     }
 
     #[test]
+    fn extraction_names_are_single_safe_filenames() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            safe_entry_output_path(dir.path(), "model.dff").unwrap(),
+            dir.path().join("model.dff")
+        );
+
+        for name in [
+            "../escape.dff",
+            "nested/model.dff",
+            r"nested\model.dff",
+            r"C:\escape.dff",
+            "file:",
+            "CON.txt",
+            "trailing. ",
+        ] {
+            assert!(
+                safe_entry_output_path(dir.path(), name).is_err(),
+                "unsafe entry name was accepted: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn export_rejects_unsafe_archive_names_before_reading_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = ArchiveInfo::new("test", false, ImgVersion::One);
+        let entry = EntryInfo::new("../escape.dff");
+        let error = export_entry_to_file(&archive, &entry, &dir.path().join("output"))
+            .unwrap_err();
+        assert!(error.to_string().contains("safe filename"));
+    }
+
+    #[test]
+    fn mapped_entry_ranges_are_not_silently_clamped() {
+        let mut entry = EntryInfo::new("truncated.dff");
+        entry.offset = 1;
+        entry.sector = 1;
+        let error = checked_source_entry_range(&entry, SECTOR_SIZE as usize).unwrap_err();
+        assert!(error.to_string().contains("exceeds source size"));
+    }
+
+    #[test]
     fn import_entry_skips_directories_with_extensions() {
         let dir = tempfile::tempdir().unwrap();
         let import_dir = dir.path().join("textures.txd");
@@ -502,6 +665,24 @@ mod tests {
         std::fs::write(&dir_path, record).unwrap();
 
         assert_eq!(detect_version(&img_path), ImgVersion::One);
+        assert_eq!(detect_version(&dir_path), ImgVersion::One);
+        assert_eq!(canonical_img_path(&dir_path), img_path);
+        assert!(is_img_archive_path(&dir_path));
+        assert!(is_img_archive_path(&img_path));
+    }
+
+    #[test]
+    fn canonical_img_path_is_case_insensitive_and_preserves_other_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let upper_dir = dir.path().join("archive.DIR");
+        let other = dir.path().join("archive.bin");
+
+        assert_eq!(
+            canonical_img_path(&upper_dir),
+            dir.path().join("archive.img")
+        );
+        assert_eq!(canonical_img_path(&other), other);
+        assert!(!is_img_archive_path(&other));
     }
 
     #[test]

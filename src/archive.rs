@@ -438,7 +438,7 @@ impl ArchiveInfo {
     }
 
     pub fn open(path: impl Into<PathBuf>) -> anyhow::Result<Self> {
-        let path = path.into();
+        let path = crate::parser::canonical_img_path(&path.into());
         let version = crate::parser::detect_version(&path);
 
         let mut archive = Self {

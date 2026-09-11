@@ -16,7 +16,7 @@ pub fn open_file() -> Task<Option<PathBuf>> {
         async {
             rfd::AsyncFileDialog::new()
                 .set_title("Open IMG archive")
-                .add_filter("IMG Archive", &["img"])
+                .add_filter("IMG Archive", &["img", "dir"])
                 .pick_file()
                 .await
                 .map(|handle| handle.path().to_path_buf())
@@ -55,7 +55,8 @@ pub fn import_files() -> Task<Vec<PathBuf>> {
 }
 
 #[cfg(feature = "native-dialogs")]
-pub fn import_folder() -> Task<Option<PathBuf>> {    Task::perform(
+pub fn import_folder() -> Task<Option<PathBuf>> {
+    Task::perform(
         async {
             rfd::AsyncFileDialog::new()
                 .set_title("Select folder to import")

@@ -99,7 +99,7 @@ impl Editor {
     }
 
     pub fn open_archive(&mut self, path: impl Into<PathBuf>) -> Result<(), OpenArchiveError> {
-        let path = path.into();
+        let path = crate::parser::canonical_img_path(&path.into());
         let file_name = path
             .file_stem()
             .and_then(|stem| stem.to_str())

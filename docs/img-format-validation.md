@@ -1,23 +1,24 @@
 # IMG v1/v2 validation notes
 
-Status: research baseline for GTA III, Vice City, San Andreas, and Bully Xbox 360
-Checked: 2026-09-10
+Status: parser-hardening and local-corpus validation record
+Checked: 2026-09-12
 Scope: PC IMG v1/v2 and the Bully Xbox 360 big-endian IMG v1 variant; IMG v3
 and RPF are intentionally out of scope.
 
-**Update (2026-09-12, v4.5.0):** this baseline has since been checked against
-retail corpora for all four targets (compatibility engine Phase 0): every scan
-returned zero parse failures and zero header anomalies, and each retail archive
-validates 100% native against its own target. The remaining parser-hardening
-follow-ups are tracked in `TODO.md`.
+**Update (2026-09-12):** the parser-hardening pass was checked against the
+supplied GTA III, Vice City, and San Andreas corpora. The optional tests now
+open v1 archives from either side of a `.img`/`.dir` pair, parse representative
+RenderWare and collision assets, rebuild representative v1 data, and reopen the
+result. The supplied files are useful compatibility evidence, but they are not
+treated as proof of every retail release or of in-game compatibility.
 
 ## Why this document exists
 
-IMG Editor Plus was derived from the original C++ IMG Editor, and its parser has
-so far been exercised primarily with synthetic archives and Bully assets. This
-document records the external format knowledge that should be checked against
-real, legally obtained GTA III, Vice City, and San Andreas archives before we
-claim full compatibility.
+IMG Editor Plus was derived from the original C++ IMG Editor. This document
+records the external format knowledge, implementation comparisons, malformed
+input defenses, and local corpus evidence used to harden the Rust parser. Real
+gameplay compatibility still requires testing a rebuilt copy in the matching
+game build.
 
 The request that mentioned “GTA II” is kept distinct from GTA III here. The
 existing code, the original IMG Editor, and the consulted IMG references all
@@ -25,6 +26,12 @@ identify the early 3D IMG family as GTA III, Vice City, and San Andreas. No
 IMG-compatible GTA II layout was established during this audit, so a GTA II
 sample must not be routed through the v1/v2 parser without separate format
 research and fixtures.
+
+The supplied `Gta_3_img\gta3.img` at the corpus root is intentionally excluded
+from validation because it has no sibling `.dir` file. Its size and contents
+cannot establish a complete paired GTA III archive; it may be incomplete,
+modified, or mislabeled. The paired files under `Gta_3_img\models` are the
+ones used by the tests.
 
 ## Sources consulted
 
@@ -112,18 +119,22 @@ each range against the `.img` length before mapping the data file. The Xbox 360
 big-endian variant uses the same v1 validation, while the v2 path applies its
 own record-aware validation described below.
 
-### Known v1 compatibility gap
+### Direct `.dir` input (implemented)
 
-The current UI and detection path are centered on an `.img` input. The parser's
-v1 helper changes an input path's extension to `.dir`; passing a `.dir` path
-directly is therefore still a future compatibility task. The C# reference
-explicitly accepts either `.img` or `.dir` and canonicalizes the pair before
-reading. Future work should canonicalize a v1 `.dir` input to its sibling
-`.img`, add `.dir` to the open/drop filters, and test both entry points.
+All open, detection, scan, and drag-and-drop paths canonicalize a selected
+`.dir` to its sibling `.img` before dispatch. The `.dir` file remains the
+directory half used by the v1 parser; the canonical `.img` path is stored as
+the archive identity and is used for data mapping, cache keys, saves, and
+deduplication. The file picker accepts both extensions, and saving a v1
+archive writes the paired `.img` and `.dir` files.
 
-For the Xbox 360 layout, see the implemented format and the deliberately
-uncompressed-only boundary documented in the local `gta-img` reference-audit
-notes.
+The direct-directory path is covered by synthetic tests and by the optional
+GTA III/Vice City corpus test. This matches the local C# reference behavior
+without making the UI expose two tabs for one physical archive.
+
+For the Xbox 360 layout, see the implemented big-endian parser in
+[`xbox360.rs`](../src/parser/xbox360.rs) and the deliberately
+uncompressed-only boundary tracked in `TODO.md`.
 
 ## IMG v2 — GTA San Andreas
 
@@ -151,7 +162,7 @@ use the streaming-size field, but both words are part of the format and should
 be retained when reading and writing.
 
 The data offset is relative to the beginning of the entire `.img`, not to the
-end of the entry table. The local San Andreas corpus confirms that retail
+end of the entry table. The supplied San Andreas corpus confirms that PC
 archives begin data at the next 2048-byte boundary after the table:
 `ceil((8 + entry_count * 32) / 2048) * 2048`. The Rust writer uses that compact
 layout now; it deliberately no longer inherits the original C++ writer's
@@ -177,14 +188,56 @@ The open path validates the complete directory before publishing any entries:
 - checked sector-to-byte conversion and every effective data range against the
   IMG length;
 - non-empty data cannot point into the directory region;
+- non-empty data ranges cannot overlap another v2 entry;
 - allocation failures from implausibly large directory counts return an error
   rather than attempting an unchecked reservation.
 
 Synthetic regression tests cover truncated tables, out-of-range data,
-directory-overlapping data, malformed names, fallback-size records, oversized
-writes, zero-length records, raw-size preservation, and compact rebuilding.
+directory-overlapping data, overlapping ranges, malformed names, fallback-size
+records, oversized writes, zero-length records, raw-size preservation, and
+compact rebuilding. Shared mmap readers also reject a source that became
+shorter after opening instead of silently clamping an entry to the new EOF.
 An optional local-corpus test opens `cutscene.img`, `gta_int.img`, `gta3.img`,
 and `player.img` when `IMGEDITOR_CORPUS_ROOT` is set.
+
+## Asset-level findings from the local implementations
+
+The IMG container is only the outer table. Real GTA archives contain several
+independent RenderWare formats, so a successful IMG parse does not imply that
+every entry is renderable.
+
+### GTA III/Vice City DFF
+
+The local `librw` reader and DragonFF implementation agree on an important
+historical edge case: a GTA III geometry stream may advertise vertex and normal
+arrays through the morph target while the geometry flags omit the usual
+position bit. The Rust DFF reader now follows the morph target's
+`has_vertices`/`has_normals` fields when consuming those arrays. Using only the
+geometry flags shifts the stream cursor and produces incomplete or distorted
+meshes. A synthetic regression fixture covers this case, and representative
+DFF entries from the supplied GTA III-labelled and Vice City corpora are
+parsed during the optional corpus test.
+
+### Collision COL1/COL2/COL3/COL4
+
+The collision parser now recognizes the legacy `COLL` header and the later
+`COL2`, `COL3`, and `COL4` records. The hardening details are important:
+
+- each entry has a fixed 32-byte header; its body-size word counts bytes after
+  the first eight header bytes;
+- COL2+ metadata supplies counts and relative offsets, and the offsets point
+  four bytes before the payload in the RenderWare/librw layout;
+- compressed collision vertices are signed 16-bit coordinates divided by
+  128.0, and triangle records use three 16-bit indices plus material/lighting
+  bytes;
+- shape-only entries are consumed safely but are not represented as viewer
+  triangles yet, because the current scene model has no collision primitive
+  type for them.
+
+The optional San Andreas corpus test parses representative COL2/COL3 entries
+from the supplied `gta3.img` and `gta_int.img` archives, including renderable
+collision triangles. The parser uses checked counts, offsets, lengths, and
+allocations so malformed collision data returns an error instead of panicking.
 
 ## Implementation comparison
 
@@ -192,17 +245,58 @@ and `player.img` when `IMGEDITOR_CORPUS_ROOT` is set.
 |---|---|---|---|---|
 | Sector size | 2048 | 2048 | 2048 | Match |
 | v1 directory size | 32-byte records to EOF | 32-byte records to EOF | 32-byte records, rejects partial tail | Compatible, Rust is stricter |
-| v1 data location | paired `.img` | paired `.img` | paired `.img` for `.img` input | Match after `.dir` canonicalization is added |
+| v1 data location | paired `.img` | paired `.img` | paired `.img` for `.img` or `.dir` input | Match |
 | v2 marker/count | `VER2` + `u32` count | `VER2` + `u32` count | `VER2` + `u32` count | Match |
 | v2 size words | flattened 4-byte field | flattened 4-byte field | separate raw `u16` words plus checked effective size | Rust corrects inherited ambiguity |
 | Name storage | 24 bytes | 24 bytes | 24 raw bytes + display string | Match |
-| Malformed range checks | minimal | sorted/order checks, some structural checks | checked table/name/range validation before mapping | Rust is stricter and fails early |
-| `.dir` as input | not supported by original UI path | explicitly supported | not yet canonicalized | Low-risk compatibility improvement |
+| Malformed range checks | minimal | sorted/order checks, some structural checks | checked table/name/range validation, non-overlap, and source-length checks before mapping | Rust is stricter and fails early |
+| `.dir` as input | not supported by original UI path | explicitly supported | canonicalized at UI, detection, scan, and parser boundaries | Match |
 | Archive mutation previews | no preview cache | no Rust scene cache | generation + texture cache + app scene cache | Move path now invalidates both sides |
 
 The original C++ and local C# implementations flatten the size words. Their
 agreement is an implementation inheritance point, not a format specification;
 the retained pair is necessary for faithful v2 round trips.
+
+## Supplied corpus results
+
+The following files were present under `C:\Dev\IMGEditor-master` on
+2026-09-12. The sizes and entry counts were collected read-only; the archives
+are not copied into this repository.
+
+| Corpus | IMG form | IMG bytes | DIR bytes | Entries | Observed extensions |
+|---|---|---:|---:|---:|---|
+| `Gta_3_img/models/gta3` | v1 pair | 170,891,264 | 123,392 | 3,856 | DFF 3,138; TXD 718 |
+| `Gta_3_img/models/txd` | v1 pair | 331,290,624 | 22,944 | 717 | TXD 717 |
+| `Grand Theft Auto Vice City/models/gta3` | v1 pair | 327,487,488 | 193,376 | 6,043 | DFF 4,617; TXD 1,368; COL 30; IFP 28 |
+| `Grand Theft Auto Vice City/anim/cuts` | v1 pair | 115,083,264 | 4,736 | 148 | IFP 76; DAT 72 |
+| `GTA San Andreas/models/gta3.img` | v2 | 937,680,896 | — | 16,297 | v2 open/range validation |
+| `GTA San Andreas/models/gta_int.img` | v2 | 150,024,192 | — | 2,484 | v2 open/range validation; COL2/COL3 representatives |
+| `GTA San Andreas/models/player.img` | v2 | 66,738,176 | — | 542 | v2 open/range validation |
+| `GTA San Andreas/models/cutscene.img` | v2 | 26,947,584 | — | 634 | v2 open/range validation |
+| `Bully script img xbox 360/Scripts` | Xbox 360 big-endian v1 pair | 5,281,792 | 16,896 | 528 | endian/range validation; representative save/reopen |
+
+The optional tests enabled by `IMGEDITOR_CORPUS_ROOT` validate all four v1
+pairs from both `.img` and `.dir` entry points, read representative DFF/TXD/
+COL/IFP records where present, and save/reopen representative v1 entries while
+comparing their raw bytes and names. The v2 corpus test opens the four listed
+San Andreas archives and checks their directory/range structure. The separate
+COL corpus test exercises representative COL2/COL3 records from the San
+Andreas model archives. The Xbox 360 corpus test detects and opens the supplied
+big-endian `Scripts.img`/`Scripts.dir`, then verifies representative LUR data
+survives a format-aware save/reopen.
+
+Run the local corpus checks with:
+
+```powershell
+$env:IMGEDITOR_CORPUS_ROOT = 'C:\Dev\IMGEditor-master'
+cargo test -j 2
+```
+
+These are structural and byte-round-trip checks, not gameplay tests. No game
+executable was launched here, and no rebuilt archive should be considered
+gameplay-safe until it has been tested in the matching game build. For clean
+release evidence, use a legally obtained install and keep only a local,
+untracked hash manifest.
 
 ## Real-archive validation plan
 
@@ -214,8 +308,9 @@ For each PC release of GTA III, Vice City, and San Andreas:
 
 1. Record the title, release/build, archive path, file sizes, and a SHA-256
    hash in a local, untracked manifest.
-2. Detect the format without trusting the filename: v1 requires a valid pair;
-   v2 requires `VER2` and a table that fits inside the file.
+2. Detect the format without trusting the filename: v1 requires a valid pair
+   (either half may be selected); v2 requires `VER2` and a table that fits
+   inside the file.
 3. Read the first several records with IMG Editor Plus and an independent tool
    such as `gta-img`; compare names, offsets, raw size words, and calculated
    byte ranges.
@@ -226,9 +321,9 @@ For each PC release of GTA III, Vice City, and San Andreas:
 6. Open, export, import/replace, save-as, and reopen a copy. Verify that the
    entry names, effective contents, and version survive the round trip.
 7. Test a deliberately malformed copy: truncated table, partial v1 DIR
-   record, out-of-range offset, oversized count, and a v2 record with distinct
-   streaming/archive size words. The application should return a readable
-   error and never panic or silently present truncated data.
+   record, out-of-range offset, overlapping ranges, oversized count, and a v2
+   record with distinct streaming/archive size words. The application should
+   return a readable error and never panic or silently present truncated data.
 8. If a rebuilt copy is intended for gameplay, test it in the matching game
    build only after the read/export comparison passes.
 
@@ -266,14 +361,17 @@ The regression test is in [`ui/app.rs`](../src/ui/app.rs) and covers cache
 clearing, generation changes, scene eviction, selection remapping, and the
 source/target entry lists.
 
-### Recommended next parser work
+### Remaining validation and compatibility work
 
-1. Add v1 `.dir` canonicalization and file-dialog/drag-and-drop coverage.
-2. Record GTA III, Vice City, and San Andreas metadata manifests and compare
-   representative exported bytes with independent tools.
-3. Test rebuilt San Andreas archives in the matching game build before making
-   broader compatibility claims.
-4. Only after those checks, consider broader asset-level improvements such as
-   more complete TXD/DFF variants.
+1. Test rebuilt San Andreas archives in the matching game build before making
+   broader gameplay-compatibility claims.
+2. Compare first-record metadata and representative exports with an independent
+   reader on legally obtained, clean installs; keep hashes in an untracked
+   manifest rather than committing game data.
+3. Add focused fixtures for unusual TXD mipmaps/palettes, native platform
+   streams, DFF skin/HAnim data, and collision primitive rendering as those
+   formats become part of the product scope.
+4. Keep native PS2/Xbox/GameCube/PSP IMG layouts and IMG v3 out of this phase;
+   they need separate format research and fixtures.
 
 No IMG v3 parser or RPF abstraction should be added as part of this phase.

@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
                 println!("Usage: imgeditor [OPTIONS]");
                 println!();
                 println!("Options:");
-                println!("  --scan-corpus <archive.img> [--target gta3|vc|sa|bully] [--colors]");
+                println!("  --scan-corpus <archive.img|archive.dir> [--target gta3|vc|sa|bully] [--colors]");
                 println!("              Profile every texture in an archive: raster classes,");
                 println!("              header anomalies, and per-game compatibility verdicts.");
                 println!("              --colors also decodes pixels to test palette");

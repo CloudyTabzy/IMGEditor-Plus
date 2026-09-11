@@ -227,6 +227,10 @@ impl PcV2Parser {
             .try_reserve(entry_count)
             .map_err(|_| anyhow::anyhow!("IMG v2 directory has too many entries to load safely"))?;
         let mut named_entries = 0usize;
+        let mut ranges = Vec::new();
+        ranges
+            .try_reserve(entry_count)
+            .map_err(|_| anyhow::anyhow!("IMG v2 directory has too many ranges to validate"))?;
 
         for index in 0..entry_count {
             let mut entry_record = [0_u8; ENTRY_SIZE];
@@ -252,6 +256,9 @@ impl PcV2Parser {
             if effective_sector_count > 0 && start < data_start {
                 anyhow::bail!("entry {index} starts at byte {start}, inside the IMG v2 directory");
             }
+            if effective_sector_count > 0 {
+                ranges.push((start, end, index));
+            }
 
             let mut entry = EntryInfo::new(decode_entry_name(&raw));
             entry.file_name_raw = raw;
@@ -259,6 +266,17 @@ impl PcV2Parser {
             entry.sector = effective_sector_count;
             entry.v2_size = Some(size_words);
             entries.push(entry);
+        }
+
+        ranges.sort_unstable_by_key(|(start, _, _)| *start);
+        for window in ranges.windows(2) {
+            let (previous_start, previous_end, previous_index) = window[0];
+            let (next_start, _, next_index) = window[1];
+            if next_start < previous_end {
+                anyhow::bail!(
+                    "IMG v2 entries {previous_index} and {next_index} overlap ([{previous_start}, {previous_end}) and starting at {next_start})"
+                );
+            }
         }
 
         if entry_count > 0 && named_entries == 0 {
@@ -533,6 +551,35 @@ mod tests {
         archive.path = Some(img_path);
         let error = PcV2Parser.open(&mut archive).unwrap_err();
         assert!(error.to_string().contains("beyond IMG size"));
+    }
+
+    #[test]
+    fn open_rejects_overlapping_entry_ranges() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("overlap.img");
+        let mut img = std::fs::File::create(&img_path).unwrap();
+        img.write_all(b"VER2").unwrap();
+        img.write_all(&2_u32.to_le_bytes()).unwrap();
+        write_v2_record(
+            &mut img,
+            1,
+            ImgV2Size::canonical(1),
+            encode_entry_name("first.dff"),
+        );
+        write_v2_record(
+            &mut img,
+            1,
+            ImgV2Size::canonical(1),
+            encode_entry_name("second.dff"),
+        );
+        img.set_len(SECTOR_SIZE * 2).unwrap();
+        img.seek(SeekFrom::Start(SECTOR_SIZE)).unwrap();
+        img.write_all(&[0_u8; SECTOR_SIZE as usize]).unwrap();
+
+        let mut archive = ArchiveInfo::new("overlap", false, crate::parser::ImgVersion::Two);
+        archive.path = Some(img_path);
+        let error = PcV2Parser.open(&mut archive).unwrap_err();
+        assert!(error.to_string().contains("overlap"));
     }
 
     #[test]

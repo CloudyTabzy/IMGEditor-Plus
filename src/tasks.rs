@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use crate::archive::{ArchiveInfo, EntryInfo, PackStats, ProgressInfo};
 use crate::parser::{
     ImgParser, ImgVersion, ImportEntryResult, PcV1Parser, PcV2Parser, SECTOR_SIZE,
-    Xbox360Parser, import_entry_with_result, unique_output_path,
+    Xbox360Parser, import_entry_with_result, safe_entry_output_path, unique_output_path,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -542,7 +542,8 @@ fn export_entry_buffered(
     reader: Option<&mut BufReader<File>>,
     folder: &Path,
 ) -> anyhow::Result<()> {
-    let output_path = unique_output_path(&folder.join(&entry.file_name));
+    let output_path = safe_entry_output_path(folder, entry.file_name.as_str())
+        .map(|path| unique_output_path(&path))?;
 
     if entry.imported {
         let Some(source) = entry.source_path.as_ref() else {
@@ -613,7 +614,10 @@ fn export_entries_zero_copy(
                 );
             }
 
-            let result = export_entry_zero_copy(entry, output_path, &mmap);
+            let result = match output_path {
+                Ok(output_path) => export_entry_zero_copy(entry, output_path, &mmap),
+                Err(reason) => Err(anyhow::anyhow!(reason.clone())),
+            };
 
             let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
             if done.is_multiple_of(progress_step) || done == total {
@@ -654,7 +658,10 @@ fn export_entry_zero_copy(
 /// directory starts empty (the common export-to-new-folder case), collision
 /// numbering is resolved in memory without any `exists()` syscalls; otherwise
 /// falls back to the disk-checking `unique_output_path` per entry.
-fn precompute_output_paths(entries: &[EntryInfo], folder: &std::path::Path) -> Vec<PathBuf> {
+fn precompute_output_paths(
+    entries: &[EntryInfo],
+    folder: &std::path::Path,
+) -> Vec<Result<PathBuf, String>> {
     let dir_empty = std::fs::read_dir(folder)
         .map(|mut it| it.next().is_none())
         .unwrap_or(false);
@@ -663,18 +670,21 @@ fn precompute_output_paths(entries: &[EntryInfo], folder: &std::path::Path) -> V
     entries
         .iter()
         .map(|entry| {
-            let base = folder.join(entry.file_name.as_str());
+            let base = match safe_entry_output_path(folder, entry.file_name.as_str()) {
+                Ok(path) => path,
+                Err(error) => return Err(error.to_string()),
+            };
             if !dir_empty {
-                return unique_output_path(&base);
+                return Ok(unique_output_path(&base));
             }
             let count = name_counts
                 .entry(entry.file_name_lower.clone())
                 .or_insert(0);
             *count += 1;
             if *count == 1 {
-                return base;
+                return Ok(base);
             }
-            numbered_path(&base, *count)
+            Ok(numbered_path(&base, *count))
         })
         .collect()
 }
@@ -1111,5 +1121,23 @@ mod tests {
             std::fs::read(out_dir.join("second.txd")).unwrap(),
             vec![b'B'; SECTOR_SIZE as usize]
         );
+    }
+
+    #[test]
+    fn zero_copy_export_rejects_unsafe_archive_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = create_fragmented_v1(dir.path());
+        let mut archive = ArchiveInfo::open(&source).unwrap();
+        archive.entries[0].file_name = CompactString::from("../escape.dff");
+        let out_dir = dir.path().join("export-unsafe");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let (count, _) = ExportTask::new(archive, out_dir.clone(), ExportMode::All)
+            .run_blocking()
+            .unwrap();
+
+        assert_eq!(count, 1, "the unsafe entry should fail while the other exports");
+        assert!(!dir.path().join("escape.dff").exists());
+        assert!(out_dir.join("second.txd").is_file());
     }
 }

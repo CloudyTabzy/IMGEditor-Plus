@@ -1,10 +1,12 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v4.5.0** (Asset Compatibility Engine: retail-verified validator, texture
-converter, and save-side repair).
+Last shipped: **v4.5.0** (Asset Compatibility Engine: corpus-verified validator,
+texture converter, and save-side repair).
 
-Next phase: **DFF/NIF model profiles (Phase D)** plus the remaining parser-hardening
-items below; see `CHECKPOINT.md` (local) for the full handoff.
+Next phase: **DFF/NIF model profiles (Phase D)** plus the remaining
+compatibility and asset-hardening items below. The shipped compatibility-engine
+details are recorded in the release notes and the dedicated documents under
+`docs/`.
 
 Shipped in v4.5.0 (previously listed here as unreleased):
 
@@ -16,7 +18,7 @@ Shipped in v4.5.0 (previously listed here as unreleased):
 - Scalability guard: `validate_scene_for_device` rejects scenes whose largest single mesh buffer exceeds `limits.max_buffer_size` (256 MiB on downlevel devices) with a clear error instead of a raw wgpu validation failure at upload time.
 - Xbox 360 Bully IMG v1 support: auto-detected big-endian `.dir`/`.img` pairs,
   validated sector ranges, 24-byte filename preservation, and big-endian
-  round-trip saves. See the local `gta-img` reference-audit notes.
+  round-trip saves. See `docs/img-format-validation.md` for the format audit.
 
 ---
 
@@ -45,37 +47,40 @@ source-path metadata.
 
 ## 2. GTA III/VC/SA archive hardening (continuing)
 
-The retail corpora are now verified by the compatibility scanner (Phase 0 of
+The supplied corpora are now exercised by the compatibility scanner (Phase 0 of
 v4.5.0), and the independent Rust `gta-img` audit confirmed the v1/v2 wire
-layouts. The following parser-hardening follow-ups remain open and are now
-testable against real GTA III, Vice City, and San Andreas archives:
+layouts. Status is tracked below: completed hardening is checked off, while
+remaining compatibility work stays open and testable against real GTA III,
+Vice City, and San Andreas archives:
 
-- [ ] Preserve IMG v2 `streaming_size` and `archive_size` as separate fields;
+- [x] Preserve IMG v2 `streaming_size` and `archive_size` as separate fields;
   expose a checked effective size for reads and preserve both words on save.
 - [x] Validate IMG v1 structure before mapping: complete records, checked
   sector-to-byte conversion, printable names, non-overlapping ranges, and every
   entry range against the image length.
-- [ ] Complete IMG v2 open-time validation: header/table arithmetic, checked
-  sector-to-byte conversion, and every entry range against the image length.
+- [x] Complete IMG v2 open-time validation: header/table arithmetic, checked
+  sector-to-byte conversion, non-overlapping non-empty ranges, and every entry
+  range against the image length.
 - [x] Add the Bully Xbox 360 big-endian IMG v1 variant with automatic format
   detection and format-aware save/import/rename behavior.
 - [ ] Add XMemDecompress support for the compressed Xbox 360/Wii image variant
   identified by `0x0FF512ED` (the supplied `Scripts.img` is uncompressed).
-- [ ] Canonicalize v1 input supplied as either `.img` or `.dir`; map the sibling
+- [x] Canonicalize v1 input supplied as either `.img` or `.dir`; map the sibling
   `.img` as data, include `.dir` in open/drop filters, and test both entry paths.
-- [ ] Make extraction path-safe by rejecting absolute paths, separators, and
-  parent components, or by proving normalized output stays inside the destination.
-- [ ] Add a read-only metadata/range diagnostics path for comparing IMGEditor
+- [x] Make extraction path-safe by rejecting absolute paths, separators, parent
+  components, alternate data streams, and Windows device names.
+- [x] Add a read-only metadata/range diagnostics path for comparing IMGEditor
   Plus with independent readers on real archives.
-- [ ] Keep local real-archive manifests and hashes untracked; commit only
+- [x] Keep local real-archive manifests and hashes untracked; commit only
   synthetic malformed-input fixtures and legally appropriate metadata/byte checks.
 - [ ] Consider a bounded `Read` view over mmap/file/imported sources only if
   source-range logic becomes duplicated; retain the existing zero-copy export
   fast path.
 
-The reference’s compact v2 data-start calculation is intentionally not a target
-for adoption: retain the current `0x300000` rebuild convention until real San
-Andreas validation confirms a different layout is safe.
+The reference’s compact v2 data-start calculation is implemented and covered by
+synthetic and optional local-corpus tests. Rebuilt archives still need manual
+validation in the matching San Andreas game build before gameplay compatibility
+is claimed.
 
 ## 3. RenderWare DFF/TXD preview follow-ups
 
@@ -89,8 +94,9 @@ assets.
 
 Recommended future adaptations, each gated by representative fixtures:
 
-- [ ] Add legally obtained GTA III and Vice City DFF/TXD fixtures and an
-  untracked per-game manifest of names, dimensions, raster formats, and hashes.
+- [x] Add optional local GTA III and Vice City DFF/TXD corpus coverage and an
+  untracked per-game manifest policy; legally obtained clean fixtures remain
+  outside the repository.
 - [ ] Decode native PS2, Xbox, GameCube, and PSP geometry/texture streams
   instead of treating them as PC vertex data.
 - [ ] Add DFF skin/bone/HAnim data, IFP animation discovery, and optional pose

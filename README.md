@@ -40,7 +40,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Two-pass sequential save** — rebuilds stream entry data straight from the source memory map; ~23 % faster rebuilds on large archives
 - ✅ **Memory-mapped reads** — instant open on large archives
 - ✅ **Multiple archive tabs** with dirty-file indicator; middle-click a tab to close it
-- ✅ **Drag-and-drop** — open `.img` archives or import files from Explorer
+- ✅ **Drag-and-drop** — open `.img`/`.dir` archives or import files from Explorer; paired v1 inputs are canonicalized automatically
 
 ### 🎨 Embedded 3D Model Viewer (v3.4+)
 - ✅ **In-app wgpu renderer** — same wgpu device Iced uses, no second window or thread battle

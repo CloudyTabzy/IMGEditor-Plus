@@ -20,10 +20,8 @@ const TEXTURE: u32 = 0x06;
 const ATOMIC: u32 = 0x14;
 
 const FLAG_TRI_STRIP: u32 = 0x0000_0001;
-const FLAG_POSITIONS: u32 = 0x0000_0002;
 const FLAG_TEXTURED: u32 = 0x0000_0004;
 const FLAG_PRELIT: u32 = 0x0000_0008;
-const FLAG_NORMALS: u32 = 0x0000_0010;
 const FLAG_TEXTURED2: u32 = 0x0000_0080;
 const FLAG_NATIVE: u32 = 0x0100_0000;
 
@@ -583,9 +581,11 @@ fn parse_geometry_struct(bytes: &[u8], library_id: u32) -> Result<GeometryData, 
             let vertex_bytes = vertex_count
                 .checked_mul(12)
                 .ok_or_else(|| "vertex data size overflowed".to_string())?;
-            if flags & FLAG_POSITIONS == 0 {
-                cursor.skip(vertex_bytes, "unused vertex data")?;
-            } else if morph == 0 {
+            // The morph-target flags describe the serialized arrays more
+            // reliably than the geometry flags. In particular, GTA III
+            // commonly writes 0x10034 (without FLAG_POSITIONS) while still
+            // storing a complete position array here.
+            if morph == 0 {
                 positions.reserve(vertex_count);
                 for _ in 0..vertex_count {
                     positions.push([
@@ -603,7 +603,7 @@ fn parse_geometry_struct(bytes: &[u8], library_id: u32) -> Result<GeometryData, 
             let normal_bytes = vertex_count
                 .checked_mul(12)
                 .ok_or_else(|| "normal data size overflowed".to_string())?;
-            if morph == 0 && flags & FLAG_NORMALS != 0 {
+            if morph == 0 {
                 normals.reserve(vertex_count);
                 for _ in 0..vertex_count {
                     normals.push([
@@ -932,6 +932,22 @@ mod tests {
         assert_eq!(meshes[0].uvs.len(), 3);
         assert_eq!(meshes[0].indices, vec![0, 1, 2]);
         assert_eq!(meshes[0].texture_name.as_deref(), Some("brick"));
+    }
+
+    #[test]
+    fn reads_morph_positions_when_gta_iii_omits_position_flag() {
+        let mut fixture = actual_layout_fixture();
+        let position_flag = 0x0001_0037_u32.to_le_bytes();
+        let position = fixture
+            .windows(4)
+            .position(|bytes| bytes == position_flag)
+            .expect("fixture geometry flags");
+        fixture[position..position + 4].copy_from_slice(&0x0001_0035_u32.to_le_bytes());
+
+        let meshes = parse_dff(&fixture).expect("fixture should parse");
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(meshes[0].positions.len(), 3);
+        assert_eq!(meshes[0].indices, vec![0, 1, 2]);
     }
 
     #[test]
