@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v4.2.0
+# 🎮 IMG Editor Plus v4.5.0
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -62,6 +62,16 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
 - ✅ **Automated regression tests** — cover parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, six-axis navigation, alpha rendering, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
+
+**v4.5.0 release highlights:**
+- 🛡 **Asset compatibility engine** — retail-verified profiles for GTA III, Vice City, San Andreas and Bully. Pick the game an archive is for (or accept an advisory content hint): every texture is checked against that target's dialect, entry rows are tinted by verdict with an icon legend, and the choice is remembered per archive path. Imports get a pre-flight format check before touching the archive
+- 🔄 **Texture replacement & converter** — import **PNG / DDS / BMP / TGA** and re-encode to the target's native language: DXT1/3/5 (texpresso), PAL8/PAL4 with an alpha-aware k-means/Oklab palettizer, 888/8888/565/1555/4444, full mip chains. A plan dialog shows the chosen format, loss warnings and a **true preview decoded back from the encoded bytes** before anything is written
+- ✨ **Import image as TXD** — author a brand-new texture entry from any image, with a name and format picker
+- 🧰 **Convert selection to target dialect** — bulk re-encode selected TXDs (e.g. move content between games) with a before/after plan
+- 💾 **Save-side validation & repair** — saving runs a pre-save report (native / convertible / incompatible / unknown counts, container mismatches, broken headers). "Fix & Save" applies lossless header repairs in the background
+- 🖼 **Texture tab verdicts** — per-texture compat chip with the classifier's notes, plus a "PAL8-ready" badge when the pixels fit an 8-bit palette
+- 🧭 **UX hardening** — byte-preserving edits (only the changed texture's section is re-serialized; untouched entries stay verbatim), ellipsized table names with wrapped tooltips, modals that fully block the background, and dialogs that can't be re-opened by stale background work
+- 🐛 **Correctness fixes** — Vice City's DXT1/DXT3 dialect classified correctly (its "565/4444" labels were DXT data), DXT5 alpha decoding fixed, Xbox 360 and Xbox 360-era texture quirks carried over
 
 **v4.2.0 release highlights:**
 - 🎮 **Bully Xbox 360 IMG v1** — auto-detected big-endian `.dir`/`.img` pairs with validated sector ranges, 24-byte filename preservation, export/import/rename, and round-trip saves
@@ -295,7 +305,9 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 | `rayon` | Parallel entry export |
 | `glam` | Vector/matrix math for the 3D viewer |
 | `compact_str` | Compact inline strings for 10,000+ entry names |
-| `image` | PNG encoding for texture exports |
+| `image` | PNG encode/export plus PNG/DDS/BMP/TGA decoding for the texture converter |
+| `texpresso` | Pure-Rust BC1/BC2/BC3 (DXT1/3/5) compression for the texture converter |
+| `quantette` | Wu + k-means palette quantization (Oklab) for PAL8/PAL4 output |
 | `fuzzt` | Jaro-Winkler typo matching (search) |
 | `rfd` | Native Windows file dialogs |
 | `ureq` | Update checker (HTTP) |
@@ -315,4 +327,4 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 
 This project is **MIT licensed** © 2025 CloudyTabzy. See [LICENSE](LICENSE) for the full text.
 
-**Dependency licenses:** every crate this project depends on is MIT-licensed (Iced, Iced AW, Tokio, Rayon, etc.). The bundled fonts — Inter, Bricolage Grotesque, and Lucide icons — are licensed under the SIL Open Font License 1.1.
+**Dependency licenses:** every crate this project depends on is permissively licensed (MIT or Apache-2.0 — Iced, Iced AW, Tokio, Rayon, texpresso, quantette, etc.). The bundled fonts — Inter, Bricolage Grotesque, and Lucide icons — are licensed under the SIL Open Font License 1.1.
