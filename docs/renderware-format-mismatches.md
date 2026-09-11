@@ -139,6 +139,24 @@ additions are nine female ped-skin `.dff/.txd` pairs (`copgrl1/2`,
 mid-archive with all originals repacked. `dwayne.txd` is **retail**, so
 the X8R8G8B8 decoder bug hit vanilla SA assets, not just mods.
 
+**The additions are a cut-content/adult mod pack, not vanilla data**
+(2026-09-11): the extracted `sex.ifp` is an ANP3/IFP containing the
+complete **Hot Coffee animation set** — 20 clips named `SEX_1_P/W`,
+`SEX_2_P/W`, `SEX_3_P/W`, `SEX_1to2`, `SEX_2to3`, `SEX_3to1`,
+`SEX_1_Cum_P/W`, `SEX_N_Fail_P/W`, authored in 3ds Max 5 (the Rockstar
+animation pipeline) and using the special `breast`/`Belly` skeleton
+parts. Vanilla SA does not put IFPs in `gta3.img` (animations live in
+`anim\*.ifp`; cutscene anims in `cutscene.img`), so the file can only be
+loaded by a script/CLEO mod — deliberate packaging. The nine skins are
+custom too (`gangrl1.txd` carries a texture literally named `GANGIRL1`).
+The retail install here is the post-controversy version: its
+`anim\ped.ifp` contains no `SEX_*` clips, consistent with the content
+being removed after the 2005 Hot Coffee re-rating. So this backup is a
+modded install that restores the cut animations alongside a girl-skin
+pack; whether `sex.ifp` is byte-identical to the original removed data
+cannot be proven without a v1/PS2 reference, but the canonical clip set
+and 3ds Max 5 provenance indicate it derives from the original assets.
+
 Interpretation (revised against the retail scan): retail SA is a
 **palette-free dialect** — its archives ship zero PAL8/PAL4 rasters. SA's
 own dialect is "DXT for world/interiors, uncompressed 888/8888 for player
