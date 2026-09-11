@@ -144,10 +144,14 @@ fn build_lut(palette: &QuantizedPalette) -> ColorLut {
         })
         .collect();
     let labs = srgb8_to_oklab(&centers);
+    // 32k cells x palette entries: parallel so dev builds stay snappy.
+    use rayon::prelude::*;
+    let table: Vec<u8> = labs
+        .par_iter()
+        .map(|lab| nearest_oklab(lab, &palette_labs))
+        .collect();
     let mut lut: ColorLut = Box::new([0u8; 32768]);
-    for (key, lab) in labs.iter().enumerate() {
-        lut[key] = nearest_oklab(lab, &palette_labs);
-    }
+    lut.copy_from_slice(&table);
     lut
 }
 

@@ -559,7 +559,7 @@ pub fn writable_target(id: &str) -> Result<&'static GameProfile, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compat::encode::encode_texture;
+    use crate::compat::encode::{encode_texture, DxtQuality};
     use crate::compat::games::{GTA3, VC};
     use crate::parser::txd_writer::single_texture_txd;
 
@@ -754,6 +754,75 @@ mod tests {
             let image = decode_source_image(&bytes)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!((image.width, image.height), (128, 128), "{name}");
+        }
+    }
+
+    /// Timing harness for 1024x1024 imports. Run with
+    /// `cargo test --lib bench_plan_import -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_plan_import() {
+        use std::time::Instant;
+        let size = 1024u32;
+        let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+        let mut seed = 0x1234_5678u32;
+        for y in 0..size {
+            for x in 0..size {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = ((seed >> 24) as u8) / 8;
+                rgba.extend([
+                    ((x * 255 / size) as u8).wrapping_add(noise),
+                    ((y * 255 / size) as u8).wrapping_add(noise),
+                    (((x + y) * 255 / (2 * size)) as u8).wrapping_add(noise),
+                    255,
+                ]);
+            }
+        }
+        let image = SourceImage {
+            width: size,
+            height: size,
+            rgba,
+            has_alpha: false,
+            format_label: "bench".to_string(),
+            encoded_bytes: 4 * 1024 * 1024,
+        };
+        for (label, target, format, options) in [
+            ("gta3-888", &GTA3, None, EncodeOptions::default()),
+            ("vc-dxt1", &VC, None, EncodeOptions::default()),
+            ("sa-dxt3", &SA, None, EncodeOptions::default()),
+            (
+                "gta3-dxt1-high",
+                &GTA3,
+                Some(EncodeFormat::Dxt1),
+                EncodeOptions {
+                    dxt_quality: DxtQuality::High,
+                    dither: false,
+                },
+            ),
+            (
+                "gta3-pal8",
+                &GTA3,
+                Some(EncodeFormat::Pal8),
+                EncodeOptions::default(),
+            ),
+        ] {
+            let resolved = format
+                .unwrap_or_else(|| default_format(target, "gta3.img", image.has_alpha).unwrap());
+            let platform = target_platform(target);
+            let start = Instant::now();
+            let encoded = encode_texture(&image.rgba, size, size, resolved, platform, options)
+                .expect("encode");
+            let encode_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let start = Instant::now();
+            let _ = decode_encoded(&encoded, platform).expect("decode");
+            let decode_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let start = Instant::now();
+            let plan = plan_import(&image, target, "gta3.img", format, options).expect("plan");
+            let plan_ms = start.elapsed().as_secs_f64() * 1000.0;
+            eprintln!(
+                "{label}: encode {encode_ms:.0} ms, preview {decode_ms:.0} ms, plan {plan_ms:.0} ms ({} bytes out)",
+                plan.output_bytes
+            );
         }
     }
 

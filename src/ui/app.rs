@@ -3237,6 +3237,8 @@ impl App {
                 self.new_txd_attempt = self.new_txd_attempt.wrapping_add(1);
                 let mut entry = crate::archive::EntryInfo::new(&name);
                 entry.imported = true;
+                entry.sector = (crate::parser::sector_rounded_size(bytes.len() as u64)
+                    / crate::parser::SECTOR_SIZE) as u32;
                 entry.override_bytes = Some(Arc::new(bytes));
                 let new_index = archive.entries.len();
                 archive.entries.push(entry);
@@ -6675,7 +6677,7 @@ fn window_icon() -> Option<iced::window::Icon> {
 fn _force_space_use(_: Space) {}
 
 /// Encoder options for the interactive converter dialogs: the
-/// high-quality DXT flag maps onto the iterative cluster fit.
+/// high-quality DXT flag maps onto cluster fit (range fit is the default).
 fn replace_encode_options(high_quality: bool) -> crate::compat::encode::EncodeOptions {
     crate::compat::encode::EncodeOptions {
         dxt_quality: if high_quality {

@@ -186,13 +186,16 @@ pub fn header_spec(format: EncodeFormat, platform_id: u32) -> HeaderSpec {
     }
 }
 
-/// DXT encoder effort levels. `Standard` matches squish's default
-/// (cluster fit + perceptual metric), which is what Magic.TXD and most
-/// tools use; `High` runs squish's iterative cluster fit for the best
-/// fit at several times the cost; `Fast` is range fit for bulk work.
+/// DXT encoder effort levels.
+///
+/// `Standard` is range fit - the fast algorithm band (stb_dxt "fast",
+/// squish range fit) used by default: measured ~150x faster than
+/// cluster fit, which matters because a 1024x1024 texture is 65k
+/// blocks. `High` runs squish-style cluster fit for the best fit per
+/// block; it is several seconds on 1024x1024, so it stays an explicit
+/// opt-in for smaller textures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DxtQuality {
-    Fast,
     #[default]
     Standard,
     High,
@@ -403,9 +406,8 @@ fn encode_dxt_levels(
             let mut out = vec![0u8; format.compressed_size(*w as usize, *h as usize)];
             let params = texpresso::Params {
                 algorithm: match options.dxt_quality {
-                    DxtQuality::Fast => texpresso::Algorithm::RangeFit,
-                    DxtQuality::Standard => texpresso::Algorithm::ClusterFit,
-                    DxtQuality::High => texpresso::Algorithm::IterativeClusterFit,
+                    DxtQuality::Standard => texpresso::Algorithm::RangeFit,
+                    DxtQuality::High => texpresso::Algorithm::ClusterFit,
                 },
                 // Alpha-blended textures fit better when the colour
                 // error is weighted by alpha; squish offers the same
@@ -550,6 +552,43 @@ mod tests {
         assert_eq!(dims, vec![(16, 8), (8, 4), (4, 2), (2, 1), (1, 1)]);
         for (w, h, data) in &levels {
             assert_eq!(data.len(), (*w * *h * 4) as usize);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_dxt_encoders() {
+        use std::time::Instant;
+        let size = 1024usize;
+        let mut rgba = vec![0u8; size * size * 4];
+        let mut seed = 0x1234_5678u32;
+        for pixel in rgba.chunks_exact_mut(4) {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            pixel[0] = (seed >> 24) as u8;
+            pixel[1] = (seed >> 16) as u8;
+            pixel[2] = (seed >> 8) as u8;
+            pixel[3] = 255;
+        }
+        eprintln!(
+            "logical cores: {:?}",
+            std::thread::available_parallelism()
+        );
+        for (label, algorithm) in [
+            ("range", texpresso::Algorithm::RangeFit),
+            ("cluster", texpresso::Algorithm::ClusterFit),
+            ("iterative", texpresso::Algorithm::IterativeClusterFit),
+        ] {
+            let mut out = vec![0u8; texpresso::Format::Bc1.compressed_size(size, size)];
+            let params = texpresso::Params {
+                algorithm,
+                ..texpresso::Params::default()
+            };
+            let start = Instant::now();
+            texpresso::Format::Bc1.compress(&rgba, size, size, params, &mut out);
+            eprintln!(
+                "bc1 {label}: {:.0} ms",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
         }
     }
 

@@ -70,6 +70,22 @@ opt-level = 3
 panic = "abort"
 strip = "symbols"
 
+# The converter runs inside unoptimized dev builds during manual testing.
+# Optimizing just the numeric dependencies keeps DXT compression and
+# palette quantization responsive without making the app's own code
+# harder to debug.
+[profile.dev.package.texpresso]
+opt-level = 3
+
+[profile.dev.package.quantette]
+opt-level = 3
+
+[profile.dev.package.wide]
+opt-level = 3
+
+[profile.dev.package.rayon]
+opt-level = 2
+
 [[example]]
 name = "probe_filecreate"
 required-features = ["bench"]
