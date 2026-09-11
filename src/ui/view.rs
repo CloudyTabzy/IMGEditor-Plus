@@ -2,8 +2,8 @@ use crate::archive::{ExportStatus, SortColumn};
 use crate::sort::SortDirection;
 use iced::widget::{
     Column, Container, Float, Row, Scrollable, Space, button, canvas, checkbox, column, container,
-    image, mouse_area, opaque, pane_grid, progress_bar, responsive, row, scrollable, stack,
-    text_input, tooltip,
+    image, mouse_area, opaque, pane_grid, progress_bar, responsive, row, stack, text_input,
+    tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length, Rectangle, Vector};
 
@@ -2215,7 +2215,12 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
     Some(opaque(responsive(move |size| {
         let max_height = (size.height - 96.0).max(260.0);
 
-        let mut cards = Column::new().spacing(10).width(Length::Fill);
+        // Right padding keeps the cards (and their Validate buttons) a
+        // clear step away from the scrollbar rail.
+        let mut cards = Column::new()
+            .spacing(10)
+            .width(Length::Fill)
+            .padding(iced::Padding { right: 16.0, ..Default::default() });
         for game in crate::compat::games::ALL_GAMES {
             let mut native_lines = Column::new().spacing(2).width(Length::Fill);
             let mut unknown_lines = Column::new().spacing(2).width(Length::Fill);
@@ -2325,7 +2330,14 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
             title_row,
             w::hairline(divider),
             introduction,
-            scrollable(cards).height(Length::Fill),
+            Scrollable::new(cards)
+                .direction(iced::widget::scrollable::Direction::Vertical(
+                    iced::widget::scrollable::Scrollbar::new()
+                        .scroller_width(10.0)
+                        .margin(3.0),
+                ))
+                .style(validator_scrollbar_style)
+                .height(Length::Fill),
             w::hairline(divider),
             footer,
         ]
@@ -2363,6 +2375,45 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
             })
             .into()
     })))
+}
+
+/// Floating, accent-tinted scrollbar for the validator popup: a round
+/// scroller on a faint rail, no hard borders. Built on Iced's
+/// `scrollable::default` so the auto-scroll overlay and hit-testing
+/// geometry stay correct.
+fn validator_scrollbar_style(
+    theme: &iced::Theme,
+    status: iced::widget::scrollable::Status,
+) -> iced::widget::scrollable::Style {
+    let palette = theme.extended_palette();
+    let mut style = iced::widget::scrollable::default(theme, status);
+    let hovering = !matches!(status, iced::widget::scrollable::Status::Active { .. });
+    let scroller_color = if hovering {
+        palette.primary.strong.color
+    } else {
+        palette.primary.weak.color
+    };
+    let rounded = |radius: f32| Border {
+        color: Color::TRANSPARENT,
+        width: 0.0,
+        radius: radius.into(),
+    };
+    style.vertical_rail = iced::widget::scrollable::Rail {
+        background: Some(
+            palette
+                .background
+                .base
+                .color
+                .scale_alpha(0.30)
+                .into(),
+        ),
+        border: rounded(6.0),
+        scroller: iced::widget::scrollable::Scroller {
+            background: scroller_color.into(),
+            border: rounded(6.0),
+        },
+    };
+    style
 }
 
 /// Row tint for a validator verdict: green = native, blue = supported /

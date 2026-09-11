@@ -4651,6 +4651,13 @@ impl App {
             )),
             Item::new(menu_button(
                 format!(
+                    "{}Highlight validator rows",
+                    view_toggle(self.compat_highlight_enabled)
+                ),
+                Message::SetCompatHighlight(!self.compat_highlight_enabled),
+            )),
+            Item::new(menu_button(
+                format!(
                     "{}Right-click adds to selection",
                     view_toggle(self.config.context_selection_accumulates)
                 ),
