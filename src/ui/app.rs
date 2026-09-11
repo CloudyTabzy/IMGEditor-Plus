@@ -2686,6 +2686,25 @@ impl App {
                 Task::batch(vec![task, Task::none()])
             }
             Message::ClearSelection => {
+                // Escape also dismisses any pending dialog. This is the
+                // safety net: a modal with a rendering bug must never be
+                // able to trap the user (the window close is intercepted
+                // while a dirty-archive guard is open).
+                if self.pending_close.is_some() {
+                    self.pending_close = None;
+                    self.close_after_save = None;
+                    return Task::none();
+                }
+                if self.pending_import.is_some() {
+                    self.pending_import = None;
+                    return Task::none();
+                }
+                if self.pending_save.is_some() {
+                    self.pending_save = None;
+                    self.close_after_save = None;
+                    self.toast = Some("Save cancelled.".into());
+                    return Task::none();
+                }
                 self.editor.clear_selection();
                 self.inspected_entry = None;
                 self.reset_texture_preview_state();
@@ -6343,6 +6362,32 @@ mod tests {
             app.editor.archives().is_empty(),
             "the archive must close after the guard's save"
         );
+    }
+
+    #[test]
+    fn escape_dismisses_pending_dialogs() {
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0].dirty = true;
+
+        // Close guard: Escape cancels the close request.
+        let _ = app.update(Message::CloseArchiveTab(0));
+        assert!(app.pending_close.is_some());
+        let _ = app.update(Message::ClearSelection);
+        assert!(app.pending_close.is_none());
+        assert_eq!(app.editor.archives().len(), 1, "archive stays open");
+
+        // Pre-save report: Escape cancels the save and any guard chain.
+        app.close_after_save = Some(0);
+        app.pending_save = Some(PendingSave {
+            index: 0,
+            path: std::path::PathBuf::from("x.img"),
+            version: crate::parser::ImgVersion::One,
+            remove_existing: false,
+            issue: Some(crate::compat::save::SaveIssue::default()),
+        });
+        let _ = app.update(Message::ClearSelection);
+        assert!(app.pending_save.is_none());
+        assert!(app.close_after_save.is_none());
     }
 
     #[test]
