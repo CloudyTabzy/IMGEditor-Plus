@@ -996,6 +996,11 @@ pub struct App {
     /// True while the new-TXD image picker is open (guards double
     /// opens from repeated toolbar clicks).
     pub new_txd_picker_open: bool,
+    /// True while a new-TXD plan is being prepared in the background
+    /// (no dialog exists yet; a second request would invalidate it).
+    pub new_txd_plan_in_flight: bool,
+    /// True while a replace plan is being prepared in the background.
+    pub replace_plan_in_flight: bool,
     /// Open replace-texture dialog state (Phase B).
     pub pending_replace: Option<ReplaceState>,
     /// Open new-TXD dialog state (Phase B).
@@ -1222,6 +1227,8 @@ impl App {
             replace_attempt: 0,
             new_txd_attempt: 0,
             new_txd_picker_open: false,
+            new_txd_plan_in_flight: false,
+            replace_plan_in_flight: false,
             pending_replace: None,
             pending_new_txd: None,
             pending_bulk: None,
@@ -2671,7 +2678,9 @@ impl App {
             }
             Message::TextureReplaceRequested => {
                 // Ignore a second request while one is already in flight.
-                if self.replace_request.is_some() {
+                if self.replace_request.is_some() || self.replace_plan_in_flight {
+                    self.toast =
+                        Some("A replacement is already being prepared.".into());
                     return Task::none();
                 }
                 let Some(archive_index) = self.editor.selected_archive() else {
@@ -2734,6 +2743,8 @@ impl App {
                 let archive_path = archive.path.clone();
                 let archive_name = archive.file_name.clone();
                 let texture_index = self.selected_texture;
+                self.replace_plan_in_flight = true;
+                self.toast = Some("Preparing replacement...".into());
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
@@ -2763,6 +2774,7 @@ impl App {
                 if attempt != self.replace_attempt {
                     return Task::none();
                 }
+                self.replace_plan_in_flight = false;
                 let ready = match *result {
                     Ok(ready) => ready,
                     Err(error) => {
@@ -3011,7 +3023,8 @@ impl App {
                     ));
                     return self.open_validator_popup();
                 }
-                if self.new_txd_picker_open {
+                if self.new_txd_picker_open || self.new_txd_plan_in_flight {
+                    self.toast = Some("An import is already being prepared.".into());
                     return Task::none();
                 }
                 self.new_txd_picker_open = true;
@@ -3041,6 +3054,8 @@ impl App {
                     return Task::none();
                 };
                 let archive_name = archive.file_name.clone();
+                self.new_txd_plan_in_flight = true;
+                self.toast = Some("Preparing import...".into());
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
@@ -3066,6 +3081,7 @@ impl App {
                 if attempt != self.new_txd_attempt {
                     return Task::none();
                 }
+                self.new_txd_plan_in_flight = false;
                 let ready = match *result {
                     Ok(ready) => ready,
                     Err(error) => {
@@ -7664,6 +7680,61 @@ mod tests {
         app.editor.select_entry(1, false, false);
         let _ = app.update(Message::TextureReplaceRequested);
         assert!(app.validator_popup_open);
+    }
+
+    #[test]
+    fn duplicate_converter_requests_are_ignored_while_planning() {
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0].target_game = Some("sa");
+
+        // Import: a second request while a plan runs would bump the
+        // attempt and silently drop the running plan.
+        app.new_txd_plan_in_flight = true;
+        let attempt = app.new_txd_attempt;
+        let _ = app.update(Message::ImportImageAsTxdRequested);
+        assert_eq!(app.new_txd_attempt, attempt, "no new attempt may start");
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("already being prepared")),
+            "{:?}",
+            app.toast
+        );
+
+        // Replace: same guard.
+        app.editor.select_entry(1, false, false);
+        app.replace_plan_in_flight = true;
+        let attempt = app.replace_attempt;
+        let _ = app.update(Message::TextureReplaceRequested);
+        assert_eq!(app.replace_attempt, attempt);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("already being prepared")),
+            "{:?}",
+            app.toast
+        );
+    }
+
+    #[test]
+    fn plan_completion_releases_the_in_flight_guard() {
+        let mut app = test_app_with_entries();
+
+        app.new_txd_plan_in_flight = true;
+        app.new_txd_attempt = 2;
+        let _ = app.update(Message::NewTxdPlanned {
+            attempt: 2,
+            result: Box::new(Err("nope".to_string())),
+        });
+        assert!(!app.new_txd_plan_in_flight);
+
+        app.replace_plan_in_flight = true;
+        app.replace_attempt = 2;
+        let _ = app.update(Message::ReplacePlanned {
+            attempt: 2,
+            result: Box::new(Err("nope".to_string())),
+        });
+        assert!(!app.replace_plan_in_flight);
     }
 
     #[test]

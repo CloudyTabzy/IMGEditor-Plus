@@ -17,8 +17,6 @@
 //! way the quantizer intended and gradients band less than with RGB
 //! distance.
 
-use std::collections::HashMap;
-
 use quantette::color_space::srgb8_to_oklab;
 use quantette::deps::palette::{Oklab, Srgb};
 use quantette::{PaletteSize, Pipeline, QuantizeMethod};
@@ -124,46 +122,75 @@ pub fn quantize(rgba: &[u8], max_colors: usize) -> QuantizedPalette {
     }
 }
 
-/// Map one mip level to palette indices. Colors are matched in Oklab;
-/// transparent pixels go to the reserved slot. With `dither`, a Bayer
-/// 4x4 threshold is applied before matching (off by default, matching
-/// retail output).
+/// A 15-bit (5-5-5) RGB lookup table: one palette index per color cell.
+/// Built once per palette and reused for every mip level and every
+/// pixel, so mapping cost is independent of how many distinct colors
+/// the image has (a photo can carry millions; the old exact-color memo
+/// took seconds and hundreds of megabytes on those).
+type ColorLut = Box<[u8; 32768]>;
+
+fn build_lut(palette: &QuantizedPalette) -> ColorLut {
+    let palette_labs = palette_oklab(&palette.entries);
+    let centers: Vec<Srgb<u8>> = (0..32768usize)
+        .map(|key| {
+            let r5 = (key >> 10) & 0x1F;
+            let g5 = (key >> 5) & 0x1F;
+            let b5 = key & 0x1F;
+            Srgb::new(
+                ((r5 << 3) | (r5 >> 2)) as u8,
+                ((g5 << 3) | (g5 >> 2)) as u8,
+                ((b5 << 3) | (b5 >> 2)) as u8,
+            )
+        })
+        .collect();
+    let labs = srgb8_to_oklab(&centers);
+    let mut lut: ColorLut = Box::new([0u8; 32768]);
+    for (key, lab) in labs.iter().enumerate() {
+        lut[key] = nearest_oklab(lab, &palette_labs);
+    }
+    lut
+}
+
+fn cell_key(r: u8, g: u8, b: u8) -> usize {
+    (usize::from(r >> 3) << 10) | (usize::from(g >> 3) << 5) | usize::from(b >> 3)
+}
+
+/// Map one mip level to palette indices. Colors are matched in Oklab
+/// through the 15-bit LUT; transparent pixels go to the reserved slot.
+/// With `dither`, a Bayer 4x4 threshold is applied before matching (off
+/// by default, matching retail output).
 pub fn map_level(
     rgba: &[u8],
     width: u32,
     palette: &QuantizedPalette,
     dither: bool,
 ) -> Vec<u8> {
-    let transparent_index = palette.transparent_index().unwrap_or(0);
-    let palette_labs = palette_oklab(&palette.entries);
+    let lut = build_lut(palette);
+    map_with_lut(rgba, width, palette, dither, &lut)
+}
 
-    // Batch conversion: convert every distinct visible color once, then
-    // match each distinct color once, then emit indices.
-    let mut distinct: HashMap<[u8; 3], ()> = HashMap::new();
-    for pixel in rgba.chunks_exact(4) {
-        if pixel[3] >= TRANSPARENT_CUTOFF {
-            distinct.insert([pixel[0], pixel[1], pixel[2]], ());
-        }
-    }
-    let colors: Vec<Srgb<u8>> = distinct
-        .keys()
-        .map(|rgb| Srgb::new(rgb[0], rgb[1], rgb[2]))
-        .collect();
-    let labs = srgb8_to_oklab(&colors);
-
-    // Dithering perturbs by the Bayer matrix before matching, so match
-    // the perturbed keys separately from the exact ones.
-    let mut lookup: HashMap<[u8; 3], u8> = colors
+/// Map every mip level through one shared LUT (the whole-mip workhorse
+/// for the encoders).
+pub fn map_levels(
+    levels: &[(u32, u32, Vec<u8>)],
+    palette: &QuantizedPalette,
+    dither: bool,
+) -> Vec<Vec<u8>> {
+    let lut = build_lut(palette);
+    levels
         .iter()
-        .zip(labs.iter())
-        .map(|(color, lab)| {
-            (
-                [color.red, color.green, color.blue],
-                nearest_oklab(lab, &palette_labs),
-            )
-        })
-        .collect();
+        .map(|(width, _, pixels)| map_with_lut(pixels, *width, palette, dither, &lut))
+        .collect()
+}
 
+fn map_with_lut(
+    rgba: &[u8],
+    width: u32,
+    palette: &QuantizedPalette,
+    dither: bool,
+    lut: &ColorLut,
+) -> Vec<u8> {
+    let transparent_index = palette.transparent_index().unwrap_or(0);
     let mut out = Vec::with_capacity(rgba.len() / 4);
     if dither {
         const BAYER: [[i16; 4]; 4] = [
@@ -180,16 +207,10 @@ pub fn map_level(
             let x = (index as u32 % width) as usize % 4;
             let y = (index as u32 / width) as usize % 4;
             let threshold = (BAYER[y][x] - 8) * 2;
-            let mut key = [0u8; 3];
-            for (channel, value) in key.iter_mut().enumerate() {
-                *value =
-                    (i16::from(pixel[channel]) + threshold).clamp(0, 255) as u8;
-            }
-            let slot = *lookup.entry(key).or_insert_with(|| {
-                let lab = srgb8_to_oklab(&[Srgb::new(key[0], key[1], key[2])])[0];
-                nearest_oklab(&lab, &palette_labs)
-            });
-            out.push(slot);
+            let r = (i16::from(pixel[0]) + threshold).clamp(0, 255) as u8;
+            let g = (i16::from(pixel[1]) + threshold).clamp(0, 255) as u8;
+            let b = (i16::from(pixel[2]) + threshold).clamp(0, 255) as u8;
+            out.push(lut[cell_key(r, g, b)]);
         }
     } else {
         for pixel in rgba.chunks_exact(4) {
@@ -197,11 +218,7 @@ pub fn map_level(
                 out.push(transparent_index);
                 continue;
             }
-            let key = [pixel[0], pixel[1], pixel[2]];
-            out.push(lookup.remove(&key).unwrap_or_else(|| {
-                let lab = srgb8_to_oklab(&[Srgb::new(key[0], key[1], key[2])])[0];
-                nearest_oklab(&lab, &palette_labs)
-            }));
+            out.push(lut[cell_key(pixel[0], pixel[1], pixel[2])]);
         }
     }
     out
@@ -234,6 +251,7 @@ fn palette_oklab(entries: &[[u8; 4]]) -> Vec<Oklab> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn small_palettes_survive_exactly() {

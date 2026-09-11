@@ -434,15 +434,7 @@ fn encode_paletted(
 ) -> (Vec<u8>, Vec<Vec<u8>>) {
     let (_, _, base) = &levels[0];
     let quantized = crate::compat::palette::quantize(base, max_colors);
-    let mut indices = Vec::with_capacity(levels.len());
-    for (w, _, px) in levels {
-        indices.push(crate::compat::palette::map_level(
-            px,
-            *w,
-            &quantized,
-            dither,
-        ));
-    }
+    let indices = crate::compat::palette::map_levels(levels, &quantized, dither);
 
     let mut palette_bytes = vec![0u8; 1024];
     for (i, c) in quantized.entries.iter().enumerate() {
