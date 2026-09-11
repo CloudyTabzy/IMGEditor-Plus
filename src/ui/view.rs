@@ -1143,6 +1143,19 @@ impl App {
         }
         let texture_meta = texture_meta.wrap();
         col = col.push(texture_meta);
+        if is_txd {
+            col = col.push(
+                row![
+                    button(fonts::body("Replace texture…"))
+                        .on_press(Message::TextureReplaceRequested),
+                    fonts::caption(
+                        "Imports PNG/DDS/BMP/TGA and re-encodes it for the archive's target.",
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            );
+        }
 
         let scene_matches = self.viewer_scene_matches_selection();
         let texture_only_preview = !scene_matches && (is_txd || is_nft);
@@ -1609,6 +1622,17 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
             fonts::body("Validate textures"),
             tooltip::Position::Bottom,
         ),
+        w::vhairline(divider),
+        w::styled_tooltip(
+            toolbar_button(icons::texture().size(18).into(), Message::ImportImageAsTxdRequested),
+            fonts::body("Import image as TXD"),
+            tooltip::Position::Bottom,
+        ),
+        w::styled_tooltip(
+            toolbar_button(icons::verdict_convert().size(18).into(), Message::BulkConvertRequested),
+            fonts::body("Convert selection to target dialect"),
+            tooltip::Position::Bottom,
+        ),
     ]
     .spacing(4)
     .padding(4)
@@ -2038,6 +2062,9 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_sort_manager(app),
         build_toast_overlay(app),
         build_validator_popup(app),
+        build_replace_dialog(app),
+        build_new_txd_dialog(app),
+        build_bulk_dialog(app),
         build_quit_fade(app),
     ]
     .into_iter()
@@ -2156,6 +2183,274 @@ fn build_unsupported(app: &App) -> Option<Element<'_, Message>> {
 /// Pre-save report: what the archive contains relative to its target,
 /// shown only when something needs a decision. The save itself stays
 /// verbatim - this dialog blocks nothing but the write.
+#[derive(Clone, PartialEq, Eq)]
+struct FormatOption {
+    format: crate::compat::encode::EncodeFormat,
+    label: String,
+}
+
+impl std::fmt::Display for FormatOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label)
+    }
+}
+
+fn format_options_for(app: &App, archive_index: usize) -> Vec<FormatOption> {
+    let Some(archive) = app.editor.archives().get(archive_index) else {
+        return Vec::new();
+    };
+    let Some(target_id) = archive.target_game else {
+        return Vec::new();
+    };
+    let Ok(target) = crate::compat::convert::writable_target(target_id) else {
+        return Vec::new();
+    };
+    crate::compat::convert::format_choices(target, &archive.file_name)
+        .into_iter()
+        .map(|choice| FormatOption {
+            format: choice.format,
+            label: format!(
+                "{} ({})",
+                choice.format.label(),
+                if choice.native { "native" } else { "opt-in" }
+            ),
+        })
+        .collect()
+}
+
+fn format_note_for(app: &App, archive_index: usize, format: crate::compat::encode::EncodeFormat) -> &'static str {
+    let Some(archive) = app.editor.archives().get(archive_index) else {
+        return "";
+    };
+    let Some(target_id) = archive.target_game else {
+        return "";
+    };
+    let Ok(target) = crate::compat::convert::writable_target(target_id) else {
+        return "";
+    };
+    crate::compat::convert::format_choices(target, &archive.file_name)
+        .into_iter()
+        .find(|choice| choice.format == format)
+        .map(|choice| choice.note)
+        .unwrap_or("")
+}
+
+fn plan_warnings(warnings: &[String]) -> Element<'_, Message> {
+    let mut list = Column::new().spacing(3).width(Length::Fill);
+    for warning in warnings.iter().take(6) {
+        list = list.push(
+            fonts::caption(warning.clone())
+                .color(compat_verdict_accent(crate::compat::games::Verdict::LossyConvertible)),
+        );
+    }
+    list.into()
+}
+
+fn preview_column(title: &str, handle: image::Handle) -> Element<'static, Message> {
+    container(
+        column![
+            fonts::caption(title.to_string()),
+            container(
+                image(handle)
+                    .content_fit(iced::ContentFit::Contain)
+                    .width(Length::Fixed(180.0))
+                    .height(Length::Fixed(180.0)),
+            )
+            .width(Length::Fixed(180.0))
+            .height(Length::Fixed(180.0))
+            .style(|theme: &iced::Theme| container::Style {
+                background: Some(iced::Background::Color(
+                    theme.extended_palette().background.weak.color,
+                )),
+                border: Border {
+                    color: theme.extended_palette().background.strong.color,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            }),
+        ]
+        .spacing(4)
+        .width(Length::Fixed(180.0)),
+    )
+    .into()
+}
+
+/// Replace-texture dialog: format picker, warnings, before/after.
+fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
+    let state = app.pending_replace.as_ref()?;
+    let options = format_options_for(app, state.archive_index);
+    let selected = options.iter().find(|option| option.format == state.chooser).cloned();
+    let note = format_note_for(app, state.archive_index, state.chooser);
+    let mut body = Column::new().spacing(6).width(Length::Fill);
+    body = body.push(fonts::body(format!(
+        "Replacing '{}' - source: {} ({}x{})",
+        state.texture_name, state.source_name, state.plan.0.width, state.plan.0.height
+    )));
+    body = body.push(
+        row![
+            fonts::header("Format:"),
+            iced::widget::pick_list(options, selected, |option| {
+                Message::ReplaceFormatChanged(option.format)
+            })
+            .width(Length::Fixed(280.0)),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+    );
+    body = body.push(fonts::caption(note.to_string()));
+    body = body.push(
+        row![
+            preview_column("Current", state.before_handle.clone()),
+            preview_column("After (encoded)", state.after_handle.clone()),
+        ]
+        .spacing(10),
+    );
+    body = body.push(plan_warnings(&state.plan.0.warnings));
+    body = body.push(fonts::caption(
+        "Stored in memory as an override; the archive file changes when you save.",
+    ));
+    body = body.push(Space::new().height(Length::Fixed(8.0)));
+    let confirm: Element<'_, Message> = if state.planning {
+        button(fonts::body("Planning…")).into()
+    } else {
+        button(fonts::strong("Replace texture"))
+            .on_press(Message::ReplaceConfirmed)
+            .style(button::primary)
+            .into()
+    };
+    body = body.push(
+        row![confirm, button(fonts::body("Cancel")).on_press(Message::ReplaceCancelled)]
+            .spacing(8),
+    );
+    Some(modal_box(
+        "Replace texture",
+        container(body).width(Length::Fixed(420.0)),
+    ))
+}
+
+/// New-TXD dialog: name, format picker, warnings, preview.
+fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
+    let state = app.pending_new_txd.as_ref()?;
+    let options = format_options_for(app, state.archive_index);
+    let selected = options.iter().find(|option| option.format == state.chooser).cloned();
+    let note = format_note_for(app, state.archive_index, state.chooser);
+    let mut body = Column::new().spacing(6).width(Length::Fill);
+    body = body.push(fonts::body(format!(
+        "New TXD from {} ({}x{})",
+        state.source_name, state.plan.0.width, state.plan.0.height
+    )));
+    body = body.push(
+        row![
+            fonts::header("Name:"),
+            text_input("texture name", &state.texture_name)
+                .on_input(Message::NewTxdNameChanged)
+                .width(Length::Fixed(260.0)),
+            fonts::caption(".txd"),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+    );
+    body = body.push(
+        row![
+            fonts::header("Format:"),
+            iced::widget::pick_list(options, selected, |option| {
+                Message::NewTxdFormatChanged(option.format)
+            })
+            .width(Length::Fixed(280.0)),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+    );
+    body = body.push(fonts::caption(note.to_string()));
+    body = body.push(preview_column("Texture", state.after_handle.clone()));
+    body = body.push(plan_warnings(&state.plan.0.warnings));
+    body = body.push(Space::new().height(Length::Fixed(8.0)));
+    let confirm: Element<'_, Message> = if state.planning {
+        button(fonts::body("Planning…")).into()
+    } else {
+        button(fonts::strong("Add to archive"))
+            .on_press(Message::NewTxdConfirmed)
+            .style(button::primary)
+            .into()
+    };
+    body = body.push(
+        row![confirm, button(fonts::body("Cancel")).on_press(Message::NewTxdCancelled)]
+            .spacing(8),
+    );
+    Some(modal_box(
+        "Import image as TXD",
+        container(body).width(Length::Fixed(420.0)),
+    ))
+}
+
+/// Bulk-conversion dialog: what will change, then apply.
+fn build_bulk_dialog(app: &App) -> Option<Element<'_, Message>> {
+    let state = app.pending_bulk.as_ref()?;
+    let mut total_textures = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+    let mut list = Column::new().spacing(3).width(Length::Fill);
+    for (index, entry) in state.entries.iter().enumerate() {
+        total_textures += entry.textures.len();
+        skipped += entry.skipped_native;
+        failed += entry.failed;
+        if index < 10 {
+            let formats: std::collections::BTreeSet<&str> = entry
+                .textures
+                .iter()
+                .map(|(_, _, plan)| plan.0.format_label.as_str())
+                .collect();
+            list = list.push(fonts::caption(format!(
+                "{} - {} texture(s) -> {}",
+                entry.file_name,
+                entry.textures.len(),
+                formats.into_iter().collect::<Vec<_>>().join(", ")
+            )));
+        }
+    }
+    if state.entries.len() > 10 {
+        list = list.push(fonts::caption(format!(
+            "… and {} more entries",
+            state.entries.len() - 10
+        )));
+    }
+    let mut body = Column::new().spacing(6).width(Length::Fill);
+    body = body.push(fonts::body(format!(
+        "{} textures across {} entries of {} will be re-encoded for the target.",
+        total_textures,
+        state.entries.len(),
+        state.source_label
+    )));
+    if skipped > 0 || failed > 0 {
+        body = body.push(fonts::caption(format!(
+            "{skipped} already native (skipped), {failed} unreadable (skipped)."
+        )));
+    }
+    body = body.push(
+        Scrollable::new(list)
+            .height(Length::Fixed(150.0))
+            .width(Length::Fill),
+    );
+    body = body.push(fonts::caption(
+        "Untouched textures and names stay verbatim; the archive changes when you save.",
+    ));
+    body = body.push(Space::new().height(Length::Fixed(8.0)));
+    body = body.push(
+        row![
+            button(fonts::strong("Convert"))
+                .on_press(Message::BulkConvertConfirmed)
+                .style(button::primary),
+            button(fonts::body("Cancel")).on_press(Message::BulkConvertCancelled),
+        ]
+        .spacing(8),
+    );
+    Some(modal_box(
+        "Convert to target dialect",
+        container(body).width(Length::Fixed(460.0)),
+    ))
+}
+
 fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
     let pending = app.pending_save.as_ref()?;
     let issue = pending.issue.as_ref()?;

@@ -55,8 +55,7 @@ pub fn import_files() -> Task<Vec<PathBuf>> {
 }
 
 #[cfg(feature = "native-dialogs")]
-pub fn import_folder() -> Task<Option<PathBuf>> {
-    Task::perform(
+pub fn import_folder() -> Task<Option<PathBuf>> {    Task::perform(
         async {
             rfd::AsyncFileDialog::new()
                 .set_title("Select folder to import")
@@ -75,6 +74,27 @@ pub fn import_folder() -> Task<Option<PathBuf>> {
 
 #[cfg(not(feature = "native-dialogs"))]
 pub fn import_files() -> Task<Vec<PathBuf>> {
+    Task::none()
+}
+
+/// Pick a source image for texture replacement / TXD authoring.
+#[cfg(feature = "native-dialogs")]
+pub fn pick_image_file() -> Task<Option<PathBuf>> {
+    Task::perform(
+        async {
+            rfd::AsyncFileDialog::new()
+                .set_title("Choose an image")
+                .add_filter("Images", &["png", "dds", "bmp", "tga"])
+                .pick_file()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        },
+        |path| path,
+    )
+}
+
+#[cfg(not(feature = "native-dialogs"))]
+pub fn pick_image_file() -> Task<Option<PathBuf>> {
     Task::none()
 }
 

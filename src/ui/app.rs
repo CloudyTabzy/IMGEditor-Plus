@@ -398,6 +398,53 @@ pub enum Message {
     SaveCheckFixToggled(bool),
     /// User cancelled at the pre-save report.
     SaveCheckCancelled,
+    /// Replace the selected texture (opens the image picker).
+    TextureReplaceRequested,
+    /// Image picker came back for a replacement.
+    ReplaceImagePicked(Option<PathBuf>),
+    /// Background planning finished for a replacement.
+    ReplacePlanned(Box<Result<ReplacePlanReady, String>>),
+    /// The dialog's format pick changed; re-plan.
+    ReplaceFormatChanged(crate::compat::encode::EncodeFormat),
+    /// Background re-plan finished.
+    ReplacePlanRefreshed(Box<Result<ReplacePlanReady, String>>),
+    /// Apply the replacement.
+    ReplaceConfirmed,
+    /// Background replacement finished.
+    ReplaceApplied {
+        archive_index: usize,
+        entry_index: usize,
+        result: Result<AppliedBytes, String>,
+    },
+    /// Dismiss the replace dialog.
+    ReplaceCancelled,
+    /// Author a new TXD from an image (opens the image picker).
+    ImportImageAsTxdRequested,
+    /// Image picker came back for TXD authoring.
+    NewTxdImagePicked(Option<PathBuf>),
+    /// Background planning finished for a new TXD.
+    NewTxdPlanned(Box<Result<NewTxdPlanReady, String>>),
+    /// The dialog's name field changed.
+    NewTxdNameChanged(String),
+    /// The dialog's format pick changed; re-plan.
+    NewTxdFormatChanged(crate::compat::encode::EncodeFormat),
+    /// Author the new TXD entry.
+    NewTxdConfirmed,
+    /// Dismiss the new-TXD dialog.
+    NewTxdCancelled,
+    /// Convert every selected TXD texture to the target dialect.
+    BulkConvertRequested,
+    /// Background bulk planning finished.
+    BulkConvertPlanned(Box<Result<BulkPlanReady, String>>),
+    /// Apply the bulk conversion.
+    BulkConvertConfirmed,
+    /// Background bulk conversion finished.
+    BulkConvertApplied {
+        archive_index: usize,
+        result: Result<SavePatches, String>,
+    },
+    /// Dismiss the bulk-convert dialog.
+    BulkConvertCancelled,
     /// Background header repair finished; apply the patches and save.
     SaveFixesReady {
         index: usize,
@@ -716,6 +763,165 @@ impl std::fmt::Debug for SavePatches {
     }
 }
 
+/// A conversion plan with a compact `Debug`: plans carry preview
+/// pixels, and message dumps must stay readable.
+#[derive(Clone)]
+pub struct CompactPlan(pub Arc<crate::compat::convert::ConversionPlan>);
+
+impl std::fmt::Debug for CompactPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ConversionPlan({} -> {})",
+            self.0.source_label, self.0.format_label
+        )
+    }
+}
+
+/// Applied entry bytes with a compact `Debug`.
+#[derive(Clone)]
+pub struct AppliedBytes(pub Arc<Vec<u8>>);
+
+impl std::fmt::Debug for AppliedBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AppliedBytes({} bytes)", self.0.len())
+    }
+}
+
+/// Planning result for a texture replacement.
+#[derive(Clone)]
+pub struct ReplacePlanReady {
+    pub archive_index: usize,
+    pub entry_index: usize,
+    pub texture_index: usize,
+    pub source_path: PathBuf,
+    pub source_name: String,
+    pub texture_name: String,
+    pub before: Option<(u32, u32, Arc<Vec<u8>>)>,
+    pub plan: CompactPlan,
+    pub entry: crate::archive::EntryInfo,
+    pub archive_path: Option<PathBuf>,
+    pub target: &'static crate::compat::games::GameProfile,
+    pub archive_name: String,
+}
+
+impl std::fmt::Debug for ReplacePlanReady {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplacePlanReady")
+            .field("archive_index", &self.archive_index)
+            .field("entry_index", &self.entry_index)
+            .field("texture_index", &self.texture_index)
+            .field("source_name", &self.source_name)
+            .field("texture_name", &self.texture_name)
+            .field("plan", &self.plan)
+            .finish()
+    }
+}
+
+/// Open replace-dialog state.
+pub struct ReplaceState {
+    pub archive_index: usize,
+    pub entry_index: usize,
+    pub texture_index: usize,
+    pub source_path: PathBuf,
+    pub source_name: String,
+    pub texture_name: String,
+    /// The entry's source (archive or loose file) for re-reading bytes.
+    pub entry: crate::archive::EntryInfo,
+    pub archive_path: Option<PathBuf>,
+    pub target: &'static crate::compat::games::GameProfile,
+    pub archive_name: String,
+    pub chooser: crate::compat::encode::EncodeFormat,
+    pub plan: CompactPlan,
+    pub before_handle: iced::widget::image::Handle,
+    pub after_handle: iced::widget::image::Handle,
+    pub planning: bool,
+}
+
+/// Planning result for a new TXD entry.
+#[derive(Clone)]
+pub struct NewTxdPlanReady {
+    pub archive_index: usize,
+    pub source_path: PathBuf,
+    pub source_name: String,
+    pub texture_name: String,
+    pub target: &'static crate::compat::games::GameProfile,
+    pub plan: CompactPlan,
+}
+
+impl std::fmt::Debug for NewTxdPlanReady {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewTxdPlanReady")
+            .field("archive_index", &self.archive_index)
+            .field("source_name", &self.source_name)
+            .field("texture_name", &self.texture_name)
+            .field("plan", &self.plan)
+            .finish()
+    }
+}
+
+/// Open new-TXD dialog state.
+pub struct NewTxdState {
+    pub archive_index: usize,
+    pub source_path: PathBuf,
+    pub source_name: String,
+    pub texture_name: String,
+    pub target: &'static crate::compat::games::GameProfile,
+    pub chooser: crate::compat::encode::EncodeFormat,
+    pub plan: CompactPlan,
+    pub after_handle: iced::widget::image::Handle,
+    pub planning: bool,
+}
+
+/// One entry's bulk-conversion plan.
+#[derive(Clone)]
+pub struct BulkEntryPlan {
+    pub entry_index: usize,
+    pub file_name: String,
+    /// (texture index, texture name, plan) for textures needing work.
+    pub textures: Vec<(usize, String, CompactPlan)>,
+    pub skipped_native: usize,
+    pub failed: usize,
+}
+
+impl std::fmt::Debug for BulkEntryPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "BulkEntryPlan({} textures, {} skipped, {} failed)",
+            self.textures.len(),
+            self.skipped_native,
+            self.failed
+        )
+    }
+}
+
+/// Bulk-conversion planning result.
+#[derive(Clone)]
+pub struct BulkPlanReady {
+    pub archive_index: usize,
+    pub source_label: String,
+    pub entries: Vec<BulkEntryPlan>,
+}
+
+impl std::fmt::Debug for BulkPlanReady {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "BulkPlanReady({} entries from {})",
+            self.entries.len(),
+            self.source_label
+        )
+    }
+}
+
+/// Open bulk-convert dialog state.
+pub struct BulkConvertState {
+    pub archive_index: usize,
+    pub source_label: String,
+    pub entries: Vec<BulkEntryPlan>,
+}
+
 pub struct App {
     pub editor: Editor,
     pub config: Config,
@@ -754,6 +960,14 @@ pub struct App {
     /// Save waiting on the pre-save report dialog (or on a validation
     /// scan that has to finish first).
     pub pending_save: Option<PendingSave>,
+    /// (archive, entry) waiting on the image picker for a replacement.
+    pub replace_request: Option<(usize, usize)>,
+    /// Open replace-texture dialog state (Phase B).
+    pub pending_replace: Option<ReplaceState>,
+    /// Open new-TXD dialog state (Phase B).
+    pub pending_new_txd: Option<NewTxdState>,
+    /// Open bulk-convert dialog state (Phase B).
+    pub pending_bulk: Option<BulkConvertState>,
     /// Close/quit waiting on the unsaved-changes guard.
     pub pending_close: Option<PendingClose>,
     /// After a successful save of this archive index, close it (the
@@ -970,6 +1184,10 @@ impl App {
             pending_folder_import: None,
             pending_import: None,
             pending_save: None,
+            replace_request: None,
+            pending_replace: None,
+            pending_new_txd: None,
+            pending_bulk: None,
             pending_close: None,
             close_after_save: None,
             quitting: None,
@@ -1448,6 +1666,9 @@ impl App {
             || self.pending_folder_import.is_some()
             || self.pending_import.is_some()
             || self.pending_save.is_some()
+            || self.pending_replace.is_some()
+            || self.pending_new_txd.is_some()
+            || self.pending_bulk.is_some()
             || self.pending_close.is_some()
             || self.show_update_status.is_some()
             || self.show_sort_manager
@@ -2374,6 +2595,513 @@ impl App {
                 let archive = archive.clone();
                 self.run_save(archive, path, version, remove_existing)
             }
+            Message::TextureReplaceRequested => {
+                let Some(archive_index) = self.editor.selected_archive() else {
+                    self.toast = Some("No archive selected.".into());
+                    return Task::none();
+                };
+                let Some(entry_index) = self.editor.selected_entry() else {
+                    self.toast = Some("Select a texture entry first.".into());
+                    return Task::none();
+                };
+                let Some(archive) = self.editor.archives().get(archive_index) else {
+                    return Task::none();
+                };
+                if !archive.entries[entry_index].file_name_lower.ends_with(".txd") {
+                    self.toast =
+                        Some("Replacement works on TXD entries; that entry is not one.".into());
+                    return Task::none();
+                }
+                let Some(target_id) = archive.target_game else {
+                    self.toast = Some("Set a game target first (Validate textures).".into());
+                    return Task::none();
+                };
+                if let Err(error) = crate::compat::convert::writable_target(target_id) {
+                    self.toast = Some(error);
+                    return Task::none();
+                }
+                self.replace_request = Some((archive_index, entry_index));
+                dialogs::pick_image_file().map(Message::ReplaceImagePicked)
+            }
+            Message::ReplaceImagePicked(None) => Task::none(),
+            Message::ReplaceImagePicked(Some(path)) => {
+                let Some((archive_index, entry_index)) = self.replace_request.take() else {
+                    return Task::none();
+                };
+                let Some(archive) = self.editor.archives().get(archive_index) else {
+                    return Task::none();
+                };
+                let Some(target_id) = archive.target_game else {
+                    return Task::none();
+                };
+                let Ok(target) = crate::compat::convert::writable_target(target_id) else {
+                    return Task::none();
+                };
+                let entry = archive.entries[entry_index].clone();
+                let archive_path = archive.path.clone();
+                let archive_name = archive.file_name.clone();
+                let texture_index = self.selected_texture;
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            plan_replace(
+                                &entry,
+                                archive_path.as_deref(),
+                                archive_index,
+                                entry_index,
+                                texture_index,
+                                path,
+                                target,
+                                &archive_name,
+                                None,
+                            )
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+                    },
+                    |result| Message::ReplacePlanned(Box::new(result)),
+                )
+            }
+            Message::ReplacePlanned(result) => {
+                let ready = match *result {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        self.toast = Some(error);
+                        return Task::none();
+                    }
+                };
+                let before_handle = ready
+                    .before
+                    .as_ref()
+                    .map(|(width, height, rgba)| {
+                        iced::widget::image::Handle::from_rgba(*width, *height, rgba.as_ref().clone())
+                    })
+                    .unwrap_or_else(|| {
+                        iced::widget::image::Handle::from_rgba(1, 1, vec![0, 0, 0, 0])
+                    });
+                let after_handle = iced::widget::image::Handle::from_rgba(
+                    ready.plan.0.width,
+                    ready.plan.0.height,
+                    ready.plan.0.preview_rgba.clone(),
+                );
+                self.pending_replace = Some(ReplaceState {
+                    archive_index: ready.archive_index,
+                    entry_index: ready.entry_index,
+                    texture_index: ready.texture_index,
+                    source_path: ready.source_path,
+                    source_name: ready.source_name,
+                    texture_name: ready.texture_name,
+                    entry: ready.entry,
+                    archive_path: ready.archive_path,
+                    target: ready.target,
+                    archive_name: ready.archive_name,
+                    chooser: ready.plan.0.format,
+                    plan: ready.plan,
+                    before_handle,
+                    after_handle,
+                    planning: false,
+                });
+                self.toast = None;
+                Task::none()
+            }
+            Message::ReplaceFormatChanged(format) => {
+                let Some(state) = self.pending_replace.as_mut() else {
+                    return Task::none();
+                };
+                state.chooser = format;
+                state.planning = true;
+                let archive_index = state.archive_index;
+                let entry_index = state.entry_index;
+                let texture_index = state.texture_index;
+                let path = state.source_path.clone();
+                let entry = state.entry.clone();
+                let archive_path = state.archive_path.clone();
+                let target = state.target;
+                let archive_name = state.archive_name.clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            plan_replace(
+                                &entry,
+                                archive_path.as_deref(),
+                                archive_index,
+                                entry_index,
+                                texture_index,
+                                path,
+                                target,
+                                &archive_name,
+                                Some(format),
+                            )
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+                    },
+                    |result| Message::ReplacePlanRefreshed(Box::new(result)),
+                )
+            }
+            Message::ReplacePlanRefreshed(result) => {
+                let ready = match *result {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        if let Some(state) = self.pending_replace.as_mut() {
+                            state.planning = false;
+                        }
+                        self.toast = Some(error);
+                        return Task::none();
+                    }
+                };
+                if let Some(state) = self.pending_replace.as_mut() {
+                    state.chooser = ready.plan.0.format;
+                    state.after_handle = iced::widget::image::Handle::from_rgba(
+                        ready.plan.0.width,
+                        ready.plan.0.height,
+                        ready.plan.0.preview_rgba.clone(),
+                    );
+                    state.plan = ready.plan;
+                    state.planning = false;
+                }
+                Task::none()
+            }
+            Message::ReplaceConfirmed => {
+                let Some(state) = self.pending_replace.take() else {
+                    return Task::none();
+                };
+                let archive_index = state.archive_index;
+                let entry_index = state.entry_index;
+                let texture_index = state.texture_index;
+                let entry = state.entry.clone();
+                let archive_path = state.archive_path.clone();
+                let plan = state.plan.clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || -> Result<Arc<Vec<u8>>, String> {
+                            let bytes = crate::parser::read_entry_data_from_source(
+                                &entry,
+                                archive_path.as_deref(),
+                            )
+                            .map_err(|error| error.to_string())?;
+                            let converted = crate::compat::convert::apply_replace(
+                                &bytes,
+                                texture_index,
+                                &plan.0,
+                            )?;
+                            Ok(Arc::new(converted))
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+                    },
+                    move |result| Message::ReplaceApplied {
+                        archive_index,
+                        entry_index,
+                        result: result.map(AppliedBytes),
+                    },
+                )
+            }
+            Message::ReplaceApplied {
+                archive_index,
+                entry_index,
+                result,
+            } => {
+                match result {
+                    Ok(AppliedBytes(bytes)) => {
+                        let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
+                        else {
+                            self.toast = Some("The archive is no longer open.".into());
+                            return Task::none();
+                        };
+                        if let Some(entry) = archive.entries.get_mut(entry_index) {
+                            entry.override_bytes = Some(bytes);
+                        }
+                        archive.dirty = true;
+                        archive.invalidate_entry_caches_keeping_report();
+                        self.toast = Some("Texture replaced - save the archive to write it.".into());
+                        return self.decode_texture_entry(entry_index);
+                    }
+                    Err(error) => {
+                        self.toast = Some(format!("Replace failed: {error}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::ReplaceCancelled => {
+                self.pending_replace = None;
+                Task::none()
+            }
+            Message::ImportImageAsTxdRequested => {
+                let Some(archive_index) = self.editor.selected_archive() else {
+                    self.toast = Some("No archive selected.".into());
+                    return Task::none();
+                };
+                let Some(archive) = self.editor.archives().get(archive_index) else {
+                    return Task::none();
+                };
+                let Some(target_id) = archive.target_game else {
+                    self.toast = Some("Set a game target first (Validate textures).".into());
+                    return Task::none();
+                };
+                if let Err(error) = crate::compat::convert::writable_target(target_id) {
+                    self.toast = Some(error);
+                    return Task::none();
+                }
+                dialogs::pick_image_file().map(Message::NewTxdImagePicked)
+            }
+            Message::NewTxdImagePicked(None) => Task::none(),
+            Message::NewTxdImagePicked(Some(path)) => {
+                let Some(archive_index) = self.editor.selected_archive() else {
+                    return Task::none();
+                };
+                let Some(archive) = self.editor.archives().get(archive_index) else {
+                    return Task::none();
+                };
+                let Some(target_id) = archive.target_game else {
+                    return Task::none();
+                };
+                let Ok(target) = crate::compat::convert::writable_target(target_id) else {
+                    return Task::none();
+                };
+                let archive_name = archive.file_name.clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            plan_txd_import(archive_index, path, target, &archive_name, None)
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+                    },
+                    |result| Message::NewTxdPlanned(Box::new(result)),
+                )
+            }
+            Message::NewTxdPlanned(result) => {
+                let ready = match *result {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        self.toast = Some(error);
+                        return Task::none();
+                    }
+                };
+                // Keep whatever name the user already typed across a
+                // format re-plan.
+                let texture_name = self
+                    .pending_new_txd
+                    .as_ref()
+                    .map(|state| state.texture_name.clone())
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or_else(|| ready.texture_name.clone());
+                let after_handle = iced::widget::image::Handle::from_rgba(
+                    ready.plan.0.width,
+                    ready.plan.0.height,
+                    ready.plan.0.preview_rgba.clone(),
+                );
+                self.pending_new_txd = Some(NewTxdState {
+                    archive_index: ready.archive_index,
+                    source_path: ready.source_path,
+                    source_name: ready.source_name,
+                    texture_name,
+                    target: ready.target,
+                    chooser: ready.plan.0.format,
+                    plan: ready.plan,
+                    after_handle,
+                    planning: false,
+                });
+                self.toast = None;
+                Task::none()
+            }
+            Message::NewTxdNameChanged(name) => {
+                if let Some(state) = self.pending_new_txd.as_mut() {
+                    state.texture_name = name;
+                }
+                Task::none()
+            }
+            Message::NewTxdFormatChanged(format) => {
+                let Some(state) = self.pending_new_txd.as_mut() else {
+                    return Task::none();
+                };
+                state.chooser = format;
+                state.planning = true;
+                let archive_index = state.archive_index;
+                let path = state.source_path.clone();
+                let target = state.target;
+                let archive_name = self
+                    .editor
+                    .archives()
+                    .get(archive_index)
+                    .map(|archive| archive.file_name.clone())
+                    .unwrap_or_default();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            plan_txd_import(archive_index, path, target, &archive_name, Some(format))
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+                    },
+                    |result| Message::NewTxdPlanned(Box::new(result)),
+                )
+            }
+            Message::NewTxdConfirmed => {
+                let Some(state) = self.pending_new_txd.take() else {
+                    return Task::none();
+                };
+                let mut name = state.texture_name.trim().to_string();
+                if name.is_empty() {
+                    self.toast = Some("Give the new TXD a name.".into());
+                    return Task::none();
+                }
+                if !name.to_ascii_lowercase().ends_with(".txd") {
+                    name.push_str(".txd");
+                }
+                let bytes = crate::compat::convert::build_new_txd(&state.plan.0, state.target, &name);
+                let Some(archive) = self.editor.archives_mut().get_mut(state.archive_index) else {
+                    self.toast = Some("The archive is no longer open.".into());
+                    return Task::none();
+                };
+                if archive
+                    .entries
+                    .iter()
+                    .any(|entry| entry.file_name.eq_ignore_ascii_case(&name))
+                {
+                    self.toast = Some(format!("An entry named '{name}' already exists."));
+                    return Task::none();
+                }
+                let mut entry = crate::archive::EntryInfo::new(&name);
+                entry.imported = true;
+                entry.override_bytes = Some(Arc::new(bytes));
+                let new_index = archive.entries.len();
+                archive.entries.push(entry);
+                archive.dirty = true;
+                archive.invalidate_entry_caches_keeping_report();
+                let archive_index = state.archive_index;
+                self.toast = Some(format!(
+                    "Added '{name}' - save the archive to write it.",
+                ));
+                if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
+                    for entry in archive.entries.iter_mut() {
+                        entry.selected = false;
+                    }
+                    if let Some(entry) = archive.entries.get_mut(new_index) {
+                        entry.selected = true;
+                    }
+                    archive.update_selected_list(&self.search, false);
+                }
+                self.editor.select_entry(new_index, false, false);
+                self.refresh_imported_verdicts(archive_index);
+                Task::none()
+            }
+            Message::NewTxdCancelled => {
+                self.pending_new_txd = None;
+                Task::none()
+            }
+            Message::BulkConvertRequested => {
+                let Some(archive_index) = self.editor.selected_archive() else {
+                    self.toast = Some("No archive selected.".into());
+                    return Task::none();
+                };
+                let Some(archive) = self.editor.archives().get(archive_index) else {
+                    return Task::none();
+                };
+                let Some(target_id) = archive.target_game else {
+                    self.toast = Some("Set a game target first (Validate textures).".into());
+                    return Task::none();
+                };
+                let Ok(target) = crate::compat::convert::writable_target(target_id) else {
+                    self.toast = Some("Bully (Gamebryo) texture writing is not supported yet.".into());
+                    return Task::none();
+                };
+                let selected: Vec<usize> = archive.selected_indices.iter().copied().collect();
+                if selected.is_empty() {
+                    self.toast = Some("Select the entries to convert first.".into());
+                    return Task::none();
+                }
+                let archive = archive.clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            plan_bulk_convert(archive_index, &archive, &selected, target)
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+                    },
+                    |result| Message::BulkConvertPlanned(Box::new(result)),
+                )
+            }
+            Message::BulkConvertPlanned(result) => {
+                let ready = match *result {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        self.toast = Some(error);
+                        return Task::none();
+                    }
+                };
+                if ready.entries.is_empty() {
+                    self.toast = Some("Every selected texture is already native for the target.".into());
+                    return Task::none();
+                }
+                self.pending_bulk = Some(BulkConvertState {
+                    archive_index: ready.archive_index,
+                    source_label: ready.source_label,
+                    entries: ready.entries,
+                });
+                self.toast = None;
+                Task::none()
+            }
+            Message::BulkConvertConfirmed => {
+                let Some(state) = self.pending_bulk.take() else {
+                    return Task::none();
+                };
+                let archive_index = state.archive_index;
+                let Some(archive) = self.editor.archives().get(archive_index).cloned() else {
+                    self.toast = Some("The archive is no longer open.".into());
+                    return Task::none();
+                };
+                let entries = state.entries;
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            convert_bulk_entries(&archive, &entries)
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+                    },
+                    move |result| Message::BulkConvertApplied {
+                        archive_index,
+                        result: result.map(SavePatches),
+                    },
+                )
+            }
+            Message::BulkConvertApplied {
+                archive_index,
+                result,
+            } => {
+                match result {
+                    Ok(SavePatches(patches)) => {
+                        let texture_count: usize = patches.len();
+                        let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
+                        else {
+                            self.toast = Some("The archive is no longer open.".into());
+                            return Task::none();
+                        };
+                        for (entry_index, bytes) in patches {
+                            if let Some(entry) = archive.entries.get_mut(entry_index) {
+                                entry.override_bytes = Some(bytes);
+                            }
+                        }
+                        archive.dirty = true;
+                        archive.invalidate_entry_caches_keeping_report();
+                        self.toast = Some(format!(
+                            "Converted {texture_count} entries - save the archive to write them.",
+                        ));
+                        let _ = self.refresh_inspection();
+                    }
+                    Err(error) => {
+                        self.toast = Some(format!("Conversion failed: {error}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::BulkConvertCancelled => {
+                self.pending_bulk = None;
+                Task::none()
+            }
             Message::SaveCheckCancelled => {
                 self.pending_save = None;
                 // A guard-initiated save that got cancelled cancels the
@@ -2473,6 +3201,26 @@ impl App {
             | Message::SaveCheckFixToggled(_)
             | Message::SaveFixesReady { .. }
             | Message::SaveCheckCancelled
+            | Message::TextureReplaceRequested
+            | Message::ReplaceImagePicked(_)
+            | Message::ReplacePlanned(_)
+            | Message::ReplaceFormatChanged(_)
+            | Message::ReplacePlanRefreshed(_)
+            | Message::ReplaceConfirmed
+            | Message::ReplaceApplied { .. }
+            | Message::ReplaceCancelled
+            | Message::ImportImageAsTxdRequested
+            | Message::NewTxdImagePicked(_)
+            | Message::NewTxdPlanned(_)
+            | Message::NewTxdNameChanged(_)
+            | Message::NewTxdFormatChanged(_)
+            | Message::NewTxdConfirmed
+            | Message::NewTxdCancelled
+            | Message::BulkConvertRequested
+            | Message::BulkConvertPlanned(_)
+            | Message::BulkConvertConfirmed
+            | Message::BulkConvertApplied { .. }
+            | Message::BulkConvertCancelled
             | Message::PackArchive
             | Message::PackCompleted { .. } => Task::none(),
 
@@ -2860,6 +3608,18 @@ impl App {
                     self.pending_save = None;
                     self.close_after_save = None;
                     self.toast = Some("Save cancelled.".into());
+                    return Task::none();
+                }
+                if self.pending_replace.is_some() {
+                    self.pending_replace = None;
+                    return Task::none();
+                }
+                if self.pending_new_txd.is_some() {
+                    self.pending_new_txd = None;
+                    return Task::none();
+                }
+                if self.pending_bulk.is_some() {
+                    self.pending_bulk = None;
                     return Task::none();
                 }
                 self.editor.clear_selection();
@@ -5670,6 +6430,174 @@ fn window_icon() -> Option<iced::window::Icon> {
 #[allow(dead_code)]
 fn _force_space_use(_: Space) {}
 
+/// Plan one texture replacement off the UI thread.
+#[allow(clippy::too_many_arguments)]
+fn plan_replace(
+    entry: &crate::archive::EntryInfo,
+    archive_path: Option<&std::path::Path>,
+    archive_index: usize,
+    entry_index: usize,
+    texture_index: usize,
+    path: PathBuf,
+    target: &'static crate::compat::games::GameProfile,
+    archive_name: &str,
+    format: Option<crate::compat::encode::EncodeFormat>,
+) -> Result<ReplacePlanReady, String> {
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("read {} failed: {error}", path.display()))?;
+    let source_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("image")
+        .to_string();
+    let image = crate::compat::convert::decode_source_image_named(&bytes, &source_name)?;
+    let entry_bytes = crate::parser::read_entry_data_from_source(entry, archive_path)
+        .map_err(|error| error.to_string())?;
+    let txd = crate::parser::txd::parse_txd(&entry_bytes)?;
+    let old = txd
+        .textures
+        .get(texture_index)
+        .ok_or_else(|| "this entry's texture list changed; reopen it".to_string())?;
+    let before_rgba = old.decode_rgba().map_err(|error| error.to_string())?;
+    let plan = crate::compat::convert::plan_import(&image, target, archive_name, format)?;
+    Ok(ReplacePlanReady {
+        archive_index,
+        entry_index,
+        texture_index,
+        source_path: path,
+        source_name,
+        texture_name: old.diffuse_name.clone(),
+        before: Some((old.width, old.height, Arc::new(before_rgba))),
+        plan: CompactPlan(Arc::new(plan)),
+        entry: entry.clone(),
+        archive_path: archive_path.map(std::path::Path::to_path_buf),
+        target,
+        archive_name: archive_name.to_string(),
+    })
+}
+
+/// Plan a new single-texture TXD from an image, off the UI thread.
+fn plan_txd_import(
+    archive_index: usize,
+    path: PathBuf,
+    target: &'static crate::compat::games::GameProfile,
+    archive_name: &str,
+    format: Option<crate::compat::encode::EncodeFormat>,
+) -> Result<NewTxdPlanReady, String> {
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("read {} failed: {error}", path.display()))?;
+    let source_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("image")
+        .to_string();
+    let image = crate::compat::convert::decode_source_image_named(&bytes, &source_name)?;
+    let texture_name = std::path::Path::new(&source_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("texture")
+        .to_string();
+    let plan = crate::compat::convert::plan_import(&image, target, archive_name, format)?;
+    Ok(NewTxdPlanReady {
+        archive_index,
+        source_path: path,
+        source_name,
+        texture_name,
+        target,
+        plan: CompactPlan(Arc::new(plan)),
+    })
+}
+
+/// Plan converting every texture of the selected entries to the target
+/// dialect, off the UI thread. Textures already native are skipped.
+fn plan_bulk_convert(
+    archive_index: usize,
+    archive: &crate::archive::ArchiveInfo,
+    selected: &[usize],
+    target: &'static crate::compat::games::GameProfile,
+) -> Result<BulkPlanReady, String> {
+    use crate::compat::games::{classify, Verdict};
+    use crate::compat::raster::RasterProfile;
+
+    let mut entries = Vec::new();
+    for &index in selected {
+        let Some(entry) = archive.entries.get(index) else {
+            continue;
+        };
+        if !entry.file_name_lower.ends_with(".txd") {
+            continue;
+        }
+        let Ok(bytes) = crate::parser::read_entry_data(archive, entry) else {
+            continue;
+        };
+        let Ok(txd) = crate::parser::txd::parse_txd(&bytes) else {
+            continue;
+        };
+        let mut textures = Vec::new();
+        let mut skipped_native = 0usize;
+        let mut failed = 0usize;
+        for (texture_index, texture) in txd.textures.iter().enumerate() {
+            let profile = RasterProfile::from_native(texture);
+            if classify(target, &profile).verdict == Verdict::Native {
+                skipped_native += 1;
+                continue;
+            }
+            match crate::compat::convert::plan_conversion(
+                &bytes,
+                texture_index,
+                target,
+                &archive.file_name,
+                None,
+            ) {
+                Ok(plan) => textures.push((
+                    texture_index,
+                    texture.diffuse_name.clone(),
+                    CompactPlan(Arc::new(plan)),
+                )),
+                Err(_) => failed += 1,
+            }
+        }
+        if !textures.is_empty() {
+            entries.push(BulkEntryPlan {
+                entry_index: index,
+                file_name: entry.file_name.to_string(),
+                textures,
+                skipped_native,
+                failed,
+            });
+        }
+    }
+    Ok(BulkPlanReady {
+        archive_index,
+        source_label: archive.file_name.clone(),
+        entries,
+    })
+}
+
+/// Converted entry bytes, keyed by entry index.
+type BulkPatches = Vec<(usize, Arc<Vec<u8>>)>;
+
+/// Execute a bulk-conversion plan off the UI thread.
+fn convert_bulk_entries(
+    archive: &crate::archive::ArchiveInfo,
+    entries: &[BulkEntryPlan],
+) -> Result<BulkPatches, String> {
+    let mut patches = Vec::new();
+    for entry_plan in entries {
+        let entry = archive
+            .entries
+            .get(entry_plan.entry_index)
+            .ok_or_else(|| "entry disappeared during conversion".to_string())?;
+        let mut bytes =
+            crate::parser::read_entry_data(archive, entry).map_err(|error| error.to_string())?;
+        for (texture_index, _, plan) in &entry_plan.textures {
+            bytes = crate::compat::convert::apply_replace(&bytes, *texture_index, &plan.0)?;
+        }
+        patches.push((entry_plan.entry_index, Arc::new(bytes)));
+    }
+    Ok(patches)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6356,6 +7284,129 @@ mod tests {
         assert_eq!(
             app.archive_tab_width,
             crate::config::ARCHIVE_TAB_WIDTH_MAX
+        );
+    }
+
+    /// A tiny planned conversion for dialog-state tests.
+    fn tiny_plan(target: &'static crate::compat::games::GameProfile) -> CompactPlan {
+        let mut rgba = Vec::new();
+        for i in 0..4u32 * 4 {
+            rgba.extend([i as u8, 0, 0, 255]);
+        }
+        let image = crate::compat::convert::SourceImage {
+            width: 4,
+            height: 4,
+            rgba,
+            has_alpha: false,
+            format_label: "test".to_string(),
+            encoded_bytes: 64,
+        };
+        let plan =
+            crate::compat::convert::plan_import(&image, target, "txd.img", None).expect("plan");
+        CompactPlan(Arc::new(plan))
+    }
+
+    #[test]
+    fn replace_applied_sets_the_override_and_dirties() {
+        let mut app = test_app_with_entries();
+        let task = app.update(Message::ReplaceApplied {
+            archive_index: 0,
+            entry_index: 1,
+            result: Ok(AppliedBytes(Arc::new(vec![1, 2, 3]))),
+        });
+        let archive = &app.editor.archives()[0];
+        assert!(
+            archive.entries[1].override_bytes.is_some(),
+            "the converted bytes must become the entry override"
+        );
+        assert!(archive.dirty);
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("Texture replaced - save the archive to write it.")
+        );
+        let _ = drain_task(task);
+    }
+
+    #[test]
+    fn new_txd_confirmed_adds_a_unique_entry() {
+        let mut app = test_app_with_entries();
+        let plan = tiny_plan(&crate::compat::games::GTA3);
+        let state = |texture_name: &str| NewTxdState {
+            archive_index: 0,
+            source_path: PathBuf::from("x.png"),
+            source_name: "x.png".to_string(),
+            texture_name: texture_name.to_string(),
+            target: &crate::compat::games::GTA3,
+            chooser: plan.0.format,
+            plan: plan.clone(),
+            after_handle: iced::widget::image::Handle::from_rgba(4, 4, vec![0, 0, 0, 0]),
+            planning: false,
+        };
+
+        app.pending_new_txd = Some(state("MyTex"));
+        let _ = app.update(Message::NewTxdConfirmed);
+        assert!(
+            app.editor.archives()[0]
+                .entries
+                .iter()
+                .any(|entry| entry.file_name == "MyTex.txd"
+                    && entry.override_bytes.is_some()),
+            "the new TXD entry must carry its bytes as an override"
+        );
+        assert!(app.editor.archives()[0].dirty);
+
+        let before = app.editor.archives()[0].entries.len();
+        app.pending_new_txd = Some(state("MyTex"));
+        let _ = app.update(Message::NewTxdConfirmed);
+        assert_eq!(
+            app.editor.archives()[0].entries.len(),
+            before,
+            "duplicate names must be rejected"
+        );
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("already exists")),
+            "{:?}",
+            app.toast
+        );
+    }
+
+    #[test]
+    fn bulk_planned_opens_the_dialog_and_cancel_clears_it() {
+        let mut app = test_app_with_entries();
+        let ready = BulkPlanReady {
+            archive_index: 0,
+            source_label: "gta3.img".to_string(),
+            entries: vec![BulkEntryPlan {
+                entry_index: 1,
+                file_name: "second.txd".to_string(),
+                textures: vec![(0, "tex".to_string(), tiny_plan(&crate::compat::games::GTA3))],
+                skipped_native: 2,
+                failed: 0,
+            }],
+        };
+        let _ = app.update(Message::BulkConvertPlanned(Box::new(Ok(ready))));
+        assert!(app.pending_bulk.is_some(), "the dialog must open");
+        let _ = app.update(Message::BulkConvertCancelled);
+        assert!(app.pending_bulk.is_none());
+    }
+
+    #[test]
+    fn bulk_convert_applied_sets_overrides_and_dirties() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::BulkConvertApplied {
+            archive_index: 0,
+            result: Ok(SavePatches(vec![(1, Arc::new(vec![7, 7, 7]))])),
+        });
+        assert!(app.editor.archives()[0].entries[1].override_bytes.is_some());
+        assert!(app.editor.archives()[0].dirty);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("Converted 1 entries")),
+            "{:?}",
+            app.toast
         );
     }
 
