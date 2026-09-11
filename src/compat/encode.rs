@@ -399,29 +399,32 @@ fn encode_dxt_levels(
         .collect()
 }
 
-// ---- Palette quantization (median cut) --------------------------------
+// ---- Palette quantization -------------------------------------------
 
 /// Quantize to at most `max_colors` entries and map every mip level.
 /// Returns the 1024-byte BGRA palette (PC storage) and per-level
-/// palette indices.
+/// palette indices. The quantizer is alpha-aware: transparent pixels
+/// get a reserved entry instead of consuming color slots, and entry
+/// alpha is the usage-weighted average of its members.
 fn encode_paletted(
     levels: &[(u32, u32, Vec<u8>)],
     max_colors: usize,
     dither: bool,
 ) -> (Vec<u8>, Vec<Vec<u8>>) {
     let (_, _, base) = &levels[0];
-    let palette = median_cut(base, max_colors);
+    let quantized = crate::compat::palette::quantize(base, max_colors);
     let mut indices = Vec::with_capacity(levels.len());
     for (w, _, px) in levels {
-        if dither {
-            indices.push(map_dithered(px, *w, &palette));
-        } else {
-            indices.push(map_nearest(px, &palette));
-        }
+        indices.push(crate::compat::palette::map_level(
+            px,
+            *w,
+            &quantized,
+            dither,
+        ));
     }
 
     let mut palette_bytes = vec![0u8; 1024];
-    for (i, c) in palette.iter().enumerate() {
+    for (i, c) in quantized.entries.iter().enumerate() {
         let o = i * 4;
         palette_bytes[o] = c[2];
         palette_bytes[o + 1] = c[1];
@@ -430,154 +433,6 @@ fn encode_paletted(
     }
     (palette_bytes, indices)
 }
-
-/// Median-cut quantization over the distinct colors of the image.
-pub fn median_cut(rgba: &[u8], max_colors: usize) -> Vec<[u8; 4]> {
-    use std::collections::HashMap;
-
-    let mut histogram: HashMap<[u8; 4], u32> = HashMap::new();
-    for p in rgba.chunks_exact(4) {
-        *histogram.entry([p[0], p[1], p[2], p[3]]).or_insert(0) += 1;
-    }
-    if histogram.is_empty() {
-        return vec![[0, 0, 0, 255]];
-    }
-    if histogram.len() <= max_colors {
-        let mut colors: Vec<[u8; 4]> = histogram.into_keys().collect();
-        colors.sort_unstable();
-        return colors;
-    }
-
-    let colors: Vec<([u8; 4], u32)> = histogram.into_iter().collect();
-    let mut boxes: Vec<Vec<([u8; 4], u32)>> = vec![colors];
-    while boxes.len() < max_colors {
-        // Split the box with the largest channel spread.
-        let mut best: Option<(usize, usize, u8)> = None;
-        for (i, b) in boxes.iter().enumerate() {
-            if b.len() <= 1 {
-                continue;
-            }
-            let channel = widest_channel(b);
-            let spread = channel_spread(b, channel);
-            if best.is_none_or(|(_, _, s)| spread > s) {
-                best = Some((i, channel, spread));
-            }
-        }
-        let Some((index, channel, _)) = best else {
-            break;
-        };
-        let mut target = boxes.swap_remove(index);
-        target.sort_by_key(|(c, _)| c[channel]);
-        let total: u64 = target.iter().map(|(_, n)| u64::from(*n)).sum();
-        let mut acc = 0u64;
-        let mut split = target.len() / 2;
-        for (i, (_, n)) in target.iter().enumerate() {
-            acc += u64::from(*n);
-            if acc * 2 >= total {
-                split = (i + 1).min(target.len() - 1);
-                break;
-            }
-        }
-        let right = target.split_off(split);
-        boxes.push(target);
-        boxes.push(right);
-    }
-
-    boxes
-        .into_iter()
-        .map(|b| {
-            let total: u64 = b.iter().map(|(_, n)| u64::from(*n)).sum();
-            if total == 0 {
-                return [0, 0, 0, 255];
-            }
-            let mut sums = [0u64; 4];
-            for (c, n) in &b {
-                for i in 0..4 {
-                    sums[i] += u64::from(c[i]) * u64::from(*n);
-                }
-            }
-            let mut out = [0u8; 4];
-            for i in 0..4 {
-                out[i] = ((sums[i] + total / 2) / total) as u8;
-            }
-            out
-        })
-        .collect()
-}
-
-fn widest_channel(b: &[([u8; 4], u32)]) -> usize {
-    (0..4)
-        .max_by_key(|&c| channel_spread(b, c))
-        .unwrap_or(0)
-}
-
-fn channel_spread(b: &[([u8; 4], u32)], channel: usize) -> u8 {
-    let mut min = 255u8;
-    let mut max = 0u8;
-    for (c, _) in b {
-        min = min.min(c[channel]);
-        max = max.max(c[channel]);
-    }
-    max.saturating_sub(min)
-}
-
-/// Per-pixel nearest-palette mapping with a memo so repeated colors do
-/// not rescan the palette.
-pub fn map_nearest(rgba: &[u8], palette: &[[u8; 4]]) -> Vec<u8> {
-    use std::collections::HashMap;
-
-    let mut memo: HashMap<[u8; 4], u8> = HashMap::new();
-    let mut out = Vec::with_capacity(rgba.len() / 4);
-    for p in rgba.chunks_exact(4) {
-        let key = [p[0], p[1], p[2], p[3]];
-        let index = *memo.entry(key).or_insert_with(|| nearest_index(&key, palette));
-        out.push(index);
-    }
-    out
-}
-
-fn nearest_index(c: &[u8; 4], palette: &[[u8; 4]]) -> u8 {
-    let mut best = 0usize;
-    let mut best_distance = u32::MAX;
-    for (i, p) in palette.iter().enumerate() {
-        let d = color_distance(c, p);
-        if d < best_distance {
-            best_distance = d;
-            best = i;
-        }
-    }
-    best as u8
-}
-
-fn color_distance(a: &[u8; 4], b: &[u8; 4]) -> u32 {
-    let dr = i32::from(a[0]) - i32::from(b[0]);
-    let dg = i32::from(a[1]) - i32::from(b[1]);
-    let db = i32::from(a[2]) - i32::from(b[2]);
-    let da = i32::from(a[3]) - i32::from(b[3]);
-    (dr * dr + dg * dg + db * db + da * da) as u32
-}
-
-/// Bayer 4x4 ordered dithering before nearest-palette mapping. The
-/// threshold nudges each channel by up to one quantization step.
-fn map_dithered(rgba: &[u8], width: u32, palette: &[[u8; 4]]) -> Vec<u8> {
-    const BAYER: [[i16; 4]; 4] = [
-        [0, 8, 2, 10],
-        [12, 4, 14, 6],
-        [3, 11, 1, 9],
-        [15, 7, 13, 5],
-    ];
-    let mut out = Vec::with_capacity(rgba.len() / 4);
-    for (i, p) in rgba.chunks_exact(4).enumerate() {
-        let x = (i as u32 % width) as usize % 4;
-        let y = (i as u32 / width) as usize % 4;
-        let threshold = (BAYER[y][x] - 8) * 2;
-        let adjust = |v: u8| (i16::from(v) + threshold).clamp(0, 255) as u8;
-        let key = [adjust(p[0]), adjust(p[1]), adjust(p[2]), p[3]];
-        out.push(nearest_index(&key, palette));
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

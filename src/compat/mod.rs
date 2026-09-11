@@ -11,6 +11,7 @@ pub mod encode;
 pub mod games;
 pub mod hint;
 pub mod normalize;
+pub mod palette;
 pub mod raster;
 pub mod save;
 pub mod scan;

@@ -54,6 +54,7 @@ pollster = "0.4"
 wgpu = { version = "27", default-features = false, features = ["wgsl", "vulkan"] }
 quick_cache = { version = "0.7.0", features = ["stats"] }
 texpresso = "2.0.2"
+quantette = { version = "0.6.0", default-features = false, features = ["kmeans", "threads"] }
 
 [dev-dependencies]
 tempfile = "3"
