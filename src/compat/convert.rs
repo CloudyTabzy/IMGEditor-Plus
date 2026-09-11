@@ -738,4 +738,98 @@ mod tests {
         assert_eq!(parsed.textures[0].diffuse_name, "newtex");
         assert_eq!(parsed.textures[0].num_mipmaps, 5);
     }
+
+    /// The DDS fixtures written by `tools/gen_converter_fixtures.py`
+    /// must decode with the same path the import dialog uses.
+    #[test]
+    fn reads_generated_dds_fixtures_when_present() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("converter-fixtures");
+        for name in ["dxt1_gradient_128.dds", "dxt5_checker_128.dds"] {
+            let path = dir.join(name);
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let image = decode_source_image(&bytes)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!((image.width, image.height), (128, 128), "{name}");
+        }
+    }
+
+    /// The full retail gate: take real textures out of the III/VC/SA
+    /// archives, convert each to its target's default dialect, and
+    /// require the result to parse, classify native, and decode.
+    #[test]
+    fn retail_textures_convert_to_native_dialects() {
+        use crate::archive::ArchiveInfo;
+        use crate::compat::games::{classify, profile_by_id, Verdict};
+        use crate::parser::{ImgParser, ImgVersion, PcV1Parser, PcV2Parser, detect_version};
+
+        let Some(root) = crate::test_paths::corpus_root() else {
+            return;
+        };
+        let archives = [
+            ("gta3", root.join("Gta_3_img/models/gta3.img")),
+            ("gta3", root.join("Gta_3_img/models/txd.img")),
+            ("vc", root.join("Grand Theft Auto Vice City/models/gta3.img")),
+            ("sa", root.join("GTA San Andreas/models/gta3.img")),
+            ("sa", root.join("GTA San Andreas/models/player.img")),
+            ("sa", root.join("GTA San Andreas/models/cutscene.img")),
+        ];
+
+        let mut checked = 0usize;
+        for (target_id, path) in archives {
+            if !path.exists() {
+                continue;
+            }
+            let target = profile_by_id(target_id).unwrap();
+            let version = detect_version(&path);
+            let mut archive = ArchiveInfo::new(target_id.to_string(), false, version);
+            archive.path = Some(path.clone());
+            match version {
+                ImgVersion::One => PcV1Parser.open(&mut archive).expect("open v1"),
+                ImgVersion::Two => PcV2Parser.open(&mut archive).expect("open v2"),
+                _ => continue,
+            }
+            for (idx, entry) in archive.entries.iter().enumerate() {
+                if !entry.file_name_lower.ends_with(".txd") || idx % 499 != 0 {
+                    continue;
+                }
+                let Ok(bytes) = crate::parser::read_entry_data(&archive, entry) else {
+                    continue;
+                };
+                let Ok(txd) = parse_txd(&bytes) else {
+                    continue;
+                };
+                for texture_index in 0..txd.textures.len() {
+                    let Ok(plan) = plan_conversion(
+                        &bytes,
+                        texture_index,
+                        target,
+                        &archive.file_name,
+                        None,
+                    ) else {
+                        continue;
+                    };
+                    let converted = apply_replace(&bytes, texture_index, &plan).expect("apply");
+                    let parsed = parse_txd(&converted).expect("parse converted");
+                    let new = &parsed.textures[texture_index];
+                    let profile = RasterProfile::from_native(new);
+                    let report = classify(target, &profile);
+                    assert_eq!(
+                        report.verdict,
+                        Verdict::Native,
+                        "{target_id} / {} texture {texture_index}: {} ({})",
+                        entry.file_name,
+                        new.format_name(),
+                        report.note
+                    );
+                    let pixels = new.decode_rgba().expect("decode converted");
+                    assert_eq!(pixels.len(), new.width as usize * new.height as usize * 4);
+                    checked += 1;
+                }
+            }
+        }
+        eprintln!("retail conversion gate: {checked} textures converted and verified");
+        assert!(checked > 0, "corpus root is set but no archives were found");
+    }
 }
