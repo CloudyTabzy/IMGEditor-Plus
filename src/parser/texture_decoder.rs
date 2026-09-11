@@ -162,13 +162,13 @@ fn dxt5_block(block: &[u8]) -> [[u8; 4]; 16] {
             6 => if alpha0 > alpha1 {
                 (2 * alpha0 as u16 + 5 * alpha1 as u16 + 3) / 7
             } else {
-                (0 * alpha0 as u16 + 5 * alpha1 as u16 + 2) / 5
+                0
             }
             .min(255) as u8,
             7 => if alpha0 > alpha1 {
                 (1 * alpha0 as u16 + 6 * alpha1 as u16 + 3) / 7
             } else {
-                0
+                255
             }
             .min(255) as u8,
             _ => 0,
@@ -1182,5 +1182,28 @@ mod tests {
         }
         assert_eq!(unique_color_count_capped(&rgba, 256), 257);
         assert_eq!(unique_color_count_capped(&rgba, 400), 300);
+    }
+
+    #[test]
+    fn dxt5_alpha_special_indices_follow_the_spec() {
+        let mut block = [0u8; 16];
+        let mut codes: u64 = 0;
+        codes |= 6 << (6 * 3);
+        codes |= 7 << (7 * 3);
+        block[2..8].copy_from_slice(&codes.to_le_bytes()[..6]);
+
+        // alpha0 <= alpha1: index 6 is transparent, index 7 is opaque.
+        block[0] = 0;
+        block[1] = 255;
+        let px = dxt5_block(&block);
+        assert_eq!(px[6][3], 0, "index 6 must decode to fully transparent");
+        assert_eq!(px[7][3], 255, "index 7 must decode to fully opaque");
+
+        // alpha0 > alpha1: indices 6/7 interpolate instead.
+        block[0] = 255;
+        block[1] = 0;
+        let px = dxt5_block(&block);
+        assert_eq!(px[6][3], ((2 * 255 + 3) / 7) as u8);
+        assert_eq!(px[7][3], ((255 + 3) / 7) as u8);
     }
 }
