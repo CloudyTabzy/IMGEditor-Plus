@@ -54,6 +54,31 @@ pub fn shield_check<'a>() -> Text<'a> {
     lucide::shield_check()
 }
 
+/// Validator legend: engine-native format.
+pub fn verdict_native<'a>() -> Text<'a> {
+    lucide::shield_check()
+}
+
+/// Validator legend: supported / losslessly convertible.
+pub fn verdict_convert<'a>() -> Text<'a> {
+    lucide::refresh_cw()
+}
+
+/// Validator legend: lossy conversion required.
+pub fn verdict_lossy<'a>() -> Text<'a> {
+    lucide::info()
+}
+
+/// Validator legend: unknown (no evidence either way).
+pub fn verdict_unknown<'a>() -> Text<'a> {
+    lucide::file_search()
+}
+
+/// Validator legend: the target engine cannot consume this form.
+pub fn verdict_incompatible<'a>() -> Text<'a> {
+    lucide::x()
+}
+
 pub fn invert_selection<'a>() -> Text<'a> {
     lucide::refresh_cw()
 }

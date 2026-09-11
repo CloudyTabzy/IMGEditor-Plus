@@ -2313,18 +2313,20 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
         )
         .width(Length::Fill);
 
-        let footer = row![
-            fonts::caption(
-                "Rows: green native - blue supported - amber unknown - red incompatible",
-            )
-            .width(Length::Fill),
-            checkbox(highlight_enabled)
-                .label("Highlight rows")
-                .on_toggle(Message::SetCompatHighlight),
-            button(fonts::body("Close")).on_press(Message::CloseValidatorPopup),
+        let footer = column![
+            compat_legend(size.width),
+            row![
+                Space::new().width(Length::Fill),
+                checkbox(highlight_enabled)
+                    .label("Highlight rows")
+                    .on_toggle(Message::SetCompatHighlight),
+                button(fonts::body("Close")).on_press(Message::CloseValidatorPopup),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
         ]
         .spacing(8)
-        .align_y(Alignment::Center);
+        .width(Length::Fill);
 
         let content = column![
             title_row,
@@ -2416,6 +2418,89 @@ fn validator_scrollbar_style(
     style
 }
 
+/// Accent color for a validator verdict. The row tint and the legend
+/// chips both read this, so they can never drift apart.
+fn compat_verdict_accent(verdict: crate::compat::games::Verdict) -> Color {
+    use crate::compat::games::Verdict;
+    match verdict {
+        Verdict::Native => Color::from_rgba(0.24, 0.78, 0.44, 1.0),
+        Verdict::Supported | Verdict::ConvertibleLossless => {
+            Color::from_rgba(0.30, 0.60, 0.95, 1.0)
+        }
+        Verdict::LossyConvertible => Color::from_rgba(0.95, 0.60, 0.20, 1.0),
+        Verdict::Unsupported => Color::from_rgba(0.92, 0.30, 0.30, 1.0),
+        Verdict::Untested => Color::from_rgba(0.95, 0.78, 0.25, 1.0),
+    }
+}
+
+/// Colored icon + label legend for the validator result colors, with a
+/// tooltip per entry. Wraps into multiple rows when the card is narrow.
+fn compat_legend(max_width: f32) -> Element<'static, Message> {
+    use crate::compat::games::Verdict;
+
+    // Icon Text is not Clone in Iced 0.14, so the lookup builds a fresh
+    // glyph per chip instead of storing widgets in the entries list.
+    let icon_for = |verdict: Verdict| -> iced::widget::Text<'static> {
+        match verdict {
+            Verdict::Native => icons::verdict_native().size(15),
+            Verdict::Supported | Verdict::ConvertibleLossless => icons::verdict_convert().size(15),
+            Verdict::LossyConvertible => icons::verdict_lossy().size(15),
+            Verdict::Untested => icons::verdict_unknown().size(15),
+            Verdict::Unsupported => icons::verdict_incompatible().size(15),
+        }
+    };
+
+    let entries: [(Verdict, &'static str, &'static str); 5] = [
+        (
+            Verdict::Native,
+            "native",
+            "Authored by this engine - no action needed.",
+        ),
+        (
+            Verdict::Supported,
+            "supported / convertible",
+            "Loads, but is not the game's data dialect; a lossless rewrite may be offered.",
+        ),
+        (
+            Verdict::LossyConvertible,
+            "lossy convert",
+            "Can be used only after a pixel-changing conversion (compression or quantization).",
+        ),
+        (
+            Verdict::Untested,
+            "unknown",
+            "No evidence either way - not known to be incompatible. Treat with care.",
+        ),
+        (
+            Verdict::Unsupported,
+            "incompatible",
+            "The selected engine cannot consume this format.",
+        ),
+    ];
+
+    // One row at full width; otherwise two-per-row so the footer never
+    // clips the last entries.
+    let per_row = if max_width >= 640.0 { 5 } else { 2 };
+    let mut rows = Column::new().spacing(6).width(Length::Fill);
+    for chunk in entries.chunks(per_row) {
+        let mut line = Row::new().spacing(14);
+        for (verdict, label, tip) in chunk {
+            let accent = compat_verdict_accent(*verdict);
+            let chip: Element<'static, Message> = w::styled_tooltip(
+                row![icon_for(*verdict).color(accent), fonts::caption(*label)]
+                    .spacing(4)
+                    .align_y(Alignment::Center),
+                fonts::caption(*tip),
+                tooltip::Position::Top,
+            )
+            .into();
+            line = line.push(chip);
+        }
+        rows = rows.push(line);
+    }
+    rows.into()
+}
+
 /// Row tint for a validator verdict: green = native, blue = supported /
 /// losslessly convertible, amber = unknown, red = incompatible. The
 /// low-alpha background plus a matching border reads as a subtle glow
@@ -2423,39 +2508,25 @@ fn validator_scrollbar_style(
 fn compat_row_style(
     verdict: crate::compat::games::Verdict,
 ) -> iced::widget::container::Style {
-    use crate::compat::games::Verdict;
-    let (background, accent) = match verdict {
-        Verdict::Native => (
-            Color::from_rgba(0.24, 0.78, 0.44, 0.13),
-            Color::from_rgba(0.24, 0.78, 0.44, 0.38),
-        ),
-        Verdict::Supported | Verdict::ConvertibleLossless => (
-            Color::from_rgba(0.30, 0.60, 0.95, 0.12),
-            Color::from_rgba(0.30, 0.60, 0.95, 0.34),
-        ),
-        Verdict::LossyConvertible => (
-            Color::from_rgba(0.95, 0.60, 0.20, 0.13),
-            Color::from_rgba(0.95, 0.60, 0.20, 0.36),
-        ),
-        Verdict::Unsupported => (
-            Color::from_rgba(0.92, 0.30, 0.30, 0.14),
-            Color::from_rgba(0.92, 0.30, 0.30, 0.42),
-        ),
-        Verdict::Untested => (
-            Color::from_rgba(0.95, 0.78, 0.25, 0.10),
-            Color::from_rgba(0.95, 0.78, 0.25, 0.30),
-        ),
+    let accent = compat_verdict_accent(verdict);
+    let background = Color {
+        a: 0.13,
+        ..accent
+    };
+    let border = Color {
+        a: 0.38,
+        ..accent
     };
     iced::widget::container::Style {
         background: Some(iced::Background::Color(background)),
         border: Border {
-            color: accent,
+            color: border,
             width: 1.0,
             radius: 3.0.into(),
         },
         shadow: iced::Shadow {
             color: Color {
-                a: accent.a * 0.35,
+                a: accent.a * 0.13,
                 ..accent
             },
             offset: iced::Vector::new(0.0, 0.0),
