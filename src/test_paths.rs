@@ -34,3 +34,10 @@ pub fn bully_nif_tools() -> Option<PathBuf> {
 pub fn gta3_exports() -> Option<PathBuf> {
     root("IMGEDITOR_GTA3_EXPORTS")
 }
+
+/// Root directory holding the retail corpora (`Gta_3_img\models`,
+/// `Grand Theft Auto Vice City\models`, `GTA San Andreas\models`, and
+/// the Bully install). Tests walk the known archive layout under it.
+pub fn corpus_root() -> Option<PathBuf> {
+    root("IMGEDITOR_CORPUS_ROOT")
+}

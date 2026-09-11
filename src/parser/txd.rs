@@ -252,6 +252,81 @@ pub fn parse_txd(bytes: &[u8]) -> Result<TxdFile, String> {
     })
 }
 
+/// Where a texture's bytes live in the original file, for surgical
+/// replacement that preserves extension chunks, version words, and IMG
+/// sector padding.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum NativeSplice {
+    /// The native has a nested STRUCT section; `start..end` is that
+    /// section including its 12-byte header. `native_header` is the
+    /// enclosing native section's header position (its size field needs
+    /// patching too).
+    Struct {
+        start: usize,
+        end: usize,
+        version: u32,
+        native_header: usize,
+    },
+    /// Old-tool native without a STRUCT wrapper: `start..end` covers the
+    /// whole native section including its header.
+    Native { start: usize, end: usize },
+}
+
+/// Byte ranges for every texture the parser would produce, in the same
+/// order (skipped/broken natives are not included, matching
+/// [`parse_txd`]).
+pub(crate) fn native_splices(bytes: &[u8]) -> Vec<NativeSplice> {
+    let mut out = Vec::new();
+    let Ok(top) = read_section(bytes, 0, bytes.len()) else {
+        return out;
+    };
+    if top.kind != rw::TEXTURE_DICTIONARY {
+        return out;
+    }
+    let mut position = top.start;
+    while position < top.end {
+        if top.end - position < 12 {
+            break;
+        }
+        let Ok(child) = read_section(bytes, position, top.end) else {
+            break;
+        };
+        if child.kind == rw::TEXTURE_NATIVE {
+            let body = &bytes[child.start..child.end];
+            if out.len() < MAX_TEXTURES as usize && parse_native_texture(body).is_ok() {
+                out.push(splice_for_native(bytes, &child, position));
+            }
+        }
+        position = child.end;
+    }
+    out
+}
+
+fn splice_for_native(bytes: &[u8], native: &Section, native_header: usize) -> NativeSplice {
+    let mut position = native.start;
+    while position < native.end {
+        if native.end - position < 12 {
+            break;
+        }
+        let Ok(child) = read_section(bytes, position, native.end) else {
+            break;
+        };
+        if child.kind == rw::STRUCT {
+            return NativeSplice::Struct {
+                start: position,
+                end: child.end,
+                version: child.version,
+                native_header,
+            };
+        }
+        position = child.end;
+    }
+    NativeSplice::Native {
+        start: native_header,
+        end: native.end,
+    }
+}
+
 /// Parse the legacy platform-independent RenderWare texture dictionary.
 ///
 /// Unlike a normal TXD, the `0x23` root stores the texture count/device pair

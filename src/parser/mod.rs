@@ -15,6 +15,7 @@ pub mod pc_v1;
 pub mod pc_v2;
 pub mod texture_decoder;
 pub mod txd;
+pub mod txd_writer;
 pub mod unknown;
 pub mod xbox360;
 
