@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{ImgVersion, import_entry};
@@ -79,7 +79,7 @@ impl Editor {
     }
 
     pub fn add_opened_archive(&mut self, mut archive: ArchiveInfo) -> bool {
-        if self.archive_exists_by_name(&archive.file_name) {
+        if self.archive_already_open(&archive.file_name, archive.path.as_deref()) {
             return false;
         }
 
@@ -106,7 +106,7 @@ impl Editor {
             .unwrap_or("Untitled")
             .to_string();
 
-        if self.archive_exists_by_name(&file_name) {
+        if self.archive_already_open(&file_name, Some(&path)) {
             return Ok(());
         }
 
@@ -371,10 +371,25 @@ impl Editor {
             .any(|archive| archive.progress.in_use())
     }
 
-    fn archive_exists_by_name(&self, name: &str) -> bool {
-        self.archives
-            .iter()
-            .any(|archive| archive.file_name == name)
+    /// True when this archive is already open: by canonical path when
+    /// both carry one (III, VC and SA all ship `gta3.img`, so the name
+    /// alone cannot be the identity), otherwise by name for untitled
+    /// archives.
+    fn archive_already_open(&self, name: &str, path: Option<&Path>) -> bool {
+        self.archives.iter().any(|archive| match (archive.path.as_deref(), path) {
+            (Some(open), Some(candidate)) => same_file(open, candidate),
+            _ => archive.file_name == name,
+        })
+    }
+}
+
+/// Best-effort identity for two archive paths: canonicalize both and
+/// compare, falling back to a literal comparison when canonicalization
+/// fails (e.g. a file vanished between open and now).
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
     }
 }
 
@@ -399,6 +414,43 @@ fn unique_archive_name(archives: &[ArchiveInfo], base: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_named_archives_from_different_paths_can_coexist() {
+        let dir = tempfile::tempdir().unwrap();
+        let iii_dir = dir.path().join("III");
+        let sa_dir = dir.path().join("SA");
+        std::fs::create_dir(&iii_dir).unwrap();
+        std::fs::create_dir(&sa_dir).unwrap();
+        let iii = iii_dir.join("gta3.img");
+        let sa = sa_dir.join("gta3.img");
+        std::fs::write(&iii, b"a").unwrap();
+        std::fs::write(&sa, b"b").unwrap();
+
+        let mut editor = Editor::new();
+        let mut first = ArchiveInfo::new("gta3", false, ImgVersion::One);
+        first.path = Some(iii.clone());
+        assert!(editor.add_opened_archive(first));
+
+        // The second gta3.img lives elsewhere: it must open too.
+        let mut second = ArchiveInfo::new("gta3", false, ImgVersion::Two);
+        second.path = Some(sa.clone());
+        assert!(
+            editor.add_opened_archive(second),
+            "a different path with the same file name is not a duplicate"
+        );
+        assert_eq!(editor.archives.len(), 2);
+
+        // Re-opening the same file is still refused.
+        let mut again = ArchiveInfo::new("gta3", false, ImgVersion::One);
+        again.path = Some(iii);
+        assert!(!editor.add_opened_archive(again));
+
+        // Untitled archives keep name-based uniqueness.
+        let mut untitled = ArchiveInfo::new("gta3", true, ImgVersion::One);
+        untitled.path = None;
+        assert!(!editor.add_opened_archive(untitled));
+    }
 
     #[test]
     fn new_archive_creates_untitled_tab() {

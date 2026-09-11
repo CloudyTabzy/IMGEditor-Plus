@@ -2018,12 +2018,16 @@ impl App {
             Message::ArchiveOpenCompleted { path, outcome } => {
                 match outcome {
                     OpenArchiveOutcome::Opened(archive) => {
-                        let _ = self.editor.add_opened_archive(*archive);
-                        if let Some(opened) = self.editor.archives_mut().last_mut() {
-                            Self::adopt_target(&self.config, opened);
+                        if self.editor.add_opened_archive(*archive) {
+                            if let Some(opened) = self.editor.archives_mut().last_mut() {
+                                Self::adopt_target(&self.config, opened);
+                            }
+                            self.config.recent_files.touch(&path);
+                            self.save_config();
+                        } else {
+                            self.toast =
+                                Some(format!("Already open: {}", path.display()));
                         }
-                        self.config.recent_files.touch(&path);
-                        self.save_config();
                     }
                     OpenArchiveOutcome::Unsupported => {
                         self.show_unsupported = Some(path);

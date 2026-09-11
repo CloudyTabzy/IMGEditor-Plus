@@ -1577,6 +1577,33 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
     .into()
 }
 
+/// Tab label for an archive. When another open archive shares the same
+/// file name (III, VC and SA all ship `gta3.img`), the parent folder is
+/// appended so the tabs stay distinguishable.
+fn archive_tab_label(
+    archive: &crate::archive::ArchiveInfo,
+    archives: &[crate::archive::ArchiveInfo],
+) -> String {
+    let duplicated = archives
+        .iter()
+        .filter(|other| other.file_name == archive.file_name)
+        .count()
+        > 1;
+    if !duplicated {
+        return archive.file_name.clone();
+    }
+    let parent = archive
+        .path
+        .as_ref()
+        .and_then(|path| path.parent())
+        .and_then(|parent| parent.file_name())
+        .map(|name| name.to_string_lossy().to_string());
+    match parent {
+        Some(folder) => format!("{} · {folder}", archive.file_name),
+        None => archive.file_name.clone(),
+    }
+}
+
 pub fn build(app: &App) -> Element<'_, Message> {
     let design = app.design();
     let tab_surface = design.chrome();
@@ -1592,10 +1619,11 @@ pub fn build(app: &App) -> Element<'_, Message> {
         let mut tab_rows = Vec::new();
         for (index, archive) in app.editor.archives().iter().enumerate() {
             let is_selected = index == selected;
+            let display_name = archive_tab_label(archive, app.editor.archives());
             let label = if archive.dirty {
-                format!("● {}", archive.file_name)
+                format!("● {display_name}")
             } else {
-                archive.file_name.clone()
+                display_name
             };
             let tab_pulse = app.archive_tab_selection_pulse(index);
             let tab = button(fonts::body(label))
@@ -3160,6 +3188,27 @@ fn empty_state() -> Element<'static, Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_labels_disambiguate_duplicate_names() {
+        use crate::parser::ImgVersion;
+
+        let mut iii = crate::archive::ArchiveInfo::new("gta3", false, ImgVersion::One);
+        iii.path = Some(std::path::PathBuf::from("C:/games/III/gta3.img"));
+        let mut sa = crate::archive::ArchiveInfo::new("gta3", false, ImgVersion::Two);
+        sa.path = Some(std::path::PathBuf::from("C:/games/SA/gta3.img"));
+        let mut player = crate::archive::ArchiveInfo::new("player", false, ImgVersion::Two);
+        player.path = Some(std::path::PathBuf::from("C:/games/SA/player.img"));
+
+        let archives = vec![iii, sa, player];
+        assert_eq!(archive_tab_label(&archives[0], &archives), "gta3 · III");
+        assert_eq!(archive_tab_label(&archives[1], &archives), "gta3 · SA");
+        assert_eq!(
+            archive_tab_label(&archives[2], &archives),
+            "player",
+            "unique names stay bare"
+        );
+    }
 
     #[test]
     fn context_menu_stays_below_when_the_viewport_has_room() {
