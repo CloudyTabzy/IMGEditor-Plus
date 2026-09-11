@@ -2287,6 +2287,10 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
         "Replacing '{}' - source: {} ({}x{})",
         state.texture_name, state.source_name, state.plan.0.width, state.plan.0.height
     )));
+    body = body.push(fonts::caption(format!(
+        "Target: {} · {}",
+        state.target.display, state.archive_name
+    )));
     body = body.push(
         row![
             fonts::header("Format:"),
@@ -2347,6 +2351,7 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
         "New TXD from {} ({}x{})",
         state.source_name, state.plan.0.width, state.plan.0.height
     )));
+    body = body.push(fonts::caption(format!("Target: {}", state.target.display)));
     body = body.push(
         row![
             fonts::header("Name:"),

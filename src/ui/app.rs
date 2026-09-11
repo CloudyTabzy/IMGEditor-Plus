@@ -1712,6 +1712,43 @@ impl App {
             || self.validator_popup_open
     }
 
+    /// Open the validator popup for the selected archive, probing its
+    /// content for a target suggestion the first time. Shared by the
+    /// toolbar button and by converter actions that need the user to
+    /// pick (or fix) the archive's game target.
+    fn open_validator_popup(&mut self) -> Task<Message> {
+        let Some(archive_index) = self.editor.selected_archive() else {
+            self.toast = Some("Open an archive first to validate it.".into());
+            return Task::none();
+        };
+        if self.editor.archives()[archive_index].progress.in_use() {
+            self.toast = Some("Another task is still running.".into());
+            return Task::none();
+        }
+        self.validator_popup_open = true;
+        // Probe the content once so the picker can suggest a game.
+        if self.editor.archives()[archive_index].target_hint.is_none() {
+            let snapshot = self.editor.archives()[archive_index].clone();
+            return Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        crate::compat::hint::probe_target(
+                            &snapshot,
+                            crate::compat::hint::PROBE_SAMPLE_LIMIT,
+                        )
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                move |hint| Message::TargetProbed {
+                    archive_index,
+                    hint,
+                },
+            );
+        }
+        Task::none()
+    }
+
     fn resolve_shortcut_focus_check(&mut self) -> Task<Message> {
         let (Some(search_focused), Some(rename_focused)) =
             (self.pending_search_focus, self.pending_rename_focus)
@@ -2654,12 +2691,17 @@ impl App {
                     return Task::none();
                 }
                 let Some(target_id) = archive.target_game else {
-                    self.toast = Some("Set a game target first (Validate textures).".into());
-                    return Task::none();
+                    self.toast = Some(
+                        "No target set for this archive. Pick the game it is for in Validate textures."
+                            .into(),
+                    );
+                    return self.open_validator_popup();
                 };
                 if let Err(error) = crate::compat::convert::writable_target(target_id) {
-                    self.toast = Some(error);
-                    return Task::none();
+                    self.toast = Some(format!(
+                        "{error} Pick the game this archive is for in Validate textures."
+                    ));
+                    return self.open_validator_popup();
                 }
                 self.replace_request = Some((archive_index, entry_index));
                 self.replace_attempt = self.replace_attempt.wrapping_add(1);
@@ -2957,12 +2999,17 @@ impl App {
                     return Task::none();
                 };
                 let Some(target_id) = archive.target_game else {
-                    self.toast = Some("Set a game target first (Validate textures).".into());
-                    return Task::none();
+                    self.toast = Some(
+                        "No target set for this archive. Pick the game it is for in Validate textures."
+                            .into(),
+                    );
+                    return self.open_validator_popup();
                 };
                 if let Err(error) = crate::compat::convert::writable_target(target_id) {
-                    self.toast = Some(error);
-                    return Task::none();
+                    self.toast = Some(format!(
+                        "{error} Pick the game this archive is for in Validate textures."
+                    ));
+                    return self.open_validator_popup();
                 }
                 if self.new_txd_picker_open {
                     return Task::none();
@@ -4682,38 +4729,7 @@ impl App {
                 Task::none()
             }
 
-            Message::OpenValidatorPopup => {
-                let Some(archive_index) = self.editor.selected_archive() else {
-                    self.toast = Some("Open an archive first to validate it.".into());
-                    return Task::none();
-                };
-                if self.editor.archives()[archive_index].progress.in_use() {
-                    self.toast = Some("Another task is still running.".into());
-                    return Task::none();
-                }
-                self.validator_popup_open = true;
-                // Probe the content once so the picker can suggest a game.
-                if self.editor.archives()[archive_index].target_hint.is_none() {
-                    let snapshot = self.editor.archives()[archive_index].clone();
-                    return Task::perform(
-                        async move {
-                            tokio::task::spawn_blocking(move || {
-                                crate::compat::hint::probe_target(
-                                    &snapshot,
-                                    crate::compat::hint::PROBE_SAMPLE_LIMIT,
-                                )
-                            })
-                            .await
-                            .unwrap_or(None)
-                        },
-                        move |hint| Message::TargetProbed {
-                            archive_index,
-                            hint,
-                        },
-                    );
-                }
-                Task::none()
-            }
+            Message::OpenValidatorPopup => self.open_validator_popup(),
             Message::TargetProbed { archive_index, hint } => {
                 if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
                     archive.target_hint = hint;
@@ -7611,6 +7627,43 @@ mod tests {
             app.pending_new_txd.is_some(),
             "a rejected name must keep the dialog open for a fix"
         );
+    }
+
+    #[test]
+    fn converter_actions_without_a_usable_target_open_the_validator() {
+        let mut app = test_app_with_entries();
+
+        // No target: the import action explains and opens the picker.
+        let _ = app.update(Message::ImportImageAsTxdRequested);
+        assert!(app.validator_popup_open);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("No target")),
+            "{:?}",
+            app.toast
+        );
+
+        // A stale/wrong target (Bully: no RenderWare writing) must not
+        // dead-end either.
+        app.validator_popup_open = false;
+        app.editor.archives_mut()[0].target_game = Some("bully");
+        let _ = app.update(Message::ImportImageAsTxdRequested);
+        assert!(app.validator_popup_open);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("Bully") && toast.contains("Validate")),
+            "{:?}",
+            app.toast
+        );
+
+        // The replace action routes the same way once a TXD is selected.
+        app.validator_popup_open = false;
+        app.editor.archives_mut()[0].target_game = None;
+        app.editor.select_entry(1, false, false);
+        let _ = app.update(Message::TextureReplaceRequested);
+        assert!(app.validator_popup_open);
     }
 
     #[test]
