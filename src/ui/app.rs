@@ -57,6 +57,9 @@ pub const ANIM_ARCHIVE_TAB_FEEDBACK: crate::ui::animator::AnimationId = 4;
 pub const ANIM_INSPECTOR_TAB_FEEDBACK: crate::ui::animator::AnimationId = 5;
 pub const ANIM_CLICK_RIPPLE: crate::ui::animator::AnimationId = 6;
 pub const ANIM_TOAST_REVEAL: crate::ui::animator::AnimationId = 7;
+/// Quit fade: covers the window as it closes so no teardown frame
+/// (swapchain/DWM artifacts) can flash at the user.
+pub const ANIM_QUIT_FADE: crate::ui::animator::AnimationId = 8;
 
 #[derive(Debug, Clone)]
 pub enum OpenArchiveOutcome {
@@ -393,6 +396,8 @@ pub enum Message {
     CloseGuardDiscard,
     /// Cancel from the unsaved-changes guard.
     CloseGuardCancel,
+    /// The quit fade finished (or its deadline passed); close the window.
+    QuitFadeDone,
     /// Content probe finished; the hint is advisory only.
     TargetProbed {
         archive_index: usize,
@@ -709,6 +714,8 @@ pub struct App {
     /// After a successful save of this archive index, close it (the
     /// unsaved-changes guard's "Save" path).
     pub close_after_save: Option<usize>,
+    /// Window being faded out before closing.
+    pub quitting: Option<iced::window::Id>,
     /// Working copy of the sort chain while the Sort Manager
     /// dialog is open. Edits land here first; "Apply" commits the
     /// draft to the live archive + config. `None` when the dialog
@@ -920,6 +927,7 @@ impl App {
             pending_save: None,
             pending_close: None,
             close_after_save: None,
+            quitting: None,
             panes,
             context_menu: None,
             inspected_entry: None,
@@ -2406,7 +2414,33 @@ impl App {
                 };
                 match pending {
                     PendingClose::Archive(index) => self.close_archive_at(index),
-                    PendingClose::Window(window) => iced::window::close::<Message>(window).map(|_| Message::Noop),
+                    PendingClose::Window(window) => {
+                        // Fade to black before closing: the last visible
+                        // frame must be dark, so swapchain/DWM teardown
+                        // cannot flash the (light) desktop buffer at
+                        // low-light users. The deadline guarantees the
+                        // close even if the fade is interrupted.
+                        self.quitting = Some(window);
+                        self.animator.animate_from_current(
+                            ANIM_QUIT_FADE,
+                            1.0,
+                            Duration::from_millis(150),
+                            crate::ui::easing::Easing::CubicOut,
+                        );
+                        Task::perform(
+                            async {
+                                tokio::time::sleep(Duration::from_millis(220)).await;
+                            },
+                            |_| Message::QuitFadeDone,
+                        )
+                    }
+                }
+            }
+            Message::QuitFadeDone => {
+                if let Some(window) = self.quitting.take() {
+                    iced::window::close::<Message>(window).map(|_| Message::Noop)
+                } else {
+                    Task::none()
                 }
             }
             Message::CloseGuardCancel => {
@@ -5521,6 +5555,7 @@ mod tests {
             return Vec::new();
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
             .build()
             .unwrap();
         runtime.block_on(async move {
@@ -6362,6 +6397,35 @@ mod tests {
             app.editor.archives().is_empty(),
             "the archive must close after the guard's save"
         );
+    }
+
+    #[test]
+    fn confirmed_quit_fades_out_before_closing_the_window() {
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0].dirty = true;
+        let window = iced::window::Id::unique();
+
+        let _ = app.update(Message::WindowCloseRequested(window));
+        assert!(matches!(app.pending_close, Some(PendingClose::Window(_))));
+
+        // Discard does not close immediately: it starts the fade and
+        // schedules the deadline that finally closes the window.
+        let task = app.update(Message::CloseGuardDiscard);
+        assert!(app.pending_close.is_none());
+        assert_eq!(app.quitting, Some(window), "fade started");
+        assert!(
+            app.animator.is_running(crate::ui::app::ANIM_QUIT_FADE),
+            "the fade animation must drive the overlay"
+        );
+        let messages = drain_task(task);
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::QuitFadeDone)),
+            "the close deadline must fire: {messages:?}"
+        );
+        let _ = app.update(Message::QuitFadeDone);
+        assert!(app.quitting.is_none(), "the window is closed once");
     }
 
     #[test]

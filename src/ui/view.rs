@@ -1985,6 +1985,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_sort_manager(app),
         build_toast_overlay(app),
         build_validator_popup(app),
+        build_quit_fade(app),
     ]
     .into_iter()
     .flatten()
@@ -2466,6 +2467,33 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
                     ..Default::default()
                 }),
         ),
+    )
+}
+
+/// Opaque black layer that fades in just before the window closes.
+/// Teardown can briefly composite whatever the driver/DWM leaves in the
+/// swapchain; ending on black keeps that invisible (and avoids flashing
+/// a light buffer at low-light users). Defaults to opaque once the fade
+/// animation is done or reaped, so the layer never lifts early.
+fn build_quit_fade(app: &App) -> Option<Element<'_, Message>> {
+    if app.quitting.is_none() {
+        return None;
+    }
+    let alpha = app
+        .animator
+        .get_or(crate::ui::app::ANIM_QUIT_FADE, 1.0)
+        .clamp(0.0, 1.0);
+    Some(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.0, 0.0, 0.0, alpha,
+                ))),
+                ..Default::default()
+            })
+            .into(),
     )
 }
 
