@@ -60,6 +60,14 @@ pub const ANIM_TOAST_REVEAL: crate::ui::animator::AnimationId = 7;
 /// Quit fade: covers the window as it closes so no teardown frame
 /// (swapchain/DWM artifacts) can flash at the user.
 pub const ANIM_QUIT_FADE: crate::ui::animator::AnimationId = 8;
+/// Give the native window a short event-loop turn to become hidden before
+/// Iced releases the wgpu surface. Windows can otherwise expose a default
+/// compositor frame while the HWND is being destroyed.
+const QUIT_HIDE_SETTLE: Duration = Duration::from_millis(120);
+/// Keep the exit transition quick while leaving enough time for a final
+/// opaque frame to be presented before the native hide.
+const QUIT_FADE_DURATION: Duration = Duration::from_millis(120);
+const QUIT_FADE_DEADLINE: Duration = Duration::from_millis(180);
 
 #[derive(Debug, Clone)]
 pub enum OpenArchiveOutcome {
@@ -398,6 +406,9 @@ pub enum Message {
     CloseGuardCancel,
     /// The quit fade finished (or its deadline passed); close the window.
     QuitFadeDone,
+    /// The native window has been hidden; it is now safe to release Iced's
+    /// surface and destroy the window.
+    QuitWindowHidden,
     /// Content probe finished; the hint is advisory only.
     TargetProbed {
         archive_index: usize,
@@ -2375,7 +2386,7 @@ impl App {
                     self.pending_close = Some(PendingClose::Window(window));
                     Task::none()
                 } else {
-                    iced::window::close::<Message>(window).map(|_| Message::Noop)
+                    self.hide_window_then_close(window)
                 }
             }
             Message::CloseGuardSave => {
@@ -2424,12 +2435,12 @@ impl App {
                         self.animator.animate_from_current(
                             ANIM_QUIT_FADE,
                             1.0,
-                            Duration::from_millis(150),
+                            QUIT_FADE_DURATION,
                             crate::ui::easing::Easing::CubicOut,
                         );
                         Task::perform(
                             async {
-                                tokio::time::sleep(Duration::from_millis(220)).await;
+                                tokio::time::sleep(QUIT_FADE_DEADLINE).await;
                             },
                             |_| Message::QuitFadeDone,
                         )
@@ -2437,6 +2448,16 @@ impl App {
                 }
             }
             Message::QuitFadeDone => {
+                if let Some(window) = self.quitting {
+                    // Keep `quitting` set until the window is hidden. Clearing
+                    // it here can produce one unmasked frame at the exact
+                    // point where the compositor is being torn down.
+                    self.hide_window_then_close(window)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::QuitWindowHidden => {
                 if let Some(window) = self.quitting.take() {
                     iced::window::close::<Message>(window).map(|_| Message::Noop)
                 } else {
@@ -4921,6 +4942,21 @@ impl App {
             }
         }
     }
+
+    /// Hide the native window before asking Iced to release its compositor.
+    /// `set_mode` is an effect, so chaining the settle delay guarantees that
+    /// the close action cannot race the visibility request.
+    fn hide_window_then_close(&mut self, window: iced::window::Id) -> Task<Message> {
+        self.quitting = Some(window);
+        iced::window::set_mode::<Message>(window, iced::window::Mode::Hidden).chain(
+            Task::perform(
+                async {
+                    tokio::time::sleep(QUIT_HIDE_SETTLE).await;
+                },
+                |_| Message::QuitWindowHidden,
+            ),
+        )
+    }
 }
 
 impl App {
@@ -6424,8 +6460,17 @@ mod tests {
                 .any(|message| matches!(message, Message::QuitFadeDone)),
             "the close deadline must fire: {messages:?}"
         );
-        let _ = app.update(Message::QuitFadeDone);
-        assert!(app.quitting.is_none(), "the window is closed once");
+        // The fade deadline only starts the native hide. The quit state must
+        // remain active until that hide has had time to reach the window.
+        let hide_task = app.update(Message::QuitFadeDone);
+        assert_eq!(app.quitting, Some(window), "fade remains active while hiding");
+        let hidden_messages = drain_task(hide_task);
+        let hidden = hidden_messages
+            .into_iter()
+            .find(|message| matches!(message, Message::QuitWindowHidden))
+            .expect("the hide settle deadline must fire");
+        let _ = app.update(hidden);
+        assert!(app.quitting.is_none(), "the window is closed once hidden");
     }
 
     #[test]
