@@ -1980,6 +1980,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_folder_import(app),
         build_import_preflight(app),
         build_save_report(app),
+        build_unsaved_dialog(app),
         build_update_status(app),
         build_sort_manager(app),
         build_toast_overlay(app),
@@ -2165,6 +2166,73 @@ fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
         "Save check",
         container(body).width(Length::Fixed(480.0)),
     ))
+}
+
+/// Unsaved-changes guard: shown when closing a dirty archive or quitting
+/// with dirty archives open. The files on disk are untouched either way;
+/// the dialog only protects the in-memory edits.
+fn build_unsaved_dialog(app: &App) -> Option<Element<'_, Message>> {
+    let pending = app.pending_close?;
+    match pending {
+        crate::ui::app::PendingClose::Archive(index) => {
+            let archive = app.editor.archives().get(index)?;
+            Some(modal_box(
+                "Unsaved changes",
+                column![
+                    fonts::body(format!(
+                        "'{}' has unsaved changes.",
+                        archive.file_name
+                    )),
+                    fonts::caption(
+                        "Closing without saving discards them; the archive file on disk is untouched."
+                    ),
+                    Space::new().height(Length::Fixed(8.0)),
+                    row![
+                        button(fonts::strong("Save"))
+                            .on_press(Message::CloseGuardSave)
+                            .style(button::primary),
+                        button(fonts::body("Discard")).on_press(Message::CloseGuardDiscard),
+                        button(fonts::body("Cancel")).on_press(Message::CloseGuardCancel),
+                    ]
+                    .spacing(8),
+                ]
+                .spacing(6)
+                .width(Length::Fill),
+            ))
+        }
+        crate::ui::app::PendingClose::Window(_) => {
+            let dirty: Vec<String> = app
+                .editor
+                .archives()
+                .iter()
+                .filter(|archive| archive.dirty)
+                .map(|archive| archive.file_name.clone())
+                .collect();
+            Some(modal_box(
+                "Unsaved changes",
+                column![
+                    fonts::body(format!(
+                        "{} archive(s) have unsaved changes: {}",
+                        dirty.len(),
+                        dirty.join(", ")
+                    )),
+                    fonts::caption(
+                        "Quitting now discards them; the files on disk are untouched."
+                    ),
+                    Space::new().height(Length::Fixed(8.0)),
+                    row![
+                        button(fonts::strong("Discard changes and quit"))
+                            .on_press(Message::CloseGuardDiscard)
+                            .style(button::primary),
+                        button(fonts::body("Cancel")).on_press(Message::CloseGuardCancel),
+                    ]
+                    .spacing(8),
+                ]
+                .spacing(6)
+                .width(Length::Fill),
+            ))
+        }
+    }
 }
 
 /// Pre-flight import dialog: lists the files whose formats the target

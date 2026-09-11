@@ -385,6 +385,14 @@ pub enum Message {
     SaveCheckConfirmed,
     /// User cancelled at the pre-save report.
     SaveCheckCancelled,
+    /// Window close button pressed; may open the unsaved-changes guard.
+    WindowCloseRequested(iced::window::Id),
+    /// Save from the unsaved-changes guard (then close).
+    CloseGuardSave,
+    /// Discard from the unsaved-changes guard.
+    CloseGuardDiscard,
+    /// Cancel from the unsaved-changes guard.
+    CloseGuardCancel,
     /// Content probe finished; the hint is advisory only.
     TargetProbed {
         archive_index: usize,
@@ -649,6 +657,15 @@ pub struct PendingSave {
     pub issue: Option<crate::compat::save::SaveIssue>,
 }
 
+/// Close or quit waiting on the unsaved-changes guard.
+#[derive(Debug, Clone, Copy)]
+pub enum PendingClose {
+    /// Closing one archive tab (dirty).
+    Archive(usize),
+    /// The window close button, with at least one dirty archive open.
+    Window(iced::window::Id),
+}
+
 pub struct App {
     pub editor: Editor,
     pub config: Config,
@@ -687,6 +704,11 @@ pub struct App {
     /// Save waiting on the pre-save report dialog (or on a validation
     /// scan that has to finish first).
     pub pending_save: Option<PendingSave>,
+    /// Close/quit waiting on the unsaved-changes guard.
+    pub pending_close: Option<PendingClose>,
+    /// After a successful save of this archive index, close it (the
+    /// unsaved-changes guard's "Save" path).
+    pub close_after_save: Option<usize>,
     /// Working copy of the sort chain while the Sort Manager
     /// dialog is open. Edits land here first; "Apply" commits the
     /// draft to the live archive + config. `None` when the dialog
@@ -896,6 +918,8 @@ impl App {
             pending_folder_import: None,
             pending_import: None,
             pending_save: None,
+            pending_close: None,
+            close_after_save: None,
             panes,
             context_menu: None,
             inspected_entry: None,
@@ -1371,6 +1395,7 @@ impl App {
             || self.pending_folder_import.is_some()
             || self.pending_import.is_some()
             || self.pending_save.is_some()
+            || self.pending_close.is_some()
             || self.show_update_status.is_some()
             || self.show_sort_manager
             || self.validator_popup_open
@@ -1918,6 +1943,39 @@ impl App {
         }
     }
 
+    /// Close an archive tab, guarded: a dirty archive opens the
+    /// unsaved-changes dialog instead of dropping the edits silently.
+    fn request_archive_close(&mut self, index: usize) -> Task<Message> {
+        let Some(archive) = self.editor.archives().get(index) else {
+            return Task::none();
+        };
+        if archive.dirty {
+            self.pending_close = Some(PendingClose::Archive(index));
+            return Task::none();
+        }
+        self.close_archive_at(index)
+    }
+
+    /// Actually close the archive and clean up everything keyed to it.
+    fn close_archive_at(&mut self, index: usize) -> Task<Message> {
+        let closing = self
+            .editor
+            .archives()
+            .get(index)
+            .map(|archive| (archive.file_name.clone(), archive.generation()));
+        let in_flight = self.viewer_load.as_ref().map(|load| load.target);
+        self.editor.close_archive(index);
+        self.active_viewer_entry = None;
+        self.clear_viewer_load();
+        self.viewer3d_handle.clear();
+        if let Some((name, generation)) = closing {
+            self.drop_scene_cache_for_archive(&name);
+            self.drop_in_flight_placeholder(&name, generation, in_flight, index);
+        }
+        let task = self.refresh_inspection();
+        Task::batch(vec![task, Task::none()])
+    }
+
     /// Route a save through the pre-save check: silent when the stored
     /// report is clean (or no target is set), a review dialog when the
     /// target or consistency has issues, and a validation scan first
@@ -2199,6 +2257,9 @@ impl App {
             }
             Message::SaveCheckCancelled => {
                 self.pending_save = None;
+                // A guard-initiated save that got cancelled cancels the
+                // whole close request.
+                self.close_after_save = None;
                 self.toast = Some("Save cancelled.".into());
                 Task::none()
             }
@@ -2211,8 +2272,15 @@ impl App {
                             Self::adopt_target(&self.config, archive);
                         }
                         self.toast = Some("Archive saved.".into());
+                        // The unsaved-changes guard may have saved in
+                        // order to close: finish the close now.
+                        if self.close_after_save == Some(index) {
+                            self.close_after_save = None;
+                            return self.close_archive_at(index);
+                        }
                     }
                     Err(err) => {
+                        self.close_after_save = None;
                         self.toast = Some(format!("Save failed: {err}"));
                     }
                 };
@@ -2288,39 +2356,63 @@ impl App {
             | Message::PackCompleted { .. } => Task::none(),
 
             Message::CloseSelectedArchive => {
-                let closed_index = self.editor.selected_archive();
-                let closing = closed_index
-                    .and_then(|index| self.editor.archives().get(index))
-                    .map(|archive| (archive.file_name.clone(), archive.generation()));
-                let in_flight = self.viewer_load.as_ref().map(|load| load.target);
-                self.editor.close_selected_archive();
-                self.active_viewer_entry = None;
-                self.clear_viewer_load();
-                self.viewer3d_handle.clear();
-                if let (Some(closed_index), Some((name, generation))) = (closed_index, closing) {
-                    self.drop_scene_cache_for_archive(&name);
-                    self.drop_in_flight_placeholder(&name, generation, in_flight, closed_index);
-                }
-                let task = self.refresh_inspection();
-                Task::batch(vec![task, Task::none()])
+                let Some(index) = self.editor.selected_archive() else {
+                    return Task::none();
+                };
+                self.request_archive_close(index)
             }
-            Message::CloseArchiveTab(index) => {
-                let closing = self
-                    .editor
-                    .archives()
-                    .get(index)
-                    .map(|archive| (archive.file_name.clone(), archive.generation()));
-                let in_flight = self.viewer_load.as_ref().map(|load| load.target);
-                self.editor.close_archive(index);
-                self.active_viewer_entry = None;
-                self.clear_viewer_load();
-                self.viewer3d_handle.clear();
-                if let Some((name, generation)) = closing {
-                    self.drop_scene_cache_for_archive(&name);
-                    self.drop_in_flight_placeholder(&name, generation, in_flight, index);
+            Message::CloseArchiveTab(index) => self.request_archive_close(index),
+            Message::WindowCloseRequested(window) => {
+                if self.editor.archives().iter().any(|archive| archive.dirty) {
+                    self.pending_close = Some(PendingClose::Window(window));
+                    Task::none()
+                } else {
+                    iced::window::close::<Message>(window).map(|_| Message::Noop)
                 }
-                let task = self.refresh_inspection();
-                Task::batch(vec![task, Task::none()])
+            }
+            Message::CloseGuardSave => {
+                let Some(pending) = self.pending_close else {
+                    return Task::none();
+                };
+                match pending {
+                    PendingClose::Archive(index) => {
+                        let Some(archive) = self.editor.archives().get(index).cloned() else {
+                            self.pending_close = None;
+                            return Task::none();
+                        };
+                        self.pending_close = None;
+                        self.close_after_save = Some(index);
+                        // Route through the normal save (and its pre-save
+                        // report when one is needed).
+                        let Some(path) = archive.path.clone() else {
+                            return Task::done(Message::SaveArchiveAs);
+                        };
+                        if !path.exists() {
+                            return Task::done(Message::SaveArchiveAs);
+                        }
+                        let version = archive.version;
+                        self.begin_save(archive, path, version, false)
+                    }
+                    PendingClose::Window(_) => {
+                        // Quitting saves nothing by itself; the dialog
+                        // only offers discard for the whole window.
+                        Task::none()
+                    }
+                }
+            }
+            Message::CloseGuardDiscard => {
+                let Some(pending) = self.pending_close.take() else {
+                    return Task::none();
+                };
+                match pending {
+                    PendingClose::Archive(index) => self.close_archive_at(index),
+                    PendingClose::Window(window) => iced::window::close::<Message>(window).map(|_| Message::Noop),
+                }
+            }
+            Message::CloseGuardCancel => {
+                self.pending_close = None;
+                self.close_after_save = None;
+                Task::none()
             }
             Message::SelectArchiveTab(index) => {
                 self.start_archive_tab_feedback(index);
@@ -4857,8 +4949,9 @@ impl App {
 
         let debounce = iced::time::every(Duration::from_millis(150)).map(|_| Message::DebounceTick);
 
-        let window = iced::window::events().map(|(_id, event)| match event {
+        let window = iced::window::events().map(|(id, event)| match event {
             iced::window::Event::FileDropped(path) => Message::FilesDropped(path),
+            iced::window::Event::CloseRequested => Message::WindowCloseRequested(id),
             _ => Message::Noop,
         });
 
@@ -5350,6 +5443,10 @@ pub fn run_app(config: Config) -> iced::Result {
     })
     .window(iced::window::Settings {
         icon: window_icon(),
+        // The close button must not quit on its own: dirty archives get
+        // an "unsaved changes" confirmation, and only then do we close
+        // the window ourselves.
+        exit_on_close_request: false,
         ..iced::window::Settings::default()
     })
     .default_font(crate::ui::fonts::INTER)
@@ -6150,6 +6247,101 @@ mod tests {
         assert!(
             !app.editor.archives()[0].progress.in_use(),
             "the progress slot must be released after a save"
+        );
+    }
+
+    #[test]
+    fn closing_a_dirty_archive_asks_before_discarding() {
+        let mut app = test_app_with_entries();
+
+        // Dirty: guarded.
+        app.editor.archives_mut()[0].dirty = true;
+        let _ = app.update(Message::CloseArchiveTab(0));
+        assert!(matches!(
+            app.pending_close,
+            Some(PendingClose::Archive(0))
+        ));
+        assert!(app.modal_open());
+        assert_eq!(app.editor.archives().len(), 1, "still open while asking");
+
+        // Cancel keeps it open.
+        let _ = app.update(Message::CloseGuardCancel);
+        assert!(app.pending_close.is_none());
+        assert_eq!(app.editor.archives().len(), 1);
+
+        // Discard closes it.
+        let _ = app.update(Message::CloseArchiveTab(0));
+        let _ = app.update(Message::CloseGuardDiscard);
+        assert!(app.pending_close.is_none());
+        assert!(app.editor.archives().is_empty());
+
+        // Clean tabs close without asking.
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::CloseSelectedArchive);
+        assert!(app.pending_close.is_none());
+        assert!(app.editor.archives().is_empty());
+    }
+
+    #[test]
+    fn quitting_with_dirty_archives_asks_before_closing_the_window() {
+        let mut app = test_app_with_entries();
+        let window = iced::window::Id::unique();
+
+        // Clean: the close request passes straight through.
+        let _ = app.update(Message::WindowCloseRequested(window));
+        assert!(app.pending_close.is_none());
+
+        // Dirty: guarded, and cancelling keeps the window.
+        app.editor.archives_mut()[0].dirty = true;
+        let _ = app.update(Message::WindowCloseRequested(window));
+        assert!(matches!(
+            app.pending_close,
+            Some(PendingClose::Window(_))
+        ));
+        let _ = app.update(Message::CloseGuardCancel);
+        assert!(app.pending_close.is_none());
+        assert_eq!(app.editor.archives().len(), 1);
+    }
+
+    #[test]
+    fn guard_save_closes_the_archive_after_a_successful_save() {
+        use crate::compat::scan::ScanReport;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("guard.img");
+        let mut img: Vec<u8> = Vec::new();
+        img.extend_from_slice(b"VER2");
+        img.extend_from_slice(&0_u32.to_le_bytes());
+        img.resize(2048, 0);
+        std::fs::write(&path, &img).unwrap();
+
+        let mut app = test_app();
+        let _ = app.editor.add_opened_archive(ArchiveInfo::open(&path).unwrap());
+        {
+            let archive = &mut app.editor.archives_mut()[0];
+            archive.dirty = true;
+            archive.target_game = Some("sa");
+            let mut report = ScanReport::default();
+            report.verdicts.entry("sa").or_default().insert("native", 1);
+            report.textures = 1;
+            archive.compat_report = Some(report);
+        }
+
+        let _ = app.update(Message::CloseArchiveTab(0));
+        let task = app.update(Message::CloseGuardSave);
+        assert_eq!(app.close_after_save, Some(0));
+        let messages = drain_task(task);
+        let saved = messages
+            .iter()
+            .find(|message| matches!(message, Message::SaveCompleted { .. }))
+            .cloned()
+            .expect("save must complete");
+        // `Save` on a clean report saves silently and then closes.
+        let _ = app.update(saved);
+        assert!(app.close_after_save.is_none());
+        assert!(
+            app.editor.archives().is_empty(),
+            "the archive must close after the guard's save"
         );
     }
 
