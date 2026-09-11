@@ -1,5 +1,6 @@
 # Agent-only local notes (not for repo)
 AGENTS.md
+CHECKPOINT.md
 
 # Rust build artifacts
 /target/

@@ -5,6 +5,12 @@ Checked: 2026-09-10
 Scope: PC IMG v1/v2 and the Bully Xbox 360 big-endian IMG v1 variant; IMG v3
 and RPF are intentionally out of scope.
 
+**Update (2026-09-12, v4.5.0):** this baseline has since been checked against
+retail corpora for all four targets (compatibility engine Phase 0): every scan
+returned zero parse failures and zero header anomalies, and each retail archive
+validates 100% native against its own target. The remaining parser-hardening
+follow-ups are tracked in `TODO.md`.
+
 ## Why this document exists
 
 IMG Editor Plus was derived from the original C++ IMG Editor, and its parser has

@@ -1,11 +1,12 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v4.1.0** (search prediction, themed UI refinement, and continued archive/3D viewer improvements).
+Last shipped: **v4.5.0** (Asset Compatibility Engine: retail-verified validator, texture
+converter, and save-side repair).
 
-Next phase: **validating and hardening GTA III/VC/SA IMG and RenderWare support** before
-considering other container families.
+Next phase: **DFF/NIF model profiles (Phase D)** plus the remaining parser-hardening
+items below; see `CHECKPOINT.md` (local) for the full handoff.
 
-On master (post-v3.16.0, unreleased):
+Shipped in v4.5.0 (previously listed here as unreleased):
 
 - Byte-budgeted `quick_cache` LRU for decoded 3D scenes (256 MiB desktop / 64 MiB mobile, keyed by `(archive, generation, entry)`) and texture previews (128 MiB / 32 MiB, keyed by entry index); `ArchiveInfo::generation` invalidates both on entry mutations. `Arc<Scene>` / `Arc<Vec<DecodedTexture>>` values are shared zero-copy with the viewer handle and per-frame lookups.
 - Memoized `IdeMap` per game root so only the first 3D load per root walks the directory.
@@ -42,12 +43,12 @@ source-path metadata.
 
 ---
 
-## 2. GTA III/VC/SA archive hardening (next major phase)
+## 2. GTA III/VC/SA archive hardening (continuing)
 
-The independent Rust `gta-img` audit
-confirmed the v1/v2 wire layouts and identified the following safe follow-ups.
-These should be completed against real, legally obtained GTA III, Vice City, and
-San Andreas archives before we expand the supported container scope.
+The retail corpora are now verified by the compatibility scanner (Phase 0 of
+v4.5.0), and the independent Rust `gta-img` audit confirmed the v1/v2 wire
+layouts. The following parser-hardening follow-ups remain open and are now
+testable against real GTA III, Vice City, and San Andreas archives:
 
 - [ ] Preserve IMG v2 `streaming_size` and `archive_size` as separate fields;
   expose a checked effective size for reads and preserve both words on save.
@@ -141,7 +142,7 @@ This is fine for **another IMG version** (`PcV3Parser` etc.). For a brand-new co
 
 ---
 
-## 4. Quality-of-life improvements
+## 5. Quality-of-life improvements
 
 - **Cache parsed NFT catalogs** — partially done. The per-game-root `IdeMap` is memoized and decoded texture pixels are cached in the `quick_cache` LRU, so repeated 3D loads skip the directory walk and pixel decode. The catalog parse itself (`parse_nft_catalog_bytes`) still runs per NIF load; parked because parsing is cheap next to decode.
 - **Game root path override** — not started. `Config` has no `game_root` field; the root is still derived from the archive path (`parent().parent()`). A CLI flag or settings field is the planned seam.
@@ -150,7 +151,7 @@ This is fine for **another IMG version** (`PcV3Parser` etc.). For a brand-new co
 
 ---
 
-## 5. Code-quality follow-ups
+## 6. Code-quality follow-ups
 
 - **§4.1 and §4.2 completed** — the reusable modules now live in `src/lib.rs`, the executable uses `src/main.rs`, and the crate-root `dead_code` suppression/duplicate-target issue described by the old notes no longer applies.
 - **§4.3 `BlockPayload` large enum variant** (`inspector/nif.rs`). `BlockPayload::NiTriShapeDataPayload` (~150 B inline) inflates every other variant. Boxing the heavy variant would shrink the enum to ~32 B. Touches ~35 match sites across `nif.rs`, `viewer3d.rs`, `texture.rs`. A `Cow`-based or `Arc`-based variant may be cleaner than `Box<>` if multiple consumers read the same payload.
@@ -158,7 +159,7 @@ This is fine for **another IMG version** (`PcV3Parser` etc.). For a brand-new co
 
 ---
 
-## 6. Release infra
+## 7. Release infra
 
 - **§5.1 `package-release.ps1` excludes `docs/`** (done in v3.5.0 post-release). Zip contains only `imgeditor.exe`, `README.md`, `LICENSE`.
 - **§5.2 `Cargo.toml` `[profile.release].codegen-units = 16`** (done in v3.4.0). Hardens against the `harfrust`/`regex-automata` stack-overrun on Rust 1.96.
