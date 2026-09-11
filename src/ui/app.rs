@@ -630,6 +630,9 @@ pub struct App {
     pub validator_popup_open: bool,
     /// Whether entry rows are tinted by their validator verdict.
     pub compat_highlight_enabled: bool,
+    /// Whether `save_config()` may write to disk. Tests disable this so
+    /// they never touch the user's real settings.ini.
+    pub config_persist_enabled: bool,
     /// In-flight drag-and-drop between archive tabs. `None` when no
     /// drag is in progress. Holds the source archive + the entry
     /// indices being moved + the currently-hovered target. The
@@ -792,6 +795,7 @@ impl App {
             show_sort_manager: false,
             validator_popup_open: false,
             compat_highlight_enabled: true,
+            config_persist_enabled: true,
             drag_state: None,
             last_export_selected_only: false,
             search: String::new(),
@@ -894,9 +898,25 @@ impl App {
     }
 
     pub fn save_config(&self) {
+        if !self.config_persist_enabled {
+            return;
+        }
         if let Err(err) = self.config.save() {
             eprintln!("failed to save config: {err}");
         }
+    }
+
+    /// Apply the persisted target to an archive (idempotent; safe to call
+    /// after tasks that rebuild the archive). Takes `&Config` so callers
+    /// can hold a mutable borrow of the archive's field.
+    fn adopt_target(config: &crate::config::Config, archive: &mut ArchiveInfo) {
+        let Some(path) = archive.path.clone() else {
+            return;
+        };
+        archive.target_game = config
+            .archive_target(&path)
+            .and_then(crate::compat::games::profile_by_id)
+            .map(|game| game.id);
     }
 
     fn open_archive_path(&mut self, path: PathBuf) -> Task<Message> {
@@ -1856,6 +1876,9 @@ impl App {
                 match outcome {
                     OpenArchiveOutcome::Opened(archive) => {
                         let _ = self.editor.add_opened_archive(*archive);
+                        if let Some(opened) = self.editor.archives_mut().last_mut() {
+                            Self::adopt_target(&self.config, opened);
+                        }
                         self.config.recent_files.touch(&path);
                         self.save_config();
                     }
@@ -1926,6 +1949,9 @@ impl App {
                 match result {
                     Ok(archive) => {
                         self.editor.replace_archive(index, archive);
+                        if let Some(archive) = self.editor.archives_mut().get_mut(index) {
+                            Self::adopt_target(&self.config, archive);
+                        }
                         self.toast = Some("Archive saved.".into());
                     }
                     Err(err) => {
@@ -2071,6 +2097,9 @@ impl App {
                         self.editor.replace_archive(index, archive);
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
                             archive.update_selected_list(&self.search, self.config.literal_file_types);
+                        }
+                        if let Some(archive) = self.editor.archives_mut().get_mut(index) {
+                            Self::adopt_target(&self.config, archive);
                         }
                         self.toast = Some(format!("Imported {count} files."));
                     }
@@ -3129,6 +3158,17 @@ impl App {
                 if self.editor.archives()[archive_index].progress.in_use() {
                     self.toast = Some("Another task is still running.".into());
                     return Task::none();
+                }
+                // Picking a game both selects and persists the archive's
+                // target, then runs the validation against it.
+                let mut archive_path = None;
+                if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
+                    archive.target_game = Some(target_id);
+                    archive_path = archive.path.clone();
+                }
+                if let Some(path) = archive_path {
+                    self.config.set_archive_target(&path, target_id);
+                    self.save_config();
                 }
                 // The popup is a picker: running closes it so the user
                 // sees the highlighted rows underneath.
@@ -4925,6 +4965,8 @@ mod tests {
         // The first-run welcome modal gates shortcuts now; tests below
         // assume a normal workspace with no dialog open.
         app.show_welcome = false;
+        // Never write the user's real settings.ini from a test.
+        app.config_persist_enabled = false;
         app
     }
 
@@ -5596,6 +5638,36 @@ mod tests {
             !app.editor.archives()[0].progress.in_use(),
             "a failed scan must release the progress slot"
         );
+    }
+
+    #[test]
+    fn picking_a_target_persists_it_and_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gta3.img");
+        // A minimal VER2 archive so the real open path is exercised.
+        let mut img: Vec<u8> = Vec::new();
+        img.extend_from_slice(b"VER2");
+        img.extend_from_slice(&0_u32.to_le_bytes());
+        img.resize(2048, 0);
+        std::fs::write(&path, &img).unwrap();
+
+        let mut app = test_app();
+        let archive = ArchiveInfo::open(&path).unwrap();
+        let _ = app.editor.add_opened_archive(archive);
+
+        let _ = app.update(Message::ValidateArchiveFor("sa"));
+        assert_eq!(app.editor.archives()[0].target_game, Some("sa"));
+        assert_eq!(app.config.archive_target(&path), Some("sa"));
+
+        // A fresh session (same config) re-applies the saved target.
+        let reopened = ArchiveInfo::open(&path).unwrap();
+        let mut fresh = App::new(app.config.clone());
+        fresh.config_persist_enabled = false;
+        let _ = fresh.editor.add_opened_archive(reopened);
+        if let Some(archive) = fresh.editor.archives_mut().last_mut() {
+            App::adopt_target(&fresh.config, archive);
+        }
+        assert_eq!(fresh.editor.archives()[0].target_game, Some("sa"));
     }
 
     #[test]

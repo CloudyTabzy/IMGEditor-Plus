@@ -258,6 +258,37 @@ pub struct Config {
     /// Right-clicking an entry adds it to the current selection instead
     /// of replacing it.
     pub context_selection_accumulates: bool,
+    /// Per-archive validator target (game id), most recently used first.
+    /// Keyed by the canonical archive path so the choice survives
+    /// restarts without sidecar files next to the game.
+    pub archive_targets: Vec<(PathBuf, String)>,
+}
+
+/// How many archive targets are remembered before the oldest is dropped.
+pub const ARCHIVE_TARGETS_MAX: usize = 64;
+
+impl Config {
+    /// The saved validator target for an archive path, if any.
+    pub fn archive_target(&self, path: &Path) -> Option<&str> {
+        let canonical = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf());
+        self.archive_targets
+            .iter()
+            .find(|(saved, _)| saved == &canonical)
+            .map(|(_, game)| game.as_str())
+    }
+
+    /// Remember the validator target for an archive path (MRU order).
+    pub fn set_archive_target(&mut self, path: &Path, game: &str) {
+        let canonical = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf());
+        self.archive_targets.retain(|(saved, _)| saved != &canonical);
+        self.archive_targets
+            .insert(0, (canonical, game.to_string()));
+        self.archive_targets.truncate(ARCHIVE_TARGETS_MAX);
+    }
 }
 
 /// Grid divisions offered in the texture preview controls. Kept coarse so
@@ -295,6 +326,7 @@ impl Default for Config {
             show_search_bar: true,
             literal_file_types: false,
             context_selection_accumulates: true,
+            archive_targets: Vec::new(),
         }
     }
 }
@@ -315,6 +347,8 @@ impl Config {
         // order (position 0 = front) regardless of line order in the
         // settings file. The BTreeMap keeps insertion ordered by key.
         let mut pending_recent: std::collections::BTreeMap<usize, PathBuf> =
+            std::collections::BTreeMap::new();
+        let mut pending_archive_targets: std::collections::BTreeMap<usize, (PathBuf, String)> =
             std::collections::BTreeMap::new();
         let mut pending_sort_priorities: Vec<SortPriority> = Vec::new();
         for line in contents.lines() {
@@ -368,6 +402,19 @@ impl Config {
                         && !value.is_empty()
                     {
                         pending_recent.insert(index, PathBuf::from(value));
+                    }
+                }
+                key if key.starts_with("archive_target_") => {
+                    // `archive_target_N=<path>|<game id>`; the path is
+                    // stored as-is (Windows paths cannot contain '|').
+                    if let Some(index) = key
+                        .strip_prefix("archive_target_")
+                        .and_then(|n| n.parse::<usize>().ok())
+                        && let Some((archive, game)) = value.split_once('|')
+                        && !archive.is_empty()
+                    {
+                        pending_archive_targets
+                            .insert(index, (PathBuf::from(archive), game.to_string()));
                     }
                 }
                 key if key.starts_with("sort_prio_") => {
@@ -491,6 +538,8 @@ impl Config {
         // saved priority chain). Truncate any trailing disabled
         // placeholders we inserted to make the vec sparse-friendly.
         config.default_sort_chain = SortChain::new(pending_sort_priorities);
+        // Archive targets are stored in MRU order already; keep file order.
+        config.archive_targets = pending_archive_targets.into_values().collect();
         config
     }
 
@@ -536,6 +585,9 @@ impl Config {
         }
         for (index, entry) in self.recent_files.iter() {
             writeln!(file, "recent_{}={}", index, entry.path.display())?;
+        }
+        for (index, (path, game)) in self.archive_targets.iter().enumerate() {
+            writeln!(file, "archive_target_{}={}|{}", index, path.display(), game)?;
         }
         for (index, prio) in self.default_sort_chain.iter().enumerate() {
             writeln!(
@@ -735,6 +787,7 @@ mod tests {
             show_search_bar: false,
             literal_file_types: true,
             context_selection_accumulates: false,
+            archive_targets: Vec::new(),
         };
         let archive_a = temp.path().join("a.img");
         let archive_b = temp.path().join("b.img");
@@ -993,5 +1046,35 @@ mod tests {
             "Gruvbox".parse::<ThemeMode>().unwrap(),
             ThemeMode::DarkGruvbox
         );
+    }
+
+    #[test]
+    fn archive_targets_round_trip_and_prune() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.ini");
+        let archive = dir.path().join("gta3.img");
+        std::fs::write(&archive, b"fake").unwrap();
+        let other = dir.path().join("player.img");
+        std::fs::write(&other, b"fake").unwrap();
+
+        let mut config = Config::default();
+        config.set_archive_target(&archive, "gta3");
+        config.set_archive_target(&other, "sa");
+        // Re-setting an existing path moves it to the front.
+        config.set_archive_target(&archive, "vc");
+        config.save_to_path(&settings).unwrap();
+
+        let loaded = Config::load_from_path(&settings);
+        assert_eq!(loaded.archive_target(&archive), Some("vc"));
+        assert_eq!(loaded.archive_target(&other), Some("sa"));
+        assert_eq!(loaded.archive_targets.len(), 2);
+        assert_eq!(loaded.archive_targets[0].1, "vc", "MRU order survives");
+
+        // The cap drops the oldest entries.
+        let mut config = Config::default();
+        for i in 0..(ARCHIVE_TARGETS_MAX + 5) {
+            config.set_archive_target(&dir.path().join(format!("a{i}.img")), "sa");
+        }
+        assert_eq!(config.archive_targets.len(), ARCHIVE_TARGETS_MAX);
     }
 }

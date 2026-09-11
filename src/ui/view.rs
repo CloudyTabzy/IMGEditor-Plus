@@ -2199,7 +2199,11 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
     }
     let archive_index = app.editor.selected_archive()?;
     let archive = app.editor.archives().get(archive_index)?;
-    let current_target = archive.compat_report.as_ref().and_then(|report| report.target);
+    // Explicit target first; the last run's target is only a fallback for
+    // archives validated before the target became persistent.
+    let current_target = archive
+        .target_game
+        .or_else(|| archive.compat_report.as_ref().and_then(|report| report.target));
     let highlight_enabled = app.compat_highlight_enabled;
 
     let design = app.design();

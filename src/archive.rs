@@ -332,6 +332,10 @@ pub struct ArchiveInfo {
     /// Latest texture-compatibility report (see `compat::scan`); cleared
     /// by `invalidate_entry_caches` so it never describes stale entries.
     pub compat_report: Option<crate::compat::scan::ScanReport>,
+    /// Validator target for this archive (`gta3`/`vc`/`sa`/`bully`).
+    /// Set by the game picker and persisted per path in the config, so
+    /// the choice survives closing the archive and restarting.
+    pub target_game: Option<&'static str>,
     /// Reverse lookup from entry index to its position in `selected_indices`.
     /// Rebuilt by `update_selected_list` so shift+click and similar operations
     /// avoid linear scans of the filtered list.
@@ -383,6 +387,7 @@ impl ArchiveInfo {
             )),
             cached_file_types: None,
             compat_report: None,
+            target_game: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
             generation: 0,
@@ -435,6 +440,7 @@ impl ArchiveInfo {
             )),
             cached_file_types: None,
             compat_report: None,
+            target_game: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
             generation: 0,
