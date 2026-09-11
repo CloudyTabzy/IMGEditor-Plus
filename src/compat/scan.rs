@@ -382,6 +382,9 @@ fn profile_nft_entry(
     options: &ScanOptions,
 ) -> anyhow::Result<()> {
     report.nft_entries += 1;
+    // Resolve the target first so even entries that cannot be parsed
+    // still surface a row verdict instead of being silently unmarked.
+    let target = options.target.and_then(crate::compat::games::profile_by_id);
     let Some(bytes) = read_entry_bytes(archive, entry, report, "NFT_READ_FAIL")? else {
         return Ok(());
     };
@@ -396,13 +399,21 @@ fn profile_nft_entry(
                 &entry.file_name,
                 format!("{err}"),
             );
+            if target.is_some() {
+                report.entry_verdicts.push(EntryVerdict {
+                    entry_index,
+                    file_name: entry.file_name.to_string(),
+                    textures: 0,
+                    worst: crate::compat::games::Verdict::Untested,
+                    counts: BTreeMap::new(),
+                });
+            }
             return Ok(());
         }
     };
 
     // Per-entry verdicts for the chosen target power the row highlights
     // for Bully archives, exactly like the TXD path.
-    let target = options.target.and_then(crate::compat::games::profile_by_id);
     let mut entry_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut entry_worst: Option<crate::compat::games::Verdict> = None;
     let mut entry_textures = 0_usize;
@@ -494,6 +505,29 @@ fn profile_nft_entry(
                     .or_default() += 1;
             }
         }
+    }
+
+    if entry_textures == 0 {
+        // Bully ships ~29 two-kilobyte placeholder stubs: valid Gamebryo
+        // headers with zero blocks and no pixels. Nothing can be
+        // classified, but the entry must still be accounted for.
+        record_anomaly(
+            report,
+            "NFT_NO_PIXELDATA",
+            Severity::Info,
+            &entry.file_name,
+            "no NiPixelData blocks (empty stub)".to_string(),
+        );
+        if target.is_some() {
+            report.entry_verdicts.push(EntryVerdict {
+                entry_index,
+                file_name: entry.file_name.to_string(),
+                textures: 0,
+                worst: crate::compat::games::Verdict::Untested,
+                counts: BTreeMap::new(),
+            });
+        }
+        return Ok(());
     }
 
     if target.is_some() && entry_worst.is_some() {
@@ -808,13 +842,11 @@ pub fn run_cli(path: &Path, options: &ScanOptions, target: Option<&str>) -> anyh
         }
     }
 
-    if let Some(target) = report.target {
-        if !report.entry_verdicts.is_empty() {
-            println!(
-                "\nRow verdicts: {} entries classified for the {target} target",
-                report.entry_verdicts.len()
-            );
-        }
+    if let Some(target) = report.target.filter(|_| !report.entry_verdicts.is_empty()) {
+        println!(
+            "\nRow verdicts: {} entries classified for the {target} target",
+            report.entry_verdicts.len()
+        );
     }
 
     if let Some(reconstructible) = report.palette_reconstructible {
@@ -1210,5 +1242,48 @@ mod tests {
             .entry_verdicts
             .iter()
             .all(|entry| entry.worst == Verdict::Unsupported));
+    }
+
+    #[test]
+    fn scanner_accounts_for_empty_nft_stubs() {
+        use crate::compat::games::Verdict;
+
+        // Bully ships 2 KB placeholder NFTs: a valid header, zero blocks.
+        let stub = crate::inspector::nif::tests::build_nif(&[]);
+        let dir = tempfile::tempdir().unwrap();
+        let mut img: Vec<u8> = Vec::new();
+        img.extend_from_slice(b"VER2");
+        img.extend_from_slice(&1_u32.to_le_bytes());
+        img.extend_from_slice(&1_u32.to_le_bytes());
+        img.extend_from_slice(&1_u32.to_le_bytes());
+        let mut name_buf = [0_u8; 24];
+        name_buf[..10].copy_from_slice(b"JD_Cam.nft");
+        img.extend_from_slice(&name_buf);
+        img.resize(2048, 0);
+        let mut padded = stub;
+        padded.resize(2048, 0);
+        img.extend_from_slice(&padded);
+        let path = dir.path().join("world.img");
+        std::fs::write(&path, &img).unwrap();
+
+        let report = scan_archive(
+            &path,
+            &ScanOptions {
+                decode_pixels: false,
+                target: Some("bully"),
+            },
+        )
+        .unwrap();
+        assert_eq!(report.nft_entries, 1);
+        assert_eq!(report.nft_textures, 0);
+        assert_eq!(report.anomaly_counts.get("NFT_NO_PIXELDATA"), Some(&1));
+        assert_eq!(report.entry_verdicts.len(), 1);
+        let entry = &report.entry_verdicts[0];
+        assert_eq!(entry.textures, 0);
+        assert_eq!(
+            entry.worst,
+            Verdict::Untested,
+            "an empty stub is unknown, not incompatible"
+        );
     }
 }
