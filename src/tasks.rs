@@ -335,7 +335,7 @@ impl FolderImportTask {
 
         if summary.imported > 0 {
             archive.dirty = true;
-            archive.invalidate_entry_caches();
+            archive.invalidate_entry_caches_keeping_report();
         }
         archive.add_log(format!(
             "Folder import: {} imported, {} skipped, {} failed",

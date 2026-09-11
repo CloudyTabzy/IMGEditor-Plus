@@ -288,7 +288,7 @@ impl Editor {
                 updated.imported = entry.imported;
                 updated.selected = entry.selected;
                 *entry = updated;
-                archive.invalidate_entry_caches();
+                archive.invalidate_entry_caches_keeping_report();
                 archive.dirty = true;
                 archive.update_selected_list("", literal);
             }
@@ -310,7 +310,7 @@ impl Editor {
 
         if count > 0 {
             archive.dirty = true;
-            archive.invalidate_entry_caches();
+            archive.invalidate_entry_caches_keeping_report();
         }
         archive.add_log(format!("Imported {count} entries"));
         archive.update_search = true;
@@ -359,7 +359,7 @@ impl Editor {
         }
         if count > 0 {
             archive.dirty = true;
-            archive.invalidate_entry_caches();
+            archive.invalidate_entry_caches_keeping_report();
         }
         archive.add_log(format!("Imported {count} entries"));
         archive.update_search = true;

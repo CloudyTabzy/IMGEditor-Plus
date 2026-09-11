@@ -663,12 +663,21 @@ impl ArchiveInfo {
     /// Call this after add/remove/rename/import operations. Also bumps the
     /// `generation` counter used to key downstream caches and drops the
     /// decoded preview caches, whose contents may reflect replaced entry
-    /// data.
+    /// data. Clears the compatibility report because entry *indices* may
+    /// have shifted (removals).
     pub fn invalidate_entry_caches(&mut self) {
+        self.compat_report = None;
+        self.invalidate_entry_caches_keeping_report();
+    }
+
+    /// Like [`Self::invalidate_entry_caches`] but keeps the compatibility
+    /// report. Use for operations that only append or rename entries, so
+    /// existing row verdicts stay valid and only imported entries need
+    /// their verdicts added (see `App::refresh_imported_verdicts`).
+    pub fn invalidate_entry_caches_keeping_report(&mut self) {
         self.cached_file_types = None;
         self.inspection_cache.clear();
         self.texture_cache.clear();
-        self.compat_report = None;
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -1029,6 +1038,27 @@ mod tests {
         archive.entries.push(EntryInfo::new("c.col"));
         let second = archive.unique_file_types(false).to_vec();
         assert_eq!(second, vec!["Collision", "Model", "Texture"]);
+    }
+
+    #[test]
+    fn invalidate_entry_caches_keeping_report_preserves_verdicts() {
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::One);
+        archive.compat_report = Some(crate::compat::scan::ScanReport::default());
+        archive.texture_cache.insert(0, Arc::new(Vec::new()));
+
+        archive.invalidate_entry_caches_keeping_report();
+        assert!(
+            archive.compat_report.is_some(),
+            "append/rename must keep the row verdicts"
+        );
+        assert_eq!(archive.generation(), 1, "content caches still refresh");
+        assert!(archive.texture_cache.is_empty());
+
+        archive.invalidate_entry_caches();
+        assert!(
+            archive.compat_report.is_none(),
+            "removals shift indices and must drop the report"
+        );
     }
 
     #[test]

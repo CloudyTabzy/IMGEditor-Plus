@@ -946,7 +946,7 @@ impl App {
         }
     }
 
-    /// Apply the persisted target to an archive (idempotent; safe to call
+    /// Re-apply the persisted target to an archive (idempotent; safe to call
     /// after tasks that rebuild the archive). Takes `&Config` so callers
     /// can hold a mutable borrow of the archive's field.
     fn adopt_target(config: &crate::config::Config, archive: &mut ArchiveInfo) {
@@ -957,6 +957,62 @@ impl App {
             .archive_target(&path)
             .and_then(crate::compat::games::profile_by_id)
             .map(|game| game.id);
+    }
+
+    /// Give freshly imported entries their row verdicts. Imports keep the
+    /// existing compatibility report (indices are stable), so only the
+    /// imported entries are checked and merged in - the rest of the
+    /// archive keeps its previous tinting.
+    fn refresh_imported_verdicts(&mut self, archive_index: usize) {
+        let target = self
+            .editor
+            .archives()
+            .get(archive_index)
+            .and_then(|archive| archive.target_game)
+            .and_then(crate::compat::games::profile_by_id);
+        let Some(target) = target else {
+            return;
+        };
+        let Some(archive) = self.editor.archives_mut().get_mut(archive_index) else {
+            return;
+        };
+        if archive.compat_report.is_none() {
+            return;
+        }
+        let imported: Vec<(usize, String, PathBuf)> = archive
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.imported)
+            .filter_map(|(index, entry)| {
+                Some((index, entry.file_name.to_string(), entry.source_path.clone()?))
+            })
+            .collect();
+        let verdicts: Vec<crate::compat::scan::EntryVerdict> = imported
+            .into_iter()
+            .filter_map(|(entry_index, file_name, path)| {
+                let check = crate::compat::scan::check_import_file(&path, target);
+                if check.textures == 0 {
+                    return None;
+                }
+                Some(crate::compat::scan::EntryVerdict {
+                    entry_index,
+                    file_name,
+                    textures: check.textures,
+                    worst: check.worst,
+                    counts: check.counts,
+                })
+            })
+            .collect();
+        if verdicts.is_empty() {
+            return;
+        }
+        if let Some(report) = archive.compat_report.as_mut() {
+            report
+                .entry_verdicts
+                .retain(|existing| !verdicts.iter().any(|new| new.entry_index == existing.entry_index));
+            report.entry_verdicts.extend(verdicts);
+        }
     }
 
     fn open_archive_path(&mut self, path: PathBuf) -> Task<Message> {
@@ -2227,6 +2283,7 @@ impl App {
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
                             Self::adopt_target(&self.config, archive);
                         }
+                        self.refresh_imported_verdicts(index);
                         self.toast = Some(if checked {
                             format!("Imported {count} files.")
                         } else {
@@ -2331,6 +2388,7 @@ impl App {
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
                             archive.update_selected_list(&self.search, self.config.literal_file_types);
                         }
+                        self.refresh_imported_verdicts(index);
                         self.toast = Some(format_folder_import_summary(&summary));
                     }
                     Err(error) => {
@@ -5847,6 +5905,64 @@ mod tests {
                 .any(|message| matches!(message, Message::ImportCompleted { checked: false, .. })),
             "unchecked import must report itself as unchecked: {messages:?}"
         );
+    }
+
+    #[test]
+    fn imported_entries_get_their_verdicts_merged_into_the_kept_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let nft = dir.path().join("skin.nft");
+        std::fs::write(
+            &nft,
+            crate::inspector::nif::tests::build_nif(&[(
+                "NiPixelData",
+                &{
+                    let mut block = Vec::new();
+                    block.extend_from_slice(&4_u32.to_le_bytes()); // DXT1
+                    block.push(0);
+                    block.extend_from_slice(&(-1_i32).to_le_bytes());
+                    block.extend_from_slice(&0_u32.to_le_bytes());
+                    block.push(1);
+                    block.extend_from_slice(&0_u32.to_le_bytes());
+                    block.push(0);
+                    block.extend_from_slice(&[4, 0, 0, 0]);
+                    block.extend_from_slice(&(-1_i32).to_le_bytes());
+                    block.extend_from_slice(&1_u32.to_le_bytes());
+                    block.extend_from_slice(&0_u32.to_le_bytes());
+                    for value in [8_u32, 8, 0, 32, 1] {
+                        block.extend_from_slice(&value.to_le_bytes());
+                    }
+                    block.extend(std::iter::repeat_n(0x8A_u8, 32));
+                    block
+                },
+            )]),
+        )
+        .unwrap();
+
+        let mut app = test_app_with_entries();
+        {
+            let archive = &mut app.editor.archives_mut()[0];
+            archive.target_game = Some("bully");
+            // A report from a previous validation (row verdicts stay).
+            archive.compat_report = Some(crate::compat::scan::ScanReport::default());
+            // An imported entry backed by the NFT on disk.
+            let mut entry = EntryInfo::new("skin.nft");
+            entry.imported = true;
+            entry.source_path = Some(nft);
+            archive.entries.push(entry);
+            archive.invalidate_entry_caches_keeping_report();
+        }
+
+        assert!(app.editor.archives()[0].compat_report.is_some());
+        app.refresh_imported_verdicts(0);
+
+        let report = app.editor.archives()[0].compat_report.as_ref().unwrap();
+        let merged = report
+            .entry_verdicts
+            .iter()
+            .find(|verdict| verdict.file_name == "skin.nft")
+            .expect("imported entry must gain a verdict");
+        assert_eq!(merged.textures, 1);
+        assert_eq!(merged.worst, crate::compat::games::Verdict::Native);
     }
 
     #[test]
