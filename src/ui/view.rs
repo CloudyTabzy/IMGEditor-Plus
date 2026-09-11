@@ -2299,6 +2299,13 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
         .align_y(Alignment::Center),
     );
     body = body.push(fonts::caption(note.to_string()));
+    if state.chooser.is_dxt() {
+        body = body.push(
+            checkbox(state.high_quality)
+                .label("High-quality DXT (iterative cluster fit, slower)")
+                .on_toggle(Message::ReplaceHighQualityToggled),
+        );
+    }
     body = body.push(
         row![
             preview_column("Current", state.before_handle.clone()),
@@ -2363,6 +2370,13 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
         .align_y(Alignment::Center),
     );
     body = body.push(fonts::caption(note.to_string()));
+    if state.chooser.is_dxt() {
+        body = body.push(
+            checkbox(state.high_quality)
+                .label("High-quality DXT (iterative cluster fit, slower)")
+                .on_toggle(Message::NewTxdHighQualityToggled),
+        );
+    }
     body = body.push(preview_column("Texture", state.after_handle.clone()));
     body = body.push(plan_warnings(&state.plan.0.warnings));
     body = body.push(Space::new().height(Length::Fixed(8.0)));

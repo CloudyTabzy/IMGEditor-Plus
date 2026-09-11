@@ -186,11 +186,23 @@ pub fn header_spec(format: EncodeFormat, platform_id: u32) -> HeaderSpec {
     }
 }
 
+/// DXT encoder effort levels. `Standard` matches squish's default
+/// (cluster fit + perceptual metric), which is what Magic.TXD and most
+/// tools use; `High` runs squish's iterative cluster fit for the best
+/// fit at several times the cost; `Fast` is range fit for bulk work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DxtQuality {
+    Fast,
+    #[default]
+    Standard,
+    High,
+}
+
 /// Options that trade encode time for quality.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EncodeOptions {
-    /// Use the fast range-fit DXT encoder instead of cluster fit.
-    pub fast_dxt: bool,
+    /// DXT encoder effort (ignored by non-DXT formats).
+    pub dxt_quality: DxtQuality,
     /// Optional Bayer 4x4 dithering for palette quantization.
     pub dither: bool,
 }
@@ -390,10 +402,10 @@ fn encode_dxt_levels(
         .map(|(w, h, px)| {
             let mut out = vec![0u8; format.compressed_size(*w as usize, *h as usize)];
             let params = texpresso::Params {
-                algorithm: if options.fast_dxt {
-                    texpresso::Algorithm::RangeFit
-                } else {
-                    texpresso::Algorithm::ClusterFit
+                algorithm: match options.dxt_quality {
+                    DxtQuality::Fast => texpresso::Algorithm::RangeFit,
+                    DxtQuality::Standard => texpresso::Algorithm::ClusterFit,
+                    DxtQuality::High => texpresso::Algorithm::IterativeClusterFit,
                 },
                 // Alpha-blended textures fit better when the colour
                 // error is weighted by alpha; squish offers the same

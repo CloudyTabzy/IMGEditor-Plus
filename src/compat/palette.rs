@@ -309,8 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn quality_beats_plain_median_cut_on_a_gradient() {
-        fn median_cut_reference(rgba: &[u8], max_colors: usize) -> Vec<[u8; 4]> {
+    fn quality_beats_plain_median_cut_on_a_gradient() {        fn median_cut_reference(rgba: &[u8], max_colors: usize) -> Vec<[u8; 4]> {
             let mut histogram: HashMap<[u8; 4], u32> = HashMap::new();
             for p in rgba.chunks_exact(4) {
                 *histogram.entry([p[0], p[1], p[2], p[3]]).or_insert(0) += 1;
@@ -434,5 +433,159 @@ mod tests {
             ours_ok < reference_ok,
             "k-means/Oklab palette ({ours_ok:.5}) should beat median cut ({reference_ok:.5}) perceptually"
         );
+    }
+
+    /// A rich 256x256 sample: smooth gradients, a hue sweep, flat
+    /// color blocks, and an alpha ramp.
+    fn sample_image(size: u32) -> Vec<u8> {
+        use quantette::deps::palette::{Hsv, IntoColor};
+        let half = size / 2;
+        let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+        let block_colors: [[u8; 4]; 16] = [
+            [0, 0, 0, 255],
+            [255, 255, 255, 255],
+            [220, 30, 30, 255],
+            [30, 200, 60, 255],
+            [40, 70, 230, 255],
+            [240, 200, 40, 255],
+            [230, 60, 200, 255],
+            [60, 210, 220, 255],
+            [128, 64, 32, 255],
+            [64, 128, 32, 255],
+            [32, 64, 128, 255],
+            [200, 160, 120, 255],
+            [90, 90, 90, 255],
+            [150, 20, 60, 255],
+            [20, 90, 150, 255],
+            [110, 200, 80, 255],
+        ];
+        for y in 0..size {
+            for x in 0..size {
+                let pixel = if x < half && y < half {
+                    // Smooth RGB gradient.
+                    [
+                        (x * 255 / half) as u8,
+                        (y * 255 / half) as u8,
+                        ((x + y) * 255 / (size - 2)) as u8,
+                        255,
+                    ]
+                } else if x >= half && y < half {
+                    // Hue wheel with radius shading.
+                    let cx = x as f32 - half as f32 * 1.5;
+                    let cy = y as f32 - half as f32 / 2.0;
+                    let angle = cy.atan2(cx).to_degrees().rem_euclid(360.0);
+                    let radius = (cx * cx + cy * cy).sqrt() / half as f32;
+                    let rgb: Srgb<f32> =
+                        Hsv::new(angle, radius.min(1.0), 1.0 - radius * 0.55).into_color();
+                    [
+                        (rgb.red * 255.0) as u8,
+                        (rgb.green * 255.0) as u8,
+                        (rgb.blue * 255.0) as u8,
+                        255,
+                    ]
+                } else if x < half && y >= half {
+                    // Flat color blocks: palettes should be exact here.
+                    let bx = (x / (half / 4)).min(3) as usize;
+                    let by = ((y - half) / (half / 4)).min(3) as usize;
+                    block_colors[by * 4 + bx]
+                } else {
+                    // Alpha ramp over two hues.
+                    let alpha = ((x - half) * 255 / (half - 1)) as u8;
+                    if (y - half) < half / 2 {
+                        [240, 60, 60, alpha]
+                    } else {
+                        [60, 80, 240, alpha]
+                    }
+                };
+                rgba.extend(pixel);
+            }
+        }
+        rgba
+    }
+
+    /// Write a visual quality sheet to
+    /// `converter-fixtures/palette-quality-sheet.png`:
+    /// original / PAL8 / PAL4, DXT1/3/5 standard, DXT1/3/5 high.
+    /// Run with `cargo test --lib write_quality_sheet -- --ignored`.
+    #[test]
+    #[ignore]
+    fn write_quality_sheet() {
+        use crate::compat::encode::{encode_texture, DxtQuality, EncodeFormat, EncodeOptions};
+        use crate::parser::texture_decoder::{decode_native_raster, RasterDescriptor};
+
+        let size = 256u32;
+        let sample = sample_image(size);
+        let entries: [(&str, EncodeFormat, u32, DxtQuality); 9] = [
+            ("original", EncodeFormat::Rgb888, 9, DxtQuality::Standard),
+            ("PAL8", EncodeFormat::Pal8, 8, DxtQuality::Standard),
+            ("PAL4", EncodeFormat::Pal4, 8, DxtQuality::Standard),
+            ("DXT1", EncodeFormat::Dxt1, 9, DxtQuality::Standard),
+            ("DXT3", EncodeFormat::Dxt3, 9, DxtQuality::Standard),
+            ("DXT5", EncodeFormat::Dxt5, 9, DxtQuality::Standard),
+            ("DXT1-high", EncodeFormat::Dxt1, 9, DxtQuality::High),
+            ("DXT3-high", EncodeFormat::Dxt3, 9, DxtQuality::High),
+            ("DXT5-high", EncodeFormat::Dxt5, 9, DxtQuality::High),
+        ];
+
+        let gap = 6u32;
+        let columns = 3u32;
+        let rows = 3u32;
+        let sheet_width = columns * size + (columns + 1) * gap;
+        let sheet_height = rows * size + (rows + 1) * gap;
+        let mut sheet = vec![25u8; (sheet_width * sheet_height * 4) as usize];
+        for pixel in sheet.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+
+        for (index, (label, format, platform, quality)) in entries.iter().enumerate() {
+            let decoded = if *label == "original" {
+                sample.clone()
+            } else {
+                let encoded = encode_texture(
+                    &sample,
+                    size,
+                    size,
+                    *format,
+                    *platform,
+                    EncodeOptions {
+                        dxt_quality: *quality,
+                        dither: false,
+                    },
+                )
+                .expect("encode");
+                let descriptor = RasterDescriptor {
+                    width: size,
+                    height: size,
+                    depth: encoded.header.depth,
+                    raster_format: encoded.header.raster_format,
+                    palette: &encoded.palette,
+                    platform_id: *platform,
+                    d3d_format: encoded.header.d3d_format,
+                    platform_properties: encoded.header.platform_properties,
+                    raster_type: encoded.header.raster_type,
+                };
+                decode_native_raster(&encoded.mipmaps[0], &descriptor).expect("decode")
+            };
+
+            let col = index as u32 % columns;
+            let row = index as u32 / columns;
+            let ox = gap + col * (size + gap);
+            let oy = gap + row * (size + gap);
+            for y in 0..size {
+                let src = (y * size * 4) as usize;
+                let dst = (((oy + y) * sheet_width + ox) * 4) as usize;
+                sheet[dst..dst + (size * 4) as usize]
+                    .copy_from_slice(&decoded[src..src + (size * 4) as usize]);
+            }
+            eprintln!("tile {index}: {label}");
+        }
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("converter-fixtures");
+        std::fs::create_dir_all(&dir).expect("create converter-fixtures");
+        let path = dir.join("palette-quality-sheet.png");
+        let image = image::RgbaImage::from_raw(sheet_width, sheet_height, sheet)
+            .expect("sheet dimensions");
+        image.save(&path).expect("write sheet");
+        eprintln!("wrote {}", path.display());
     }
 }

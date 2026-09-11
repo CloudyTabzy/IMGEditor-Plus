@@ -321,6 +321,7 @@ pub fn plan_import(
     target: &GameProfile,
     archive_file_name: &str,
     format_override: Option<EncodeFormat>,
+    options: EncodeOptions,
 ) -> Result<ConversionPlan, String> {
     let format = match format_override {
         Some(format) => format,
@@ -333,7 +334,7 @@ pub fn plan_import(
         image.height,
         format,
         platform,
-        EncodeOptions::default(),
+        options,
     )?;
 
     let mut warnings = Vec::new();
@@ -415,6 +416,7 @@ pub fn plan_conversion(
     target: &GameProfile,
     archive_file_name: &str,
     format_override: Option<EncodeFormat>,
+    options: EncodeOptions,
 ) -> Result<ConversionPlan, String> {
     let parsed = parse_txd(txd_bytes)?;
     let texture = parsed
@@ -451,7 +453,7 @@ pub fn plan_conversion(
             .rgba
             .chunks_exact(4)
             .any(|pixel| pixel[3] < 255);
-    plan_import(&image, target, archive_file_name, format_override)
+    plan_import(&image, target, archive_file_name, format_override, options)
 }
 
 /// Apply a replace plan to an existing TXD entry. The texture's name
@@ -678,14 +680,14 @@ mod tests {
     fn alpha_loss_and_quantization_are_warned_about() {
         let png = png_bytes(8, 8, true);
         let image = decode_source_image(&png).unwrap();
-        let plan = plan_import(&image, &GTA3, "txd.img", Some(EncodeFormat::Rgb888)).unwrap();
+        let plan = plan_import(&image, &GTA3, "txd.img", Some(EncodeFormat::Rgb888), EncodeOptions::default()).unwrap();
         assert!(
             plan.warnings.iter().any(|w| w.contains("alpha")),
             "{:?}",
             plan.warnings
         );
 
-        let plan = plan_import(&image, &GTA3, "gta3.img", Some(EncodeFormat::Pal4)).unwrap();
+        let plan = plan_import(&image, &GTA3, "gta3.img", Some(EncodeFormat::Pal4), EncodeOptions::default()).unwrap();
         assert!(
             plan.warnings.iter().any(|w| w.contains("quantized")),
             "{:?}",
@@ -709,7 +711,7 @@ mod tests {
         let native = txd_writer::native_from_encoded(&encoded, PLATFORM_D3D8, "grass", "");
         let txd = single_texture_txd(native, 0x1003_FFFF);
 
-        let plan = plan_conversion(&txd, 0, &VC, "gta3.img", Some(EncodeFormat::Rgb888)).unwrap();
+        let plan = plan_conversion(&txd, 0, &VC, "gta3.img", Some(EncodeFormat::Rgb888), EncodeOptions::default()).unwrap();
         assert_eq!(plan.width, 16);
         let converted = apply_replace(&txd, 0, &plan).unwrap();
         let parsed = parse_txd(&converted).unwrap();
@@ -728,7 +730,7 @@ mod tests {
     fn new_txd_plan_builds_a_parseable_dictionary() {
         let png = png_bytes(16, 16, false);
         let image = decode_source_image(&png).unwrap();
-        let plan = plan_import(&image, &SA, "gta3.img", None).unwrap();
+        let plan = plan_import(&image, &SA, "gta3.img", None, EncodeOptions::default()).unwrap();
         assert_eq!(plan.format, EncodeFormat::Dxt1);
         let txd = build_new_txd(&plan, &SA, "newtex");
         let parsed = parse_txd(&txd).expect("parse");
@@ -807,6 +809,7 @@ mod tests {
                         target,
                         &archive.file_name,
                         None,
+                        EncodeOptions::default(),
                     ) else {
                         continue;
                     };

@@ -406,6 +406,8 @@ pub enum Message {
     ReplacePlanned(Box<Result<ReplacePlanReady, String>>),
     /// The dialog's format pick changed; re-plan.
     ReplaceFormatChanged(crate::compat::encode::EncodeFormat),
+    /// Toggle high-quality DXT for the replacement; re-plan.
+    ReplaceHighQualityToggled(bool),
     /// Background re-plan finished.
     ReplacePlanRefreshed(Box<Result<ReplacePlanReady, String>>),
     /// Apply the replacement.
@@ -428,6 +430,8 @@ pub enum Message {
     NewTxdNameChanged(String),
     /// The dialog's format pick changed; re-plan.
     NewTxdFormatChanged(crate::compat::encode::EncodeFormat),
+    /// Toggle high-quality DXT for the new TXD; re-plan.
+    NewTxdHighQualityToggled(bool),
     /// Author the new TXD entry.
     NewTxdConfirmed,
     /// Dismiss the new-TXD dialog.
@@ -832,6 +836,8 @@ pub struct ReplaceState {
     pub target: &'static crate::compat::games::GameProfile,
     pub archive_name: String,
     pub chooser: crate::compat::encode::EncodeFormat,
+    /// High-quality DXT (iterative cluster fit) for this plan.
+    pub high_quality: bool,
     pub plan: CompactPlan,
     pub before_handle: iced::widget::image::Handle,
     pub after_handle: iced::widget::image::Handle,
@@ -868,6 +874,8 @@ pub struct NewTxdState {
     pub texture_name: String,
     pub target: &'static crate::compat::games::GameProfile,
     pub chooser: crate::compat::encode::EncodeFormat,
+    /// High-quality DXT (iterative cluster fit) for this plan.
+    pub high_quality: bool,
     pub plan: CompactPlan,
     pub after_handle: iced::widget::image::Handle,
     pub planning: bool,
@@ -2654,6 +2662,7 @@ impl App {
                                 target,
                                 &archive_name,
                                 None,
+                                crate::compat::encode::EncodeOptions::default(),
                             )
                         })
                         .await
@@ -2696,6 +2705,7 @@ impl App {
                     target: ready.target,
                     archive_name: ready.archive_name,
                     chooser: ready.plan.0.format,
+                    high_quality: false,
                     plan: ready.plan,
                     before_handle,
                     after_handle,
@@ -2718,6 +2728,7 @@ impl App {
                 let archive_path = state.archive_path.clone();
                 let target = state.target;
                 let archive_name = state.archive_name.clone();
+                let high_quality = state.high_quality;
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
@@ -2731,6 +2742,44 @@ impl App {
                                 target,
                                 &archive_name,
                                 Some(format),
+                                replace_encode_options(high_quality),
+                            )
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+                    },
+                    |result| Message::ReplacePlanRefreshed(Box::new(result)),
+                )
+            }
+            Message::ReplaceHighQualityToggled(high_quality) => {
+                let Some(state) = self.pending_replace.as_mut() else {
+                    return Task::none();
+                };
+                state.high_quality = high_quality;
+                state.planning = true;
+                let archive_index = state.archive_index;
+                let entry_index = state.entry_index;
+                let texture_index = state.texture_index;
+                let path = state.source_path.clone();
+                let entry = state.entry.clone();
+                let archive_path = state.archive_path.clone();
+                let target = state.target;
+                let archive_name = state.archive_name.clone();
+                let format = state.chooser;
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            plan_replace(
+                                &entry,
+                                archive_path.as_deref(),
+                                archive_index,
+                                entry_index,
+                                texture_index,
+                                path,
+                                target,
+                                &archive_name,
+                                Some(format),
+                                replace_encode_options(high_quality),
                             )
                         })
                         .await
@@ -2863,7 +2912,14 @@ impl App {
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            plan_txd_import(archive_index, path, target, &archive_name, None)
+                            plan_txd_import(
+                                archive_index,
+                                path,
+                                target,
+                                &archive_name,
+                                None,
+                                crate::compat::encode::EncodeOptions::default(),
+                            )
                         })
                         .await
                         .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
@@ -2879,14 +2935,18 @@ impl App {
                         return Task::none();
                     }
                 };
-                // Keep whatever name the user already typed across a
-                // format re-plan.
+                // Keep whatever name and quality choice the user already
+                // set across a re-plan.
                 let texture_name = self
                     .pending_new_txd
                     .as_ref()
                     .map(|state| state.texture_name.clone())
                     .filter(|name| !name.trim().is_empty())
                     .unwrap_or_else(|| ready.texture_name.clone());
+                let high_quality = self
+                    .pending_new_txd
+                    .as_ref()
+                    .is_some_and(|state| state.high_quality);
                 let after_handle = iced::widget::image::Handle::from_rgba(
                     ready.plan.0.width,
                     ready.plan.0.height,
@@ -2899,6 +2959,7 @@ impl App {
                     texture_name,
                     target: ready.target,
                     chooser: ready.plan.0.format,
+                    high_quality,
                     plan: ready.plan,
                     after_handle,
                     planning: false,
@@ -2921,6 +2982,7 @@ impl App {
                 let archive_index = state.archive_index;
                 let path = state.source_path.clone();
                 let target = state.target;
+                let high_quality = state.high_quality;
                 let archive_name = self
                     .editor
                     .archives()
@@ -2930,7 +2992,48 @@ impl App {
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            plan_txd_import(archive_index, path, target, &archive_name, Some(format))
+                            plan_txd_import(
+                                archive_index,
+                                path,
+                                target,
+                                &archive_name,
+                                Some(format),
+                                replace_encode_options(high_quality),
+                            )
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+                    },
+                    |result| Message::NewTxdPlanned(Box::new(result)),
+                )
+            }
+            Message::NewTxdHighQualityToggled(high_quality) => {
+                let Some(state) = self.pending_new_txd.as_mut() else {
+                    return Task::none();
+                };
+                state.high_quality = high_quality;
+                state.planning = true;
+                let archive_index = state.archive_index;
+                let path = state.source_path.clone();
+                let target = state.target;
+                let format = state.chooser;
+                let archive_name = self
+                    .editor
+                    .archives()
+                    .get(archive_index)
+                    .map(|archive| archive.file_name.clone())
+                    .unwrap_or_default();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            plan_txd_import(
+                                archive_index,
+                                path,
+                                target,
+                                &archive_name,
+                                Some(format),
+                                replace_encode_options(high_quality),
+                            )
                         })
                         .await
                         .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
@@ -3205,6 +3308,7 @@ impl App {
             | Message::ReplaceImagePicked(_)
             | Message::ReplacePlanned(_)
             | Message::ReplaceFormatChanged(_)
+            | Message::ReplaceHighQualityToggled(_)
             | Message::ReplacePlanRefreshed(_)
             | Message::ReplaceConfirmed
             | Message::ReplaceApplied { .. }
@@ -3214,6 +3318,7 @@ impl App {
             | Message::NewTxdPlanned(_)
             | Message::NewTxdNameChanged(_)
             | Message::NewTxdFormatChanged(_)
+            | Message::NewTxdHighQualityToggled(_)
             | Message::NewTxdConfirmed
             | Message::NewTxdCancelled
             | Message::BulkConvertRequested
@@ -6430,6 +6535,19 @@ fn window_icon() -> Option<iced::window::Icon> {
 #[allow(dead_code)]
 fn _force_space_use(_: Space) {}
 
+/// Encoder options for the interactive converter dialogs: the
+/// high-quality DXT flag maps onto the iterative cluster fit.
+fn replace_encode_options(high_quality: bool) -> crate::compat::encode::EncodeOptions {
+    crate::compat::encode::EncodeOptions {
+        dxt_quality: if high_quality {
+            crate::compat::encode::DxtQuality::High
+        } else {
+            crate::compat::encode::DxtQuality::Standard
+        },
+        dither: false,
+    }
+}
+
 /// Plan one texture replacement off the UI thread.
 #[allow(clippy::too_many_arguments)]
 fn plan_replace(
@@ -6442,6 +6560,7 @@ fn plan_replace(
     target: &'static crate::compat::games::GameProfile,
     archive_name: &str,
     format: Option<crate::compat::encode::EncodeFormat>,
+    options: crate::compat::encode::EncodeOptions,
 ) -> Result<ReplacePlanReady, String> {
     let bytes = std::fs::read(&path)
         .map_err(|error| format!("read {} failed: {error}", path.display()))?;
@@ -6459,7 +6578,8 @@ fn plan_replace(
         .get(texture_index)
         .ok_or_else(|| "this entry's texture list changed; reopen it".to_string())?;
     let before_rgba = old.decode_rgba().map_err(|error| error.to_string())?;
-    let plan = crate::compat::convert::plan_import(&image, target, archive_name, format)?;
+    let plan =
+        crate::compat::convert::plan_import(&image, target, archive_name, format, options)?;
     Ok(ReplacePlanReady {
         archive_index,
         entry_index,
@@ -6483,6 +6603,7 @@ fn plan_txd_import(
     target: &'static crate::compat::games::GameProfile,
     archive_name: &str,
     format: Option<crate::compat::encode::EncodeFormat>,
+    options: crate::compat::encode::EncodeOptions,
 ) -> Result<NewTxdPlanReady, String> {
     let bytes = std::fs::read(&path)
         .map_err(|error| format!("read {} failed: {error}", path.display()))?;
@@ -6497,7 +6618,8 @@ fn plan_txd_import(
         .and_then(|stem| stem.to_str())
         .unwrap_or("texture")
         .to_string();
-    let plan = crate::compat::convert::plan_import(&image, target, archive_name, format)?;
+    let plan =
+        crate::compat::convert::plan_import(&image, target, archive_name, format, options)?;
     Ok(NewTxdPlanReady {
         archive_index,
         source_path: path,
@@ -6548,6 +6670,7 @@ fn plan_bulk_convert(
                 target,
                 &archive.file_name,
                 None,
+                crate::compat::encode::EncodeOptions::default(),
             ) {
                 Ok(plan) => textures.push((
                     texture_index,
@@ -7301,8 +7424,14 @@ mod tests {
             format_label: "test".to_string(),
             encoded_bytes: 64,
         };
-        let plan =
-            crate::compat::convert::plan_import(&image, target, "txd.img", None).expect("plan");
+        let plan = crate::compat::convert::plan_import(
+            &image,
+            target,
+            "txd.img",
+            None,
+            crate::compat::encode::EncodeOptions::default(),
+        )
+        .expect("plan");
         CompactPlan(Arc::new(plan))
     }
 
@@ -7338,6 +7467,7 @@ mod tests {
             texture_name: texture_name.to_string(),
             target: &crate::compat::games::GTA3,
             chooser: plan.0.format,
+            high_quality: false,
             plan: plan.clone(),
             after_handle: iced::widget::image::Handle::from_rgba(4, 4, vec![0, 0, 0, 0]),
             planning: false,

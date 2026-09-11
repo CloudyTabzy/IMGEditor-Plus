@@ -16,7 +16,9 @@ pub mod raster;
 pub mod save;
 pub mod scan;
 
-pub use encode::{encode_texture, header_spec, EncodeFormat, EncodeOptions, EncodedTexture};
+pub use encode::{
+    encode_texture, header_spec, DxtQuality, EncodeFormat, EncodeOptions, EncodedTexture,
+};
 pub use games::{
     classify, classify_nft_format, profile_by_id, validate_rasters, Evidence, GameProfile, Offender,
     ValidationSummary, Verdict, VerdictReport, ALL_GAMES, BULLY, GTA3, SA, VC,
