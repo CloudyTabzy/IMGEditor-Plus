@@ -375,6 +375,12 @@ pub enum Message {
     ValidateArchiveFor(&'static str),
     /// Toggles the validator's entry-row tinting.
     SetCompatHighlight(bool),
+    /// Grab the tab-width divider.
+    TabResizeStarted,
+    /// Cursor x while dragging the divider.
+    TabResizeMoved(f32),
+    /// Release the tab-width drag; persists the width.
+    TabResizeEnded,
     /// Content probe finished; the hint is advisory only.
     TargetProbed {
         archive_index: usize,
@@ -674,6 +680,12 @@ pub struct App {
     pub validator_popup_open: bool,
     /// Whether entry rows are tinted by their validator verdict.
     pub compat_highlight_enabled: bool,
+    /// Archive-tab width in logical pixels (draggable divider).
+    pub archive_tab_width: f32,
+    /// Active tab-width drag; holds the last cursor x (NaN before the
+    /// first move) so width changes track deltas without needing the
+    /// strip's absolute origin.
+    pub tab_resize_drag: Option<f32>,
     /// Whether `save_config()` may write to disk. Tests disable this so
     /// they never touch the user's real settings.ini.
     pub config_persist_enabled: bool,
@@ -834,11 +846,13 @@ impl App {
 
         Self {
             editor,
+            archive_tab_width: crate::config::clamp_archive_tab_width(config.archive_tab_width),
             config,
             sort_draft: None,
             show_sort_manager: false,
             validator_popup_open: false,
             compat_highlight_enabled: true,
+            tab_resize_drag: None,
             config_persist_enabled: true,
             drag_state: None,
             last_export_selected_only: false,
@@ -3375,6 +3389,28 @@ impl App {
                 self.compat_highlight_enabled = enabled;
                 Task::none()
             }
+            Message::TabResizeStarted => {
+                self.tab_resize_drag = Some(f32::NAN);
+                Task::none()
+            }
+            Message::TabResizeMoved(x) => {
+                if let Some(last) = self.tab_resize_drag
+                    && last.is_finite()
+                {
+                    self.archive_tab_width = crate::config::clamp_archive_tab_width(
+                        self.archive_tab_width + (x - last),
+                    );
+                }
+                self.tab_resize_drag = Some(x);
+                Task::none()
+            }
+            Message::TabResizeEnded => {
+                if self.tab_resize_drag.take().is_some() {
+                    self.config.archive_tab_width = self.archive_tab_width;
+                    self.save_config();
+                }
+                Task::none()
+            }
             Message::ValidateArchiveFor(target_id) => {
                 let Some(archive_index) = self.editor.selected_archive() else {
                     self.toast = Some("Open an archive first to validate it.".into());
@@ -4724,6 +4760,22 @@ impl App {
             Subscription::none()
         };
 
+        // While the tab divider is grabbed, track the cursor globally so
+        // the drag keeps working once the pointer leaves the narrow grip.
+        let tab_resize = if self.tab_resize_drag.is_some() {
+            iced::event::listen_with(|event, _status, _window| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Some(Message::TabResizeMoved(position.x))
+                }
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                )) => Some(Message::TabResizeEnded),
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
+
         Subscription::batch([
             mod_tracker,
             key,
@@ -4734,6 +4786,7 @@ impl App {
             window,
             autoscroll_start,
             autoscroll_stop,
+            tab_resize,
         ])
     }
 }
@@ -5823,6 +5876,49 @@ mod tests {
         assert!(!app.compat_highlight_enabled);
         let _ = app.update(Message::SetCompatHighlight(true));
         assert!(app.compat_highlight_enabled);
+    }
+
+    #[test]
+    fn tab_resize_drag_tracks_deltas_and_clamps() {
+        let mut app = test_app_with_entries();
+        let start = app.archive_tab_width;
+
+        let _ = app.update(Message::TabResizeStarted);
+        assert!(app.tab_resize_drag.is_some());
+        // First movement only anchors the drag; it must not jump the width
+        // to the absolute cursor position.
+        let _ = app.update(Message::TabResizeMoved(900.0));
+        assert_eq!(app.archive_tab_width, start);
+
+        // Deltas widen and compress the tabs, clamped at the bounds.
+        let _ = app.update(Message::TabResizeMoved(940.0));
+        assert_eq!(app.archive_tab_width, start + 40.0);
+        let _ = app.update(Message::TabResizeMoved(0.0));
+        assert_eq!(
+            app.archive_tab_width,
+            crate::config::ARCHIVE_TAB_WIDTH_MIN,
+            "compression stops at the minimum"
+        );
+        let _ = app.update(Message::TabResizeMoved(10_000.0));
+        assert_eq!(
+            app.archive_tab_width,
+            crate::config::ARCHIVE_TAB_WIDTH_MAX,
+            "widening stops at the maximum"
+        );
+
+        // Releasing persists the width and ends the drag.
+        let _ = app.update(Message::TabResizeEnded);
+        assert!(app.tab_resize_drag.is_none());
+        assert_eq!(
+            app.config.archive_tab_width,
+            crate::config::ARCHIVE_TAB_WIDTH_MAX
+        );
+        // Stray moves after release must not resize anything.
+        let _ = app.update(Message::TabResizeMoved(0.0));
+        assert_eq!(
+            app.archive_tab_width,
+            crate::config::ARCHIVE_TAB_WIDTH_MAX
+        );
     }
 
     #[test]

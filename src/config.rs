@@ -262,6 +262,23 @@ pub struct Config {
     /// Keyed by the canonical archive path so the choice survives
     /// restarts without sidecar files next to the game.
     pub archive_targets: Vec<(PathBuf, String)>,
+    /// Width of an archive tab in logical pixels, adjustable by dragging
+    /// the divider after the tab strip.
+    pub archive_tab_width: f32,
+}
+
+/// Tab width bounds and default.
+pub const ARCHIVE_TAB_WIDTH_MIN: f32 = 72.0;
+pub const ARCHIVE_TAB_WIDTH_MAX: f32 = 320.0;
+pub const ARCHIVE_TAB_WIDTH_DEFAULT: f32 = 150.0;
+
+/// Clamp a tab width to the supported range (also guards corrupt config).
+pub fn clamp_archive_tab_width(width: f32) -> f32 {
+    if width.is_finite() {
+        width.clamp(ARCHIVE_TAB_WIDTH_MIN, ARCHIVE_TAB_WIDTH_MAX)
+    } else {
+        ARCHIVE_TAB_WIDTH_DEFAULT
+    }
 }
 
 /// How many archive targets are remembered before the oldest is dropped.
@@ -327,6 +344,7 @@ impl Default for Config {
             literal_file_types: false,
             context_selection_accumulates: true,
             archive_targets: Vec::new(),
+            archive_tab_width: ARCHIVE_TAB_WIDTH_DEFAULT,
         }
     }
 }
@@ -488,6 +506,11 @@ impl Config {
                 "update_notify_disabled" => {
                     config.update_notify_disabled = value.eq_ignore_ascii_case("true");
                 }
+                "archive_tab_width" => {
+                    if let Ok(width) = value.parse::<f32>() {
+                        config.archive_tab_width = clamp_archive_tab_width(width);
+                    }
+                }
                 "show_texture_grid" => {
                     config.show_texture_grid = value.eq_ignore_ascii_case("true");
                 }
@@ -589,6 +612,7 @@ impl Config {
         for (index, (path, game)) in self.archive_targets.iter().enumerate() {
             writeln!(file, "archive_target_{}={}|{}", index, path.display(), game)?;
         }
+        writeln!(file, "archive_tab_width={:.1}", self.archive_tab_width)?;
         for (index, prio) in self.default_sort_chain.iter().enumerate() {
             writeln!(
                 file,
@@ -788,6 +812,7 @@ mod tests {
             literal_file_types: true,
             context_selection_accumulates: false,
             archive_targets: Vec::new(),
+            archive_tab_width: 220.0,
         };
         let archive_a = temp.path().join("a.img");
         let archive_b = temp.path().join("b.img");
@@ -805,6 +830,7 @@ mod tests {
         assert!(loaded.window.maximized);
         assert_eq!(loaded.last_export_folder, Some(PathBuf::from("C:/out")));
         assert_eq!(loaded.last_open_folder, Some(PathBuf::from("C:/in")));
+        assert_eq!(loaded.archive_tab_width, 220.0);
         assert_eq!(loaded.recent_files.len(), 2);
         // MRU-first: b was touched last, so it's at index 0.
         let canonical_b = archive_b.canonicalize().unwrap();

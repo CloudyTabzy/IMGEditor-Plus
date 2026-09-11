@@ -768,8 +768,10 @@ mod tests {
 
     #[test]
     fn repeated_truck_barr_uvs_stay_inside_the_preview_tile_when_present() {
-        let path = "C:/Dev/bully-nif-tools/Nif_Files/3_06TruckBarr.nif";
-        let bytes = match std::fs::read(path) {
+        let Some(root) = crate::test_paths::bully_nif_tools() else {
+            return;
+        };
+        let bytes = match std::fs::read(root.join("3_06TruckBarr.nif")) {
             Ok(bytes) => bytes,
             Err(_) => return,
         };

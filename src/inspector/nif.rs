@@ -1,7 +1,7 @@
 //! Gamebryo NIF 20.3.0.9 parser for Bully Scholarship Edition.
 //!
-//! The parser is hand-rolled against the format spec in
-//! `bully_nif_format.md (external nif-tools docs)`. It does **not** depend on the `nif 0.5`
+//! The parser is hand-rolled against the Bully NIF format specification
+//! (`bully_nif_format.md` in the external nif-tools docs). It does **not** depend on the `nif 0.5`
 //! crate (which only targets 20.0.0.4) or on the niftools nifgen schema
 //! (which is GPL and written in Python).
 //!

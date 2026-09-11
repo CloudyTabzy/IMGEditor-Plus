@@ -1611,6 +1611,49 @@ fn archive_tab_label(
     format!("{} · {}", archive.file_name, parts.join("\\"))
 }
 
+/// Cut a label to fit a tab width, appending an ellipsis. Iced's Text has
+/// no ellipsis support in 0.14, so the budget is estimated from the tab
+/// font's average glyph width.
+fn ellipsize(label: &str, width: f32) -> String {
+    const GLYPH_WIDTH: f32 = 7.2;
+    const HORIZONTAL_PADDING: f32 = 20.0;
+    let budget = (((width - HORIZONTAL_PADDING) / GLYPH_WIDTH).floor() as usize).max(4);
+    if label.chars().count() <= budget {
+        return label.to_string();
+    }
+    let mut out: String = label.chars().take(budget - 1).collect();
+    out.push('…');
+    out
+}
+
+/// Divider after the tab strip: drag horizontally to resize the tabs.
+fn tab_resize_grip() -> Element<'static, Message> {
+    let bar = Container::new(
+        Space::new()
+            .width(Length::Fixed(3.0))
+            .height(Length::Fixed(24.0)),
+    )
+    .style(|theme: &iced::Theme| iced::widget::container::Style {
+        background: Some(theme.extended_palette().background.strong.color.into()),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 2.0.into(),
+        },
+        ..Default::default()
+    });
+    let padded = container(bar).padding(iced::Padding {
+        top: 0.0,
+        right: 4.0,
+        bottom: 0.0,
+        left: 4.0,
+    });
+    mouse_area(padded)
+        .on_press(Message::TabResizeStarted)
+        .interaction(iced::mouse::Interaction::ResizingHorizontally)
+        .into()
+}
+
 pub fn build(app: &App) -> Element<'_, Message> {
     let design = app.design();
     let tab_surface = design.chrome();
@@ -1623,6 +1666,10 @@ pub fn build(app: &App) -> Element<'_, Message> {
         Space::new().height(Length::Fixed(0.0)).into()
     } else {
         let selected = app.editor.selected_archive().unwrap_or(0);
+        let tab_width = app.archive_tab_width.clamp(
+            crate::config::ARCHIVE_TAB_WIDTH_MIN,
+            crate::config::ARCHIVE_TAB_WIDTH_MAX,
+        );
         let mut tab_rows = Vec::new();
         for (index, archive) in app.editor.archives().iter().enumerate() {
             let is_selected = index == selected;
@@ -1632,9 +1679,11 @@ pub fn build(app: &App) -> Element<'_, Message> {
             } else {
                 display_name
             };
+            let label = ellipsize(&label, tab_width);
             let tab_pulse = app.archive_tab_selection_pulse(index);
             let tab = button(fonts::body(label))
                 .on_press(Message::SelectArchiveTab(index))
+                .width(Length::Fixed(tab_width))
                 .style(move |theme, status| {
                     let mut style = if is_selected {
                         button::primary(theme, status)
@@ -1699,14 +1748,21 @@ pub fn build(app: &App) -> Element<'_, Message> {
             } else {
                 row.into()
             };
-        Container::new(row)
-            .width(Length::Fill)
-            .height(Length::Fixed(40.0))
-            .style(move |_| iced::widget::container::Style {
-                background: Some(iced::Background::Color(tab_surface)),
-                ..Default::default()
-            })
-            .into()
+        Container::new(
+            Row::new()
+                .push(row)
+                .push(Space::new().width(Length::Fill))
+                .push(tab_resize_grip())
+                .align_y(Alignment::Center)
+                .height(Length::Fixed(40.0)),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(40.0))
+        .style(move |_| iced::widget::container::Style {
+            background: Some(iced::Background::Color(tab_surface)),
+            ..Default::default()
+        })
+        .into()
     };
 
     let body: Element<'_, Message> = if app.editor.archives().is_empty() {
@@ -3236,6 +3292,24 @@ mod tests {
             "player",
             "unique names stay bare"
         );
+    }
+
+    #[test]
+    fn tab_labels_ellipsize_to_the_tab_width() {
+        let long = "gta3.img · GTA San Andreas\\models";
+        let short = "player.img";
+
+        // Wide tabs keep the whole label; narrow tabs cut it with an
+        // ellipsis and never exceed the glyph budget.
+        assert_eq!(ellipsize(short, 150.0), short);
+        let cut = ellipsize(long, 100.0);
+        assert!(cut.ends_with('…'));
+        assert!(cut.chars().count() < long.chars().count());
+        assert!(ellipsize(long, 40.0).chars().count() >= 4);
+
+        // The minimum width still leaves room for a readable stub.
+        let minimal = ellipsize(long, crate::config::ARCHIVE_TAB_WIDTH_MIN);
+        assert!(minimal.chars().count() >= 6, "got {minimal:?}");
     }
 
     #[test]

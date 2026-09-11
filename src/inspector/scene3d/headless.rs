@@ -985,21 +985,18 @@ mod tests {
     fn navigation_fixture_views_when_present() {
         use crate::inspector::scene3d::camera::BaseOrientation;
         use crate::inspector::scene3d::navigation::AxisView;
-        let fixtures = [
-            (
-                "gta-tank",
-                "C:/Dev/IMGEditor-master/Gta_3_img/Exported/ci_watertank.dff",
-            ),
-            (
-                "bully-lamp",
-                "C:/Games/Bully - Scholarship Edition/Stream/NIF/adm_lamp.nif",
-            ),
-        ];
+        let mut fixtures: Vec<(&str, std::path::PathBuf)> = Vec::new();
+        if let Some(root) = crate::test_paths::gta3_exports() {
+            fixtures.push(("gta-tank", root.join("ci_watertank.dff")));
+        }
+        if let Some(root) = crate::test_paths::bully_nif() {
+            fixtures.push(("bully-lamp", root.join("adm_lamp.nif")));
+        }
         for (name, path) in fixtures {
-            let Ok(bytes) = std::fs::read(path) else {
+            let Ok(bytes) = std::fs::read(&path) else {
                 continue;
             };
-            let mut scene = if path.ends_with(".dff") {
+            let mut scene = if path.extension().is_some_and(|ext| ext == "dff") {
                 crate::inspector::scene3d::decode::parse_and_build_scene_from_dff(
                     &bytes,
                     BaseOrientation::Zup,
@@ -1055,14 +1052,10 @@ mod tests {
 
     #[test]
     fn bully_fixture_renders_to_png_when_present() {
-        // End-to-end smoke: parse a Bully NIF, decode the geometry,
-        // upload to GPU, render one frame, write a PNG to the target
-        // directory so a human can eyeball the output. Skips silently
-        // when the fixture is not on the dev machine (matches the
-        // existing `decoder_handles_bully_fixture_when_present` pattern).
-        let path = std::path::Path::new(
-            "C:/Games/Bully - Scholarship Edition/Stream/test1/1950Fridge.nif",
-        );
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let path = stream.join("test1/1950Fridge.nif");
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
             Err(_) => return,
@@ -1097,10 +1090,14 @@ mod tests {
 
     #[test]
     fn adm_lamp_fixture_renders_when_present() {
-        let candidates = [
-            std::path::Path::new("C:/Dev/bully-nif-tools/Nif_Files/adm_lamp.nif"),
-            std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/NIF/adm_lamp.nif"),
-        ];
+        let candidates: Vec<std::path::PathBuf> = [
+            crate::test_paths::bully_nif_tools(),
+            crate::test_paths::bully_nif(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|root| root.join("adm_lamp.nif"))
+        .collect();
         let Some(path) = candidates.iter().find(|path| path.is_file()) else {
             return;
         };
@@ -1137,9 +1134,11 @@ mod tests {
 
     #[test]
     fn mascot_fixtures_render_to_png_when_present() {
-        let root = std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/NIF");
-        let archive_path =
-            std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/World.img");
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let root = stream.join("NIF");
+        let archive_path = stream.join("World.img");
         let names = [
             "Player_Mascot.nif",
             "Player_Mascot_nh.nif",
@@ -1224,9 +1223,10 @@ mod tests {
         // target/scene3d-full-pipeline.png so the rendering can be
         // eyeballed without launching the GUI. Skips silently when
         // the Bully fixture is not on the dev machine.
-        let path = std::path::Path::new(
-            "C:/Games/Bully - Scholarship Edition/Stream/test1/1950Fridge.nif",
-        );
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let path = stream.join("test1/1950Fridge.nif");
         let Ok(bytes) = std::fs::read(path) else {
             return;
         };

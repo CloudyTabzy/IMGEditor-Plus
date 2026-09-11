@@ -1598,8 +1598,10 @@ mod tests {
     /// must have identical block counts and string tables.
     #[test]
     fn nft_parse_accepts_crlf_header() {
-        let lf_path = "C:/Games/Bully - Scholarship Edition/Stream/Test/EXTwinradar029.nft";
-        let lf_bytes = match std::fs::read(lf_path) {
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let lf_bytes = match std::fs::read(stream.join("Test/EXTwinradar029.nft")) {
             Ok(b) => b,
             Err(_) => return,
         };
@@ -1736,8 +1738,10 @@ mod tests {
     ///   - num_shader_textures = 0
     #[test]
     fn nif_parse_texturing_property_1950fridge() {
-        let path = "C:/Games/Bully - Scholarship Edition/Stream/test1/1950Fridge.nif";
-        let bytes = match std::fs::read(path) {
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let bytes = match std::fs::read(stream.join("test1/1950Fridge.nif")) {
             Ok(b) => b,
             Err(_) => return,
         };
@@ -1825,10 +1829,10 @@ mod tests {
 
     #[test]
     fn bully_fixture_catalog_resolves_referenced_pixels_when_present() {
-        let root = Path::new("C:/Games/Bully - Scholarship Edition");
-        if !root.is_dir() {
+        let Some(stream) = crate::test_paths::bully_stream() else {
             return;
-        }
+        };
+        let root = stream.parent().unwrap_or(stream.as_path());
         let ide_map = IdeMap::build(root);
         let Some(catalog) = resolve_textures_for_nif("1950Fridge", &ide_map) else {
             // The NIF fixture may be installed without its companion NFT.
@@ -1846,12 +1850,15 @@ mod tests {
 
     #[test]
     fn bully_archive_catalog_resolves_player_mascot_pixels_when_present() {
-        let archive_path = Path::new("C:/Games/Bully - Scholarship Edition/Stream/World.img");
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let archive_path = stream.join("World.img");
         if !archive_path.is_file() {
             return;
         }
         let archive =
-            crate::archive::ArchiveInfo::open(archive_path).expect("World.img should open");
+            crate::archive::ArchiveInfo::open(&archive_path).expect("World.img should open");
         let index = ArchiveTextureIndex::from_entries(&archive.entries, archive.path.as_deref());
         let catalog = index
             .resolve_textures_for_nif("Player_Mascot", None)

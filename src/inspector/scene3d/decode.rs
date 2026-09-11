@@ -300,11 +300,10 @@ mod tests {
 
     #[test]
     fn decoder_handles_bully_fixture_when_present() {
-        // Same fixture path the existing `nif` tests use. Skips when
-        // the file is not on the dev machine, mirroring the test
-        // pattern in `inspector::texture`.
-        let path = "C:/Games/Bully - Scholarship Edition/Stream/test1/1950Fridge.nif";
-        let bytes = match std::fs::read(path) {
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let bytes = match std::fs::read(stream.join("test1/1950Fridge.nif")) {
             Ok(b) => b,
             Err(_) => return,
         };
@@ -322,9 +321,11 @@ mod tests {
 
     #[test]
     fn decoder_routes_fixture_diffuse_names_per_mesh_when_present() {
-        let path = "C:/Games/Bully - Scholarship Edition/Stream/test1/1950Fridge.nif";
-        let root = std::path::Path::new("C:/Games/Bully - Scholarship Edition");
-        let bytes = match std::fs::read(path) {
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let root = stream.parent().unwrap_or(stream.as_path());
+        let bytes = match std::fs::read(stream.join("test1/1950Fridge.nif")) {
             Ok(b) => b,
             Err(_) => return,
         };
@@ -353,8 +354,10 @@ mod tests {
 
     #[test]
     fn decoder_preserves_bbagbottle_strip_topology_when_present() {
-        let path = "C:/Dev/bully-nif-tools/Nif_Files/1S01_bbagbottle.nif";
-        let bytes = match std::fs::read(path) {
+        let Some(root) = crate::test_paths::bully_nif_tools() else {
+            return;
+        };
+        let bytes = match std::fs::read(root.join("1S01_bbagbottle.nif")) {
             Ok(bytes) => bytes,
             Err(_) => return,
         };

@@ -11,5 +11,7 @@ pub mod session;
 pub mod sort;
 pub mod tasks;
 pub mod ui;
+#[cfg(test)]
+pub(crate) mod test_paths;
 pub mod updater;
 pub mod utils;

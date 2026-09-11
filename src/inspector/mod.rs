@@ -2,7 +2,7 @@
 //!
 //! Bully Scholarship Edition uses Gamebryo NIF version 20.3.0.9 with
 //! `user_version = 0` and `bs_version = 0`. The on-disk layout is fully
-//! documented in `bully_nif_format.md (external nif-tools docs)`; the spec is derived from the
+//! documented in the Bully NIF format specification; the spec is derived from the
 //! niftools nifxml schema and verified against `1950Fridge.nif`.
 //!
 //! The inspector is split into five layers:

@@ -925,7 +925,10 @@ mod tests {
 
     #[test]
     fn parses_real_renderware_texture_when_fixture_is_present() {
-        let path = "C:/Dev/IMGEditor-master/Gta_3_img/Exported/gta_proc_grassland.txd";
+        let Some(root) = crate::test_paths::gta3_exports() else {
+            return;
+        };
+        let path = root.join("gta_proc_grassland.txd");
         let Ok(bytes) = std::fs::read(path) else {
             return;
         };

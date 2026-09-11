@@ -1157,13 +1157,15 @@ mod tests {
 
     #[test]
     fn mascot_fixtures_have_upright_viewer_bounds_when_present() {
+        let Some(nif_root) = crate::test_paths::bully_nif() else {
+            return;
+        };
         for name in [
             "Player_Mascot.nif",
             "Player_Mascot_nh.nif",
             "Player_Mascot_W.nif",
         ] {
-            let path =
-                std::path::Path::new("C:/Games/Bully - Scholarship Edition/Stream/NIF").join(name);
+            let path = nif_root.join(name);
             let Ok(bytes) = std::fs::read(path) else {
                 continue;
             };

@@ -949,7 +949,10 @@ mod tests {
 
     #[test]
     fn parses_real_renderware_dff_samples_when_present() {
-        let root = std::path::Path::new("C:/Dev/IMGEditor-master/Gta_3_img/Exported");
+        let Some(root) = crate::test_paths::gta3_exports() else {
+            return;
+        };
+        let root = root.as_path();
         let mut paths = [
             root.join("a51_blastdoorl.dff"),
             root.join("a51_crane.dff"),
