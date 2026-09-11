@@ -256,9 +256,12 @@ const GTA3_FORMATS: &[FormatInfo] = &[
     FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: "1,121 rasters" },
     FormatInfo { class: "1555", verdict: Verdict::Native, note: "24 rasters" },
     FormatInfo { class: "DXT1", verdict: Verdict::Supported, note: "retail ships none; D3D8 hardware supports it" },
-    FormatInfo { class: "DXT2 / DXT3 / DXT4 / DXT5", verdict: Verdict::Untested, note: "retail ships none; acceptance unmeasured" },
-    FormatInfo { class: "888 true 24-bit", verdict: Verdict::Untested, note: "retail never stores 888 at 24-bit" },
-    FormatInfo { class: "565 / 4444", verdict: Verdict::Untested, note: "VC-era 16-bit forms; III ships none" },
+    FormatInfo { class: "DXT3 / DXT5", verdict: Verdict::Supported, note: "driver reads them; retail ships none" },
+    FormatInfo { class: "DXT2 / DXT4", verdict: Verdict::Untested, note: "no RW raster identification path" },
+    FormatInfo { class: "888 true 24-bit", verdict: Verdict::Unsupported, note: "no 24-bit RW form: C888 is X8R8G8B8" },
+    FormatInfo { class: "565 / 4444", verdict: Verdict::Supported, note: "driver-mapped; III ships none" },
+    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: "driver maps C555 and LUM8; retail ships none" },
+    FormatInfo { class: "A8L8", verdict: Verdict::Unsupported, note: "no RW raster format maps to A8L8" },
 ];
 
 const VC_FORMATS: &[FormatInfo] = &[
@@ -269,7 +272,11 @@ const VC_FORMATS: &[FormatInfo] = &[
     FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: "1 raster" },
     FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: "III ships it; VC itself ships none" },
     FormatInfo { class: "DXT1", verdict: Verdict::Supported, note: "retail ships none; D3D8 hardware supports it" },
-    FormatInfo { class: "DXT2 / DXT3 / DXT4 / DXT5", verdict: Verdict::Untested, note: "retail ships none; acceptance unmeasured" },
+    FormatInfo { class: "DXT3 / DXT5", verdict: Verdict::Supported, note: "driver reads them; retail ships none" },
+    FormatInfo { class: "DXT2 / DXT4", verdict: Verdict::Untested, note: "no RW raster identification path" },
+    FormatInfo { class: "888 true 24-bit", verdict: Verdict::Unsupported, note: "no 24-bit RW form: C888 is X8R8G8B8" },
+    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: "driver maps C555 and LUM8; retail ships none" },
+    FormatInfo { class: "A8L8", verdict: Verdict::Unsupported, note: "no RW raster format maps to A8L8" },
 ];
 
 const SA_FORMATS: &[FormatInfo] = &[
@@ -279,8 +286,10 @@ const SA_FORMATS: &[FormatInfo] = &[
     FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: "237 rasters" },
     FormatInfo { class: "DXT5", verdict: Verdict::Supported, note: "retail ships none; D3D9 supports it" },
     FormatInfo { class: "DXT2 / DXT4", verdict: Verdict::Untested, note: "retail ships none" },
-    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Untested, note: "palette-free dialect: 0 / 32,157" },
-    FormatInfo { class: "1555 / 565 / 4444", verdict: Verdict::Untested, note: "retail ships no 16-bit uncompressed" },
+    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Supported, note: "driver converts palettes at load; retail ships none" },
+    FormatInfo { class: "1555 / 565 / 4444", verdict: Verdict::Supported, note: "driver-mapped; retail ships no 16-bit uncompressed" },
+    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: "driver maps C555 and LUM8; retail ships none" },
+    FormatInfo { class: "A8L8", verdict: Verdict::Unsupported, note: "no RW raster format maps to A8L8" },
 ];
 
 const BULLY_FORMATS: &[FormatInfo] = &[
@@ -443,12 +452,13 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
             Evidence::Retail,
             "retail SA ships none; DXT5 rides D3D9 support (mod tooling uses it)".to_string(),
         ),
-        // SA abandoned palettes entirely - the III/VC native form has
-        // no retail precedent for an SA target.
+        // SA abandoned palettes entirely, but the D3D9 driver decodes a
+        // paletted raster into an uncompressed image when the device has
+        // no P8 support, so paletted content still loads.
         LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
-            Verdict::Untested,
-            Evidence::Retail,
-            "retail SA ships zero paletted rasters (0/32,157)".to_string(),
+            Verdict::Supported,
+            Evidence::Docs,
+            "driver converts palettes to uncompressed at load; retail SA ships none".to_string(),
         ),
         // Retail SA ships uncompressed 888 as X8R8G8B8 32bpp storage
         // (1,015 rasters, mostly player.img ped skins) and 8888 (237).
@@ -456,19 +466,32 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
             (Verdict::Native, Evidence::Retail, String::new())
         }
         LogicalFormat::R888 => (
-            Verdict::Untested,
-            Evidence::Retail,
-            "retail SA never ships true 24-bit 888".to_string(),
+            Verdict::Unsupported,
+            Evidence::Docs,
+            "C888 is stored X8R8G8B8 32-bit; there is no 24-bit RW raster form".to_string(),
         ),
         LogicalFormat::R8888 => (Verdict::Native, Evidence::Retail, String::new()),
+        // Driver-mapped formats that retail SA happens not to ship.
         LogicalFormat::R1555 | LogicalFormat::R565 | LogicalFormat::R4444 => (
-            Verdict::Untested,
-            Evidence::Retail,
-            "retail SA ships no 16-bit uncompressed rasters".to_string(),
+            Verdict::Supported,
+            Evidence::Docs,
+            "driver maps 1555/565/4444; retail SA ships no 16-bit uncompressed".to_string(),
         ),
-        LogicalFormat::R555 | LogicalFormat::Lum8 | LogicalFormat::A8l8 => {
-            (Verdict::Untested, Evidence::Untested, String::new())
-        }
+        LogicalFormat::R555 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            "driver maps C555 to X1R5G5B5; retail ships none".to_string(),
+        ),
+        LogicalFormat::Lum8 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            "driver maps LUM8 to D3DFMT_L8; retail ships none".to_string(),
+        ),
+        LogicalFormat::A8l8 => (
+            Verdict::Unsupported,
+            Evidence::Docs,
+            "no RW raster format maps to A8L8".to_string(),
+        ),
         LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, String::new()),
     }
 }
@@ -495,13 +518,21 @@ fn iii_vc_verdict(
             Evidence::Retail,
             "retail III+VC ship no compressed rasters (0/27,395)".to_string(),
         ),
-        LogicalFormat::Dxt2 | LogicalFormat::Dxt3 | LogicalFormat::Dxt4 | LogicalFormat::Dxt5 => {
-            (
-                Verdict::Untested,
-                Evidence::Retail,
-                "retail III+VC ship none; engine acceptance unmeasured".to_string(),
-            )
-        }
+        // librw's D3D driver reads the native compression byte 1..5 into
+        // DXT1..DXT5 textures, so DXT3/DXT5 load even though retail III+VC
+        // never ship compressed rasters. DXT2/DXT4 have no RW raster
+        // identification path, so they stay unknown.
+        LogicalFormat::Dxt3 | LogicalFormat::Dxt5 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            "D3D driver reads DXT3/DXT5 compression codes; retail III+VC ship none".to_string(),
+        ),
+        LogicalFormat::Dxt2 | LogicalFormat::Dxt4 => (
+            Verdict::Untested,
+            Evidence::Docs,
+            "driver maps DXT codes 1-5 but RW raster identification only knows DXT1/3/5"
+                .to_string(),
+        ),
         // Question 5 answered: retail III stores 888 exclusively as
         // 32-bit X8R8G8B8 (6,806 rasters; the txd.img player/vehicle
         // set is 87% of this class). True 24-bit never ships. VC
@@ -509,11 +540,12 @@ fn iii_vc_verdict(
         LogicalFormat::R888 if profile.storage_bpp == 4 => {
             (Verdict::Native, Evidence::Retail, String::new())
         }
+        // librw maps RW C888 to D3DFMT_X8R8G8B8 and has no 24-bit RW
+        // raster code; D3DFMT_R8G8B8 carries no RW format.
         LogicalFormat::R888 => (
-            Verdict::Untested,
-            Evidence::Retail,
-            "retail III+VC never ship true 24-bit 888; D3D8 R8G8B8 acceptance unmeasured"
-                .to_string(),
+            Verdict::Unsupported,
+            Evidence::Docs,
+            "C888 is stored X8R8G8B8 32-bit; there is no 24-bit RW raster form".to_string(),
         ),
         LogicalFormat::R8888 => (
             Verdict::Native,
@@ -529,9 +561,22 @@ fn iii_vc_verdict(
         LogicalFormat::R1555 | LogicalFormat::R4444 => {
             (Verdict::Native, Evidence::Retail, String::new())
         }
-        LogicalFormat::R555 | LogicalFormat::Lum8 | LogicalFormat::A8l8 => {
-            (Verdict::Untested, Evidence::Untested, String::new())
-        }
+        // Mapped driver formats that retail happens not to use.
+        LogicalFormat::R555 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            "driver maps C555 to X1R5G5B5; retail ships none".to_string(),
+        ),
+        LogicalFormat::Lum8 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            "driver maps LUM8 to D3DFMT_L8; retail ships none".to_string(),
+        ),
+        LogicalFormat::A8l8 => (
+            Verdict::Unsupported,
+            Evidence::Docs,
+            "no RW raster format maps to A8L8".to_string(),
+        ),
         LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, String::new()),
     }
 }
@@ -621,12 +666,78 @@ mod tests {
         assert_eq!(summary.incompatible_count(), 1);
         assert_eq!(summary.worst, Verdict::Unsupported);
 
-        // 555 has no retail evidence for SA: unknown, not incompatible.
-        let odd = raster(9, LogicalFormat::R555);
+        // DXT4 has no retail SA precedent and no RW identification
+        // path: unknown, not incompatible.
+        let odd = raster(9, LogicalFormat::Dxt4);
         let summary = validate_rasters(&SA, [("odd", &odd)]);
         assert_eq!(summary.unknown_count(), 1);
         assert!(!summary.has_incompatible());
         assert_eq!(summary.worst, Verdict::Untested);
+    }
+
+    #[test]
+    fn librw_driver_cells_are_documented() {
+        use crate::compat::raster::PaletteKind;
+
+        fn platform_for(game: &GameProfile) -> u32 {
+            if game.id == "sa" {
+                9
+            } else {
+                8
+            }
+        }
+
+        fn verdict(game: &GameProfile, logical: LogicalFormat, bpp: u32) -> VerdictReport {
+            let profile = RasterProfile {
+                platform_id: platform_for(game),
+                raster_format: 0,
+                d3d_format: 0,
+                fourcc: None,
+                logical,
+                storage_bpp: bpp,
+                width: 64,
+                height: 64,
+                depth: 32,
+                mip_levels: 1,
+                palette: PaletteKind::None,
+                has_alpha_header: true,
+                automipmap: false,
+            };
+            classify(game, &profile)
+        }
+
+        // DXT3/DXT5 load on the D3D driver (compression codes 2/4).
+        // III/VC retail ships none, so they are Supported there; SA
+        // retail ships DXT3 (native) but not DXT5.
+        for game in [&GTA3, &VC] {
+            for logical in [LogicalFormat::Dxt3, LogicalFormat::Dxt5] {
+                let report = verdict(game, logical, 4);
+                assert_eq!(report.verdict, Verdict::Supported, "{} {logical:?}", game.id);
+            }
+        }
+        assert_eq!(verdict(&SA, LogicalFormat::Dxt3, 4).verdict, Verdict::Native);
+        assert_eq!(verdict(&SA, LogicalFormat::Dxt5, 4).verdict, Verdict::Supported);
+
+        // True 24-bit 888 and A8L8 have no RW raster form at all.
+        for game in [&GTA3, &VC, &SA] {
+            let report = verdict(game, LogicalFormat::R888, 3);
+            assert_eq!(report.verdict, Verdict::Unsupported, "{}", game.id);
+            let report = verdict(game, LogicalFormat::A8l8, 2);
+            assert_eq!(report.verdict, Verdict::Unsupported, "{}", game.id);
+        }
+
+        // Driver-mapped-but-unshipped formats are Supported, with Docs
+        // evidence: LUM8/C555 everywhere, palettes on SA.
+        for game in [&GTA3, &VC, &SA] {
+            for logical in [LogicalFormat::Lum8, LogicalFormat::R555] {
+                let report = verdict(game, logical, 1);
+                assert_eq!(report.verdict, Verdict::Supported, "{} {logical:?}", game.id);
+                assert_eq!(report.evidence, Evidence::Docs);
+            }
+        }
+        let report = verdict(&SA, LogicalFormat::Pal8, 1);
+        assert_eq!(report.verdict, Verdict::Supported);
+        assert_eq!(report.evidence, Evidence::Docs);
     }
 
     #[test]
