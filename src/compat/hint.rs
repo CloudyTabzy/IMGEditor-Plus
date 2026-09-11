@@ -204,7 +204,7 @@ fn peek_native(body: &[u8], out: &mut Vec<(u32, LogicalFormat)>) {
                 let raster_format = read_u32(struct_body, 72).unwrap_or(0);
                 let d3d_format = read_u32(struct_body, 76).unwrap_or(0);
                 let depth = struct_body[84];
-                let paletted = matches!((raster_format >> 13) & 0x3, 1 | 2 | 3);
+                let paletted = matches!((raster_format >> 13) & 0x3, 1..=3);
                 let (class, _) = super::raster::classify_format(
                     raster_format,
                     d3d_format,
