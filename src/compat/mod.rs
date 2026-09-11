@@ -6,6 +6,7 @@
 
 pub mod games;
 pub mod hint;
+pub mod normalize;
 pub mod raster;
 pub mod save;
 pub mod scan;
