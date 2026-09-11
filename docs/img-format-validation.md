@@ -116,7 +116,8 @@ reading. Future work should canonicalize a v1 `.dir` input to its sibling
 `.img`, add `.dir` to the open/drop filters, and test both entry points.
 
 For the Xbox 360 layout, see the implemented format and the deliberately
-uncompressed-only boundary in [`gta-img-reference-audit.md`](gta-img-reference-audit.md).
+uncompressed-only boundary documented in the local `gta-img` reference-audit
+notes.
 
 ## IMG v2 — GTA San Andreas
 

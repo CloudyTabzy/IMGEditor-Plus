@@ -15,7 +15,7 @@ On master (post-v3.16.0, unreleased):
 - Scalability guard: `validate_scene_for_device` rejects scenes whose largest single mesh buffer exceeds `limits.max_buffer_size` (256 MiB on downlevel devices) with a clear error instead of a raw wgpu validation failure at upload time.
 - Xbox 360 Bully IMG v1 support: auto-detected big-endian `.dir`/`.img` pairs,
   validated sector ranges, 24-byte filename preservation, and big-endian
-  round-trip saves. See [`docs/gta-img-reference-audit.md`](docs/gta-img-reference-audit.md).
+  round-trip saves. See the local `gta-img` reference-audit notes.
 
 ---
 
@@ -44,7 +44,7 @@ source-path metadata.
 
 ## 2. GTA III/VC/SA archive hardening (next major phase)
 
-The independent Rust [`gta-img` audit](docs/gta-img-reference-audit.md)
+The independent Rust `gta-img` audit
 confirmed the v1/v2 wire layouts and identified the following safe follow-ups.
 These should be completed against real, legally obtained GTA III, Vice City, and
 San Andreas archives before we expand the supported container scope.
@@ -81,7 +81,7 @@ Andreas validation confirms a different layout is safe.
 The embedded viewer now supports the common PC RenderWare path used by GTA
 III, Vice City, and San Andreas: non-native DFF geometry, frame/atomic
 transforms, PC D3D8/D3D9 TXDs, diffuse texture resolution, and the core raster
-decoders. See [`docs/renderware-gta-preview.md`](docs/renderware-gta-preview.md)
+decoders. See the local GTA RenderWare preview notes
 for the format notes and the important caveat that the current local
 `Gta_3_img` corpus is labelled as GTA III but contains San Andreas-style
 assets.

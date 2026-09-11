@@ -59,7 +59,7 @@ architecture.
 
 ### Methodology
 
-- Archive: `C:\Games\Bully - Scholarship Edition\Stream\World.img`
+- Archive: a retail Bully: Scholarship Edition `World.img`
   - ~1.93 GB
   - 11,980 entries
   - GTA IMG v1 format

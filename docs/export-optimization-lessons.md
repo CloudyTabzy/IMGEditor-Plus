@@ -18,7 +18,7 @@ the design decisions that followed.
 
 ## The Workload
 
-- Archive: `C:\Games\Bully - Scholarship Edition\Stream\World.img`
+- Archive: a retail Bully: Scholarship Edition `World.img`
 - Size: ~1.93 GB
 - Entries: 11,980
 - Format: GTA IMG v1 (`.img` + `.dir`)
