@@ -886,16 +886,13 @@ mod tests {
 
         assert_eq!(outcome.stats.entry_count, 2);
         assert_eq!(outcome.stats.original_bytes, 0x300000 + 4 * SECTOR_SIZE);
-        assert_eq!(outcome.stats.packed_bytes, 0x300000 + 2 * SECTOR_SIZE);
-        assert_eq!(outcome.stats.reclaimed_bytes(), 2 * SECTOR_SIZE);
-        assert_eq!(
-            std::fs::metadata(&output).unwrap().len(),
-            0x300000 + 2 * SECTOR_SIZE
-        );
+        assert_eq!(outcome.stats.packed_bytes, 3 * SECTOR_SIZE);
+        assert_eq!(outcome.stats.reclaimed_bytes(), 0x300000 + SECTOR_SIZE);
+        assert_eq!(std::fs::metadata(&output).unwrap().len(), 3 * SECTOR_SIZE);
 
         let packed = ArchiveInfo::open(&output).unwrap();
-        assert_eq!(packed.entries[0].offset, 1536);
-        assert_eq!(packed.entries[1].offset, 1537);
+        assert_eq!(packed.entries[0].offset, 1);
+        assert_eq!(packed.entries[1].offset, 2);
         assert_eq!(
             read_entry_data(&packed, &packed.entries[0]).unwrap()[0],
             b'A'

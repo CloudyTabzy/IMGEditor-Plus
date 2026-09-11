@@ -108,9 +108,9 @@ The Rust parser improves malformed-input handling over the original C++
 implementation: it rejects a `.dir` whose byte length is not divisible by 32,
 instead of silently ignoring a trailing partial record, and validates printable
 names, checked sector-to-byte arithmetic, non-overlapping non-empty ranges, and
-each range against the `.img` length before mapping the data file. This same
-validation is used by the Xbox 360 big-endian variant; v2 validation remains a
-separate task.
+each range against the `.img` length before mapping the data file. The Xbox 360
+big-endian variant uses the same v1 validation, while the v2 path applies its
+own record-aware validation described below.
 
 ### Known v1 compatibility gap
 
@@ -151,43 +151,40 @@ use the streaming-size field, but both words are part of the format and should
 be retained when reading and writing.
 
 The data offset is relative to the beginning of the entire `.img`, not to the
-end of the entry table. Tools commonly reserve a large header/data-start area
-for extensibility; the current Rust writer uses `0x300000` as its rebuild data
-start, matching the original C++ writer's convention. A real San Andreas
-fixture must confirm that this remains appropriate for the archives we intend
-to preserve.
+end of the entry table. The local San Andreas corpus confirms that retail
+archives begin data at the next 2048-byte boundary after the table:
+`ceil((8 + entry_count * 32) / 2048) * 2048`. The Rust writer uses that compact
+layout now; it deliberately no longer inherits the original C++ writer's
+unnecessary `0x300000` reservation.
 
-### Rust comparison: structural match and important mismatch
+### Rust implementation and validation
 
 The Rust implementation correctly recognizes `VER2`, reads the entry count,
 uses 32-byte records, preserves 24-byte names, and interprets offsets in
 2048-byte sectors. This is visible in [`PcV2Parser::open`](../src/parser/pc_v2.rs)
 and the shared constants in [`parser/mod.rs`](../src/parser/mod.rs).
 
-There is one important fidelity issue to resolve before declaring San Andreas
-support complete: the current code reads `entry_record[4..8]` as one `u32`
-(`EntryInfo::sector`) and writes the same flattened representation. The
-original C++ parser and the local C# reference do the same, so our code agrees
-with both implementations, but the external format reference describes two
-separate `u16` size fields. A real SA archive is needed to settle how those
-fields are populated in each supported game build. The safe Rust design is to
-retain both words in a v2-specific metadata type and expose one checked
-effective sector count for reading; this avoids losing information during a
-save/rebuild.
+`EntryInfo` now retains an `ImgV2Size` pair for each v2 entry while its generic
+`sector` field holds the checked effective count. This preserves uncommon
+fallback records (`streaming_size == 0`) through a save/rebuild without making
+all readers v2-specific.
 
-Other v2 checks still needed:
+The open path validates the complete directory before publishing any entries:
 
-- Ensure `8 + entry_count * 32` cannot overflow and is within the file before
-  reading the table.
-- Check every `offset * 2048 + effective_size * 2048` range against the IMG
-  length during open. Current mmap reads clamp an out-of-range request rather
-  than rejecting the archive early.
-- Reject or clearly report names with no usable NUL-terminated content if a
-  fixture shows that the game requires it.
-- Preserve and test record order. Sorting records by name would change the
-  archive's physical read pattern.
-- Verify the rebuild reservation and empty-archive behavior against a real SA
-  archive rather than relying only on synthetic tests.
+- checked header/table arithmetic and a table that fits in the file;
+- printable names and at least one named record (while retaining record order
+  and raw name bytes);
+- checked sector-to-byte conversion and every effective data range against the
+  IMG length;
+- non-empty data cannot point into the directory region;
+- allocation failures from implausibly large directory counts return an error
+  rather than attempting an unchecked reservation.
+
+Synthetic regression tests cover truncated tables, out-of-range data,
+directory-overlapping data, malformed names, fallback-size records, oversized
+writes, zero-length records, raw-size preservation, and compact rebuilding.
+An optional local-corpus test opens `cutscene.img`, `gta_int.img`, `gta3.img`,
+and `player.img` when `IMGEDITOR_CORPUS_ROOT` is set.
 
 ## Implementation comparison
 
@@ -197,16 +194,15 @@ Other v2 checks still needed:
 | v1 directory size | 32-byte records to EOF | 32-byte records to EOF | 32-byte records, rejects partial tail | Compatible, Rust is stricter |
 | v1 data location | paired `.img` | paired `.img` | paired `.img` for `.img` input | Match after `.dir` canonicalization is added |
 | v2 marker/count | `VER2` + `u32` count | `VER2` + `u32` count | `VER2` + `u32` count | Match |
-| v2 size words | flattened 4-byte field | flattened 4-byte field | flattened 4-byte field | Matches implementations; verify against spec/fixtures |
+| v2 size words | flattened 4-byte field | flattened 4-byte field | separate raw `u16` words plus checked effective size | Rust corrects inherited ambiguity |
 | Name storage | 24 bytes | 24 bytes | 24 raw bytes + display string | Match |
-| Malformed range checks | minimal | sorted/order checks, some structural checks | read-time clamping, limited open-time checks | Rust hardening required |
+| Malformed range checks | minimal | sorted/order checks, some structural checks | checked table/name/range validation before mapping | Rust is stricter and fails early |
 | `.dir` as input | not supported by original UI path | explicitly supported | not yet canonicalized | Low-risk compatibility improvement |
 | Archive mutation previews | no preview cache | no Rust scene cache | generation + texture cache + app scene cache | Move path now invalidates both sides |
 
-The apparent v2 agreement between the C++/C# code and Rust must not be treated
-as proof that the flattened field is correct for every stock archive. It is an
-implementation inheritance point worth testing, not an independent
-specification.
+The original C++ and local C# implementations flatten the size words. Their
+agreement is an implementation inheritance point, not a format specification;
+the retained pair is necessary for faithful v2 round trips.
 
 ## Real-archive validation plan
 
@@ -273,11 +269,11 @@ source/target entry lists.
 ### Recommended next parser work
 
 1. Add v1 `.dir` canonicalization and file-dialog/drag-and-drop coverage.
-2. Add checked open-time table and data-range validation for v2.
-3. Introduce v2-specific size metadata instead of overloading one generic
-   `EntryInfo::sector` field.
-4. Validate against real GTA III/VC/SA manifests and selected exported bytes.
-5. Only after those checks, consider broader asset-level improvements such as
+2. Record GTA III, Vice City, and San Andreas metadata manifests and compare
+   representative exported bytes with independent tools.
+3. Test rebuilt San Andreas archives in the matching game build before making
+   broader compatibility claims.
+4. Only after those checks, consider broader asset-level improvements such as
    more complete TXD/DFF variants.
 
 No IMG v3 parser or RPF abstraction should be added as part of this phase.

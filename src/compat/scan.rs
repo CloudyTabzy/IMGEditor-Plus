@@ -1017,15 +1017,18 @@ mod tests {
         let mut img: Vec<u8> = Vec::new();
         img.extend_from_slice(b"VER2");
         img.extend_from_slice(&2_u32.to_le_bytes());
-        // Entry 0: the TXD at sector 1.
+        // Entry 0: the TXD at sector 1. IMG v2 records store the
+        // streaming and archive sizes as distinct u16 fields.
         img.extend_from_slice(&1_u32.to_le_bytes());
-        img.extend_from_slice(&1_u32.to_le_bytes());
+        img.extend_from_slice(&1_u16.to_le_bytes());
+        img.extend_from_slice(&0_u16.to_le_bytes());
         let mut name = [0_u8; 24];
         name[..9].copy_from_slice(b"test.txd\0");
         img.extend_from_slice(&name);
-        // Entry 1: a model, no TXD suffix.
-        img.extend_from_slice(&9_u32.to_le_bytes());
-        img.extend_from_slice(&1_u32.to_le_bytes());
+        // Entry 1: a model, no TXD suffix, at the following sector.
+        img.extend_from_slice(&2_u32.to_le_bytes());
+        img.extend_from_slice(&1_u16.to_le_bytes());
+        img.extend_from_slice(&0_u16.to_le_bytes());
         let mut name = [0_u8; 24];
         name[..8].copy_from_slice(b"car.dff\0");
         img.extend_from_slice(&name);
@@ -1034,7 +1037,7 @@ mod tests {
         let mut padded = txd;
         padded.resize(2048, 0);
         img.extend_from_slice(&padded);
-        img.resize(4096, 0);
+        img.resize(6144, 0);
 
         let path = dir.join("fixture.img");
         std::fs::write(&path, &img).unwrap();

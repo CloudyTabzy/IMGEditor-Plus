@@ -210,10 +210,41 @@ impl Default for SortState {
     }
 }
 
+/// The two size words stored in an IMG v2 directory record.
+///
+/// GTA uses `streaming_size` for reads unless it is zero, in which case
+/// `archive_size` is the effective sector count. Keeping both words avoids
+/// silently changing a valid archive's record layout during a rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImgV2Size {
+    pub streaming_size: u16,
+    pub archive_size: u16,
+}
+
+impl ImgV2Size {
+    pub const fn effective_sector_count(self) -> u32 {
+        (if self.streaming_size == 0 {
+            self.archive_size
+        } else {
+            self.streaming_size
+        }) as u32
+    }
+
+    pub const fn canonical(sector_count: u16) -> Self {
+        Self {
+            streaming_size: sector_count,
+            archive_size: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryInfo {
     pub offset: u32,
     pub sector: u32,
+    /// Raw IMG v2 size metadata when this entry came from an IMG v2 archive.
+    /// `sector` always remains the effective count used by generic readers.
+    pub v2_size: Option<ImgV2Size>,
     pub file_name: CompactString,
     /// Lowercase version of `file_name` for fast case-insensitive filtering.
     pub file_name_lower: CompactString,
@@ -264,6 +295,7 @@ impl EntryInfo {
         Self {
             offset: 0,
             sector: 0,
+            v2_size: None,
             file_name,
             file_name_lower,
             file_name_raw,
@@ -732,7 +764,12 @@ impl ArchiveInfo {
         let header_bytes: u64 = match self.version {
             ImgVersion::One | ImgVersion::Xbox360 => 0,
             ImgVersion::Two if self.entries.is_empty() => 8,
-            ImgVersion::Two => 0x300000,
+            ImgVersion::Two if data_bytes == 0 => {
+                crate::parser::pc_v2::directory_end_for_entry_count(self.entries.len())?
+            }
+            ImgVersion::Two => {
+                crate::parser::pc_v2::data_start_for_entry_count(self.entries.len())?
+            }
             ImgVersion::Unknown => anyhow::bail!("cannot pack unknown archive format"),
         };
         let packed_bytes = header_bytes
@@ -1127,7 +1164,23 @@ mod tests {
         let stats = archive.pack_stats().unwrap();
         assert_eq!(stats.entry_count, 2);
         assert_eq!(stats.original_bytes, 0x300000 + 3 * SECTOR_SIZE);
-        assert_eq!(stats.packed_bytes, 0x300000 + 3 * SECTOR_SIZE);
-        assert_eq!(stats.reclaimed_bytes(), 0);
+        assert_eq!(stats.packed_bytes, 4 * SECTOR_SIZE);
+        assert_eq!(stats.reclaimed_bytes(), 0x300000 - SECTOR_SIZE);
+    }
+
+    #[test]
+    fn pack_stats_keeps_only_the_directory_for_zero_length_v2_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive_path = dir.path().join("empty-entry.img");
+        std::fs::write(&archive_path, vec![0_u8; 8 + crate::parser::ENTRY_SIZE]).unwrap();
+
+        let mut archive = ArchiveInfo::new("empty-entry", false, ImgVersion::Two);
+        archive.path = Some(archive_path);
+        archive.entries.push(EntryInfo::new("empty.dff"));
+
+        let stats = archive.pack_stats().unwrap();
+        assert_eq!(stats.entry_count, 1);
+        assert_eq!(stats.original_bytes, 8 + crate::parser::ENTRY_SIZE as u64);
+        assert_eq!(stats.packed_bytes, 8 + crate::parser::ENTRY_SIZE as u64);
     }
 }

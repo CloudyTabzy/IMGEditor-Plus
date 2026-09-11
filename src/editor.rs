@@ -284,6 +284,7 @@ impl Editor {
                 let mut updated = EntryInfo::new_for_version(new_name, archive.version);
                 updated.offset = entry.offset;
                 updated.sector = entry.sector;
+                updated.v2_size = entry.v2_size;
                 updated.source_path = entry.source_path.clone();
                 updated.imported = entry.imported;
                 updated.selected = entry.selected;
