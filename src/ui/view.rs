@@ -1979,6 +1979,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_unsupported(app),
         build_folder_import(app),
         build_import_preflight(app),
+        build_save_report(app),
         build_update_status(app),
         build_sort_manager(app),
         build_toast_overlay(app),
@@ -2094,6 +2095,75 @@ fn build_unsupported(app: &App) -> Option<Element<'_, Message>> {
             button(fonts::body("Close")).on_press(Message::HideUnsupported),
         ]
         .spacing(6),
+    ))
+}
+
+/// Pre-save report: what the archive contains relative to its target,
+/// shown only when something needs a decision. The save itself stays
+/// verbatim - this dialog blocks nothing but the write.
+fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
+    let pending = app.pending_save.as_ref()?;
+    let issue = pending.issue.as_ref()?;
+    let target = app
+        .editor
+        .archives()
+        .get(pending.index)
+        .and_then(|archive| archive.target_game)
+        .and_then(crate::compat::games::profile_by_id)
+        .map(|game| game.display)
+        .unwrap_or("the target");
+
+    let mut body = Column::new().spacing(6).width(Length::Fill);
+    body = body.push(fonts::body(format!(
+        "{} textures, {} entries - checked against {target}.",
+        issue.textures, issue.entry_count
+    )));
+    body = body.push(fonts::caption(format!(
+        "{} native/supported · {} convertible (lossless) · {} incompatible · {} unknown",
+        issue.fine, issue.convertible, issue.incompatible, issue.unknown
+    )));
+
+    if let Some(note) = &issue.container_note {
+        body = body.push(
+            fonts::body(format!("Container: {note}"))
+                .color(compat_verdict_accent(crate::compat::games::Verdict::Unsupported)),
+        );
+    }
+
+    if !issue.anomalies.is_empty() {
+        let mut list = Column::new().spacing(3).width(Length::Fill);
+        for (code, count, example) in issue.anomalies.iter().take(8) {
+            list = list.push(fonts::caption(format!("{code}: {count} (e.g. {example})")));
+        }
+        body = body.push(Space::new().height(Length::Fixed(4.0)));
+        body = body.push(fonts::strong("Broken headers (fixable without re-encoding):"));
+        body = body.push(list);
+    }
+    if issue.warnings > 0 {
+        body = body.push(fonts::caption(format!(
+            "{} warning-level anomalies (reported, not blocking).",
+            issue.warnings
+        )));
+    }
+
+    body = body.push(Space::new().height(Length::Fixed(4.0)));
+    body = body.push(fonts::caption(
+        "Saving writes every entry verbatim; no texture is re-encoded or converted.",
+    ));
+    body = body.push(Space::new().height(Length::Fixed(8.0)));
+    body = body.push(
+        row![
+            button(fonts::body("Save anyway"))
+                .on_press(Message::SaveCheckConfirmed)
+                .style(button::primary),
+            button(fonts::body("Cancel")).on_press(Message::SaveCheckCancelled),
+        ]
+        .spacing(8),
+    );
+
+    Some(modal_box(
+        "Save check",
+        container(body).width(Length::Fixed(480.0)),
     ))
 }
 

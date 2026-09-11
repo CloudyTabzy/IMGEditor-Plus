@@ -381,6 +381,10 @@ pub enum Message {
     TabResizeMoved(f32),
     /// Release the tab-width drag; persists the width.
     TabResizeEnded,
+    /// User acknowledged the pre-save report and wants to write.
+    SaveCheckConfirmed,
+    /// User cancelled at the pre-save report.
+    SaveCheckCancelled,
     /// Content probe finished; the hint is advisory only.
     TargetProbed {
         archive_index: usize,
@@ -613,8 +617,7 @@ pub enum Pane {
 /// An import paused at the pre-flight format-check dialog because at
 /// least one file carries a format the target engine cannot consume.
 #[derive(Debug, Clone)]
-pub struct PendingImport {
-    pub index: usize,
+pub struct PendingImport {    pub index: usize,
     pub paths: Vec<PathBuf>,
     /// Folder imports resume through their plan + chosen duplicate policy.
     pub folder: Option<(FolderImportPlan, FolderDuplicatePolicy)>,
@@ -632,6 +635,18 @@ impl PendingImport {
         flagged.sort_by_key(|check| std::cmp::Reverse(check.worst));
         flagged
     }
+}
+
+/// A save waiting on the pre-save report. `issue` is `None` while a
+/// validation scan is still running; it is filled once the report lands,
+/// and the save proceeds silently when nothing needs review.
+#[derive(Debug, Clone)]
+pub struct PendingSave {
+    pub index: usize,
+    pub path: PathBuf,
+    pub version: crate::parser::ImgVersion,
+    pub remove_existing: bool,
+    pub issue: Option<crate::compat::save::SaveIssue>,
 }
 
 pub struct App {
@@ -669,6 +684,9 @@ pub struct App {
     pub pending_folder_import: Option<(usize, FolderImportPlan)>,
     /// Import waiting on the pre-flight format check dialog.
     pub pending_import: Option<PendingImport>,
+    /// Save waiting on the pre-save report dialog (or on a validation
+    /// scan that has to finish first).
+    pub pending_save: Option<PendingSave>,
     /// Working copy of the sort chain while the Sort Manager
     /// dialog is open. Edits land here first; "Apply" commits the
     /// draft to the live archive + config. `None` when the dialog
@@ -877,6 +895,7 @@ impl App {
             toast: None,
             pending_folder_import: None,
             pending_import: None,
+            pending_save: None,
             panes,
             context_menu: None,
             inspected_entry: None,
@@ -1351,6 +1370,7 @@ impl App {
             || self.show_unsupported.is_some()
             || self.pending_folder_import.is_some()
             || self.pending_import.is_some()
+            || self.pending_save.is_some()
             || self.show_update_status.is_some()
             || self.show_sort_manager
             || self.validator_popup_open
@@ -1898,6 +1918,67 @@ impl App {
         }
     }
 
+    /// Route a save through the pre-save check: silent when the stored
+    /// report is clean (or no target is set), a review dialog when the
+    /// target or consistency has issues, and a validation scan first
+    /// when no report exists yet.
+    fn begin_save(
+        &mut self,
+        archive: ArchiveInfo,
+        path: PathBuf,
+        version: crate::parser::ImgVersion,
+        remove_existing: bool,
+    ) -> Task<Message> {
+        let index = self.editor.selected_archive().unwrap_or(0);
+        if archive.target_game.is_none() {
+            return self.run_save(archive, path, version, remove_existing);
+        }
+
+        let Some(report) = archive.compat_report.as_ref() else {
+            // No report yet: validate first, then resume the save.
+            self.pending_save = Some(PendingSave {
+                index,
+                path,
+                version,
+                remove_existing,
+                issue: None,
+            });
+            return Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        crate::compat::scan::validate_open_archive(
+                            &archive,
+                            &crate::compat::scan::ScanOptions {
+                                decode_pixels: false,
+                                target: archive.target_game,
+                            },
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|err| Err(anyhow::anyhow!("task panicked: {err}")))
+                },
+                move |result| Message::CompatibilityValidated {
+                    archive_index: index,
+                    result: result.map_err(|err| format!("{err}")),
+                },
+            );
+        };
+
+        let issue = crate::compat::save::evaluate_save(report, &archive);
+        if issue.needs_review() {
+            self.pending_save = Some(PendingSave {
+                index,
+                path,
+                version,
+                remove_existing,
+                issue: Some(issue),
+            });
+            Task::none()
+        } else {
+            self.run_save(archive, path, version, remove_existing)
+        }
+    }
+
     fn run_save(
         &self,
         archive: ArchiveInfo,
@@ -2081,7 +2162,7 @@ impl App {
                     return Task::done(Message::SaveArchiveAs);
                 }
                 let version = archive.version;
-                self.run_save(archive, path, version, false)
+                self.begin_save(archive, path, version, false)
             }
 
             Message::SaveArchiveAs => {
@@ -2102,9 +2183,25 @@ impl App {
                     self.toast = Some("No archive selected.".into());
                     return Task::none();
                 };
-                self.run_save(archive, choice.path, choice.version, true)
+                self.begin_save(archive, choice.path, choice.version, true)
             }
             Message::SaveArchiveAsResult(None) => Task::none(),
+
+            Message::SaveCheckConfirmed => {
+                let Some(pending) = self.pending_save.take() else {
+                    return Task::none();
+                };
+                let Some(archive) = self.editor.archives().get(pending.index).cloned() else {
+                    self.toast = Some("The archive is no longer open.".into());
+                    return Task::none();
+                };
+                self.run_save(archive, pending.path, pending.version, pending.remove_existing)
+            }
+            Message::SaveCheckCancelled => {
+                self.pending_save = None;
+                self.toast = Some("Save cancelled.".into());
+                Task::none()
+            }
 
             Message::SaveCompleted { index, result } => {
                 match result {
@@ -2185,6 +2282,8 @@ impl App {
             | Message::SaveArchiveAs
             | Message::SaveArchiveAsResult(_)
             | Message::SaveCompleted { .. }
+            | Message::SaveCheckConfirmed
+            | Message::SaveCheckCancelled
             | Message::PackArchive
             | Message::PackCompleted { .. } => Task::none(),
 
@@ -3503,10 +3602,48 @@ impl App {
                         // instead of the snappy default).
                         self.toast_extended_duration = true;
                         self.toast = Some(if errors == 0 && warnings == 0 {
-                            format!("No compatibility issues found — {summary}")
+                            format!("No compatibility issues found - {summary}")
                         } else {
                             summary
                         });
+
+                        // A save may be waiting on this report: review it
+                        // or continue silently.
+                        if let Some(pending) = self.pending_save.take() {
+                            if pending.index != archive_index || pending.issue.is_some() {
+                                self.pending_save = Some(pending);
+                            } else {
+                                let issue = self
+                                    .editor
+                                    .archives()
+                                    .get(archive_index)
+                                    .and_then(|archive| {
+                                        archive.compat_report.as_ref().map(|report| {
+                                            crate::compat::save::evaluate_save(report, archive)
+                                        })
+                                    });
+                                match issue {
+                                    Some(issue) if issue.needs_review() => {
+                                        self.pending_save = Some(PendingSave {
+                                            issue: Some(issue),
+                                            ..pending
+                                        });
+                                        self.toast = None;
+                                        return Task::none();
+                                    }
+                                    _ => {
+                                        let archive =
+                                            self.editor.archives()[archive_index].clone();
+                                        return self.run_save(
+                                            archive,
+                                            pending.path,
+                                            pending.version,
+                                            pending.remove_existing,
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(err) if err.contains("cancelled") => {
                         self.toast = Some("Validation cancelled.".into());
@@ -5918,6 +6055,93 @@ mod tests {
         assert_eq!(
             app.archive_tab_width,
             crate::config::ARCHIVE_TAB_WIDTH_MAX
+        );
+    }
+
+    #[test]
+    fn save_gates_on_issues_and_confirm_clears_the_dialog() {
+        use crate::compat::scan::ScanReport;
+
+        let mut app = test_app_with_entries();
+        {
+            let archive = &mut app.editor.archives_mut()[0];
+            archive.target_game = Some("gta3");
+            let mut report = ScanReport::default();
+            report.verdicts.entry("gta3").or_default().insert("unsupported", 3);
+            report.textures = 3;
+            archive.compat_report = Some(report);
+        }
+
+        // Issues present: the save pauses on the report dialog.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.img");
+        let _ = app.begin_save(
+            app.editor.archives()[0].clone(),
+            path.clone(),
+            crate::parser::ImgVersion::One,
+            true,
+        );
+        assert!(app.pending_save.is_some(), "issues must gate the save");
+        assert!(app.modal_open(), "the report gates shortcuts");
+
+        // Confirming writes (the task completes with an outcome) and
+        // clears the state.
+        let messages = drain_task(app.update(Message::SaveCheckConfirmed));
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::SaveCompleted { .. })),
+            "confirming must start the save: {messages:?}"
+        );
+        assert!(app.pending_save.is_none());
+
+        // Cancelling keeps the archive untouched.
+        app.pending_save = Some(PendingSave {
+            index: 0,
+            path,
+            version: crate::parser::ImgVersion::One,
+            remove_existing: true,
+            issue: Some(crate::compat::save::SaveIssue::default()),
+        });
+        let _ = app.update(Message::SaveCheckCancelled);
+        assert!(app.pending_save.is_none());
+        assert_eq!(app.toast.as_deref(), Some("Save cancelled."));
+    }
+
+    #[test]
+    fn save_with_a_clean_report_skips_the_dialog() {
+        use crate::compat::scan::ScanReport;
+
+        let mut app = test_app_with_entries();
+        {
+            let archive = &mut app.editor.archives_mut()[0];
+            archive.target_game = Some("gta3");
+            let mut report = ScanReport::default();
+            report.verdicts.entry("gta3").or_default().insert("native", 10);
+            report.textures = 10;
+            archive.compat_report = Some(report);
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.img");
+        let task = app.begin_save(
+            app.editor.archives()[0].clone(),
+            path,
+            crate::parser::ImgVersion::One,
+            true,
+        );
+        assert!(
+            app.pending_save.is_none(),
+            "a clean save must not interrupt the user"
+        );
+        // The save still runs; the synthetic archive fails to write, but
+        // the outcome must come back without any dialog.
+        let messages = drain_task(task);
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::SaveCompleted { .. })),
+            "clean save must proceed: {messages:?}"
         );
     }
 
