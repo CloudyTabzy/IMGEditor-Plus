@@ -157,6 +157,21 @@ impl App {
         let total_height = total as f32 * ROW_HEIGHT;
         let scroll_y = self.scroll_y.max(0.0);
 
+        // Compatibility verdicts by entry index, built once per frame so
+        // the row styling below is a map lookup, not a scan per row.
+        let compat_verdicts: std::collections::HashMap<usize, crate::compat::games::Verdict> =
+            archive
+                .compat_report
+                .as_ref()
+                .map(|report| {
+                    report
+                        .entry_verdicts
+                        .iter()
+                        .map(|verdict| (verdict.entry_index, verdict.worst))
+                        .collect()
+                })
+                .unwrap_or_default();
+
         // Window of visible rows, with an overscan to cover any tall viewport.
         let raw_first = ((scroll_y / ROW_HEIGHT) as i32) - OVERSCAN_ROWS;
         let last_inclusive = ((scroll_y / ROW_HEIGHT) as i32) + 64;
@@ -190,7 +205,13 @@ impl App {
                 continue;
             };
             content =
-                content.push(self.build_entry_row(archive_index, entry_index, display_row, entry));
+                content.push(self.build_entry_row(
+                    archive_index,
+                    entry_index,
+                    display_row,
+                    entry,
+                    compat_verdicts.get(&entry_index).copied(),
+                ));
         }
 
         if bottom_pad_rows > 0 {
@@ -253,6 +274,7 @@ impl App {
         entry_index: usize,
         display_row: usize,
         entry: &'a crate::archive::EntryInfo,
+        compat_verdict: Option<crate::compat::games::Verdict>,
     ) -> Element<'a, Message> {
         use std::borrow::Cow;
 
@@ -367,6 +389,10 @@ impl App {
         .padding(6)
         .into();
 
+        // Compatibility highlight for this row, when a per-target
+        // validation has been run on this archive.
+        let compat_row = compat_verdict;
+
         let cell = Container::new(row_content)
             .height(Length::Fixed(ROW_HEIGHT))
             .style(move |theme: &iced::Theme| {
@@ -391,6 +417,8 @@ impl App {
                         )),
                         ..Default::default()
                     }
+                } else if let Some(verdict) = compat_row {
+                    compat_row_style(verdict)
                 } else if let Some(background) = alternate_background {
                     iced::widget::container::Style {
                         background: Some(background.into()),
@@ -1519,7 +1547,7 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
         ),
         w::vhairline(divider),
         w::styled_tooltip(
-            toolbar_button(icons::shield_check().size(18).into(), Message::ValidateCompatibility),
+            toolbar_button(icons::shield_check().size(18).into(), Message::OpenValidatorPopup),
             fonts::body("Validate textures"),
             tooltip::Position::Bottom,
         ),
@@ -1846,6 +1874,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_update_status(app),
         build_sort_manager(app),
         build_toast_overlay(app),
+        build_validator_popup(app),
     ]
     .into_iter()
     .flatten()
@@ -2157,6 +2186,206 @@ fn modal_box<'a>(title: &'a str, content: impl Into<Element<'a, Message>>) -> El
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .into()
+}
+
+fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
+    if !app.validator_popup_open {
+        return None;
+    }
+    let archive_index = app.editor.selected_archive()?;
+    let archive = app.editor.archives().get(archive_index)?;
+    let current_target = archive.compat_report.as_ref().and_then(|report| report.target);
+
+    let design = app.design();
+    let surface = design.surface();
+    let text_color = design.text();
+    let border_color = design.border();
+    let shadow = design.iced_shadow(&design.tokens.elevation.modal);
+    let divider = design.divider();
+
+    let mut cards = Column::new().spacing(10).width(Length::Fill);
+    for game in crate::compat::games::ALL_GAMES {
+        let mut native_lines = Column::new().spacing(2).width(Length::Fill);
+        let mut unknown_lines = Column::new().spacing(2).width(Length::Fill);
+        let mut has_unknown = false;
+        for info in crate::compat::games::format_catalog(game) {
+            let line = row![
+                fonts::caption(info.class).width(Length::Fixed(210.0)),
+                fonts::caption(info.note).width(Length::Fill),
+            ]
+            .spacing(8)
+            .width(Length::Fill);
+            if info.verdict == crate::compat::games::Verdict::Native {
+                native_lines = native_lines.push(line);
+            } else {
+                has_unknown = true;
+                unknown_lines = unknown_lines.push(line);
+            }
+        }
+
+        let last_run = archive
+            .compat_report
+            .as_ref()
+            .filter(|report| report.target == Some(game.id))
+            .map(|report| {
+                let counts = report
+                    .verdicts
+                    .get(game.id)
+                    .map(|counts| {
+                        counts
+                            .iter()
+                            .map(|(verdict, count)| format!("{verdict} {count}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_else(|| "no textures".to_string());
+                format!("Last run: {counts}")
+            });
+
+        let mut card_body = Column::new().spacing(6).width(Length::Fill);
+        let mut header = row![fonts::strong(game.display).width(Length::Fill)];
+        if current_target == Some(game.id) {
+            header = header.push(fonts::caption("current target"));
+        }
+        header = header.push(
+            button(fonts::body(format!("Validate for {}", game.display)))
+                .on_press(Message::ValidateArchiveFor(game.id))
+                .style(button::primary),
+        );
+        card_body = card_body.push(header.spacing(8).align_y(Alignment::Center));
+        if let Some(last_run) = last_run {
+            card_body = card_body.push(fonts::caption(last_run));
+        }
+        card_body = card_body.push(fonts::caption("Native (retail-verified):"));
+        card_body = card_body.push(native_lines);
+        if has_unknown {
+            card_body = card_body.push(fonts::caption("Unknown / not game-native:"));
+            card_body = card_body.push(unknown_lines);
+        }
+
+        cards = cards.push(
+            Container::new(card_body)
+                .width(Length::Fill)
+                .padding(10)
+                .style(move |_| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(surface)),
+                    text_color: Some(text_color),
+                    border: Border {
+                        color: border_color,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..Default::default()
+                }),
+        );
+    }
+
+    let content = column![
+        fonts::body(
+            "Pick the game this archive targets. The validator flags every texture \
+             outside that engine's retail-accepted formats, and lists the unknowns \
+             that could plausibly load but are not game-native.",
+        )
+        .width(Length::Fill),
+        w::hairline(divider),
+        cards,
+        w::hairline(divider),
+        row![
+            fonts::caption(
+                "Row colors after a run: green native · blue supported/convertible · \
+                 amber unknown · red incompatible",
+            )
+            .width(Length::Fill),
+            button(fonts::body("Close")).on_press(Message::CloseValidatorPopup),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(10)
+    .width(Length::Fill)
+    .align_x(Alignment::Start);
+
+    let card = Container::new(content)
+        .width(Length::Fill)
+        .max_width(720.0)
+        .padding(16)
+        .style(move |_| iced::widget::container::Style {
+            background: Some(iced::Background::Color(surface)),
+            text_color: Some(text_color),
+            border: Border {
+                color: border_color,
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            shadow,
+            ..Default::default()
+        });
+
+    Some(
+        opaque(
+            Container::new(card)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(24)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(Color::from_rgba(
+                        0.0, 0.0, 0.0, 0.42,
+                    ))),
+                    ..Default::default()
+                }),
+        ),
+    )
+}
+
+/// Row tint for a validator verdict: green = native, blue = supported /
+/// losslessly convertible, amber = unknown, red = incompatible. The
+/// low-alpha background plus a matching border reads as a subtle glow
+/// without disturbing the list layout (no shadow bleed between rows).
+fn compat_row_style(
+    verdict: crate::compat::games::Verdict,
+) -> iced::widget::container::Style {
+    use crate::compat::games::Verdict;
+    let (background, accent) = match verdict {
+        Verdict::Native => (
+            Color::from_rgba(0.24, 0.78, 0.44, 0.13),
+            Color::from_rgba(0.24, 0.78, 0.44, 0.38),
+        ),
+        Verdict::Supported | Verdict::ConvertibleLossless => (
+            Color::from_rgba(0.30, 0.60, 0.95, 0.12),
+            Color::from_rgba(0.30, 0.60, 0.95, 0.34),
+        ),
+        Verdict::LossyConvertible => (
+            Color::from_rgba(0.95, 0.60, 0.20, 0.13),
+            Color::from_rgba(0.95, 0.60, 0.20, 0.36),
+        ),
+        Verdict::Unsupported => (
+            Color::from_rgba(0.92, 0.30, 0.30, 0.14),
+            Color::from_rgba(0.92, 0.30, 0.30, 0.42),
+        ),
+        Verdict::Untested => (
+            Color::from_rgba(0.95, 0.78, 0.25, 0.10),
+            Color::from_rgba(0.95, 0.78, 0.25, 0.30),
+        ),
+    };
+    iced::widget::container::Style {
+        background: Some(iced::Background::Color(background)),
+        border: Border {
+            color: accent,
+            width: 1.0,
+            radius: 3.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: Color {
+                a: accent.a * 0.35,
+                ..accent
+            },
+            offset: iced::Vector::new(0.0, 0.0),
+            blur_radius: 8.0,
+        },
+        ..Default::default()
+    }
 }
 
 fn build_context_menu(

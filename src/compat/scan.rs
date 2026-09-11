@@ -48,16 +48,37 @@ pub struct ScanReport {
     pub anomaly_examples: BTreeMap<&'static str, Vec<String>>,
     /// Game id → verdict label → texture count.
     pub verdicts: BTreeMap<&'static str, BTreeMap<&'static str, usize>>,
+    /// The game the per-entry verdicts were computed against.
+    pub target: Option<&'static str>,
+    /// Per-entry verdicts for `target` (empty when no target was set).
+    pub entry_verdicts: Vec<EntryVerdict>,
     /// Palette-reconstructible texture count (only with pixel decoding).
     pub palette_reconstructible: Option<usize>,
     /// Worst severity per anomaly code for report ordering.
     pub anomaly_severity: BTreeMap<&'static str, Severity>,
 }
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ScanOptions {
     /// Decode pixels to test palette-reconstructibility (≤ 256 unique
     /// colors). Slower: one RGBA decode per texture.
     pub decode_pixels: bool,
+    /// Target game id for the per-entry verdict pass. When set, the
+    /// report carries per-entry worst verdicts so the UI can highlight
+    /// rows; when `None`, only the aggregate all-games table is built.
+    pub target: Option<&'static str>,
+}
+
+/// Per-entry compatibility verdict for one target game. Recorded only
+/// when [`ScanOptions::target`] is set.
+#[derive(Debug, Clone)]
+pub struct EntryVerdict {
+    pub entry_index: usize,
+    pub file_name: String,
+    pub textures: usize,
+    /// Most severe verdict among the entry's textures.
+    pub worst: crate::compat::games::Verdict,
+    /// Verdict label -> count for this entry.
+    pub counts: BTreeMap<&'static str, usize>,
 }
 
 /// Open any supported archive headlessly and profile its textures.
@@ -82,6 +103,7 @@ pub fn scan_archive(path: &Path, options: &ScanOptions) -> anyhow::Result<ScanRe
         archive_path: path.display().to_string(),
         archive_kind: version_text(version).to_string(),
         entry_count: archive.entries.len(),
+        target: options.target,
         ..ScanReport::default()
     };
     profile_entries(&archive, &mut report, options, None)?;
@@ -96,16 +118,20 @@ pub fn validate_open_archive(
     archive: &ArchiveInfo,
     options: &ScanOptions,
 ) -> anyhow::Result<ScanReport> {
-    let progress = archive.progress.clone();
-    progress.start();
+    // Resolve the source *before* claiming the progress slot: an early
+    // return after start() would leave the archive stuck "in use" and
+    // block every later run.
     let source = archive
         .path
         .clone()
         .ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
+    let progress = archive.progress.clone();
+    progress.start();
     let mut report = ScanReport {
         archive_path: source.display().to_string(),
         archive_kind: version_text(archive.version).to_string(),
         entry_count: archive.entries.len(),
+        target: options.target,
         ..ScanReport::default()
     };
     let result = profile_entries(archive, &mut report, options, Some(&progress));
@@ -153,7 +179,7 @@ fn profile_entries(
             }
         }
         if entry.file_name_lower.ends_with(".txd") {
-            profile_txd_entry(archive, entry, report, options)?;
+            profile_txd_entry(archive, index, entry, report, options)?;
         } else if entry.file_name_lower.ends_with(".nft") {
             profile_nft_entry(archive, entry, report)?;
         } else if entry.file_name_lower.ends_with(".nif") {
@@ -165,6 +191,7 @@ fn profile_entries(
 
 fn profile_txd_entry(
     archive: &ArchiveInfo,
+    entry_index: usize,
     entry: &crate::archive::EntryInfo,
     report: &mut ScanReport,
     options: &ScanOptions,
@@ -187,6 +214,12 @@ fn profile_txd_entry(
                 return Ok(());
             }
         };
+
+        // Per-entry verdicts for the chosen target power the row
+        // highlights in the UI. Computed alongside the aggregate pass.
+        let target = options.target.and_then(crate::compat::games::profile_by_id);
+        let mut entry_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+        let mut entry_worst: Option<crate::compat::games::Verdict> = None;
 
         for texture in &parsed.textures {
             report.textures += 1;
@@ -218,6 +251,15 @@ fn profile_txd_entry(
                     .or_default() += 1;
             }
 
+            if let Some(target) = target {
+                let verdict = classify(target, &profile).verdict;
+                *entry_counts.entry(verdict.label()).or_default() += 1;
+                entry_worst = Some(match entry_worst {
+                    Some(previous) => previous.max(verdict),
+                    None => verdict,
+                });
+            }
+
             if options.decode_pixels {
                 match texture.decode_rgba() {
                     Ok(rgba) if unique_color_count(&rgba) <= 256 => {
@@ -235,6 +277,16 @@ fn profile_txd_entry(
                     }
                 }
             }
+        }
+
+        if let (Some(_), Some(worst)) = (target, entry_worst) {
+            report.entry_verdicts.push(EntryVerdict {
+                entry_index,
+                file_name: entry.file_name.to_string(),
+                textures: parsed.textures.len(),
+                worst,
+                counts: entry_counts,
+            });
         }
     Ok(())
 }
@@ -635,6 +687,7 @@ pub fn run_cli_args(args: &[String]) -> anyhow::Result<()> {
         &path,
         &ScanOptions {
             decode_pixels,
+            target: target.and_then(|id| crate::compat::games::profile_by_id(id).map(|g| g.id)),
         },
         target,
     )
@@ -986,6 +1039,48 @@ mod tests {
         let raw = nif_pixel_data_block(4, &[(8, 8)], -1);
         // A truncated block (no data bytes) must not decode.
         assert!(decode_ni_pixel_tail(&raw[..raw.len() - 20], Endian::Little).is_none());
+    }
+
+    #[test]
+    fn scanner_records_per_entry_verdicts_for_the_target() {
+        use crate::compat::games::Verdict;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = fixture_archive(dir.path());
+
+        // The fixture TXD is a DXT3 native on platform 9.
+        let sa = scan_archive(
+            &path,
+            &ScanOptions {
+                decode_pixels: false,
+                target: Some("sa"),
+            },
+        )
+        .unwrap();
+        assert_eq!(sa.target, Some("sa"));
+        assert_eq!(sa.entry_verdicts.len(), 1);
+        let entry = &sa.entry_verdicts[0];
+        assert_eq!(entry.file_name, "test.txd");
+        assert_eq!(entry.textures, 1);
+        assert_eq!(entry.worst, Verdict::Native);
+        assert_eq!(entry.counts.get("native"), Some(&1));
+
+        // Against GTA III the same raster needs a platform rewrite
+        // (platform 9 in a platform-8 dialect), which is lossless.
+        let gta3 = scan_archive(
+            &path,
+            &ScanOptions {
+                decode_pixels: false,
+                target: Some("gta3"),
+            },
+        )
+        .unwrap();
+        assert_eq!(gta3.entry_verdicts[0].worst, Verdict::ConvertibleLossless);
+
+        // Without a target the per-entry pass is skipped.
+        let none = scan_archive(&path, &ScanOptions::default()).unwrap();
+        assert!(none.entry_verdicts.is_empty());
+        assert_eq!(none.target, None);
     }
 
     #[test]

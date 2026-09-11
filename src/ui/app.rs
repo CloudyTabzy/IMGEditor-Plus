@@ -354,7 +354,12 @@ pub enum Message {
 
     /// Toolbar "Validate textures": profile every TXD in the selected
     /// archive against the per-game compatibility tables.
-    ValidateCompatibility,
+    /// Opens the game-picker popup for texture validation.
+    OpenValidatorPopup,
+    /// Closes the validator popup without running anything.
+    CloseValidatorPopup,
+    /// Runs the texture validator against one game profile.
+    ValidateArchiveFor(&'static str),
     CompatibilityValidated {
         archive_index: usize,
         result: Result<crate::compat::scan::ScanReport, String>,
@@ -619,6 +624,8 @@ pub struct App {
     pub sort_draft: Option<crate::sort::SortChain>,
     /// `true` while the Sort Manager modal is visible.
     pub show_sort_manager: bool,
+    /// True while the texture-validator game picker is visible.
+    pub validator_popup_open: bool,
     /// In-flight drag-and-drop between archive tabs. `None` when no
     /// drag is in progress. Holds the source archive + the entry
     /// indices being moved + the currently-hovered target. The
@@ -779,6 +786,7 @@ impl App {
             config,
             sort_draft: None,
             show_sort_manager: false,
+            validator_popup_open: false,
             drag_state: None,
             last_export_selected_only: false,
             search: String::new(),
@@ -1163,6 +1171,7 @@ impl App {
             || self.pending_folder_import.is_some()
             || self.show_update_status.is_some()
             || self.show_sort_manager
+            || self.validator_popup_open
     }
 
     fn resolve_shortcut_focus_check(&mut self) -> Task<Message> {
@@ -3087,7 +3096,7 @@ impl App {
                 Task::none()
             }
 
-            Message::ValidateCompatibility => {
+            Message::OpenValidatorPopup => {
                 let Some(archive_index) = self.editor.selected_archive() else {
                     self.toast = Some("Open an archive first to validate it.".into());
                     return Task::none();
@@ -3096,6 +3105,25 @@ impl App {
                     self.toast = Some("Another task is still running.".into());
                     return Task::none();
                 }
+                self.validator_popup_open = true;
+                Task::none()
+            }
+            Message::CloseValidatorPopup => {
+                self.validator_popup_open = false;
+                Task::none()
+            }
+            Message::ValidateArchiveFor(target_id) => {
+                let Some(archive_index) = self.editor.selected_archive() else {
+                    self.toast = Some("Open an archive first to validate it.".into());
+                    return Task::none();
+                };
+                if self.editor.archives()[archive_index].progress.in_use() {
+                    self.toast = Some("Another task is still running.".into());
+                    return Task::none();
+                }
+                // The popup is a picker: running closes it so the user
+                // sees the highlighted rows underneath.
+                self.validator_popup_open = false;
                 // The snapshot shares the archive's ProgressInfo (Arc), so
                 // the toolbar progress bar and its cancel button drive the
                 // background scan.
@@ -3105,7 +3133,10 @@ impl App {
                         tokio::task::spawn_blocking(move || {
                             crate::compat::scan::validate_open_archive(
                                 &snapshot,
-                                &crate::compat::scan::ScanOptions::default(),
+                                &crate::compat::scan::ScanOptions {
+                                    decode_pixels: false,
+                                    target: Some(target_id),
+                                },
                             )
                         })
                         .await
@@ -3126,10 +3157,10 @@ impl App {
                         };
                         let errors = report.error_count();
                         let warnings = report.warning_count();
-                        let target = match archive.version {
-                            ImgVersion::Two => "sa",
-                            _ => "gta3",
-                        };
+                        let target = report.target.unwrap_or("gta3");
+                        let display = crate::compat::games::profile_by_id(target)
+                            .map(|game| game.display)
+                            .unwrap_or(target);
                         let verdict_summary = report
                             .verdicts
                             .get(target)
@@ -3142,7 +3173,7 @@ impl App {
                             })
                             .unwrap_or_else(|| "no textures".to_string());
                         let summary = format!(
-                            "Validated {} TXDs ({} textures): {errors} errors, {warnings} warnings; {target} target — {verdict_summary}",
+                            "Validated {} TXDs ({} textures) for {display}: {verdict_summary}; {errors} errors, {warnings} warnings",
                             report.txd_entries, report.textures
                         );
                         archive.add_log(format!("Compatibility check: {summary}"));
@@ -5404,6 +5435,7 @@ mod tests {
             archive_path: "fixture.img".into(),
             archive_kind: "IMG v1".into(),
             entry_count: 3,
+            target: Some("gta3"),
             ..ScanReport::default()
         };
         report.txd_entries = 2;
@@ -5452,7 +5484,10 @@ mod tests {
             "toast should summarize: {toast}"
         );
         assert!(toast.contains("2 errors"), "toast should count errors: {toast}");
-        assert!(toast.contains("gta3 target"), "toast names the target: {toast}");
+        assert!(
+            toast.contains("for GTA III"),
+            "toast names the target: {toast}"
+        );
         assert!(
             app.toast_extended_duration,
             "the long summary needs the extended 6.5 s toast"
@@ -5489,10 +5524,51 @@ mod tests {
     #[test]
     fn validate_button_without_archive_toasts_guidance() {
         let mut app = test_app();
-        let _ = app.update(Message::ValidateCompatibility);
+        let _ = app.update(Message::OpenValidatorPopup);
         assert_eq!(
             app.toast.as_deref(),
             Some("Open an archive first to validate it.")
+        );
+        assert!(!app.validator_popup_open);
+    }
+
+    #[test]
+    fn validator_popup_opens_closes_and_runs_for_a_target() {
+        let mut app = test_app_with_entries();
+        assert!(!app.modal_open());
+
+        let _ = app.update(Message::OpenValidatorPopup);
+        assert!(app.validator_popup_open);
+        assert!(app.modal_open(), "keyboard shortcuts must be gated");
+
+        let _ = app.update(Message::CloseValidatorPopup);
+        assert!(!app.validator_popup_open);
+
+        // Running closes the picker (the worker drives the progress bar).
+        // The synthetic test archive has no source path, so the scan
+        // errors out - but the popup must still close and the progress
+        // slot must be released (regression: start() before the path
+        // check left it stuck in use).
+        let _ = app.update(Message::OpenValidatorPopup);
+        assert!(app.validator_popup_open);
+        let messages = drain_task(app.update(Message::ValidateArchiveFor("sa")));
+        assert!(
+            matches!(
+                messages.as_slice(),
+                [Message::CompatibilityValidated {
+                    archive_index: 0,
+                    ..
+                }]
+            ),
+            "validation must report back: {messages:?}"
+        );
+        assert!(
+            !app.validator_popup_open,
+            "running closes the picker so the highlighted rows are visible"
+        );
+        assert!(
+            !app.editor.archives()[0].progress.in_use(),
+            "a failed scan must release the progress slot"
         );
     }
 

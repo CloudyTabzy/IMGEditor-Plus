@@ -240,6 +240,70 @@ pub struct VerdictReport {
     pub note: String,
 }
 
+/// One row of a game's format catalog: the user-facing summary of what
+/// that engine ships (native) and what it cannot be judged on
+/// (unknown), derived from the retail-verified tables.
+#[derive(Clone, Copy, Debug)]
+pub struct FormatInfo {
+    pub class: &'static str,
+    pub verdict: Verdict,
+    pub note: &'static str,
+}
+
+const GTA3_FORMATS: &[FormatInfo] = &[
+    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Native, note: "96.5% of retail world textures" },
+    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: "6,806 rasters, incl. player/vehicle set" },
+    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: "1,121 rasters" },
+    FormatInfo { class: "1555", verdict: Verdict::Native, note: "24 rasters" },
+    FormatInfo { class: "DXT1", verdict: Verdict::Supported, note: "retail ships none; D3D8 hardware supports it" },
+    FormatInfo { class: "DXT2 / DXT3 / DXT4 / DXT5", verdict: Verdict::Untested, note: "retail ships none; acceptance unmeasured" },
+    FormatInfo { class: "888 true 24-bit", verdict: Verdict::Untested, note: "retail never stores 888 at 24-bit" },
+    FormatInfo { class: "565 / 4444", verdict: Verdict::Untested, note: "VC-era 16-bit forms; III ships none" },
+];
+
+const VC_FORMATS: &[FormatInfo] = &[
+    FormatInfo { class: "565 (R5G6B5)", verdict: Verdict::Native, note: "88.8% of retail" },
+    FormatInfo { class: "4444 (A4R4G4B4)", verdict: Verdict::Native, note: "1,149 rasters; the alpha carrier" },
+    FormatInfo { class: "1555 (A1R5G5B5)", verdict: Verdict::Native, note: "164 rasters" },
+    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Native, note: "27 rasters; accepted but rare" },
+    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: "1 raster" },
+    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: "III ships it; VC itself ships none" },
+    FormatInfo { class: "DXT1", verdict: Verdict::Supported, note: "retail ships none; D3D8 hardware supports it" },
+    FormatInfo { class: "DXT2 / DXT3 / DXT4 / DXT5", verdict: Verdict::Untested, note: "retail ships none; acceptance unmeasured" },
+];
+
+const SA_FORMATS: &[FormatInfo] = &[
+    FormatInfo { class: "DXT1", verdict: Verdict::Native, note: "28,807 rasters across the four archives" },
+    FormatInfo { class: "DXT3", verdict: Verdict::Native, note: "2,098 rasters" },
+    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: "1,015 rasters, mostly player.img skins" },
+    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: "237 rasters" },
+    FormatInfo { class: "DXT5", verdict: Verdict::Supported, note: "retail ships none; D3D9 supports it" },
+    FormatInfo { class: "DXT2 / DXT4", verdict: Verdict::Untested, note: "retail ships none" },
+    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Untested, note: "palette-free dialect: 0 / 32,157" },
+    FormatInfo { class: "1555 / 565 / 4444", verdict: Verdict::Untested, note: "retail ships no 16-bit uncompressed" },
+];
+
+const BULLY_FORMATS: &[FormatInfo] = &[
+    FormatInfo { class: "DXT1 (NFT)", verdict: Verdict::Native, note: "31,714 rasters" },
+    FormatInfo { class: "DXT5 (NFT)", verdict: Verdict::Native, note: "3,526 rasters" },
+    FormatInfo { class: "RGB / RGBA (NFT)", verdict: Verdict::Native, note: "138 / 134 rasters" },
+    FormatInfo { class: "PAL / PALA (NFT)", verdict: Verdict::Native, note: "127 / 1 rasters" },
+    FormatInfo { class: "DXT3 (NFT)", verdict: Verdict::Supported, note: "Gamebryo supports it; retail ships none" },
+    FormatInfo { class: "other NiPixelData formats", verdict: Verdict::Untested, note: "15 rasters undecodable" },
+];
+
+/// The catalog a game picker shows: what the engine natively ships and
+/// what remains unknown. Every entry is retail-verified.
+pub fn format_catalog(game: &GameProfile) -> &'static [FormatInfo] {
+    match game.id {
+        "gta3" => GTA3_FORMATS,
+        "vc" => VC_FORMATS,
+        "sa" => SA_FORMATS,
+        "bully" => BULLY_FORMATS,
+        _ => &[],
+    }
+}
+
 /// Classify a texture raster against a target game.
 pub fn classify(game: &GameProfile, profile: &RasterProfile) -> VerdictReport {
     // Bully has no RenderWare texture path at all: its assets are
