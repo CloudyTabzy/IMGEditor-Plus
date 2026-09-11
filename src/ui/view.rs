@@ -2396,6 +2396,48 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
         )
         .width(Length::Fill);
 
+        // Advisory content hint: a suggestion with its evidence, never
+        // applied automatically.
+        let hint_row: Option<Element<'static, Message>> = archive.target_hint.as_ref().map(|hint| {
+            let display = crate::compat::games::profile_by_id(hint.game_id)
+                .map(|game| game.display)
+                .unwrap_or(hint.game_id);
+            let confidence = match hint.confidence {
+                crate::compat::hint::HintConfidence::High => "looks like",
+                crate::compat::hint::HintConfidence::Medium => "possibly",
+            };
+            let mut body = column![
+                fonts::body(format!("Content {confidence} {display}"))
+                    .color(compat_verdict_accent(crate::compat::games::Verdict::Supported)),
+                fonts::caption(hint.reasons.join(" · ")),
+            ]
+            .spacing(2);
+            if archive.target_game != Some(hint.game_id) {
+                body = body.push(
+                    button(fonts::body(format!("Use {display} as target")))
+                        .on_press(Message::ValidateArchiveFor(hint.game_id))
+                        .style(button::primary),
+                );
+            } else {
+                body = body.push(fonts::caption("(already the target)"));
+            }
+            Container::new(body)
+                .width(Length::Fill)
+                .padding(8)
+                .style(|_| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(Color::from_rgba(
+                        0.30, 0.60, 0.95, 0.10,
+                    ))),
+                    border: Border {
+                        color: Color::from_rgba(0.30, 0.60, 0.95, 0.30),
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                })
+                .into()
+        });
+
         let footer = column![
             compat_legend(size.width),
             row![
@@ -2411,24 +2453,30 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
         .spacing(8)
         .width(Length::Fill);
 
-        let content = column![
+        let mut content = column![
             title_row,
             w::hairline(divider),
             introduction,
-            Scrollable::new(cards)
-                .direction(iced::widget::scrollable::Direction::Vertical(
-                    iced::widget::scrollable::Scrollbar::new()
-                        .scroller_width(10.0)
-                        .margin(3.0),
-                ))
-                .style(validator_scrollbar_style)
-                .height(Length::Fill),
-            w::hairline(divider),
-            footer,
         ]
         .spacing(10)
         .width(Length::Fill)
         .align_x(Alignment::Start);
+        if let Some(hint_row) = hint_row {
+            content = content.push(hint_row);
+        }
+        let content = content
+            .push(
+                Scrollable::new(cards)
+                    .direction(iced::widget::scrollable::Direction::Vertical(
+                        iced::widget::scrollable::Scrollbar::new()
+                            .scroller_width(10.0)
+                            .margin(3.0),
+                    ))
+                    .style(validator_scrollbar_style)
+                    .height(Length::Fill),
+            )
+            .push(w::hairline(divider))
+            .push(footer);
 
         let card = Container::new(content)
             .width(Length::Fill)

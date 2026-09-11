@@ -336,6 +336,9 @@ pub struct ArchiveInfo {
     /// Set by the game picker and persisted per path in the config, so
     /// the choice survives closing the archive and restarting.
     pub target_game: Option<&'static str>,
+    /// Advisory content probe shown in the validator popup (None until
+    /// probed, cleared when entry content changes).
+    pub target_hint: Option<crate::compat::hint::TargetHint>,
     /// Reverse lookup from entry index to its position in `selected_indices`.
     /// Rebuilt by `update_selected_list` so shift+click and similar operations
     /// avoid linear scans of the filtered list.
@@ -388,6 +391,7 @@ impl ArchiveInfo {
             cached_file_types: None,
             compat_report: None,
             target_game: None,
+            target_hint: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
             generation: 0,
@@ -441,6 +445,7 @@ impl ArchiveInfo {
             cached_file_types: None,
             compat_report: None,
             target_game: None,
+            target_hint: None,
             selected_lookup: HashMap::new(),
             rename_index: None,
             generation: 0,
@@ -678,6 +683,7 @@ impl ArchiveInfo {
         self.cached_file_types = None;
         self.inspection_cache.clear();
         self.texture_cache.clear();
+        self.target_hint = None;
         self.generation = self.generation.wrapping_add(1);
     }
 

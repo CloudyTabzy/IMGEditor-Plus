@@ -1435,6 +1435,66 @@ mod tests {
     }
 
     #[test]
+    fn hint_probe_reads_fixture_archives() {
+        // The TXD fixture is a platform-9 DXT3 native: the probe should
+        // suggest San Andreas from real bytes.
+        let dir = tempfile::tempdir().unwrap();
+        let path = fixture_archive(dir.path());
+        let mut archive = ArchiveInfo::new("fixture.img", false, ImgVersion::Two);
+        archive.path = Some(path);
+        PcV2Parser.open(&mut archive).unwrap();
+
+        let hint = crate::compat::hint::probe_target(&archive, 96);
+        let hint = hint.expect("platform 9 content should hint SA");
+        assert_eq!(hint.game_id, "sa");
+        assert_eq!(hint.sampled_textures, 1);
+
+        // The Bully fixture (NFT/NIF entries) must hint Bully instead.
+        let dir = tempfile::tempdir().unwrap();
+        let path = bully_fixture_archive(dir.path());
+        let mut archive = ArchiveInfo::new("world.img", false, ImgVersion::Two);
+        archive.path = Some(path);
+        PcV2Parser.open(&mut archive).unwrap();
+
+        let hint = crate::compat::hint::probe_target(&archive, 96);
+        let hint = hint.expect("Gamebryo content should hint Bully");
+        assert_eq!(hint.game_id, "bully");
+    }
+
+    /// Minimal VER2 archive with four NFT entries and one NIF (the same
+    /// shape `scanner_profiles_bully_nft_entries` builds).
+    fn bully_fixture_archive(dir: &std::path::Path) -> std::path::PathBuf {
+        let nft = nif_nft_bytes(&nif_pixel_data_block(4, &[(8, 8)], -1));
+        let nif = crate::inspector::nif::tests::build_nif(&[("NiNode", &[0u8; 8])]);
+        let entries = [
+            ("a.nft", nft.clone()),
+            ("b.nft", nft.clone()),
+            ("c.nft", nft.clone()),
+            ("d.nft", nft.clone()),
+            ("model.nif", nif),
+        ];
+        let mut img: Vec<u8> = Vec::new();
+        img.extend_from_slice(b"VER2");
+        img.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (i, (name, _)) in entries.iter().enumerate() {
+            img.extend_from_slice(&((i + 1) as u32).to_le_bytes());
+            img.extend_from_slice(&1_u32.to_le_bytes());
+            let mut name_buf = [0_u8; 24];
+            name_buf[..name.len()].copy_from_slice(name.as_bytes());
+            img.extend_from_slice(&name_buf);
+        }
+        img.resize(2048, 0);
+        for (_, data) in &entries {
+            let mut padded = data.clone();
+            padded.resize(2048, 0);
+            img.extend_from_slice(&padded);
+        }
+        let path = dir.join("world.img");
+        std::fs::write(&path, &img).unwrap();
+        path
+    }
+
+    #[test]
     fn import_check_issue_predicate_flags_incompatible_and_unknown_only() {
         let mut check = ImportFileCheck {
             file_name: "x.txd".to_string(),

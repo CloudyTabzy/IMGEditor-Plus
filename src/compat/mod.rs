@@ -5,6 +5,7 @@
 //! judges assets, it never converts or writes them.
 
 pub mod games;
+pub mod hint;
 pub mod raster;
 pub mod scan;
 

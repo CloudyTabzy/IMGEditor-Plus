@@ -375,6 +375,11 @@ pub enum Message {
     ValidateArchiveFor(&'static str),
     /// Toggles the validator's entry-row tinting.
     SetCompatHighlight(bool),
+    /// Content probe finished; the hint is advisory only.
+    TargetProbed {
+        archive_index: usize,
+        hint: Option<crate::compat::hint::TargetHint>,
+    },
     CompatibilityValidated {
         archive_index: usize,
         result: Result<crate::compat::scan::ScanReport, String>,
@@ -3330,6 +3335,32 @@ impl App {
                     return Task::none();
                 }
                 self.validator_popup_open = true;
+                // Probe the content once so the picker can suggest a game.
+                if self.editor.archives()[archive_index].target_hint.is_none() {
+                    let snapshot = self.editor.archives()[archive_index].clone();
+                    return Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                crate::compat::hint::probe_target(
+                                    &snapshot,
+                                    crate::compat::hint::PROBE_SAMPLE_LIMIT,
+                                )
+                            })
+                            .await
+                            .unwrap_or(None)
+                        },
+                        move |hint| Message::TargetProbed {
+                            archive_index,
+                            hint,
+                        },
+                    );
+                }
+                Task::none()
+            }
+            Message::TargetProbed { archive_index, hint } => {
+                if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
+                    archive.target_hint = hint;
+                }
                 Task::none()
             }
             Message::CloseValidatorPopup => {
