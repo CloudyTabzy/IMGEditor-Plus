@@ -264,14 +264,14 @@ const GTA3_FORMATS: &[FormatInfo] = &[
 ];
 
 const VC_FORMATS: &[FormatInfo] = &[
-    FormatInfo { class: "565 (R5G6B5)", verdict: Verdict::Native, note: "88.8% of retail" },
-    FormatInfo { class: "4444 (A4R4G4B4)", verdict: Verdict::Native, note: "1,149 rasters; the alpha carrier" },
-    FormatInfo { class: "1555 (A1R5G5B5)", verdict: Verdict::Native, note: "164 rasters" },
+    FormatInfo { class: "DXT1", verdict: Verdict::Native, note: "retail world dialect; D3D8 pp=1 (10k+ rasters, stale nibbles)" },
+    FormatInfo { class: "DXT3", verdict: Verdict::Native, note: "retail alpha dialect; D3D8 pp=3 (1,149 rasters)" },
     FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Native, note: "27 rasters; accepted but rare" },
     FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: "1 raster" },
     FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: "III ships it; VC itself ships none" },
-    FormatInfo { class: "DXT1", verdict: Verdict::Supported, note: "retail ships none; D3D8 hardware supports it" },
-    FormatInfo { class: "DXT2 - DXT5", verdict: Verdict::Supported, note: "D3D8 compression values 1-5; retail ships none" },
+    FormatInfo { class: "565 (R5G6B5)", verdict: Verdict::Supported, note: "retail 565 labels are DXT1 data; no genuine R565 measured" },
+    FormatInfo { class: "1555 / 4444", verdict: Verdict::Supported, note: "retail labels are DXT1/DXT3 data; raw 16-bit forms unmeasured" },
+    FormatInfo { class: "DXT2 / DXT4 / DXT5", verdict: Verdict::Supported, note: "D3D8 compression values exist; retail ships only 1 and 3" },
     FormatInfo { class: "888 true 24-bit", verdict: Verdict::Untested, note: "documented depth-24 form; stride/order unverified" },
     FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: "driver maps C555 and LUM8; retail ships none" },
     FormatInfo { class: "A8L8", verdict: Verdict::Untested, note: "D3D9/decoders support it; RW nibble path unverified" },
@@ -363,7 +363,7 @@ fn format_verdict(
 ) -> (Verdict, Evidence, String) {
     match game.id {
         "sa" => sa_verdict(profile),
-        "gta3" | "vc" => iii_vc_verdict(profile),
+        "gta3" | "vc" => iii_vc_verdict(game.id, profile),
         _ => (
             Verdict::Untested,
             Evidence::Untested,
@@ -496,36 +496,48 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
 }
 
 fn iii_vc_verdict(
+    game_id: &str,
     profile: &RasterProfile,
 ) -> (Verdict, Evidence, String) {
     // Retail evidence base: GTA III PC 1.0 (gta3.img + txd.img,
     // 15,372 textures) and GTA VC PC 1.0 (gta3.img, 12,023 textures)
-    // measured 2026-09-11, zero parse failures and zero header
-    // anomalies.
+    // measured 2026-09-11. The VC pass was re-resolved 2026-09-11e:
+    // its 565/1555/4444-labelled rasters carry DXT-sized mip data and
+    // D3D8 compression codes (pp=1/3), so the dialect is DXT1/DXT3,
+    // not 16-bit uncompressed.
+    let vc = game_id == "vc";
     match profile.logical {
         // PAL is the III world-texture form (96.5% PAL8); VC barely
-        // uses it (27 rasters) in favor of 565/4444.
+        // uses it (27 rasters) in favor of compressed data.
         LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
             Verdict::Native,
             Evidence::Retail,
             "retail III: 96.5% PAL8; retail VC: 27 rasters - accepted but rare".to_string(),
         ),
-        // III and VC ship zero compressed rasters; DXT1 rides on D3D8
-        // hardware support but is not either game's data dialect.
+        LogicalFormat::Dxt1 if vc => (
+            Verdict::Native,
+            Evidence::Retail,
+            "retail VC world dialect: DXT1 with D3D8 pp=1; the raster nibble is stale".to_string(),
+        ),
+        // III genuinely ships zero compressed rasters; DXT1 rides on
+        // D3D8 hardware support but is not the game's data dialect.
         LogicalFormat::Dxt1 => (
             Verdict::Supported,
             Evidence::Retail,
-            "retail III+VC ship no compressed rasters (0/27,395)".to_string(),
+            "retail III ships no compressed rasters (0/15,372); D3D8 hardware supports DXT1".to_string(),
+        ),
+        LogicalFormat::Dxt3 if vc => (
+            Verdict::Native,
+            Evidence::Retail,
+            "retail VC alpha dialect: DXT3 with D3D8 pp=3 (1,149 rasters)".to_string(),
         ),
         // librw's D3D driver reads native compression values 1..5 into
         // DXT1..DXT5 textures; DXT2/DXT4 are the premultiplied-alpha
         // twins of DXT3/DXT5 and our decoder already handles them.
-        // Runtime acceptance of any compressed raster in III/VC is still
-        // unverified (retail ships none).
         LogicalFormat::Dxt2 | LogicalFormat::Dxt3 | LogicalFormat::Dxt4 | LogicalFormat::Dxt5 => (
             Verdict::Supported,
             Evidence::Docs,
-            "D3D8 compression values 1-5 map to DXT1-5 (DXT2/4 premultiplied); retail III+VC ship none"
+            "D3D8 compression values 1-5 map to DXT1-5 (DXT2/4 premultiplied); retail III+VC ship only 1 and 3"
                 .to_string(),
         ),
         // Question 5 answered: retail III stores 888 exclusively as
@@ -550,15 +562,35 @@ fn iii_vc_verdict(
             Evidence::Retail,
             "retail III ships 8888 in both archives (1,121 rasters)".to_string(),
         ),
-        // VC is the 565/4444 game: 10,682 + 1,149 rasters.
-        LogicalFormat::R565 => (
-            Verdict::Native,
+        // The raw 16-bit forms are not what retail VC stores: its
+        // 565/1555/4444 headers label DXT1/DXT3 data. They still load,
+        // but they are not the dialect.
+        LogicalFormat::R565 if vc => (
+            Verdict::Supported,
             Evidence::Retail,
-            "retail VC: 565 is the dominant world-texture form".to_string(),
+            "retail VC's 565-labelled rasters are DXT1 data; no genuine R565 measured".to_string(),
         ),
-        LogicalFormat::R1555 | LogicalFormat::R4444 => {
-            (Verdict::Native, Evidence::Retail, String::new())
-        }
+        LogicalFormat::R565 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            "driver-mapped 16-bit form; III ships none".to_string(),
+        ),
+        LogicalFormat::R1555 if vc => (
+            Verdict::Supported,
+            Evidence::Retail,
+            "retail VC's 1555 labels are DXT1 data; no genuine R1555 measured".to_string(),
+        ),
+        LogicalFormat::R1555 => (Verdict::Native, Evidence::Retail, String::new()),
+        LogicalFormat::R4444 if vc => (
+            Verdict::Supported,
+            Evidence::Retail,
+            "retail VC's 4444 labels are DXT3 data; no genuine R4444 measured".to_string(),
+        ),
+        LogicalFormat::R4444 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            "III ships none; D3D8-era 16-bit with alpha".to_string(),
+        ),
         // Mapped driver formats that retail happens not to use.
         LogicalFormat::R555 => (
             Verdict::Supported,
@@ -706,24 +738,41 @@ mod tests {
         }
 
         // DXT1-5 are all representable by the D3D8 driver (compression
-        // values 1-5). III/VC retail ships none, so they are Supported
-        // there; SA retail ships DXT3 (native) but not DXT5.
-        for game in [&GTA3, &VC] {
-            for logical in [
-                LogicalFormat::Dxt1,
-                LogicalFormat::Dxt2,
-                LogicalFormat::Dxt3,
-                LogicalFormat::Dxt4,
-                LogicalFormat::Dxt5,
-            ] {
-                let report = verdict(game, logical, 4);
-                assert_eq!(report.verdict, Verdict::Supported, "{} {logical:?}", game.id);
-            }
+        // values 1-5). III retail ships none, so they are Supported
+        // there. VC is the correction case: its 565/1555/4444 labels
+        // are DXT1/DXT3 data (D3D8 pp=1/3), so those two are Native;
+        // DXT2/4/5 stay Supported. SA retail ships DXT3 (native) but
+        // not DXT5.
+        for logical in [
+            LogicalFormat::Dxt1,
+            LogicalFormat::Dxt2,
+            LogicalFormat::Dxt3,
+            LogicalFormat::Dxt4,
+            LogicalFormat::Dxt5,
+        ] {
+            let report = verdict(&GTA3, logical, 4);
+            assert_eq!(report.verdict, Verdict::Supported, "gta3 {logical:?}");
+        }
+        assert_eq!(verdict(&VC, LogicalFormat::Dxt1, 4).verdict, Verdict::Native);
+        assert_eq!(verdict(&VC, LogicalFormat::Dxt3, 4).verdict, Verdict::Native);
+        for logical in [LogicalFormat::Dxt2, LogicalFormat::Dxt4, LogicalFormat::Dxt5] {
+            assert_eq!(verdict(&VC, logical, 4).verdict, Verdict::Supported, "vc {logical:?}");
         }
         assert_eq!(verdict(&SA, LogicalFormat::Dxt3, 4).verdict, Verdict::Native);
         for logical in [LogicalFormat::Dxt2, LogicalFormat::Dxt4, LogicalFormat::Dxt5] {
             assert_eq!(verdict(&SA, logical, 4).verdict, Verdict::Supported, "{logical:?}");
         }
+
+        // VC's raw 16-bit formats are not its dialect (the retail
+        // labels belong to DXT data), so they are Supported, not Native.
+        for logical in [
+            LogicalFormat::R565,
+            LogicalFormat::R1555,
+            LogicalFormat::R4444,
+        ] {
+            assert_eq!(verdict(&VC, logical, 2).verdict, Verdict::Supported, "vc {logical:?}");
+        }
+        assert_eq!(verdict(&GTA3, LogicalFormat::R1555, 2).verdict, Verdict::Native);
 
         // Depth-24 888 and A8L8 are documented/tool-supported but not
         // proven at runtime, so they stay unknown rather than being

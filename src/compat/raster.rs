@@ -99,12 +99,15 @@ pub struct RasterProfile {
 }
 
 /// Resolution order: FourCC > D3D format word (8-bit formats carry no
-/// raster nibble) > palette > raster nibble (+ depth). Shared by the
-/// full profile extraction and the header-only hint probe so both always
-/// agree.
+/// raster nibble) > D3D8 compression code > palette > raster nibble
+/// (+ depth). Shared by the full profile extraction and the header-only
+/// hint probe so both always agree.
 pub(crate) fn classify_format(
     raster_format: u32,
+    platform_id: u32,
     d3d_format: u32,
+    platform_properties: u8,
+    raster_type: u8,
     depth: u8,
     paletted: bool,
 ) -> (LogicalFormat, u32) {
@@ -123,6 +126,27 @@ pub(crate) fn classify_format(
     }
     if d3d_format == 51 {
         return (LogicalFormat::A8l8, 2);
+    }
+    // D3D8 natives have no FourCC: the compression code lives in the
+    // platform-properties byte (1..5 = DXT1..DXT5) and the raster nibble
+    // is stale from whatever the source format was before compression.
+    // Retail VC is the proof: its "565/1555/4444"-labelled rasters have
+    // DXT-sized mip data and pp 1/3.
+    if let Some(dxt) = crate::parser::texture_decoder::native_dxt_type(
+        raster_format,
+        platform_id,
+        d3d_format,
+        platform_properties,
+        raster_type,
+    ) {
+        let fmt = match dxt {
+            crate::parser::texture_decoder::DxtType::Dxt1 => LogicalFormat::Dxt1,
+            crate::parser::texture_decoder::DxtType::Dxt2 => LogicalFormat::Dxt2,
+            crate::parser::texture_decoder::DxtType::Dxt3 => LogicalFormat::Dxt3,
+            crate::parser::texture_decoder::DxtType::Dxt4 => LogicalFormat::Dxt4,
+            crate::parser::texture_decoder::DxtType::Dxt5 => LogicalFormat::Dxt5,
+        };
+        return (fmt, 0);
     }
     if paletted {
         return (LogicalFormat::Pal8, 1);
@@ -162,10 +186,32 @@ impl RasterProfile {
 
         let (logical, storage_bpp) = classify_format(
             texture.raster_format,
+            texture.platform_id,
             texture.d3d_format,
+            texture.platform_properties,
+            texture.raster_type,
             texture.depth,
             palette != PaletteKind::None,
         );
+        // D3D8 natives signal compression through the platform-properties
+        // byte, not a FourCC; surface the resolved fourcc for the
+        // anomaly checks and UI labels.
+        let fourcc = fourcc.or_else(|| {
+            crate::parser::texture_decoder::native_dxt_type(
+                texture.raster_format,
+                texture.platform_id,
+                texture.d3d_format,
+                texture.platform_properties,
+                texture.raster_type,
+            )
+            .map(|dxt| match dxt {
+                crate::parser::texture_decoder::DxtType::Dxt1 => "DXT1",
+                crate::parser::texture_decoder::DxtType::Dxt2 => "DXT2",
+                crate::parser::texture_decoder::DxtType::Dxt3 => "DXT3",
+                crate::parser::texture_decoder::DxtType::Dxt4 => "DXT4",
+                crate::parser::texture_decoder::DxtType::Dxt5 => "DXT5",
+            })
+        });
 
         Self {
             platform_id: texture.platform_id,
@@ -337,3 +383,30 @@ fn fourcc_name(d3d_format: u32) -> Option<&'static str> {
 
 /// Frequency counter helper shared by the scanner report.
 pub type Counts<T> = BTreeMap<T, usize>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// D3D8 (platform 8) natives carry the compression code in the
+    /// platform-properties byte; the raster nibble is stale from the
+    /// pre-compression source format. Retail VC is the proof case.
+    #[test]
+    fn d3d8_compression_code_beats_the_stale_nibble() {
+        // VC "1555" that is really DXT1: rf nibble 0x1, pp=1.
+        let (logical, _) = classify_format(0x100, 8, 1, 1, 4, 16, false);
+        assert_eq!(logical, LogicalFormat::Dxt1);
+        // VC "565" that is really DXT1: rf nibble 0x2, pp=1.
+        let (logical, _) = classify_format(0x200, 8, 0, 1, 4, 16, false);
+        assert_eq!(logical, LogicalFormat::Dxt1);
+        // VC "4444" that is really DXT3: rf nibble 0x3, pp=3.
+        let (logical, _) = classify_format(0x300, 8, 1, 3, 4, 16, false);
+        assert_eq!(logical, LogicalFormat::Dxt3);
+        // A genuine 1555 (pp=0) stays uncompressed.
+        let (logical, _) = classify_format(0x100, 8, 1, 0, 4, 16, false);
+        assert_eq!(logical, LogicalFormat::R1555);
+        // D3D9 still resolves by FourCC.
+        let (logical, _) = classify_format(0x200, 9, 0x3354_5844, 9, 4, 16, false);
+        assert_eq!(logical, LogicalFormat::Dxt3);
+    }
+}

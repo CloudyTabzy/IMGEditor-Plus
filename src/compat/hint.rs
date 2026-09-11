@@ -198,16 +198,22 @@ fn peek_native(body: &[u8], out: &mut Vec<(u32, LogicalFormat)>) {
         if kind == RW_STRUCT_KIND {
             let struct_body = &body[(position + 12).min(end)..end];
             // platform u32 + flags 4 + names 64 + raster u32 + d3d u32
-            // + width u16 + height u16 + depth u8 = 85 bytes minimum.
+            // + width u16 + height u16 + depth u8 = 85 bytes minimum;
+            // mip count / raster type / compression follow.
             if struct_body.len() >= 85 {
                 let platform = read_u32(struct_body, 0).unwrap_or(0);
                 let raster_format = read_u32(struct_body, 72).unwrap_or(0);
                 let d3d_format = read_u32(struct_body, 76).unwrap_or(0);
                 let depth = struct_body[84];
+                let raster_type = struct_body.get(86).copied().unwrap_or(0);
+                let platform_properties = struct_body.get(87).copied().unwrap_or(0);
                 let paletted = matches!((raster_format >> 13) & 0x3, 1..=3);
                 let (class, _) = super::raster::classify_format(
                     raster_format,
+                    platform,
                     d3d_format,
+                    platform_properties,
+                    raster_type,
                     depth,
                     paletted,
                 );
