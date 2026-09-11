@@ -36,6 +36,8 @@ pub struct ScanReport {
     pub nft_textures: usize,
     /// NiPixelData format name -> count ("DXT1", "PAL", ...).
     pub nft_formats: BTreeMap<String, usize>,
+    /// Game id -> verdict label -> NFT raster count.
+    pub nft_verdicts: BTreeMap<&'static str, BTreeMap<&'static str, usize>>,
     /// NFT rasters whose NiPixelData carries a palette reference.
     pub nft_paletted: usize,
     /// Logical-format histogram ("DXT1", "888 (32bpp)".).
@@ -361,6 +363,15 @@ fn profile_nft_entry(
             continue;
         };
         report.nft_textures += 1;
+        for game in ALL_GAMES {
+            let verdict = crate::compat::games::classify_nft_format(game, info_format_label(raw, header.endian));
+            *report
+                .nft_verdicts
+                .entry(game.id)
+                .or_default()
+                .entry(verdict.verdict.label())
+                .or_default() += 1;
+        }
         match decode_ni_pixel_tail(raw, header.endian) {
             Some(info) => {
                 *report.nft_formats.entry(info.format_name().to_string()).or_default() += 1;
@@ -689,17 +700,29 @@ pub fn run_cli(path: &Path, options: &ScanOptions, target: Option<&str>) -> anyh
     };
     println!("\nVerdicts per target game:");
     for game_id in games {
-        let counts = report.verdicts.get(game_id);
-        match counts {
-            Some(counts) => {
-                let summary = counts
-                    .iter()
-                    .map(|(verdict, count)| format!("{verdict}={count}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                println!("  {game_id}: {summary}");
+        match (
+            report.verdicts.get(game_id),
+            report.nft_verdicts.get(game_id),
+        ) {
+            (None, None) => println!("  {game_id}: no textures"),
+            (rw, nft) => {
+                if let Some(counts) = rw {
+                    let summary = counts
+                        .iter()
+                        .map(|(verdict, count)| format!("{verdict}={count}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    println!("  {game_id} (RW): {summary}");
+                }
+                if let Some(counts) = nft {
+                    let summary = counts
+                        .iter()
+                        .map(|(verdict, count)| format!("{verdict}={count}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    println!("  {game_id} (NFT): {summary}");
+                }
             }
-            None => println!("  {game_id}: no textures"),
         }
     }
 
@@ -1013,5 +1036,14 @@ mod tests {
         assert_eq!(report.anomaly_counts.get("NFT_NON_POT"), Some(&1));
         assert!(!report.anomaly_counts.contains_key("NFT_HEADER_FAIL"));
         assert!(!report.anomaly_counts.contains_key("NFT_PIXELDATA_UNPARSED"));
+
+        // NFT verdicts: the three DXT1 + one PAL rasters are native to
+        // Bully; every RenderWare target marks them unsupported.
+        let bully = report.nft_verdicts.get("bully").unwrap();
+        assert_eq!(bully.get("native"), Some(&4));
+        for game in ["gta3", "vc", "sa"] {
+            let verdicts = report.nft_verdicts.get(game).unwrap();
+            assert_eq!(verdicts.get("unsupported"), Some(&4), "{game}");
+        }
     }
 }

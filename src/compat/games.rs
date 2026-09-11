@@ -187,6 +187,60 @@ fn format_verdict(
     }
 }
 
+/// Classify a Gamebryo `NiPixelData` raster format (nif.xml
+/// `PixelFormat` enum values: 0 RGB, 1 RGBA, 2 PAL, 3 PALA, 4 DXT1,
+/// 5 DXT3, 6 DXT5) against a target game.
+///
+/// Bully is the only Gamebryo target; for RenderWare games an NFT
+/// raster is simply not their native form. Evidence: the retail
+/// World.img scan (35,655 rasters, 2026-09-11).
+pub fn classify_nft_format(game: &GameProfile, format: u32) -> VerdictReport {
+    if game.id != BULLY.id {
+        return VerdictReport {
+            game_id: game.id,
+            verdict: Verdict::Unsupported,
+            evidence: Evidence::Docs,
+            note: "Gamebryo NFT rasters are not RenderWare natives".to_string(),
+        };
+    }
+    let (verdict, evidence, note) = match format {
+        4 => (
+            Verdict::Native,
+            Evidence::Retail,
+            "retail Bully: 31,714 DXT1 rasters".to_string(),
+        ),
+        6 => (
+            Verdict::Native,
+            Evidence::Retail,
+            "retail Bully: 3,526 DXT5 rasters".to_string(),
+        ),
+        0 | 1 => (
+            Verdict::Native,
+            Evidence::Retail,
+            "retail Bully ships raw RGB/RGBA (138/134)".to_string(),
+        ),
+        2 | 3 => (
+            Verdict::Native,
+            Evidence::Retail,
+            "retail Bully ships paletted rasters (127 PAL + 1 PALA)".to_string(),
+        ),
+        // The Gamebryo format enum and our decoder both handle DXT3,
+        // but retail Bully ships none - keep it non-native.
+        5 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            "Gamebryo supports DXT3 but retail Bully ships none".to_string(),
+        ),
+        _ => (Verdict::Untested, Evidence::Untested, String::new()),
+    };
+    VerdictReport {
+        game_id: game.id,
+        verdict,
+        evidence,
+        note,
+    }
+}
+
 fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
     // Retail evidence base: GTA SA PC 1.0 (gta3.img, gta_int.img,
     // player.img, cutscene.img — 32,157 textures measured 2026-09-11,
@@ -301,5 +355,36 @@ fn iii_vc_verdict(
             (Verdict::Untested, Evidence::Untested, String::new())
         }
         LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, String::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bully_nft_formats_classify_against_retail_profile() {
+        for (format, expected) in [
+            (4_u32, Verdict::Native),  // DXT1
+            (6, Verdict::Native),      // DXT5
+            (0, Verdict::Native),      // RGB
+            (1, Verdict::Native),      // RGBA
+            (2, Verdict::Native),      // PAL
+            (3, Verdict::Native),      // PALA
+            (5, Verdict::Supported),   // DXT3 - engine-supported, retail-absent
+            (99, Verdict::Untested),   // unknown enum value
+        ] {
+            let report = classify_nft_format(&BULLY, format);
+            assert_eq!(report.verdict, expected, "format {format}");
+            assert_eq!(report.game_id, "bully");
+        }
+    }
+
+    #[test]
+    fn nft_formats_are_unsupported_for_renderware_targets() {
+        for game in [&GTA3, &VC, &SA] {
+            let report = classify_nft_format(game, 4);
+            assert_eq!(report.verdict, Verdict::Unsupported, "{}", game.id);
+        }
     }
 }
