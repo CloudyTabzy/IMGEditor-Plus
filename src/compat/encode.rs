@@ -234,6 +234,9 @@ pub fn encode_texture(
             rgba.len()
         ));
     }
+    let source_alpha = rgba[..expected]
+        .chunks_exact(4)
+        .any(|pixel| pixel[3] < 255);
 
     let levels = mip_chain(rgba, width, height);
     let mut palette = Vec::new();
@@ -262,9 +265,9 @@ pub fn encode_texture(
             .collect(),
         EncodeFormat::Rgb888 => levels.iter().map(|(_, _, px)| encode_888(px)).collect(),
         EncodeFormat::Argb8888 => levels.iter().map(|(_, _, px)| encode_8888(px)).collect(),
-        EncodeFormat::Dxt1 => encode_dxt_levels(&levels, texpresso::Format::Bc1, options),
-        EncodeFormat::Dxt3 => encode_dxt_levels(&levels, texpresso::Format::Bc2, options),
-        EncodeFormat::Dxt5 => encode_dxt_levels(&levels, texpresso::Format::Bc3, options),
+        EncodeFormat::Dxt1 => encode_dxt_levels(&levels, texpresso::Format::Bc1, options, source_alpha),
+        EncodeFormat::Dxt3 => encode_dxt_levels(&levels, texpresso::Format::Bc2, options, source_alpha),
+        EncodeFormat::Dxt5 => encode_dxt_levels(&levels, texpresso::Format::Bc3, options, source_alpha),
     };
 
     let header = header_spec(format, platform_id).with_mips(mipmaps.len().max(1) as u8);
@@ -380,6 +383,7 @@ fn encode_dxt_levels(
     levels: &[(u32, u32, Vec<u8>)],
     format: texpresso::Format,
     options: EncodeOptions,
+    source_alpha: bool,
 ) -> Vec<Vec<u8>> {
     levels
         .iter()
@@ -391,6 +395,11 @@ fn encode_dxt_levels(
                 } else {
                     texpresso::Algorithm::ClusterFit
                 },
+                // Alpha-blended textures fit better when the colour
+                // error is weighted by alpha; squish offers the same
+                // flag (kWeightColourByAlpha) and Magic.TXD never sets
+                // it.
+                weigh_colour_by_alpha: source_alpha,
                 ..texpresso::Params::default()
             };
             format.compress(px, *w as usize, *h as usize, params, &mut out);
