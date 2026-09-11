@@ -2476,9 +2476,7 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
 /// a light buffer at low-light users). Defaults to opaque once the fade
 /// animation is done or reaped, so the layer never lifts early.
 fn build_quit_fade(app: &App) -> Option<Element<'_, Message>> {
-    if app.quitting.is_none() {
-        return None;
-    }
+    app.quitting?;
     let alpha = app
         .animator
         .get_or(crate::ui::app::ANIM_QUIT_FADE, 1.0)
