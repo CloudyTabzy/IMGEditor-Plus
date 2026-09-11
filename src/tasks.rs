@@ -719,6 +719,60 @@ mod tests {
     use crate::parser::{encode_entry_name, read_entry_data};
 
     #[test]
+    fn save_writes_override_bytes_instead_of_the_source_range() {
+        // Normalize-pass foundation: a patched entry must be saved with
+        // its override bytes, not the original source range.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.img");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"VER2");
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes()); // offset (sectors)
+        bytes.extend_from_slice(&1_u32.to_le_bytes()); // size (sectors)
+        let mut name = [0_u8; 24];
+        name[..8].copy_from_slice(b"test.txd");
+        bytes.extend_from_slice(&name);
+        bytes.resize(2048, 0);
+        bytes.extend_from_slice(&[b'A'; 2048]);
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut archive = ArchiveInfo::new("one.img", false, ImgVersion::Two);
+        archive.path = Some(path.clone());
+        crate::parser::pc_v2::PcV2Parser
+            .open(&mut archive)
+            .unwrap();
+        assert_eq!(archive.entries.len(), 1);
+        archive.entries[0].override_bytes =
+            Some(std::sync::Arc::new(b"PATCHED-TXD-BYTES".to_vec()));
+
+        // Layout and stream both honor the override.
+        assert_eq!(
+            crate::parser::entry_data_size(&archive.entries[0], archive.source_mmap.as_deref())
+                .unwrap(),
+            SECTOR_SIZE
+        );
+        let saved = SaveTask::new(archive, path.clone(), ImgVersion::Two)
+            .run_blocking()
+            .unwrap();
+
+        let reopened = {
+            let mut archive = ArchiveInfo::new("one.img", false, ImgVersion::Two);
+            archive.path = Some(path.clone());
+            crate::parser::pc_v2::PcV2Parser
+                .open(&mut archive)
+                .unwrap();
+            archive
+        };
+        let data = read_entry_data(&reopened, &reopened.entries[0]).unwrap();
+        assert!(data.starts_with(b"PATCHED-TXD-BYTES"));
+        assert!(
+            !data.starts_with(b"AAAA"),
+            "the original source range must not be written"
+        );
+        let _ = saved;
+    }
+
+    #[test]
     fn successful_save_releases_the_progress_slot() {
         // Regression: SaveTask started progress but only finished it on
         // errors, so a completed save left the archive "in use" forever

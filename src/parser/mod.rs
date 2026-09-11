@@ -195,6 +195,9 @@ fn read_entry_data_with_source(
     archive_source: Option<&Path>,
     source_mmap: Option<&Mmap>,
 ) -> anyhow::Result<Vec<u8>> {
+    if let Some(bytes) = &entry.override_bytes {
+        return Ok(bytes.as_ref().clone());
+    }
     if entry.imported {
         let source = entry
             .source_path
@@ -228,6 +231,9 @@ pub(crate) fn entry_data_size(
     entry: &EntryInfo,
     source_mmap: Option<&Mmap>,
 ) -> anyhow::Result<u64> {
+    if let Some(bytes) = &entry.override_bytes {
+        return Ok(sector_rounded_size(bytes.len() as u64));
+    }
     if entry.imported {
         let source = entry
             .source_path
@@ -256,6 +262,15 @@ pub(crate) fn stream_entry_data(
     source_mmap: Option<&Mmap>,
     source_file: &mut Option<BufReader<std::fs::File>>,
 ) -> anyhow::Result<()> {
+    if let Some(bytes) = &entry.override_bytes {
+        out.write_all(bytes)?;
+        let actual = bytes.len() as u64;
+        let pad = sector_rounded_size(actual) - actual;
+        if pad > 0 {
+            out.write_all(&ZERO_SECTOR[..pad as usize])?;
+        }
+        return Ok(());
+    }
     if entry.imported {
         let source = entry
             .source_path
@@ -310,6 +325,9 @@ pub fn read_entry_data_from_source(
     entry: &EntryInfo,
     archive_source: Option<&std::path::Path>,
 ) -> anyhow::Result<Vec<u8>> {
+    if let Some(bytes) = &entry.override_bytes {
+        return Ok(bytes.as_ref().clone());
+    }
     if entry.imported {
         let source = entry
             .source_path

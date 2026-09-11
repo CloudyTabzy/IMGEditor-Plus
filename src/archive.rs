@@ -225,6 +225,9 @@ pub struct EntryInfo {
     pub file_ext: CompactString,
     pub source_path: Option<PathBuf>,
     pub imported: bool,
+    /// Patched entry bytes (normalize pass). When set, every reader and
+    /// the save writers use these instead of the source range/file.
+    pub override_bytes: Option<std::sync::Arc<Vec<u8>>>,
     pub rename: bool,
     pub selected: bool,
 }
@@ -268,6 +271,7 @@ impl EntryInfo {
             file_ext,
             source_path: None,
             imported: false,
+            override_bytes: None,
             rename: false,
             selected: false,
         }
