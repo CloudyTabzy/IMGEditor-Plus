@@ -1,11 +1,16 @@
 //! Per-game dialect profiles and the texture verdict tables.
 //!
 //! Every verdict carries its evidence class so untested cells stay
-//! visible in code (see docs/asset-compatibility-engine.md §3). The
-//! tables here are Phase 0 drafts: corpus evidence comes from the
-//! modded `gta3.img` forensics, docs evidence from the INU Tools
-//! research (docs/research-inu-tools-gta.md); retail verification
-//! flips cells from `Docs`/`Untested` to `Retail` as corpora arrive.
+//! visible in code (see docs/asset-compatibility-engine.md §3). As of
+//! 2026-09-11 all four retail corpora are verified: III, VC, SA and
+//! Bully rows are `Evidence::Retail`, and cells retail absence cannot
+//! resolve stay `Untested` with a retail note.
+//!
+//! [`validate_rasters`] is the validator primitive: it reduces a set
+//! of rasters (an imported file, an entry, a whole archive) to a
+//! [`ValidationSummary`] against one target profile.
+
+use std::collections::BTreeMap;
 
 use super::raster::{LogicalFormat, RasterProfile};
 
@@ -92,8 +97,8 @@ pub const VC: GameProfile = GameProfile {
     rw_range: (0x34000, 0x36000),
 };
 
-/// PC SA accepts both platform 8 and 9 natives (docs evidence);
-/// what vanilla itself writes is pending retail verification.
+/// SA writes platform-9 (D3D9) natives — retail-verified 2026-09-11
+/// across all four archives; platform-8 acceptance is unmeasured.
 pub const SA: GameProfile = GameProfile {
     id: "sa",
     display: "San Andreas",
@@ -115,6 +120,115 @@ pub const ALL_GAMES: [&GameProfile; 4] = [&GTA3, &VC, &SA, &BULLY];
 
 pub fn profile_by_id(id: &str) -> Option<&'static GameProfile> {
     ALL_GAMES.into_iter().find(|game| game.id == id)
+}
+
+/// One named raster that is not native to the target, worst first.
+#[derive(Debug, Clone)]
+pub struct Offender {
+    pub name: String,
+    pub verdict: Verdict,
+    pub note: String,
+}
+
+/// Aggregated verdicts for a set of rasters (one imported file, one
+/// entry, or a whole archive) against a single target game.
+#[derive(Debug, Clone)]
+pub struct ValidationSummary {
+    pub game_id: &'static str,
+    pub display: &'static str,
+    pub textures: usize,
+    /// Verdict label -> count (only verdicts that occurred).
+    pub counts: BTreeMap<&'static str, usize>,
+    /// Most severe verdict in the set; `Untested` for an empty set.
+    pub worst: Verdict,
+    /// Non-native rasters, most severe first, capped at
+    /// [`MAX_OFFENDERS`] so summaries stay UI-sized.
+    pub offenders: Vec<Offender>,
+}
+
+/// Cap on [`ValidationSummary::offenders`] (the counts keep the total).
+pub const MAX_OFFENDERS: usize = 8;
+
+impl ValidationSummary {
+    /// True when every raster is engine-native for the target.
+    pub fn all_native(&self) -> bool {
+        self.textures > 0 && self.worst == Verdict::Native
+    }
+
+    /// True when nothing is outright incompatible (no `Unsupported`).
+    pub fn has_incompatible(&self) -> bool {
+        self.counts.contains_key(Verdict::Unsupported.label())
+    }
+
+    /// Count of rasters the target cannot consume as-is.
+    pub fn incompatible_count(&self) -> usize {
+        self.counts
+            .get(Verdict::Unsupported.label())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Rasters whose compatibility is unknown (no evidence either way).
+    pub fn unknown_count(&self) -> usize {
+        self.counts
+            .get(Verdict::Untested.label())
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Verdict {
+    /// True when the raster needs no action for this target.
+    pub fn is_native(self) -> bool {
+        self == Verdict::Native
+    }
+}
+
+/// Classify a set of named rasters against one target game and
+/// aggregate the result. This is the validator primitive: an import,
+/// an entry, or a whole archive reduced to "how much of it does this
+/// engine accept, and what needs attention".
+pub fn validate_rasters<'a, I>(target: &GameProfile, rasters: I) -> ValidationSummary
+where
+    I: IntoIterator<Item = (&'a str, &'a RasterProfile)>,
+{
+    let mut summary = ValidationSummary {
+        game_id: target.id,
+        display: target.display,
+        textures: 0,
+        counts: BTreeMap::new(),
+        worst: Verdict::Untested,
+        offenders: Vec::new(),
+    };
+    let mut worst: Option<Verdict> = None;
+    for (name, profile) in rasters {
+        let report = classify(target, profile);
+        summary.textures += 1;
+        *summary
+            .counts
+            .entry(report.verdict.label())
+            .or_default() += 1;
+        worst = Some(match worst {
+            Some(previous) => previous.max(report.verdict),
+            None => report.verdict,
+        });
+        if report.verdict != Verdict::Native {
+            summary.offenders.push(Offender {
+                name: name.to_string(),
+                verdict: report.verdict,
+                note: report.note,
+            });
+        }
+    }
+    if let Some(worst) = worst {
+        summary.worst = worst;
+    }
+    // Most severe first; stable enough for UI listing.
+    summary
+        .offenders
+        .sort_by_key(|offender| std::cmp::Reverse(offender.verdict));
+    summary.offenders.truncate(MAX_OFFENDERS);
+    summary
 }
 
 /// One texture's compatibility report against one target game.
@@ -361,6 +475,7 @@ fn iii_vc_verdict(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compat::raster::PaletteKind;
 
     #[test]
     fn bully_nft_formats_classify_against_retail_profile() {
@@ -386,5 +501,103 @@ mod tests {
             let report = classify_nft_format(game, 4);
             assert_eq!(report.verdict, Verdict::Unsupported, "{}", game.id);
         }
+    }
+
+    fn raster(platform: u32, logical: LogicalFormat) -> RasterProfile {
+        RasterProfile {
+            platform_id: platform,
+            raster_format: 0,
+            d3d_format: 0,
+            fourcc: None,
+            logical,
+            storage_bpp: 4,
+            width: 64,
+            height: 64,
+            depth: 32,
+            mip_levels: 1,
+            palette: PaletteKind::None,
+            has_alpha_header: true,
+            automipmap: false,
+        }
+    }
+
+    #[test]
+    fn validate_rasters_reports_all_native_sets() {
+        let a = raster(9, LogicalFormat::Dxt1);
+        let b = raster(9, LogicalFormat::R8888);
+        let summary = validate_rasters(&SA, [("a", &a), ("b", &b)]);
+        assert_eq!(summary.textures, 2);
+        assert!(summary.all_native());
+        assert_eq!(summary.worst, Verdict::Native);
+        assert!(summary.offenders.is_empty());
+        assert_eq!(summary.counts.get("native"), Some(&2));
+        assert!(!summary.has_incompatible());
+    }
+
+    #[test]
+    fn validate_rasters_surfaces_worst_and_offenders() {
+        let native = raster(8, LogicalFormat::Pal8);
+        let dxt = raster(8, LogicalFormat::Dxt1);
+        let summary = validate_rasters(&GTA3, [("tiles", &native), ("prop", &dxt)]);
+        assert!(!summary.all_native());
+        // DXT1 in III is Supported (retail ships none).
+        assert_eq!(summary.worst, Verdict::Supported);
+        assert_eq!(summary.offenders.len(), 1);
+        assert_eq!(summary.offenders[0].name, "prop");
+        assert_eq!(summary.offenders[0].verdict, Verdict::Supported);
+        assert_eq!(summary.incompatible_count(), 0);
+    }
+
+    #[test]
+    fn validate_rasters_flags_incompatible_and_unknown() {
+        // A RenderWare raster against Bully is outright unsupported.
+        let rw = raster(8, LogicalFormat::Pal8);
+        let summary = validate_rasters(&BULLY, [("tiles", &rw)]);
+        assert!(summary.has_incompatible());
+        assert_eq!(summary.incompatible_count(), 1);
+        assert_eq!(summary.worst, Verdict::Unsupported);
+
+        // 555 has no retail evidence for SA: unknown, not incompatible.
+        let odd = raster(9, LogicalFormat::R555);
+        let summary = validate_rasters(&SA, [("odd", &odd)]);
+        assert_eq!(summary.unknown_count(), 1);
+        assert!(!summary.has_incompatible());
+        assert_eq!(summary.worst, Verdict::Untested);
+    }
+
+    #[test]
+    fn validate_rasters_marks_platform_rewrites_lossless() {
+        // A platform-9 paletted raster in a III archive: format is
+        // native but the container needs a rewrite.
+        let p9 = raster(9, LogicalFormat::Pal8);
+        let summary = validate_rasters(&GTA3, [("tiles", &p9)]);
+        assert_eq!(summary.worst, Verdict::ConvertibleLossless);
+        assert_eq!(
+            summary.counts.get(Verdict::ConvertibleLossless.label()),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn validate_rasters_caps_offenders_but_counts_all() {
+        let bad = raster(8, LogicalFormat::Dxt1);
+        let names: Vec<&str> = (0..10).map(|_| "prop").collect();
+        let items: Vec<(&str, &RasterProfile)> =
+            names.iter().map(|n| (*n, &bad)).collect();
+        let summary = validate_rasters(&GTA3, items);
+        assert_eq!(summary.textures, 10);
+        assert_eq!(summary.offenders.len(), MAX_OFFENDERS);
+        assert_eq!(summary.counts.get("supported"), Some(&10));
+    }
+
+    #[test]
+    fn validate_rasters_handles_empty_sets() {
+        let summary = validate_rasters(
+            &SA,
+            std::iter::empty::<(&str, &RasterProfile)>(),
+        );
+        assert_eq!(summary.textures, 0);
+        assert_eq!(summary.worst, Verdict::Untested);
+        assert!(!summary.all_native());
     }
 }

@@ -8,5 +8,8 @@ pub mod games;
 pub mod raster;
 pub mod scan;
 
-pub use games::{classify, Evidence, GameProfile, Verdict, VerdictReport, ALL_GAMES, BULLY, GTA3, SA, VC};
+pub use games::{
+    classify, classify_nft_format, profile_by_id, validate_rasters, Evidence, GameProfile, Offender,
+    ValidationSummary, Verdict, VerdictReport, ALL_GAMES, BULLY, GTA3, SA, VC,
+};
 pub use raster::{Anomaly, LogicalFormat, PaletteKind, RasterProfile, Severity};
