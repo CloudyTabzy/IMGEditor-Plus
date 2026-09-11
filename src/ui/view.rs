@@ -2,8 +2,8 @@ use crate::archive::{ExportStatus, SortColumn};
 use crate::sort::SortDirection;
 use iced::widget::{
     Column, Container, Float, Row, Scrollable, Space, button, canvas, checkbox, column, container,
-    image, mouse_area, opaque, pane_grid, progress_bar, responsive, row, stack, text_input,
-    tooltip,
+    image, mouse_area, opaque, pane_grid, progress_bar, responsive, row, scrollable, stack,
+    text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length, Rectangle, Vector};
 
@@ -159,18 +159,23 @@ impl App {
 
         // Compatibility verdicts by entry index, built once per frame so
         // the row styling below is a map lookup, not a scan per row.
+        // Skipped entirely when the user turned highlighting off.
         let compat_verdicts: std::collections::HashMap<usize, crate::compat::games::Verdict> =
-            archive
-                .compat_report
-                .as_ref()
-                .map(|report| {
-                    report
-                        .entry_verdicts
-                        .iter()
-                        .map(|verdict| (verdict.entry_index, verdict.worst))
-                        .collect()
-                })
-                .unwrap_or_default();
+            if self.compat_highlight_enabled {
+                archive
+                    .compat_report
+                    .as_ref()
+                    .map(|report| {
+                        report
+                            .entry_verdicts
+                            .iter()
+                            .map(|verdict| (verdict.entry_index, verdict.worst))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                std::collections::HashMap::new()
+            };
 
         // Window of visible rows, with an overscan to cover any tall viewport.
         let raw_first = ((scroll_y / ROW_HEIGHT) as i32) - OVERSCAN_ROWS;
@@ -2195,6 +2200,7 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
     let archive_index = app.editor.selected_archive()?;
     let archive = app.editor.archives().get(archive_index)?;
     let current_target = archive.compat_report.as_ref().and_then(|report| report.target);
+    let highlight_enabled = app.compat_highlight_enabled;
 
     let design = app.design();
     let surface = design.surface();
@@ -2203,140 +2209,160 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
     let shadow = design.iced_shadow(&design.tokens.elevation.modal);
     let divider = design.divider();
 
-    let mut cards = Column::new().spacing(10).width(Length::Fill);
-    for game in crate::compat::games::ALL_GAMES {
-        let mut native_lines = Column::new().spacing(2).width(Length::Fill);
-        let mut unknown_lines = Column::new().spacing(2).width(Length::Fill);
-        let mut has_unknown = false;
-        for info in crate::compat::games::format_catalog(game) {
-            let line = row![
-                fonts::caption(info.class).width(Length::Fixed(210.0)),
-                fonts::caption(info.note).width(Length::Fill),
-            ]
-            .spacing(8)
-            .width(Length::Fill);
-            if info.verdict == crate::compat::games::Verdict::Native {
-                native_lines = native_lines.push(line);
-            } else {
-                has_unknown = true;
-                unknown_lines = unknown_lines.push(line);
+    // `responsive` bounds the card to the window: the game list scrolls
+    // when it does not fit, and the header (with the X) and footer (with
+    // Close) stay reachable at any window size.
+    Some(opaque(responsive(move |size| {
+        let max_height = (size.height - 96.0).max(260.0);
+
+        let mut cards = Column::new().spacing(10).width(Length::Fill);
+        for game in crate::compat::games::ALL_GAMES {
+            let mut native_lines = Column::new().spacing(2).width(Length::Fill);
+            let mut unknown_lines = Column::new().spacing(2).width(Length::Fill);
+            let mut has_unknown = false;
+            for info in crate::compat::games::format_catalog(game) {
+                let line = row![
+                    fonts::caption(info.class).width(Length::Fixed(210.0)),
+                    fonts::caption(info.note).width(Length::Fill),
+                ]
+                .spacing(8)
+                .width(Length::Fill);
+                if info.verdict == crate::compat::games::Verdict::Native {
+                    native_lines = native_lines.push(line);
+                } else {
+                    has_unknown = true;
+                    unknown_lines = unknown_lines.push(line);
+                }
             }
+
+            let last_run = archive
+                .compat_report
+                .as_ref()
+                .filter(|report| report.target == Some(game.id))
+                .map(|report| {
+                    let counts = report
+                        .verdicts
+                        .get(game.id)
+                        .map(|counts| {
+                            counts
+                                .iter()
+                                .map(|(verdict, count)| format!("{verdict} {count}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_else(|| "no textures".to_string());
+                    format!("Last run: {counts}")
+                });
+
+            let mut card_body = Column::new().spacing(6).width(Length::Fill);
+            let mut header = row![fonts::strong(game.display).width(Length::Fill)];
+            if current_target == Some(game.id) {
+                header = header.push(fonts::caption("current target"));
+            }
+            header = header.push(
+                button(fonts::body(format!("Validate for {}", game.display)))
+                    .on_press(Message::ValidateArchiveFor(game.id))
+                    .style(button::primary),
+            );
+            card_body = card_body.push(header.spacing(8).align_y(Alignment::Center));
+            if let Some(last_run) = last_run {
+                card_body = card_body.push(fonts::caption(last_run));
+            }
+            card_body = card_body.push(fonts::caption("Native (retail-verified):"));
+            card_body = card_body.push(native_lines);
+            if has_unknown {
+                card_body = card_body.push(fonts::caption("Unknown / not game-native:"));
+                card_body = card_body.push(unknown_lines);
+            }
+
+            cards = cards.push(
+                Container::new(card_body)
+                    .width(Length::Fill)
+                    .padding(10)
+                    .style(move |_| iced::widget::container::Style {
+                        background: Some(iced::Background::Color(surface)),
+                        text_color: Some(text_color),
+                        border: Border {
+                            color: border_color,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                        ..Default::default()
+                    }),
+            );
         }
 
-        let last_run = archive
-            .compat_report
-            .as_ref()
-            .filter(|report| report.target == Some(game.id))
-            .map(|report| {
-                let counts = report
-                    .verdicts
-                    .get(game.id)
-                    .map(|counts| {
-                        counts
-                            .iter()
-                            .map(|(verdict, count)| format!("{verdict} {count}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_else(|| "no textures".to_string());
-                format!("Last run: {counts}")
-            });
+        let title_row = row![
+            fonts::display("Validate textures").width(Length::Fill),
+            button(icons::close().size(16))
+                .on_press(Message::CloseValidatorPopup)
+                .style(button::text),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
 
-        let mut card_body = Column::new().spacing(6).width(Length::Fill);
-        let mut header = row![fonts::strong(game.display).width(Length::Fill)];
-        if current_target == Some(game.id) {
-            header = header.push(fonts::caption("current target"));
-        }
-        header = header.push(
-            button(fonts::body(format!("Validate for {}", game.display)))
-                .on_press(Message::ValidateArchiveFor(game.id))
-                .style(button::primary),
-        );
-        card_body = card_body.push(header.spacing(8).align_y(Alignment::Center));
-        if let Some(last_run) = last_run {
-            card_body = card_body.push(fonts::caption(last_run));
-        }
-        card_body = card_body.push(fonts::caption("Native (retail-verified):"));
-        card_body = card_body.push(native_lines);
-        if has_unknown {
-            card_body = card_body.push(fonts::caption("Unknown / not game-native:"));
-            card_body = card_body.push(unknown_lines);
-        }
-
-        cards = cards.push(
-            Container::new(card_body)
-                .width(Length::Fill)
-                .padding(10)
-                .style(move |_| iced::widget::container::Style {
-                    background: Some(iced::Background::Color(surface)),
-                    text_color: Some(text_color),
-                    border: Border {
-                        color: border_color,
-                        width: 1.0,
-                        radius: 8.0.into(),
-                    },
-                    ..Default::default()
-                }),
-        );
-    }
-
-    let content = column![
-        fonts::body(
+        let introduction = fonts::body(
             "Pick the game this archive targets. The validator flags every texture \
              outside that engine's retail-accepted formats, and lists the unknowns \
              that could plausibly load but are not game-native.",
         )
-        .width(Length::Fill),
-        w::hairline(divider),
-        cards,
-        w::hairline(divider),
-        row![
+        .width(Length::Fill);
+
+        let footer = row![
             fonts::caption(
-                "Row colors after a run: green native · blue supported/convertible · \
-                 amber unknown · red incompatible",
+                "Rows: green native - blue supported - amber unknown - red incompatible",
             )
             .width(Length::Fill),
+            checkbox(highlight_enabled)
+                .label("Highlight rows")
+                .on_toggle(Message::SetCompatHighlight),
             button(fonts::body("Close")).on_press(Message::CloseValidatorPopup),
         ]
         .spacing(8)
-        .align_y(Alignment::Center),
-    ]
-    .spacing(10)
-    .width(Length::Fill)
-    .align_x(Alignment::Start);
+        .align_y(Alignment::Center);
 
-    let card = Container::new(content)
+        let content = column![
+            title_row,
+            w::hairline(divider),
+            introduction,
+            scrollable(cards).height(Length::Fill),
+            w::hairline(divider),
+            footer,
+        ]
+        .spacing(10)
         .width(Length::Fill)
-        .max_width(720.0)
-        .padding(16)
-        .style(move |_| iced::widget::container::Style {
-            background: Some(iced::Background::Color(surface)),
-            text_color: Some(text_color),
-            border: Border {
-                color: border_color,
-                width: 1.0,
-                radius: 12.0.into(),
-            },
-            shadow,
-            ..Default::default()
-        });
+        .align_x(Alignment::Start);
 
-    Some(
-        opaque(
-            Container::new(card)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(24)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .style(|_| iced::widget::container::Style {
-                    background: Some(iced::Background::Color(Color::from_rgba(
-                        0.0, 0.0, 0.0, 0.42,
-                    ))),
-                    ..Default::default()
-                }),
-        ),
-    )
+        let card = Container::new(content)
+            .width(Length::Fill)
+            .max_width(720.0)
+            .max_height(max_height)
+            .height(Length::Fill)
+            .padding(16)
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(surface)),
+                text_color: Some(text_color),
+                border: Border {
+                    color: border_color,
+                    width: 1.0,
+                    radius: 12.0.into(),
+                },
+                shadow,
+                ..Default::default()
+            });
+
+        Container::new(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(24)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.42))),
+                ..Default::default()
+            })
+            .into()
+    })))
 }
 
 /// Row tint for a validator verdict: green = native, blue = supported /

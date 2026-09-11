@@ -360,6 +360,8 @@ pub enum Message {
     CloseValidatorPopup,
     /// Runs the texture validator against one game profile.
     ValidateArchiveFor(&'static str),
+    /// Toggles the validator's entry-row tinting.
+    SetCompatHighlight(bool),
     CompatibilityValidated {
         archive_index: usize,
         result: Result<crate::compat::scan::ScanReport, String>,
@@ -626,6 +628,8 @@ pub struct App {
     pub show_sort_manager: bool,
     /// True while the texture-validator game picker is visible.
     pub validator_popup_open: bool,
+    /// Whether entry rows are tinted by their validator verdict.
+    pub compat_highlight_enabled: bool,
     /// In-flight drag-and-drop between archive tabs. `None` when no
     /// drag is in progress. Holds the source archive + the entry
     /// indices being moved + the currently-hovered target. The
@@ -787,6 +791,7 @@ impl App {
             sort_draft: None,
             show_sort_manager: false,
             validator_popup_open: false,
+            compat_highlight_enabled: true,
             drag_state: None,
             last_export_selected_only: false,
             search: String::new(),
@@ -3110,6 +3115,10 @@ impl App {
             }
             Message::CloseValidatorPopup => {
                 self.validator_popup_open = false;
+                Task::none()
+            }
+            Message::SetCompatHighlight(enabled) => {
+                self.compat_highlight_enabled = enabled;
                 Task::none()
             }
             Message::ValidateArchiveFor(target_id) => {
@@ -5530,6 +5539,16 @@ mod tests {
             Some("Open an archive first to validate it.")
         );
         assert!(!app.validator_popup_open);
+    }
+
+    #[test]
+    fn compat_highlight_toggle_flips_the_flag() {
+        let mut app = test_app_with_entries();
+        assert!(app.compat_highlight_enabled);
+        let _ = app.update(Message::SetCompatHighlight(false));
+        assert!(!app.compat_highlight_enabled);
+        let _ = app.update(Message::SetCompatHighlight(true));
+        assert!(app.compat_highlight_enabled);
     }
 
     #[test]
