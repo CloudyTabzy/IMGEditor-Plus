@@ -181,7 +181,7 @@ fn profile_entries(
         if entry.file_name_lower.ends_with(".txd") {
             profile_txd_entry(archive, index, entry, report, options)?;
         } else if entry.file_name_lower.ends_with(".nft") {
-            profile_nft_entry(archive, entry, report)?;
+            profile_nft_entry(archive, index, entry, report, options)?;
         } else if entry.file_name_lower.ends_with(".nif") {
             report.nif_entries += 1;
         }
@@ -376,8 +376,10 @@ pub fn nif_format_name(format: u32) -> &'static str {
 /// no payloads) and decode every NiPixelData block's tail.
 fn profile_nft_entry(
     archive: &ArchiveInfo,
+    entry_index: usize,
     entry: &crate::archive::EntryInfo,
     report: &mut ScanReport,
+    options: &ScanOptions,
 ) -> anyhow::Result<()> {
     report.nft_entries += 1;
     let Some(bytes) = read_entry_bytes(archive, entry, report, "NFT_READ_FAIL")? else {
@@ -398,6 +400,13 @@ fn profile_nft_entry(
         }
     };
 
+    // Per-entry verdicts for the chosen target power the row highlights
+    // for Bully archives, exactly like the TXD path.
+    let target = options.target.and_then(crate::compat::games::profile_by_id);
+    let mut entry_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut entry_worst: Option<crate::compat::games::Verdict> = None;
+    let mut entry_textures = 0_usize;
+
     for block in &header.blocks {
         if block.type_name != "NiPixelData" {
             continue;
@@ -415,14 +424,24 @@ fn profile_nft_entry(
             continue;
         };
         report.nft_textures += 1;
+        entry_textures += 1;
+        let format = info_format_label(raw, header.endian);
         for game in ALL_GAMES {
-            let verdict = crate::compat::games::classify_nft_format(game, info_format_label(raw, header.endian));
+            let verdict = crate::compat::games::classify_nft_format(game, format);
             *report
                 .nft_verdicts
                 .entry(game.id)
                 .or_default()
                 .entry(verdict.verdict.label())
                 .or_default() += 1;
+        }
+        if let Some(target) = target {
+            let verdict = crate::compat::games::classify_nft_format(target, format).verdict;
+            *entry_counts.entry(verdict.label()).or_default() += 1;
+            entry_worst = Some(match entry_worst {
+                Some(previous) => previous.max(verdict),
+                None => verdict,
+            });
         }
         match decode_ni_pixel_tail(raw, header.endian) {
             Some(info) => {
@@ -475,6 +494,16 @@ fn profile_nft_entry(
                     .or_default() += 1;
             }
         }
+    }
+
+    if target.is_some() && entry_worst.is_some() {
+        report.entry_verdicts.push(EntryVerdict {
+            entry_index,
+            file_name: entry.file_name.to_string(),
+            textures: entry_textures,
+            worst: entry_worst.unwrap_or(crate::compat::games::Verdict::Untested),
+            counts: entry_counts,
+        });
     }
     Ok(())
 }
@@ -776,6 +805,15 @@ pub fn run_cli(path: &Path, options: &ScanOptions, target: Option<&str>) -> anyh
                     println!("  {game_id} (NFT): {summary}");
                 }
             }
+        }
+    }
+
+    if let Some(target) = report.target {
+        if !report.entry_verdicts.is_empty() {
+            println!(
+                "\nRow verdicts: {} entries classified for the {target} target",
+                report.entry_verdicts.len()
+            );
         }
     }
 
@@ -1140,5 +1178,37 @@ mod tests {
             let verdicts = report.nft_verdicts.get(game).unwrap();
             assert_eq!(verdicts.get("unsupported"), Some(&4), "{game}");
         }
+
+        // Per-entry verdicts for a chosen target (row highlighting):
+        // all four NFT entries are native for Bully, unsupported for a
+        // RenderWare target.
+        use crate::compat::games::Verdict;
+        let bully = scan_archive(
+            &path,
+            &ScanOptions {
+                decode_pixels: false,
+                target: Some("bully"),
+            },
+        )
+        .unwrap();
+        assert_eq!(bully.entry_verdicts.len(), 4, "one verdict per NFT entry");
+        assert!(bully
+            .entry_verdicts
+            .iter()
+            .all(|entry| entry.worst == Verdict::Native));
+
+        let gta3 = scan_archive(
+            &path,
+            &ScanOptions {
+                decode_pixels: false,
+                target: Some("gta3"),
+            },
+        )
+        .unwrap();
+        assert_eq!(gta3.entry_verdicts.len(), 4);
+        assert!(gta3
+            .entry_verdicts
+            .iter()
+            .all(|entry| entry.worst == Verdict::Unsupported));
     }
 }
