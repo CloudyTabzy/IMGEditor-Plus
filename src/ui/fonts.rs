@@ -71,6 +71,18 @@ pub fn caption<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
     text(label.into(), 12.0, INTER)
 }
 
+/// Body text for lines that may contain long identifiers (entry or
+/// file names): wraps long words at the glyph level instead of
+/// overflowing their container.
+pub fn body_wrapped<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
+    body(label).wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+}
+
+/// Caption counterpart of [`body_wrapped`].
+pub fn caption_wrapped<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
+    caption(label).wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+}
+
 pub fn body_monospace<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
     text(label.into(), 13.0, iced::Font::MONOSPACE)
 }

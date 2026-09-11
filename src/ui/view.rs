@@ -2239,7 +2239,7 @@ fn plan_warnings(warnings: &[String]) -> Element<'_, Message> {
     let mut list = Column::new().spacing(3).width(Length::Fill);
     for warning in warnings.iter().take(6) {
         list = list.push(
-            fonts::caption(warning.clone())
+            fonts::caption_wrapped(warning.clone())
                 .color(compat_verdict_accent(crate::compat::games::Verdict::LossyConvertible)),
         );
     }
@@ -2283,7 +2283,7 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
     let selected = options.iter().find(|option| option.format == state.chooser).cloned();
     let note = format_note_for(app, state.archive_index, state.chooser);
     let mut body = Column::new().spacing(6).width(Length::Fill);
-    body = body.push(fonts::body(format!(
+    body = body.push(fonts::body_wrapped(format!(
         "Replacing '{}' - source: {} ({}x{})",
         state.texture_name, state.source_name, state.plan.0.width, state.plan.0.height
     )));
@@ -2347,7 +2347,7 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
     let selected = options.iter().find(|option| option.format == state.chooser).cloned();
     let note = format_note_for(app, state.archive_index, state.chooser);
     let mut body = Column::new().spacing(6).width(Length::Fill);
-    body = body.push(fonts::body(format!(
+    body = body.push(fonts::body_wrapped(format!(
         "New TXD from {} ({}x{})",
         state.source_name, state.plan.0.width, state.plan.0.height
     )));
@@ -2420,7 +2420,7 @@ fn build_bulk_dialog(app: &App) -> Option<Element<'_, Message>> {
                 .iter()
                 .map(|(_, _, plan)| plan.0.format_label.as_str())
                 .collect();
-            list = list.push(fonts::caption(format!(
+            list = list.push(fonts::caption_wrapped(format!(
                 "{} - {} texture(s) -> {}",
                 entry.file_name,
                 entry.textures.len(),
@@ -2435,14 +2435,14 @@ fn build_bulk_dialog(app: &App) -> Option<Element<'_, Message>> {
         )));
     }
     let mut body = Column::new().spacing(6).width(Length::Fill);
-    body = body.push(fonts::body(format!(
+    body = body.push(fonts::body_wrapped(format!(
         "{} textures across {} entries of {} will be re-encoded for the target.",
         total_textures,
         state.entries.len(),
         state.source_label
     )));
     if skipped > 0 || failed > 0 {
-        body = body.push(fonts::caption(format!(
+        body = body.push(fonts::caption_wrapped(format!(
             "{skipped} already native (skipped), {failed} unreadable (skipped)."
         )));
     }
@@ -2494,7 +2494,7 @@ fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
 
     if let Some(note) = &issue.container_note {
         body = body.push(
-            fonts::body(format!("Container: {note}"))
+            fonts::body_wrapped(format!("Container: {note}"))
                 .color(compat_verdict_accent(crate::compat::games::Verdict::Unsupported)),
         );
     }
@@ -2502,7 +2502,7 @@ fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
     if !issue.anomalies.is_empty() {
         let mut list = Column::new().spacing(3).width(Length::Fill);
         for (code, count, example) in issue.anomalies.iter().take(8) {
-            list = list.push(fonts::caption(format!("{code}: {count} (e.g. {example})")));
+            list = list.push(fonts::caption_wrapped(format!("{code}: {count} (e.g. {example})")));
         }
         body = body.push(Space::new().height(Length::Fixed(4.0)));
         body = body.push(fonts::strong("Broken headers (fixable without re-encoding):"));
@@ -2562,7 +2562,7 @@ fn build_unsaved_dialog(app: &App) -> Option<Element<'_, Message>> {
         crate::ui::app::PendingClose::Archive(index) => {
             let archive = app.editor.archives().get(index)?;
             let body = column![
-                fonts::body(format!("'{}' has unsaved changes.", archive.file_name)),
+                fonts::body_wrapped(format!("'{}' has unsaved changes.", archive.file_name)),
                 fonts::caption(
                     "Closing without saving discards them; the archive file on disk is untouched."
                 ),
@@ -2592,7 +2592,7 @@ fn build_unsaved_dialog(app: &App) -> Option<Element<'_, Message>> {
                 .map(|archive| archive.file_name.clone())
                 .collect();
             let body = column![
-                fonts::body(format!(
+                fonts::body_wrapped(format!(
                     "{} archive(s) have unsaved changes: {}",
                     dirty.len(),
                     dirty.join(", ")
@@ -2648,12 +2648,9 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
             })
             .unwrap_or_default();
         lines = lines.push(column![
-            fonts::strong(check.file_name.clone()),
-            fonts::caption(format!(
-                "{} texture(s): {}",
-                check.textures,
-                detail
-            )),
+            fonts::strong(check.file_name.clone())
+                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+            fonts::caption_wrapped(format!("{} texture(s): {}", check.textures, detail)),
         ]
         .spacing(1));
     }
@@ -2665,7 +2662,7 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
     }
 
     let body = column![
-        fonts::body(format!(
+        fonts::body_wrapped(format!(
             "{} of {} file(s) need a decision for {target}: {incompatible} incompatible texture(s), {unknown} unknown.",
             flagged.len(),
             total_files
@@ -2732,7 +2729,7 @@ fn build_folder_import(app: &App) -> Option<Element<'_, Message>> {
     actions = actions.push(button(fonts::body("Cancel")).on_press(Message::CancelFolderImport));
 
     let mut content = column![
-        fonts::body(format!("Folder: {}", plan.folder.display())),
+        fonts::body_wrapped(format!("Folder: {}", plan.folder.display())),
         fonts::body(format!(
             "{} regular file(s) • {}",
             plan.files.len(),
@@ -2917,10 +2914,19 @@ fn modal_box<'a>(title: &'a str, content: impl Into<Element<'a, Message>>) -> El
         });
 
     let card_element: Element<'_, Message> = card.into();
-    Container::new(card_element)
+    // The scrim must swallow every kind of interaction, not just presses
+    // (`opaque`): wheel scrolls would otherwise reach the entry table,
+    // and presses could start divider/canvas drags behind the modal.
+    let scrim = Container::new(card_element)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
-        .into()
+        .style(|_theme: &iced::Theme| iced::widget::container::Style {
+            background: Some(iced::Background::Color(Color::from_rgba(
+                0.0, 0.0, 0.0, 0.35,
+            ))),
+            ..Default::default()
+        });
+    opaque(mouse_area(scrim).on_scroll(|_| Message::Noop))
 }
 
 fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
