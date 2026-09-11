@@ -93,6 +93,9 @@ pub fn apply_fixes(archive: &mut ArchiveInfo) -> usize {
             patched += 1;
         }
     }
+    if patched > 0 {
+        archive.dirty = true;
+    }
     patched
 }
 
@@ -269,6 +272,7 @@ mod tests {
         assert!(fixes[0].detail.contains("depth 32 -> 16"));
 
         assert_eq!(apply_fixes(&mut archive), 1);
+        assert!(archive.dirty, "patching changes the archive");
         let patched = archive.entries[0].override_bytes.as_ref().unwrap();
         let header = walk_native_headers(patched);
         assert_eq!(header[0].raster_format, 0x0300);
