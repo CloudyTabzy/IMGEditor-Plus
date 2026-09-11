@@ -7624,6 +7624,15 @@ mod tests {
                     && entry.override_bytes.is_some()),
             "the new TXD entry must carry its bytes as an override"
         );
+        let added = app.editor.archives()[0]
+            .entries
+            .iter()
+            .find(|entry| entry.file_name == "MyTex.txd")
+            .unwrap();
+        assert!(
+            added.sector > 0,
+            "generated entries must carry a sector count or the size column shows 0 KB"
+        );
         assert!(app.editor.archives()[0].dirty);
 
         let before = app.editor.archives()[0].entries.len();
