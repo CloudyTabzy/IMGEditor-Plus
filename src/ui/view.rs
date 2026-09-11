@@ -1578,8 +1578,9 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
 }
 
 /// Tab label for an archive. When another open archive shares the same
-/// file name (III, VC and SA all ship `gta3.img`), the parent folder is
-/// appended so the tabs stay distinguishable.
+/// file name (III, VC and SA all ship `gta3.img`), the last two parent
+/// folders are appended so the tabs stay distinguishable; the tooltip
+/// carries the full path.
 fn archive_tab_label(
     archive: &crate::archive::ArchiveInfo,
     archives: &[crate::archive::ArchiveInfo],
@@ -1592,16 +1593,22 @@ fn archive_tab_label(
     if !duplicated {
         return archive.file_name.clone();
     }
-    let parent = archive
-        .path
-        .as_ref()
-        .and_then(|path| path.parent())
-        .and_then(|parent| parent.file_name())
-        .map(|name| name.to_string_lossy().to_string());
-    match parent {
-        Some(folder) => format!("{} · {folder}", archive.file_name),
-        None => archive.file_name.clone(),
+    let mut parts: Vec<String> = Vec::new();
+    let mut cursor = archive.path.as_ref().and_then(|path| path.parent());
+    while let Some(dir) = cursor {
+        if parts.len() == 2 {
+            break;
+        }
+        if let Some(name) = dir.file_name() {
+            parts.push(name.to_string_lossy().to_string());
+        }
+        cursor = dir.parent();
     }
+    if parts.is_empty() {
+        return archive.file_name.clone();
+    }
+    parts.reverse();
+    format!("{} · {}", archive.file_name, parts.join("\\"))
 }
 
 pub fn build(app: &App) -> Element<'_, Message> {
@@ -1657,6 +1664,17 @@ pub fn build(app: &App) -> Element<'_, Message> {
                     .into()
             } else {
                 tab.into()
+            };
+            // The tooltip carries the full path so the folder suffix in
+            // the label never has to be decoded by hovering guesses.
+            let tab: Element<'_, Message> = match archive.path.as_ref() {
+                Some(path) => w::styled_tooltip(
+                    tab,
+                    fonts::caption(path.display().to_string()),
+                    tooltip::Position::Bottom,
+                )
+                .into(),
+                None => tab,
             };
             tab_rows.push(
                 mouse_area(tab)
@@ -2441,6 +2459,12 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
             ]
             .spacing(2);
             if archive.target_game != Some(hint.game_id) {
+                if let Some(current) = archive.target_game {
+                    let current_display = crate::compat::games::profile_by_id(current)
+                        .map(|game| game.display)
+                        .unwrap_or(current);
+                    body = body.push(fonts::caption(format!("current target: {current_display}")));
+                }
                 body = body.push(
                     button(fonts::body(format!("Use {display} as target")))
                         .on_press(Message::ValidateArchiveFor(hint.game_id))
@@ -3201,8 +3225,12 @@ mod tests {
         player.path = Some(std::path::PathBuf::from("C:/games/SA/player.img"));
 
         let archives = vec![iii, sa, player];
-        assert_eq!(archive_tab_label(&archives[0], &archives), "gta3 · III");
-        assert_eq!(archive_tab_label(&archives[1], &archives), "gta3 · SA");
+        assert_eq!(
+            archive_tab_label(&archives[0], &archives),
+            "gta3 · games\\III",
+            "two parent layers disambiguate models folders"
+        );
+        assert_eq!(archive_tab_label(&archives[1], &archives), "gta3 · games\\SA");
         assert_eq!(
             archive_tab_label(&archives[2], &archives),
             "player",

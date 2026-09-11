@@ -10,10 +10,9 @@
 use std::collections::BTreeMap;
 
 use crate::archive::ArchiveInfo;
-use crate::parser::txd::parse_txd;
 use crate::parser::{read_entry_data_from_source, ImgVersion};
 
-use super::raster::{LogicalFormat, RasterProfile};
+use super::raster::LogicalFormat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HintConfidence {
@@ -31,7 +30,21 @@ pub struct TargetHint {
 }
 
 /// How many TXD entries the probe parses before deciding.
-pub const PROBE_SAMPLE_LIMIT: usize = 96;
+pub const PROBE_SAMPLE_LIMIT: usize = 48;
+
+/// Bytes read per sampled TXD. Texture-native headers sit at the start
+/// of the file, so a prefix is enough to classify without parsing (and
+/// copying) megabyte-sized mip data.
+const PROBE_READ_LIMIT: usize = 4 * 1024;
+
+/// Native textures read per sampled TXD.
+const PROBE_TEXTURES_PER_TXD: usize = 32;
+
+/// Stop sampling once this many textures have been classified; most
+/// archives reach a decisive share well before the sample limit, which
+/// keeps cold-cache page reads down (the probe touches scattered 4 KB
+/// prefixes across the archive file).
+const PROBE_TEXTURES_ENOUGH: usize = 240;
 
 /// What the probe found, before it is turned into a hint.
 #[derive(Debug, Default)]
@@ -90,34 +103,128 @@ pub fn collect_stats(archive: &ArchiveInfo, sample_limit: usize) -> ProbeStats {
             continue;
         }
         stats.txd_entries += 1;
-        if stats.sampled_txds >= sample_limit {
+        if stats.sampled_txds >= sample_limit || stats.textures >= PROBE_TEXTURES_ENOUGH {
             continue;
         }
-        let Some(bytes) = read_entry_bytes(archive, entry) else {
+        let textures = peek_entry_textures(archive, entry);
+        if textures.is_empty() {
             continue;
-        };
-        let Ok(parsed) = parse_txd(&bytes) else {
-            continue;
-        };
+        }
         stats.sampled_txds += 1;
-        for texture in &parsed.textures {
-            let profile = RasterProfile::from_native(texture);
-            *stats.platform_counts.entry(profile.platform_id).or_default() += 1;
-            *stats.class_counts.entry(profile.logical).or_default() += 1;
+        for (platform, class) in textures {
+            *stats.platform_counts.entry(platform).or_default() += 1;
+            *stats.class_counts.entry(class).or_default() += 1;
             stats.textures += 1;
         }
     }
     stats
 }
 
-fn read_entry_bytes(archive: &ArchiveInfo, entry: &crate::archive::EntryInfo) -> Option<Vec<u8>> {
+/// Header-only read of one TXD entry: a bounded prefix (no copy from the
+/// mmap) walked tolerantly instead of a full parse.
+fn peek_entry_textures(
+    archive: &ArchiveInfo,
+    entry: &crate::archive::EntryInfo,
+) -> Vec<(u32, LogicalFormat)> {
     if let Some(mmap) = &archive.source_mmap {
         let start = entry.offset as usize * crate::parser::SECTOR_SIZE as usize;
         let end = start + entry.sector as usize * crate::parser::SECTOR_SIZE as usize;
-        return mmap.get(start..end).map(|slice| slice.to_vec());
+        if let Some(slice) = mmap.get(start..end) {
+            let limit = slice.len().min(PROBE_READ_LIMIT);
+            return peek_textures(&slice[..limit]);
+        }
+        return Vec::new();
     }
-    read_entry_data_from_source(entry, archive.path.as_deref()).ok()
+    match read_entry_data_from_source(entry, archive.path.as_deref()) {
+        Ok(bytes) => {
+            let limit = bytes.len().min(PROBE_READ_LIMIT);
+            peek_textures(&bytes[..limit])
+        }
+        Err(_) => Vec::new(),
+    }
 }
+
+fn read_u32(bytes: &[u8], pos: usize) -> Option<u32> {
+    let slice = bytes.get(pos..pos + 4)?;
+    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+/// Walk the section tree tolerantly (truncated tails are normal for a
+/// prefix read) and classify each native texture header found.
+fn peek_textures(bytes: &[u8]) -> Vec<(u32, LogicalFormat)> {
+    let mut out = Vec::new();
+    let Some(top_kind) = read_u32(bytes, 0) else {
+        return out;
+    };
+    if top_kind != RW_TEXTURE_DICTIONARY && top_kind != RW_PI_TEXTURE_DICTIONARY {
+        return out;
+    }
+    let top_size = read_u32(bytes, 4).unwrap_or(0) as usize;
+    let top_end = (12 + top_size).min(bytes.len());
+
+    let mut position = 12usize;
+    while position + 12 <= top_end {
+        let Some(kind) = read_u32(bytes, position) else {
+            break;
+        };
+        let size = read_u32(bytes, position + 4).unwrap_or(0) as usize;
+        // Tolerate truncation: clamp the declared section to the data.
+        let end = (position + 12 + size).min(top_end);
+        if kind == RW_TEXTURE_NATIVE {
+            peek_native(&bytes[(position + 12).min(end)..end], &mut out);
+        }
+        if end <= position {
+            break;
+        }
+        position = end;
+        if out.len() >= PROBE_TEXTURES_PER_TXD {
+            break;
+        }
+    }
+    out
+}
+
+/// Read one TEXTURE_NATIVE's STRUCT header: platform, raster flags, D3D
+/// format word, and depth, then classify with the shared resolver.
+fn peek_native(body: &[u8], out: &mut Vec<(u32, LogicalFormat)>) {
+    const RW_STRUCT_KIND: u32 = 1;
+    let mut position = 0usize;
+    while position + 12 <= body.len() {
+        let Some(kind) = read_u32(body, position) else {
+            return;
+        };
+        let size = read_u32(body, position + 4).unwrap_or(0) as usize;
+        let end = (position + 12 + size).min(body.len());
+        if kind == RW_STRUCT_KIND {
+            let struct_body = &body[(position + 12).min(end)..end];
+            // platform u32 + flags 4 + names 64 + raster u32 + d3d u32
+            // + width u16 + height u16 + depth u8 = 85 bytes minimum.
+            if struct_body.len() >= 85 {
+                let platform = read_u32(struct_body, 0).unwrap_or(0);
+                let raster_format = read_u32(struct_body, 72).unwrap_or(0);
+                let d3d_format = read_u32(struct_body, 76).unwrap_or(0);
+                let depth = struct_body[84];
+                let paletted = matches!((raster_format >> 13) & 0x3, 1 | 2 | 3);
+                let (class, _) = super::raster::classify_format(
+                    raster_format,
+                    d3d_format,
+                    depth,
+                    paletted,
+                );
+                out.push((platform, class));
+            }
+            return;
+        }
+        if end <= position {
+            return;
+        }
+        position = end;
+    }
+}
+
+const RW_TEXTURE_DICTIONARY: u32 = 0x16;
+const RW_PI_TEXTURE_DICTIONARY: u32 = 0x23;
+const RW_TEXTURE_NATIVE: u32 = 0x15;
 
 fn percent(share: f32) -> String {
     format!("{:.0}%", share * 100.0)

@@ -98,6 +98,56 @@ pub struct RasterProfile {
     pub automipmap: bool,
 }
 
+/// Resolution order: FourCC > D3D format word (8-bit formats carry no
+/// raster nibble) > palette > raster nibble (+ depth). Shared by the
+/// full profile extraction and the header-only hint probe so both always
+/// agree.
+pub(crate) fn classify_format(
+    raster_format: u32,
+    d3d_format: u32,
+    depth: u8,
+    paletted: bool,
+) -> (LogicalFormat, u32) {
+    if let Some(code) = fourcc_name(d3d_format) {
+        let fmt = match code {
+            "DXT1" => LogicalFormat::Dxt1,
+            "DXT2" => LogicalFormat::Dxt2,
+            "DXT3" => LogicalFormat::Dxt3,
+            "DXT4" => LogicalFormat::Dxt4,
+            _ => LogicalFormat::Dxt5,
+        };
+        return (fmt, 0);
+    }
+    if d3d_format == 50 {
+        return (LogicalFormat::Lum8, 1);
+    }
+    if d3d_format == 51 {
+        return (LogicalFormat::A8l8, 2);
+    }
+    if paletted {
+        return (LogicalFormat::Pal8, 1);
+    }
+    match (raster_format >> 8) & 0xF {
+        0x1 => (LogicalFormat::R1555, 2),
+        0x2 => (LogicalFormat::R565, 2),
+        0x3 => (LogicalFormat::R4444, 2),
+        0x4 => (LogicalFormat::Lum8, 1),
+        0x5 => (LogicalFormat::R8888, 4),
+        0x6 => {
+            // RW "888": D3D9-era conversions store it as 32-bit
+            // X8R8G8B8; D3D8-era rasters keep true 24-bit rows. Same
+            // disambiguation the decoder applies.
+            if depth == 32 {
+                (LogicalFormat::R888, 4)
+            } else {
+                (LogicalFormat::R888, 3)
+            }
+        }
+        0xA => (LogicalFormat::R555, 2),
+        _ => (LogicalFormat::Unknown, u32::from(depth) / 8),
+    }
+}
+
 impl RasterProfile {
     /// Resolve a parsed native through the same cross-check chain the
     /// decoder uses, so verdicts judge what the pixels will actually be.
@@ -110,44 +160,12 @@ impl RasterProfile {
         };
         let automipmap = texture.raster_format & 0x1000 != 0;
 
-        // Resolution order: FourCC > D3D format word (8-bit formats
-        // carry no raster nibble) > palette > raster nibble (+ depth).
-        let (logical, storage_bpp) = if let Some(code) = fourcc {
-            let fmt = match code {
-                "DXT1" => LogicalFormat::Dxt1,
-                "DXT2" => LogicalFormat::Dxt2,
-                "DXT3" => LogicalFormat::Dxt3,
-                "DXT4" => LogicalFormat::Dxt4,
-                _ => LogicalFormat::Dxt5,
-            };
-            (fmt, 0)
-        } else if texture.d3d_format == 50 {
-            (LogicalFormat::Lum8, 1)
-        } else if texture.d3d_format == 51 {
-            (LogicalFormat::A8l8, 2)
-        } else if palette != PaletteKind::None {
-            (LogicalFormat::Pal8, 1)
-        } else {
-            match (texture.raster_format >> 8) & 0xF {
-                0x1 => (LogicalFormat::R1555, 2),
-                0x2 => (LogicalFormat::R565, 2),
-                0x3 => (LogicalFormat::R4444, 2),
-                0x4 => (LogicalFormat::Lum8, 1),
-                0x5 => (LogicalFormat::R8888, 4),
-                0x6 => {
-                    // RW "888": D3D9-era conversions store it as 32-bit
-                    // X8R8G8B8; D3D8-era rasters keep true 24-bit rows.
-                    // Same disambiguation the decoder applies.
-                    if texture.depth == 32 {
-                        (LogicalFormat::R888, 4)
-                    } else {
-                        (LogicalFormat::R888, 3)
-                    }
-                }
-                0xA => (LogicalFormat::R555, 2),
-                _ => (LogicalFormat::Unknown, u32::from(texture.depth) / 8),
-            }
-        };
+        let (logical, storage_bpp) = classify_format(
+            texture.raster_format,
+            texture.d3d_format,
+            texture.depth,
+            palette != PaletteKind::None,
+        );
 
         Self {
             platform_id: texture.platform_id,
