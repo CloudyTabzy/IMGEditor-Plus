@@ -102,8 +102,10 @@ pub fn header_spec(format: EncodeFormat, platform_id: u32) -> HeaderSpec {
         EncodeFormat::Pal8 => HeaderSpec {
             // Retail III writes both 0x2500 and 0x2600 for PAL8; 0x2600
             // (888 base with the palette bit) is the common shape.
+            // D3D9 paletted rasters use D3DFMT_P8 (41), per magic-rw's
+            // D3D9 format table.
             raster_format: format::FORMAT_888 | format::EXT_PAL8,
-            d3d_format: if d3d9 { 22 } else { 0 },
+            d3d_format: if d3d9 { 41 } else { 0 },
             depth: 8,
             raster_type: 4,
             platform_properties: 0,
@@ -111,7 +113,7 @@ pub fn header_spec(format: EncodeFormat, platform_id: u32) -> HeaderSpec {
         },
         EncodeFormat::Pal4 => HeaderSpec {
             raster_format: format::FORMAT_888 | format::EXT_PAL4,
-            d3d_format: if d3d9 { 22 } else { 0 },
+            d3d_format: if d3d9 { 41 } else { 0 },
             depth: 4,
             raster_type: 4,
             platform_properties: 0,
@@ -696,6 +698,8 @@ mod tests {
         assert_eq!(dxt1.platform_properties, 8);
         let dxt3 = header_spec(EncodeFormat::Dxt3, 9);
         assert_eq!(dxt3.platform_properties, 9);
+        // D3D9 palettes use D3DFMT_P8 (41), like magic-rw writes.
+        assert_eq!(header_spec(EncodeFormat::Pal8, 9).d3d_format, 41);
         // Mip flag round-trips.
         let spec = header_spec(EncodeFormat::Rgb565, 8).with_mips(9);
         assert!(spec.raster_format & format::EXT_MIPMAP != 0);

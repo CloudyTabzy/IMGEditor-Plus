@@ -229,8 +229,10 @@ pub fn single_texture_txd(texture: NativeTexture, rw_version: u32) -> Vec<u8> {
 }
 
 /// Turn an encoded texture into a writable native with the given
-/// names. Filtering matches what the games ship (linear + mip
-/// filtering, wrap addressing).
+/// names. The filter mode is LINEAR_LINEAR (6), the value the retail
+/// corpora use overwhelmingly; the linear component applies to
+/// minification and the second enables mip filtering for the generated
+/// chain. Addressing stays wrap.
 pub fn native_from_encoded(
     encoded: &EncodedTexture,
     platform_id: u32,
@@ -249,7 +251,7 @@ pub fn native_from_encoded(
         .collect();
     NativeTexture {
         platform_id,
-        filter_mode: 2,
+        filter_mode: 6,
         uv_addressing: 0,
         diffuse_name: diffuse_name.to_string(),
         alpha_name: alpha_name.to_string(),
@@ -307,6 +309,7 @@ mod tests {
             assert_eq!(tex.diffuse_name, "sample");
             assert_eq!(tex.width, 16);
             assert_eq!(tex.height, 16);
+            assert_eq!(tex.filter_mode, 6, "retail filter mode for new natives");
             assert_eq!(tex.depth, encoded.header.depth);
             assert_eq!(tex.num_mipmaps, encoded.levels());
             assert_eq!(tex.raster_format, encoded.header.raster_format);
