@@ -185,21 +185,12 @@ pub fn header_spec(format: EncodeFormat, platform_id: u32) -> HeaderSpec {
 }
 
 /// Options that trade encode time for quality.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct EncodeOptions {
     /// Use the fast range-fit DXT encoder instead of cluster fit.
     pub fast_dxt: bool,
     /// Optional Bayer 4x4 dithering for palette quantization.
     pub dither: bool,
-}
-
-impl Default for EncodeOptions {
-    fn default() -> Self {
-        Self {
-            fast_dxt: false,
-            dither: false,
-        }
-    }
 }
 
 /// An encoded native texture ready for the TXD writer.
