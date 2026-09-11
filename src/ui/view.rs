@@ -197,33 +197,33 @@ impl App {
         let top_pad_height = top_pad_rows as f32 * ROW_HEIGHT;
         let bottom_pad_height = bottom_pad_rows as f32 * ROW_HEIGHT;
 
-        let mut content = Column::new().spacing(0).width(Length::Fill);
-        if top_pad_rows > 0 {
-            content = content.push(Space::new().height(Length::Fixed(top_pad_height)));
-        }
-
-        for display_row in first..last {
-            let Some(entry_index) = archive.selected_indices.get(display_row).copied() else {
-                continue;
-            };
-            let Some(entry) = archive.entries.get(entry_index) else {
-                continue;
-            };
-            content =
-                content.push(self.build_entry_row(
+        let content = responsive(move |size| {
+            let name_width = name_column_text_width(size.width);
+            let mut content = Column::new().spacing(0).width(Length::Fill);
+            if top_pad_rows > 0 {
+                content = content.push(Space::new().height(Length::Fixed(top_pad_height)));
+            }
+            for display_row in first..last {
+                let Some(entry_index) = archive.selected_indices.get(display_row).copied() else {
+                    continue;
+                };
+                let Some(entry) = archive.entries.get(entry_index) else {
+                    continue;
+                };
+                content = content.push(self.build_entry_row(
                     archive_index,
                     entry_index,
                     display_row,
                     entry,
                     compat_verdicts.get(&entry_index).copied(),
+                    name_width,
                 ));
-        }
-
-        if bottom_pad_rows > 0 {
-            content = content.push(Space::new().height(Length::Fixed(bottom_pad_height)));
-        }
-
-        let content = content.height(Length::Fixed(total_height));
+            }
+            if bottom_pad_rows > 0 {
+                content = content.push(Space::new().height(Length::Fixed(bottom_pad_height)));
+            }
+            content.height(Length::Fixed(total_height)).into()
+        });
 
         let scrollable = Scrollable::new(content)
             .id(iced::widget::Id::new("entry_table"))
@@ -285,13 +285,14 @@ impl App {
         format!("{} KB", entry.sector * 2)
     }
 
-fn build_entry_row<'a>(
+    fn build_entry_row<'a>(
         &'a self,
         archive_index: usize,
         entry_index: usize,
         display_row: usize,
         entry: &'a crate::archive::EntryInfo,
         compat_verdict: Option<crate::compat::games::Verdict>,
+        name_width: f32,
     ) -> Element<'a, Message> {
         use std::borrow::Cow;
 
@@ -308,11 +309,17 @@ fn build_entry_row<'a>(
         // Render display strings on demand for the visible row only. Pre-caching
         // these for every filtered entry caused thousands of allocations each
         // time the filter or selection changed.
-        let file_name: Cow<'_, str> = if is_selected {
-            Cow::Owned(format!("✓ {}", entry.file_name))
+        let full_name = if is_selected {
+            format!("▶ {}", entry.file_name)
         } else {
-            Cow::Borrowed(entry.file_name.as_str())
+            entry.file_name.to_string()
         };
+        // Long, unbroken names used to run across the Type and Size
+        // columns; clamp them to the cell and reveal the full name in a
+        // tooltip when clipped.
+        let shown_name = ellipsize_in(&full_name, name_width);
+        let name_truncated = shown_name != full_name;
+        let file_name: Cow<'_, str> = Cow::Owned(shown_name);
         let file_type = Cow::Borrowed(entry.display_file_type(literal_types).as_str());
         let size_kb = Cow::Owned(Self::entry_size_label(entry));
 
@@ -384,6 +391,16 @@ fn build_entry_row<'a>(
             Float::new(name_widget)
                 .translate(move |_, _| Vector::new(text_nudge, 0.0))
                 .into()
+        } else {
+            name_widget
+        };
+        let name_widget: Element<'_, Message> = if name_truncated && !is_renaming {
+            w::styled_tooltip(
+                name_widget,
+                fonts::caption(full_name.clone()),
+                tooltip::Position::Top,
+            )
+            .into()
         } else {
             name_widget
         };
@@ -1703,16 +1720,34 @@ fn archive_tab_label(
 /// Cut a label to fit a tab width, appending an ellipsis. Iced's Text has
 /// no ellipsis support in 0.14, so the budget is estimated from the tab
 /// font's average glyph width.
-fn ellipsize(label: &str, width: f32) -> String {
+/// Truncate `label` with an ellipsis so it fits `text_width` pixels at
+/// the 14 px UI font. A 7.2 px average glyph width keeps call sites
+/// cheap; proportional fonts only vary by a character either way.
+fn ellipsize_in(label: &str, text_width: f32) -> String {
     const GLYPH_WIDTH: f32 = 7.2;
-    const HORIZONTAL_PADDING: f32 = 20.0;
-    let budget = (((width - HORIZONTAL_PADDING) / GLYPH_WIDTH).floor() as usize).max(4);
+    let budget = ((text_width / GLYPH_WIDTH).floor() as usize).max(4);
     if label.chars().count() <= budget {
         return label.to_string();
     }
     let mut out: String = label.chars().take(budget - 1).collect();
     out.push('…');
     out
+}
+
+fn ellipsize(label: &str, width: f32) -> String {
+    const HORIZONTAL_PADDING: f32 = 20.0;
+    ellipsize_in(label, width - HORIZONTAL_PADDING)
+}
+
+/// Text width available to the Name cell for a given table width. The
+/// row layout is 6 px padding per side, 8 px between the three cells,
+/// Name at 6 of the 10 fill portions, and a 16 px icon plus its 6 px
+/// spacer in front of the text.
+fn name_column_text_width(table_width: f32) -> f32 {
+    const ROW_PADDING: f32 = 12.0;
+    const CELL_SPACING: f32 = 16.0;
+    const NAME_CELL_OVERHEAD: f32 = 22.0;
+    ((table_width - ROW_PADDING - CELL_SPACING) * 0.6 - NAME_CELL_OVERHEAD).max(24.0)
 }
 
 /// Divider after the tab strip: drag horizontally to resize the tabs.
@@ -3877,6 +3912,27 @@ mod tests {
         // The minimum width still leaves room for a readable stub.
         let minimal = ellipsize(long, crate::config::ARCHIVE_TAB_WIDTH_MIN);
         assert!(minimal.chars().count() >= 6, "got {minimal:?}");
+    }
+
+    #[test]
+    fn table_names_ellipsize_to_the_available_cell_width() {
+        // The Name cell tracks the pane: a divider-shrunk table gives
+        // less text width than a wide one.
+        let wide = name_column_text_width(900.0);
+        let narrow = name_column_text_width(320.0);
+        assert!(narrow < wide);
+        assert!(narrow >= 24.0, "the cell always keeps a readable stub");
+
+        let long = "tsubomioka_happa_original_drawn_by_jovejun_84a2dada61da25cea3b245.jpg.txd";
+        let clipped = ellipsize_in(long, narrow);
+        assert!(clipped.ends_with('…'));
+        assert!(clipped.chars().count() < long.chars().count());
+        assert!(
+            clipped.chars().count() as f32 * 7.2 <= narrow + 7.2,
+            "must fit the cell"
+        );
+        // Wide cells leave ordinary names untouched.
+        assert_eq!(ellipsize_in("player.txd", wide), "player.txd");
     }
 
     #[test]
