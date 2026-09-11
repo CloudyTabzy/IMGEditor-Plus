@@ -2176,28 +2176,26 @@ fn build_unsaved_dialog(app: &App) -> Option<Element<'_, Message>> {
     match pending {
         crate::ui::app::PendingClose::Archive(index) => {
             let archive = app.editor.archives().get(index)?;
+            let body = column![
+                fonts::body(format!("'{}' has unsaved changes.", archive.file_name)),
+                fonts::caption(
+                    "Closing without saving discards them; the archive file on disk is untouched."
+                ),
+                Space::new().height(Length::Fixed(8.0)),
+                row![
+                    button(fonts::strong("Save"))
+                        .on_press(Message::CloseGuardSave)
+                        .style(button::primary),
+                    button(fonts::body("Discard")).on_press(Message::CloseGuardDiscard),
+                    button(fonts::body("Cancel")).on_press(Message::CloseGuardCancel),
+                ]
+                .spacing(8),
+            ]
+            .spacing(6)
+            .width(Length::Fill);
             Some(modal_box(
                 "Unsaved changes",
-                column![
-                    fonts::body(format!(
-                        "'{}' has unsaved changes.",
-                        archive.file_name
-                    )),
-                    fonts::caption(
-                        "Closing without saving discards them; the archive file on disk is untouched."
-                    ),
-                    Space::new().height(Length::Fixed(8.0)),
-                    row![
-                        button(fonts::strong("Save"))
-                            .on_press(Message::CloseGuardSave)
-                            .style(button::primary),
-                        button(fonts::body("Discard")).on_press(Message::CloseGuardDiscard),
-                        button(fonts::body("Cancel")).on_press(Message::CloseGuardCancel),
-                    ]
-                    .spacing(8),
-                ]
-                .spacing(6)
-                .width(Length::Fill),
+                container(body).width(Length::Fixed(440.0)),
             ))
         }
         crate::ui::app::PendingClose::Window(_) => {
@@ -2208,28 +2206,27 @@ fn build_unsaved_dialog(app: &App) -> Option<Element<'_, Message>> {
                 .filter(|archive| archive.dirty)
                 .map(|archive| archive.file_name.clone())
                 .collect();
+            let body = column![
+                fonts::body(format!(
+                    "{} archive(s) have unsaved changes: {}",
+                    dirty.len(),
+                    dirty.join(", ")
+                )),
+                fonts::caption("Quitting now discards them; the files on disk are untouched."),
+                Space::new().height(Length::Fixed(8.0)),
+                row![
+                    button(fonts::strong("Discard changes and quit"))
+                        .on_press(Message::CloseGuardDiscard)
+                        .style(button::primary),
+                    button(fonts::body("Cancel")).on_press(Message::CloseGuardCancel),
+                ]
+                .spacing(8),
+            ]
+            .spacing(6)
+            .width(Length::Fill);
             Some(modal_box(
                 "Unsaved changes",
-                column![
-                    fonts::body(format!(
-                        "{} archive(s) have unsaved changes: {}",
-                        dirty.len(),
-                        dirty.join(", ")
-                    )),
-                    fonts::caption(
-                        "Quitting now discards them; the files on disk are untouched."
-                    ),
-                    Space::new().height(Length::Fixed(8.0)),
-                    row![
-                        button(fonts::strong("Discard changes and quit"))
-                            .on_press(Message::CloseGuardDiscard)
-                            .style(button::primary),
-                        button(fonts::body("Cancel")).on_press(Message::CloseGuardCancel),
-                    ]
-                    .spacing(8),
-                ]
-                .spacing(6)
-                .width(Length::Fill),
+                container(body).width(Length::Fixed(440.0)),
             ))
         }
     }
@@ -2472,6 +2469,10 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
     )
 }
 
+/// Centered modal card. `content` must establish its own width (a
+/// fixed-width container, like the other dialogs): the card column is
+/// `Length::Shrink`, and Fill-width content inside it collapses to an
+/// empty rounded box with no buttons.
 fn modal_box<'a>(title: &'a str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     let content: Element<'a, Message> = content.into();
     let content = column![
