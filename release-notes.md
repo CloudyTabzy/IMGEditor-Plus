@@ -1,3 +1,17 @@
+## IMG Editor Plus v4.5.0
+
+### Highlights
+
+- **Asset compatibility engine (validator):** retail-verified profiles for GTA III, Vice City, San Andreas and Bully. Set the game an archive is for - or accept an advisory content hint - and every texture is checked against that engine's dialect: entry rows are tinted by verdict with an icon legend, the target is remembered per archive path, and imported files get a pre-flight format check before touching the archive.
+- **Texture converter:** import **PNG / DDS / BMP / TGA** and re-encode into the target's native language - DXT1/3/5, PAL8/PAL4, 888/8888/565/1555/4444 - with full mip chains. A plan dialog shows the chosen format, honest loss warnings (alpha, compression, quantization) and a **true preview decoded back from the encoded bytes** before anything is written.
+- **Import image as TXD:** author a brand-new texture entry from any image, with a name and format picker.
+- **Convert selection to target dialect:** bulk re-encode selected TXDs (for example, move content between games) with a before/after plan.
+- **Save check + lossless repair:** saving runs a pre-save report (native / convertible / incompatible / unknown counts, container mismatches, broken headers). *Fix & Save* applies header-only repairs in the background.
+- **Per-texture verdicts:** the Texture tab shows a compatibility chip per texture with the classifier's notes, plus a *PAL8-ready* badge when the pixels fit an 8-bit palette.
+- **Byte-preserving edits:** replacing or converting a texture re-serializes only that texture's section; every other entry and all container metadata stay verbatim. Untouched retail archives are never rewritten.
+- **Correctness fixes:** Vice City's texture dialect is now classified as DXT1/DXT3 (its "565/4444" headers were DXT data with stale labels), DXT5 alpha decoding follows the spec, and generated entries show their real byte size.
+- **New crates:** `texpresso` (MIT) for BC1/BC2/BC3 compression and `quantette` (MIT or Apache-2.0) for Wu + k-means palette quantization in Oklab.
+
 ## IMG Editor Plus v4.2.0
 
 ### Highlights
