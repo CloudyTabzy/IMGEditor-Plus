@@ -358,7 +358,6 @@ mod tests {
 
     /// Retail exports are the fidelity gate: parse -> write must be
     /// byte-identical for every texture the parser understands.
-    #[test]
     /// The real fidelity gate: identity-replacing every texture in
     /// sampled retail TXDs (III PAL8/888, VC DXT with D3D8 codes, SA
     /// DXT with mips) must reproduce the entry bytes exactly - the

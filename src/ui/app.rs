@@ -7474,8 +7474,10 @@ mod tests {
         {
             let archive = &mut app.editor.archives_mut()[0];
             archive.target_game = Some("gta3");
-            let mut report = ScanReport::default();
-            report.textures = 1;
+            let mut report = ScanReport {
+                textures: 1,
+                ..ScanReport::default()
+            };
             report.anomaly_counts.insert("CONTRADICTORY_DXT_HEADER", 1);
             report
                 .anomaly_severity
