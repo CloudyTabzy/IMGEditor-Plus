@@ -309,11 +309,11 @@ impl App {
         // Render display strings on demand for the visible row only. Pre-caching
         // these for every filtered entry caused thousands of allocations each
         // time the filter or selection changed.
-        let full_name = if is_selected {
-            format!("▶ {}", entry.file_name)
-        } else {
-            entry.file_name.to_string()
-        };
+        //
+        // No cursor glyph prefix: the "▶ " marker indented the selected row
+        // against every other row (and read as a play button). Selection is
+        // already carried by the background and pulse.
+        let full_name = entry.file_name.to_string();
         // Long, unbroken names used to run across the Type and Size
         // columns; clamp them to the cell and reveal the full name in a
         // tooltip when clipped.
@@ -395,12 +395,12 @@ impl App {
             name_widget
         };
         let name_widget: Element<'_, Message> = if name_truncated && !is_renaming {
-            w::styled_tooltip(
-                name_widget,
-                fonts::caption(full_name.clone()),
-                tooltip::Position::Top,
-            )
-            .into()
+            // The tooltip must stay a self-contained box: a bounded,
+            // glyph-wrapping text so long unbroken names wrap inside it
+            // instead of running across the table.
+            let hint = container(fonts::caption_wrapped(full_name.clone()))
+                .width(Length::Fixed(380.0));
+            w::styled_tooltip(name_widget, hint, tooltip::Position::Top).into()
         } else {
             name_widget
         };
