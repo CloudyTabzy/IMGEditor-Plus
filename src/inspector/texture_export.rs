@@ -158,6 +158,7 @@ mod tests {
         TextureEntry {
             source_path: source.to_string(),
             pixel_data: pixels,
+            nif_format: None,
         }
     }
 

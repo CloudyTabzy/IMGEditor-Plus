@@ -1065,7 +1065,17 @@ impl App {
                 .width(Length::Fill),
             );
         }
-        let texture_meta = row![
+        let target_game = archive
+            .target_game
+            .and_then(crate::compat::games::profile_by_id);
+        let texture_verdict = target_game.and_then(|game| match (&tex.raster, tex.nif_format) {
+            (Some(profile), _) => Some(crate::compat::games::classify(game, profile)),
+            (None, Some(format)) => Some(crate::compat::games::classify_nft_format(game, format)),
+            _ => None,
+        });
+        let theme = self.theme();
+        let palette = theme.extended_palette();
+        let mut texture_meta = row![
             row![fonts::header("Name:"), fonts::body(tex.name.clone())]
                 .spacing(3)
                 .align_y(Alignment::Center),
@@ -1087,8 +1097,51 @@ impl App {
         ]
         .spacing(8)
         .align_y(Alignment::Center)
-        .width(Length::Fill)
-        .wrap();
+        .width(Length::Fill);
+        if let Some(report) = texture_verdict {
+            let accent = compat_verdict_accent(report.verdict);
+            let background = iced::theme::palette::mix(
+                palette.background.base.color,
+                accent,
+                0.55,
+            );
+            let chip = w::badge(
+                report.verdict.label().to_string(),
+                background,
+                w::readable_text_color(background, palette.background.base.text),
+            );
+            let note = if report.note.is_empty() {
+                format!("Verdict for a {} target.", report.game_id)
+            } else {
+                report.note.clone()
+            };
+            texture_meta = texture_meta.push(w::styled_tooltip(
+                chip,
+                fonts::caption(note),
+                tooltip::Position::Top,
+            ));
+        }
+        if let Some(colors) = tex.palette_colors {
+            let background = iced::theme::palette::mix(
+                palette.background.base.color,
+                palette.primary.weak.color,
+                0.32,
+            );
+            let chip = w::badge(
+                format!("PAL8-ready ({colors} colors)"),
+                background,
+                w::readable_text_color(background, palette.background.base.text),
+            );
+            texture_meta = texture_meta.push(w::styled_tooltip(
+                chip,
+                fonts::caption(
+                    "Every pixel is one of these distinct colors, so an 8-bit palette \
+                     stores this texture without quantization.",
+                ),
+                tooltip::Position::Top,
+            ));
+        }
+        let texture_meta = texture_meta.wrap();
         col = col.push(texture_meta);
 
         let scene_matches = self.viewer_scene_matches_selection();

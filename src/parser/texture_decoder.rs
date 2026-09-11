@@ -586,6 +586,37 @@ pub struct DecodedTexture {
     /// initialization without locking on reads, and keeps `DecodedTexture`
     /// `Send + Sync` for the parallel export path.
     pub handle: std::sync::OnceLock<iced::widget::image::Handle>,
+    /// Distinct RGBA colors when the image fits an 8-bit palette (<=256).
+    /// Computed at decode time with an early exit, so >256-color images
+    /// pay almost nothing.
+    pub palette_colors: Option<u16>,
+    /// RenderWare raster header, when this texture came from a TXD. The
+    /// UI classifies this against the archive target at view time, so a
+    /// target change never leaves a stale verdict in the cache.
+    pub raster: Option<crate::compat::raster::RasterProfile>,
+    /// Gamebryo `NiPixelData` PixelFormat, when this texture came from
+    /// an NFT catalog.
+    pub nif_format: Option<u32>,
+}
+
+/// Count distinct RGBA colors, stopping once `cap` is exceeded. Bounded
+/// so photo-like textures exit after a few hundred pixels.
+pub fn unique_color_count_capped(rgba: &[u8], cap: usize) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    for px in rgba.chunks_exact(4) {
+        seen.insert([px[0], px[1], px[2], px[3]]);
+        if seen.len() > cap {
+            return seen.len();
+        }
+    }
+    seen.len()
+}
+
+/// `Some(count)` when the image has at most 256 distinct colors, i.e. a
+/// PAL8 container can hold it without quantization loss.
+pub fn palette_colors(rgba: &[u8]) -> Option<u16> {
+    let count = unique_color_count_capped(rgba, 256);
+    (count <= 256).then_some(count as u16)
 }
 
 /// Decode raster data to RGBA given the TXD raster format.
@@ -1122,5 +1153,34 @@ mod tests {
         let rgba = decode_native_raster(&data, &desc).unwrap();
         assert_eq!(&rgba[..4], &[0x54, 0x64, 0x8C, 0xFF]);
         assert_eq!(&rgba[4..8], &[0x44, 0x54, 0x74, 0xFF]);
+    }
+
+    #[test]
+    fn palette_flag_needs_at_most_256_distinct_colors() {
+        // Exactly 256 distinct opaque colors: PAL8 can hold this losslessly.
+        let mut rgba = Vec::new();
+        for i in 0..256u32 {
+            rgba.extend([i as u8, (i >> 8) as u8, 0, 0xFF]);
+        }
+        assert_eq!(palette_colors(&rgba), Some(256));
+
+        // One more distinct color tips it over.
+        rgba.extend([0xEE, 0xEE, 0xEE, 0xFF]);
+        assert_eq!(palette_colors(&rgba), None);
+
+        // Alpha is part of the color identity.
+        let alpha_variants = [1u8, 2, 3, 4].into_iter().flat_map(|a| [0, 0, 0, a]);
+        assert_eq!(palette_colors(&alpha_variants.collect::<Vec<_>>()), Some(4));
+    }
+
+    #[test]
+    fn capped_unique_colors_exit_early() {
+        // 300 distinct colors with the cap at 256 stops at 257.
+        let mut rgba = Vec::new();
+        for i in 0..300u32 {
+            rgba.extend([i as u8, (i >> 8) as u8, 7, 0xFF]);
+        }
+        assert_eq!(unique_color_count_capped(&rgba, 256), 257);
+        assert_eq!(unique_color_count_capped(&rgba, 400), 300);
     }
 }

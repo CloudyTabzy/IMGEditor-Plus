@@ -555,6 +555,7 @@ pub fn decoded_textures_from_scene(scene: &Scene) -> Vec<DecodedTexture> {
             .unwrap_or(&key)
             .to_string();
         let has_alpha = texture.rgba.chunks_exact(4).any(|pixel| pixel[3] < 255);
+        let palette_colors = crate::parser::texture_decoder::palette_colors(&texture.rgba);
         textures.push(DecodedTexture {
             name,
             width: texture.width,
@@ -563,6 +564,9 @@ pub fn decoded_textures_from_scene(scene: &Scene) -> Vec<DecodedTexture> {
             has_alpha,
             format_name: "Model companion texture".to_string(),
             mipmap_count: 1,
+            palette_colors,
+            raster: None,
+            nif_format: None,
             handle: std::sync::OnceLock::new(),
         });
     }

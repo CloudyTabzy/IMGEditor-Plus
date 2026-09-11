@@ -4947,10 +4947,20 @@ impl App {
                                                 name: tex.diffuse_name.clone(),
                                                 width: tex.width,
                                                 height: tex.height,
+                                                palette_colors:
+                                                    crate::parser::texture_decoder::palette_colors(
+                                                        &rgba,
+                                                    ),
                                                 rgba,
                                                 has_alpha: tex.has_alpha_channel(),
                                                 format_name: tex.format_name().to_string(),
                                                 mipmap_count: tex.num_mipmaps as u32,
+                                                raster: Some(
+                                                    crate::compat::raster::RasterProfile::from_native(
+                                                        tex,
+                                                    ),
+                                                ),
+                                                nif_format: None,
                                                 handle: std::sync::OnceLock::new(),
                                             });
                                         }

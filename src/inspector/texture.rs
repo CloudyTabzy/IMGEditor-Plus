@@ -325,6 +325,9 @@ pub struct TextureEntry {
     pub source_path: String,
     /// Raw pixel data extracted from the NiSourceTexture block.
     pub pixel_data: Option<Vec<u8>>,
+    /// Gamebryo `NiPixelData` PixelFormat when the payload came from a
+    /// pixel block (embedded DDS/TGA payloads carry no Gamebryo format).
+    pub nif_format: Option<u32>,
 }
 
 impl NftCatalog {
@@ -368,6 +371,7 @@ where
 
     for (key, entry) in catalog.entries {
         let source_path = entry.source_path.clone();
+        let nif_format = entry.nif_format;
         let scene_texture = entry
             .pixel_data
             .and_then(|payload| decode_texture_payload(&payload))
@@ -389,6 +393,7 @@ where
             .rgba
             .chunks_exact(4)
             .any(|pixel| pixel[3] < 255);
+        let palette_colors = crate::parser::texture_decoder::palette_colors(&scene_texture.rgba);
 
         decoded.push(DecodedTexture {
             name,
@@ -398,6 +403,9 @@ where
             has_alpha,
             format_name: format_name.to_string(),
             mipmap_count: 1,
+            palette_colors,
+            raster: None,
+            nif_format,
             handle: std::sync::OnceLock::new(),
         });
     }
@@ -588,12 +596,16 @@ fn parse_nft_catalog_bytes(nft_bytes: &[u8]) -> Option<NftCatalog> {
         let Some(key) = base_name else {
             continue;
         };
-        let pixel_data = extract_pixels_for_nft(&nft, nft_bytes, idx);
+        let (pixel_data, nif_format) = match extract_pixels_for_nft(&nft, nft_bytes, idx) {
+            Some((pixels, format)) => (Some(pixels), format),
+            None => (None, None),
+        };
         entries.insert(
             key,
             TextureEntry {
                 source_path: tex.file_name.clone().unwrap_or_default(),
                 pixel_data,
+                nif_format,
             },
         );
     }
@@ -603,11 +615,13 @@ fn parse_nft_catalog_bytes(nft_bytes: &[u8]) -> Option<NftCatalog> {
 
 /// Try to find NiPixelData associated with a NiSourceTexture by scanning
 /// forward from the NiSourceTexture block for the next NiPixelData block.
+/// Returns the decodable payload plus its Gamebryo format when the pixels
+/// came from a pixel block (embedded payloads carry no Gamebryo format).
 fn extract_pixels_for_nft(
     nft: &NifFile,
     nft_bytes: &[u8],
     tex_block_idx: usize,
-) -> Option<Vec<u8>> {
+) -> Option<(Vec<u8>, Option<u32>)> {
     // The reference is authoritative when present. Scanning by block order
     // can associate a shared pixel block with the wrong source texture.
     if let Some(Some(BlockPayload::NiSourceTexture(tex))) = nft.payloads.get(tex_block_idx)
@@ -616,14 +630,14 @@ fn extract_pixels_for_nft(
             nft.payloads.get(tex.pixel_data_ref as usize)
         && let Some(pixels) = extract_dds_from_nipixeldata(pd)
     {
-        return Some(pixels);
+        return Some((pixels, Some(pd.pixel_format)));
     }
 
     // Check inline pixel data first (NiSourceTexture embedded).
     if let Some(tga) = extract_embedded_pixels(nft, nft_bytes, tex_block_idx)
         && tga.len() > 22
     {
-        return Some(tga);
+        return Some((tga, None));
     }
     // Fall back to NiPixelData blocks nearby.
     for candidate in tex_block_idx + 1..nft.blocks.len().min(tex_block_idx + 10) {
@@ -634,7 +648,7 @@ fn extract_pixels_for_nft(
             continue;
         }
         if let Some(dds) = extract_dds_from_nipixeldata(pd) {
-            return Some(dds);
+            return Some((dds, Some(pd.pixel_format)));
         }
     }
     None
@@ -1801,6 +1815,7 @@ mod tests {
             TextureEntry {
                 source_path: String::from("models/chair_d.tga"),
                 pixel_data: Some(vec![1, 2, 3]),
+                nif_format: None,
             },
         );
         let catalog = NftCatalog { entries };
