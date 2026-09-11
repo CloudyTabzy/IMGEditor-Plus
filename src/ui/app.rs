@@ -6094,6 +6094,10 @@ mod tests {
             "confirming must start the save: {messages:?}"
         );
         assert!(app.pending_save.is_none());
+        assert!(
+            !app.editor.archives()[0].progress.in_use(),
+            "a finished save must release the progress slot (else the shield refuses later scans)"
+        );
 
         // Cancelling keeps the archive untouched.
         app.pending_save = Some(PendingSave {
@@ -6142,6 +6146,10 @@ mod tests {
                 .iter()
                 .any(|message| matches!(message, Message::SaveCompleted { .. })),
             "clean save must proceed: {messages:?}"
+        );
+        assert!(
+            !app.editor.archives()[0].progress.in_use(),
+            "the progress slot must be released after a save"
         );
     }
 

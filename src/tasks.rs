@@ -75,18 +75,20 @@ impl SaveTask {
             ImgVersion::Xbox360 => Xbox360Parser
                 .save(&mut archive, &self.path, self.remove_existing)
                 .map_err(anyhow_forward),
-            ImgVersion::Unknown => {
-                progress.finish();
-                Err(anyhow::anyhow!("cannot save unknown archive format"))
-            }
+            ImgVersion::Unknown => Err(anyhow::anyhow!("cannot save unknown archive format")),
         };
 
         if let Err(ref err) = result {
             eprintln!("save failed: {err}");
-            progress.finish();
         } else {
+            progress.set_percentage(1.0);
             archive.add_log("Archive saved".to_string());
         }
+        // Must run on every path: a successful save that skipped this
+        // left the archive "in use" forever, which then made the
+        // validator refuse every later scan ("Another task is still
+        // running") and the progress bar animate indefinitely.
+        progress.finish();
 
         result.map(|_| archive)
     }
@@ -715,6 +717,35 @@ mod tests {
     use std::io::{Seek, SeekFrom, Write};
 
     use crate::parser::{encode_entry_name, read_entry_data};
+
+    #[test]
+    fn successful_save_releases_the_progress_slot() {
+        // Regression: SaveTask started progress but only finished it on
+        // errors, so a completed save left the archive "in use" forever
+        // (bar animating, validator refusing later scans).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.img");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"VER2");
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut archive = ArchiveInfo::new("empty.img", false, ImgVersion::Two);
+        archive.path = Some(path.clone());
+        crate::parser::pc_v2::PcV2Parser
+            .open(&mut archive)
+            .unwrap();
+        assert!(!archive.progress.in_use());
+
+        let saved = SaveTask::new(archive, path, ImgVersion::Two)
+            .run_blocking()
+            .expect("empty archive must save");
+        assert!(
+            !saved.progress.in_use(),
+            "a successful save must release the progress slot"
+        );
+        assert_eq!(saved.progress.percentage(), 1.0);
+    }
 
     fn write_entry_record(output: &mut impl Write, offset: u32, sector: u32, name: &str) {
         output.write_all(&offset.to_le_bytes()).unwrap();
