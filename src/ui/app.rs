@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -124,6 +125,23 @@ pub(crate) const EMPTY_STATE_PRO_TIPS: [&str; 10] = [
     "Use Ctrl+S for a quick save and Ctrl+Shift+S to save an archive under a new name.",
     "Exported textures use unique filenames automatically, so batch exports never overwrite one another.",
 ];
+
+fn empty_state_tip_index() -> usize {
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| {
+            let mut hasher = DefaultHasher::new();
+            duration.as_secs().hash(&mut hasher);
+            // Windows system time is commonly quantized to 100 ns. Hashing
+            // the full duration avoids relying on the always-zero low digit.
+            duration.as_nanos().hash(&mut hasher);
+            std::process::id().hash(&mut hasher);
+            hasher.finish()
+        })
+        .unwrap_or_default();
+
+    (seed % EMPTY_STATE_PRO_TIPS.len() as u64) as usize
+}
 
 /// Optional inertia layered after Iced's native autoscroll settles in its
 /// neutral zone. It deliberately stores one sampled velocity rather than an
@@ -1217,10 +1235,7 @@ impl Default for App {
 impl App {
     pub fn new(config: Config) -> Self {
         let show_welcome = !config.first_run_complete;
-        let empty_state_tip_index = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| (duration.as_nanos() % EMPTY_STATE_PRO_TIPS.len() as u128) as usize)
-            .unwrap_or_default();
+        let empty_state_tip_index = empty_state_tip_index();
         let mut editor = Editor::new();
         editor.set_default_sort_chain(config.default_sort_chain.clone());
         editor.file_type_literal = config.literal_file_types;
