@@ -429,8 +429,12 @@ pub struct ArchiveInfo {
     pub texture_cache: Arc<TexturePreviewCache>,
     texture_cache_active_entry: Arc<AtomicUsize>,
     /// Cache for `unique_file_types()` invalidated whenever entries are added,
-    /// removed, or renamed.
+    /// removed, or renamed, and rebuilt when the display mode changes.
     cached_file_types: Option<Vec<CompactString>>,
+    /// Display mode used to populate `cached_file_types`. The archive is
+    /// initially opened before the app's literal-type preference is applied,
+    /// so the cache must be keyed by the mode as well as by entry mutations.
+    cached_file_types_literal: Option<bool>,
     /// Latest texture-compatibility report (see `compat::scan`); cleared
     /// by `invalidate_entry_caches` so it never describes stale entries.
     pub compat_report: Option<crate::compat::scan::ScanReport>,
@@ -488,6 +492,7 @@ impl ArchiveInfo {
             texture_cache: new_texture_preview_cache(&texture_cache_active_entry),
             texture_cache_active_entry,
             cached_file_types: None,
+            cached_file_types_literal: None,
             compat_report: None,
             target_game: None,
             target_hint: None,
@@ -539,6 +544,7 @@ impl ArchiveInfo {
             texture_cache: new_texture_preview_cache(&texture_cache_active_entry),
             texture_cache_active_entry,
             cached_file_types: None,
+            cached_file_types_literal: None,
             compat_report: None,
             target_game: None,
             target_hint: None,
@@ -721,10 +727,10 @@ impl ArchiveInfo {
     }
 
     /// Returns the sorted, deduplicated list of file types in this archive.
-    /// The result is cached and only recomputed when the cache is invalidated
-    /// by entry mutations.
+    /// The result is cached and recomputed when the cache is invalidated by
+    /// entry mutations or when the requested display mode changes.
     pub(crate) fn unique_file_types(&mut self, literal: bool) -> &[CompactString] {
-        if self.cached_file_types.is_none() {
+        if self.cached_file_types.is_none() || self.cached_file_types_literal != Some(literal) {
             let mut types: Vec<CompactString> = self
                 .entries
                 .iter()
@@ -733,6 +739,7 @@ impl ArchiveInfo {
             types.sort();
             types.dedup();
             self.cached_file_types = Some(types);
+            self.cached_file_types_literal = Some(literal);
         }
         self.cached_file_types.as_deref().unwrap_or_default()
     }
@@ -741,6 +748,7 @@ impl ArchiveInfo {
     /// mode changes, since the cached strings differ per mode.
     pub(crate) fn invalidate_type_cache(&mut self) {
         self.cached_file_types = None;
+        self.cached_file_types_literal = None;
     }
 
     /// The file type currently bubbled to the top by the Type sort.
@@ -787,6 +795,7 @@ impl ArchiveInfo {
     /// their verdicts added (see `App::refresh_imported_verdicts`).
     pub fn invalidate_entry_caches_keeping_report(&mut self) {
         self.cached_file_types = None;
+        self.cached_file_types_literal = None;
         self.inspection_cache.clear();
         self.set_active_texture_preview_entry(None);
         self.texture_cache.clear();

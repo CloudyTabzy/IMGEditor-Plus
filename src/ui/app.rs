@@ -3378,7 +3378,7 @@ impl App {
                     if let Some(entry) = archive.entries.get_mut(new_index) {
                         entry.selected = true;
                     }
-                    archive.update_selected_list(&self.search, false);
+                    archive.update_selected_list(&self.search, self.config.literal_file_types);
                 }
                 self.editor.select_entry(new_index, false, false);
                 self.refresh_imported_verdicts(archive_index);
@@ -8876,6 +8876,33 @@ mod tests {
         let _ = app.update(Message::ToggleLiteralFileTypes(false));
         assert!(!app.config.literal_file_types);
         assert!(!app.editor.file_type_literal);
+    }
+
+    #[test]
+    fn type_header_cycles_literal_extensions_after_archive_open() {
+        let mut app = test_app();
+        app.config.literal_file_types = true;
+        app.editor.file_type_literal = true;
+        app.editor.new_archive();
+        let archive = app.editor.archives_mut().first_mut().unwrap();
+        archive.entries.push(EntryInfo::new("collision.col"));
+        archive.entries.push(EntryInfo::new("model.dff"));
+        archive.entries.push(EntryInfo::new("texture.txd"));
+
+        // ArchiveInfo::open warms its cache in curated mode before the
+        // editor applies the user's literal-type preference. Reproduce that
+        // transition, then use the same header-click path as the GUI.
+        archive.update_selected_list("", false);
+
+        let _ = app.update(Message::SortBy(SortColumn::Type));
+        let _ = app.update(Message::SortBy(SortColumn::Type));
+
+        let archive = &app.editor.archives()[0];
+        assert_eq!(archive.sort.type_header_label, "Type ↑ DFF");
+        assert_eq!(
+            archive.entries[archive.selected_indices[0]].file_name,
+            "model.dff"
+        );
     }
 
     #[test]
