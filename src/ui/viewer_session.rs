@@ -16,10 +16,11 @@ use crate::inspector::animation::binding::{ClipBinding, bind_clip};
 use crate::inspector::animation::clip::{AnimationClip, AnimationLibrary, ClipMarker};
 use crate::inspector::animation::model::ModelAsset;
 use crate::inspector::animation::pose::{
-    PoseBuffers, RootMotionPolicy, evaluate_pose, sample_locals,
+    PoseBuffers, RootMotionPolicy, clip_envelope, evaluate_pose, sample_locals,
 };
 use crate::inspector::animation::transport::{LoopMode, PlaybackState, Transport};
 use crate::inspector::animation::{ClipId, PlaybackCapability};
+use crate::inspector::scene3d::mesh::Aabb;
 
 /// User-tunable presentation state for the animation dock.
 #[derive(Clone, Debug, PartialEq)]
@@ -66,6 +67,9 @@ pub struct AnimationSession {
     pub panel: AnimationPanel,
     pub last_marker: Option<(String, Instant)>,
     pub demo: bool,
+    /// Cached sampled root trajectory for the motion-path overlay; cleared
+    /// whenever the clip, range, root policy or display offset changes.
+    pub motion_path: Option<Vec<Vec3>>,
 }
 
 impl AnimationSession {
@@ -92,6 +96,7 @@ impl AnimationSession {
             panel: AnimationPanel::default(),
             last_marker: None,
             demo,
+            motion_path: None,
         };
         if let Some(first) = session.library.clips.first().map(|clip| clip.id) {
             session.select_clip(first, now);
@@ -138,6 +143,7 @@ impl AnimationSession {
         let binding = bind_clip(&self.asset, clip);
         self.capability = capability_for(&self.asset, &self.library, Some(clip), Some(&binding));
         self.binding = Some(binding);
+        self.motion_path = None;
         self.transport.set_clip(clip, now);
         self.evaluate();
         self.can_play()
@@ -254,6 +260,7 @@ impl AnimationSession {
 
     pub fn set_range(&mut self, now: Instant, start: f64, end: f64) {
         self.transport.set_range(now, start, end);
+        self.motion_path = None;
         self.evaluate();
     }
 
@@ -266,6 +273,7 @@ impl AnimationSession {
             return;
         }
         self.root_policy = policy;
+        self.motion_path = None;
         self.evaluate();
     }
 
@@ -274,7 +282,75 @@ impl AnimationSession {
             return;
         }
         self.display_offset = offset;
+        self.motion_path = None;
         self.evaluate();
+    }
+
+    /// Bounds of the currently evaluated pose, in display space.
+    pub fn current_pose_bounds(&self) -> Option<Aabb> {
+        self.pose.posed_bounds
+    }
+
+    /// Sampled motion envelope of the active clip over the play range.
+    /// This is an estimate (see `clip_envelope`) used only for framing and
+    /// path display, never for culling.
+    pub fn clip_motion_bounds(&self) -> Option<Aabb> {
+        let clip = self.clip()?;
+        let binding = self.binding.as_ref()?;
+        let range = self.transport.range();
+        clip_envelope(
+            &self.asset,
+            clip,
+            binding,
+            (range.0 as f32, range.1 as f32),
+            48,
+            self.root_policy,
+            self.display_offset,
+        )
+    }
+
+    /// Current root-motion node origin in display space, if designated.
+    pub fn root_position_view(&self) -> Option<Vec3> {
+        let root = self.asset.root_motion_node?;
+        self.pose.node_positions_view.get(root.0 as usize).copied()
+    }
+
+    /// Sampled root trajectory across the play range for the motion-path
+    /// overlay. Bounded and cached; invalidated by clip/range/policy/
+    /// offset changes. Returns empty when no root node or clip is active.
+    pub fn motion_path_samples(&mut self, samples: usize) -> Vec<Vec3> {
+        if let Some(cached) = &self.motion_path {
+            return cached.clone();
+        }
+        let Some(root) = self.asset.root_motion_node else {
+            return Vec::new();
+        };
+        let Some(id) = self.clip else {
+            return Vec::new();
+        };
+        let Some(clip) = self.library.clip(id) else {
+            return Vec::new();
+        };
+        let Some(binding) = self.binding.as_ref() else {
+            return Vec::new();
+        };
+        let samples = samples.clamp(2, 128);
+        let (start, end) = self.transport.range();
+        let mut buffers = PoseBuffers::new(&self.asset);
+        let mut out = Vec::with_capacity(samples);
+        for step in 0..samples {
+            let t = start + (end - start) * (step as f64 / (samples - 1) as f64);
+            sample_locals(clip, binding, &self.asset, t as f32, &mut buffers.locals);
+            evaluate_pose(
+                &self.asset,
+                self.root_policy,
+                self.display_offset,
+                &mut buffers,
+            );
+            out.push(buffers.node_positions_view[root.0 as usize]);
+        }
+        self.motion_path = Some(out.clone());
+        out
     }
 
     pub fn note_marker(&mut self, marker: &ClipMarker, now: Instant) {
@@ -386,5 +462,35 @@ mod tests {
         assert_eq!(session.clip_name(), Some("Wave"));
         assert_eq!(session.transport.shown_time(), 0.0);
         assert!(matches!(session.state(), PlaybackState::Paused));
+    }
+
+    #[test]
+    fn motion_path_is_sampled_cached_and_invalidated() {
+        let mut session = demo_session();
+        let first = session.motion_path_samples(16);
+        assert_eq!(first.len(), 16);
+        assert!(session.motion_path.is_some());
+        session.set_range(Instant::now(), 0.2, 1.0);
+        assert!(
+            session.motion_path.is_none(),
+            "range change invalidates cache"
+        );
+        let second = session.motion_path_samples(16);
+        assert_eq!(second.len(), 16);
+    }
+
+    #[test]
+    fn clip_motion_bounds_cover_the_pose() {
+        let session = demo_session();
+        assert!(session.clip_motion_bounds().is_some());
+        assert!(session.current_pose_bounds().is_some());
+    }
+
+    #[test]
+    fn root_position_matches_the_posed_node() {
+        let session = demo_session();
+        let root = session.asset.root_motion_node.unwrap();
+        let expected = session.pose.node_positions_view[root.0 as usize];
+        assert_eq!(session.root_position_view(), Some(expected));
     }
 }

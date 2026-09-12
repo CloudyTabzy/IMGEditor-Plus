@@ -39,6 +39,8 @@ pub use decode::{
     parse_and_build_scene, parse_and_build_scene_from_col, parse_and_build_scene_from_dff,
 };
 #[allow(unused_imports)]
-pub use mesh::{Aabb, SceneMesh, SceneTexture, VERTEX_STRIDE, Vertex};
+pub use mesh::{
+    Aabb, SKELETON_VERTEX_STRIDE, SceneMesh, SceneTexture, SkeletonVertex, VERTEX_STRIDE, Vertex,
+};
 #[allow(unused_imports)]
 pub use scene::Scene;

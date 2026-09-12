@@ -261,6 +261,42 @@ impl OrbitCamera {
         self.navigation_hover = 0;
     }
 
+    /// Frame `aabb` by moving the target to its centre and setting the
+    /// distance to fit its bounding sphere inside BOTH the vertical and
+    /// horizontal field of view, while preserving the current view
+    /// direction, projection mode and pan orientation. This is the
+    /// inspection-friendly counterpart to [`Self::reset_to_aabb`], which
+    /// additionally resets yaw/pitch.
+    pub fn frame_aabb_preserving_view(&mut self, aabb: &Aabb) {
+        let center = aabb.center();
+        if center.iter().all(|v| v.is_finite()) {
+            self.target = center;
+        }
+        let r = aabb.bounding_radius();
+        let r = if r.is_finite() && r >= 0.0 { r } else { 1.0 };
+        let half_fov_y = (self.fov_y_deg * 0.5).to_radians();
+        let sin_y = half_fov_y.sin();
+        // A narrow pane is limited by the horizontal FOV; derive it from
+        // the viewport aspect so the character is never cropped sideways.
+        let aspect = self.viewport.aspect();
+        let sin_x = if aspect.is_finite() && aspect > 0.01 {
+            (half_fov_y.tan() * aspect).atan().sin()
+        } else {
+            sin_y
+        };
+        let sin = sin_y.min(sin_x);
+        let d = if sin > 0.001 && sin.is_finite() {
+            (r / sin) * 1.2
+        } else {
+            r.max(1.0) * 4.0
+        };
+        self.distance = if d.is_finite() {
+            d.max(self.near * 2.0 + 0.1)
+        } else {
+            10.0
+        };
+    }
+
     /// Apply an orbit delta given in pixels. `sensitivity` is radians per
     /// pixel; defaults to ~0.01 which feels good on a 1080p viewport.
     /// Blender-style turntable: dragging right swings the viewpoint to
@@ -313,6 +349,59 @@ mod tests {
 
     fn approx_pt(a: [f32; 3], b: [f32; 3]) -> bool {
         approx_eq(a[0], b[0]) && approx_eq(a[1], b[1]) && approx_eq(a[2], b[2])
+    }
+
+    #[test]
+    fn preserving_frame_keeps_view_direction_and_centres_target() {
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 200,
+            height: 120,
+        });
+        camera.yaw = 0.8;
+        camera.pitch = -0.2;
+        camera.orthographic = true;
+        let aabb = Aabb {
+            min: [4.0, 1.0, -2.0],
+            max: [6.0, 3.0, 2.0],
+        };
+        camera.frame_aabb_preserving_view(&aabb);
+        assert!(approx_pt(camera.target, [5.0, 2.0, 0.0]));
+        assert!(approx_eq(camera.yaw, 0.8));
+        assert!(approx_eq(camera.pitch, -0.2));
+        assert!(camera.orthographic, "projection mode must be preserved");
+        assert!(camera.distance > 0.0 && camera.distance.is_finite());
+    }
+
+    #[test]
+    fn narrow_viewport_frames_the_horizontal_extent() {
+        let wide = {
+            let mut camera = OrbitCamera::new(Viewport {
+                width: 1000,
+                height: 400,
+            });
+            let aabb = Aabb {
+                min: [-10.0, -1.0, -1.0],
+                max: [10.0, 1.0, 1.0],
+            };
+            camera.frame_aabb_preserving_view(&aabb);
+            camera.distance
+        };
+        let narrow = {
+            let mut camera = OrbitCamera::new(Viewport {
+                width: 300,
+                height: 800,
+            });
+            let aabb = Aabb {
+                min: [-10.0, -1.0, -1.0],
+                max: [10.0, 1.0, 1.0],
+            };
+            camera.frame_aabb_preserving_view(&aabb);
+            camera.distance
+        };
+        assert!(
+            narrow > wide,
+            "a narrow pane must pull the camera back: {narrow} vs {wide}"
+        );
     }
 
     #[test]

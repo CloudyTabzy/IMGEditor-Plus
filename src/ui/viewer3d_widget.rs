@@ -44,7 +44,7 @@ use crate::inspector::animation::clip::AnimationLibrary;
 use crate::inspector::animation::model::ModelAsset;
 use crate::inspector::animation::pose::rest_scene;
 use crate::inspector::scene3d::camera::OrbitCamera;
-use crate::inspector::scene3d::mesh::Aabb;
+use crate::inspector::scene3d::mesh::{Aabb, SkeletonVertex};
 use crate::inspector::scene3d::navigation::{NavigationAction, NavigationUniform};
 use crate::inspector::scene3d::pipeline::{
     GpuMesh, GpuTexture, RenderFlags, SCENE_MSAA_SAMPLES, ScenePipelines, create_depth_texture,
@@ -115,6 +115,8 @@ pub struct SceneHandleInner {
     pub(crate) pointer_over_viewport: bool,
     /// Cursor is over the timeline dock this frame (playback shortcut gate).
     pub(crate) timeline_hover: bool,
+    /// A camera drag owns the pointer; suppress root-follow while true.
+    pub(crate) camera_user_manipulating: bool,
 }
 
 impl Default for SceneHandleInner {
@@ -135,6 +137,7 @@ impl Default for SceneHandleInner {
             session: None,
             pointer_over_viewport: false,
             timeline_hover: false,
+            camera_user_manipulating: false,
         }
     }
 }
@@ -310,6 +313,7 @@ impl SceneHandle {
         self.with_mut(|inner| {
             let result = inner.session.as_mut().map(|session| session.advance(now));
             if result.is_some() {
+                apply_root_follow(inner);
                 inner.dirty = true;
             }
             result
@@ -321,16 +325,125 @@ impl SceneHandle {
         f: impl FnOnce(&mut AnimationSession) -> R,
     ) -> Option<R> {
         self.with_mut(|inner| {
-            let result = inner.session.as_mut().map(f);
-            if result.is_some() {
+            let SceneHandleInner {
+                session,
+                camera,
+                camera_user_manipulating,
+                dirty,
+                ..
+            } = inner;
+            let result = session.as_mut().map(f)?;
+            if let Some(session) = session.as_ref()
+                && session.panel.follow_root
+                && !*camera_user_manipulating
+                && let Some(root) = session.root_position_view()
+            {
+                // Preserve the user's orbit/distance; only the target moves.
+                let target = root.to_array();
+                if camera.target != target {
+                    camera.target = target;
+                    *dirty = true;
+                }
+            }
+            *dirty = true;
+            Some(result)
+        })
+    }
+
+    /// Frame the rest/reference bounds without resetting the view direction.
+    pub fn frame_animation_rest(&self) {
+        self.with_mut(|inner| {
+            if let Some(scene) = inner.scene.as_ref() {
+                let aabb =
+                    translated_aabb(scene.aabb, scene_display_offset(scene, inner.origin_mode));
+                inner.camera.frame_aabb_preserving_view(&aabb);
                 inner.dirty = true;
             }
-            result
-        })
+        });
+    }
+
+    /// Frame the currently evaluated pose.
+    pub fn frame_animation_current(&self) {
+        self.with_mut(|inner| {
+            let bounds = inner.session.as_ref().and_then(|s| s.current_pose_bounds());
+            if let Some(aabb) = bounds {
+                inner.camera.frame_aabb_preserving_view(&aabb);
+                inner.dirty = true;
+            }
+        });
+    }
+
+    /// Frame the sampled motion envelope of the active clip.
+    pub fn frame_animation_motion(&self) {
+        self.with_mut(|inner| {
+            let bounds = inner.session.as_ref().and_then(|s| s.clip_motion_bounds());
+            if let Some(aabb) = bounds {
+                inner.camera.frame_aabb_preserving_view(&aabb);
+                inner.dirty = true;
+            }
+        });
     }
 
     pub(crate) fn set_timeline_hover(&self, hover: bool) {
         self.with_mut(|inner| inner.timeline_hover = hover);
+    }
+}
+
+fn build_overlay_vertices(session: &mut AnimationSession) -> Vec<SkeletonVertex> {
+    const BONE: [f32; 4] = [1.0, 0.62, 0.18, 0.95];
+    const PATH: [f32; 4] = [0.25, 0.85, 0.95, 0.9];
+    let mut vertices = Vec::new();
+    if session.panel.show_skeleton {
+        for (index, node) in session.asset.nodes.iter().enumerate() {
+            if let Some(parent) = node.parent {
+                let a = session.pose.node_positions_view[parent.0 as usize].to_array();
+                let b = session.pose.node_positions_view[index].to_array();
+                vertices.push(SkeletonVertex {
+                    position: a,
+                    color: BONE,
+                });
+                vertices.push(SkeletonVertex {
+                    position: b,
+                    color: BONE,
+                });
+            }
+        }
+    }
+    if session.panel.show_motion_path {
+        let path = session.motion_path_samples(48);
+        for pair in path.windows(2) {
+            vertices.push(SkeletonVertex {
+                position: pair[0].to_array(),
+                color: PATH,
+            });
+            vertices.push(SkeletonVertex {
+                position: pair[1].to_array(),
+                color: PATH,
+            });
+        }
+    }
+    vertices
+}
+
+/// Move the camera target onto the designated root-motion node while
+/// `Follow root` is enabled, preserving orbit/distance and staying out of
+/// the way of an active camera drag.
+fn apply_root_follow(inner: &mut SceneHandleInner) {
+    if inner.camera_user_manipulating {
+        return;
+    }
+    let Some(target) = inner
+        .session
+        .as_ref()
+        .filter(|session| session.panel.follow_root)
+        .and_then(|session| session.root_position_view())
+        .map(|position| position.to_array())
+    else {
+        return;
+    };
+    if inner.camera.target != target {
+        inner.camera.target = target;
+        inner.dirty = true;
     }
 }
 
@@ -588,6 +701,8 @@ where
                 inner.dirty = true;
                 dirty = true;
             }
+            inner.camera_user_manipulating =
+                state.is_dragging() || state.navigation_pending.is_some();
             let _ = bounds;
         });
         if prev_inside != cursor_inside {
@@ -756,6 +871,16 @@ impl primitive::Primitive for ScenePrimitive {
                     .with_mut(|i| i.session.as_mut().map(|s| s.mark_uploaded()));
             }
         }
+        let overlay = self.handle.with_mut(|inner| {
+            let Some(session) = inner.session.as_mut() else {
+                return Vec::new();
+            };
+            if !(session.panel.show_skeleton || session.panel.show_motion_path) {
+                return Vec::new();
+            }
+            build_overlay_vertices(session)
+        });
+        pipeline.upload_overlay(device, queue, &overlay);
         let _ = device.poll(wgpu::PollType::Poll);
         if let Some(error) = pipeline.gpu_error() {
             self.handle.set_gpu_error(error);
@@ -835,6 +960,10 @@ pub struct ScenePipeline {
     pub cached_origin_offset: [f32; 3],
     pub cached_dynamic: bool,
     pub mesh_cache: Vec<(GpuMesh, Option<GpuTexture>)>,
+    /// Dynamic overlay (skeleton + motion path) vertex buffer.
+    pub skeleton_buffer: Option<wgpu::Buffer>,
+    pub skeleton_capacity: usize,
+    pub skeleton_vertex_count: u32,
     pub prepared_this_frame: bool,
     gpu_error: Arc<Mutex<Option<String>>>,
 }
@@ -945,8 +1074,40 @@ impl ScenePipeline {
         }
     }
 
+    /// Upload the diagnostic overlay line vertices (skeleton + motion
+    /// path). The buffer grows on demand and is reused while it fits.
+    pub fn upload_overlay(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[SkeletonVertex],
+    ) {
+        self.skeleton_vertex_count = vertices.len() as u32;
+        if vertices.is_empty() {
+            return;
+        }
+        let bytes = bytemuck::cast_slice(vertices);
+        if let Some(buffer) = &self.skeleton_buffer
+            && self.skeleton_capacity >= vertices.len()
+        {
+            queue.write_buffer(buffer, 0, bytes);
+            return;
+        }
+        use wgpu::util::DeviceExt;
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("imgeditor-scene3d/skeleton"),
+            contents: bytes,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+        self.skeleton_buffer = Some(buffer);
+        self.skeleton_capacity = vertices.len();
+    }
+
     fn release_scene_resources(&mut self) {
         self.mesh_cache.clear();
+        self.skeleton_buffer = None;
+        self.skeleton_capacity = 0;
+        self.skeleton_vertex_count = 0;
         self.cached_signature = 0;
         self.cached_scene_ptr = 0;
         self.cached_flags_bits = u32::MAX;
@@ -1098,6 +1259,16 @@ impl ScenePipeline {
             }
         }
 
+        // 4b. skeleton / motion-path overlay (depth-tested, no depth write).
+        if self.skeleton_vertex_count > 0
+            && let Some(buffer) = &self.skeleton_buffer
+        {
+            pass.set_pipeline(&self.render_pipelines.skeleton);
+            pass.set_bind_group(0, &self.render_pipelines.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..self.skeleton_vertex_count, 0..1);
+        }
+
         if flags.contains(RenderFlags::SHOW_NAVIGATION) {
             // 5. source-coordinate navigation overlay in the top-right.
             pass.set_pipeline(&self.render_pipelines.gizmo);
@@ -1203,6 +1374,9 @@ impl PrimitivePipeline for ScenePipeline {
             cached_origin_offset: [0.0; 3],
             cached_dynamic: false,
             mesh_cache: Vec::new(),
+            skeleton_buffer: None,
+            skeleton_capacity: 0,
+            skeleton_vertex_count: 0,
             prepared_this_frame: false,
             gpu_error: register_gpu_error_handlers(device),
         }
@@ -1413,6 +1587,38 @@ mod tests {
         let h = SceneHandle::new();
         h.clear();
         assert!(h.with(|i| i.scene.is_none()));
+    }
+
+    #[test]
+    fn install_session_frames_rest_advances_and_clears() {
+        let h = SceneHandle::new();
+        let (model, library) = crate::inspector::animation::fixtures::demo();
+        h.install_animation_session(Arc::new(model), Arc::new(library), true, Instant::now());
+        assert!(h.has_animation_session());
+        assert!(h.with(|inner| inner.scene.is_some()));
+        let before = h
+            .animation_session(|session| session.pose.revision)
+            .unwrap();
+        h.with_animation_session_mut(|session| session.play(Instant::now()));
+        h.advance_animation(Instant::now() + std::time::Duration::from_millis(400));
+        let after = h
+            .animation_session(|session| session.pose.revision)
+            .unwrap();
+        assert!(after > before, "advance must re-evaluate the pose");
+        h.clear();
+        assert!(!h.has_animation_session());
+    }
+
+    #[test]
+    fn framing_current_pose_keeps_view_direction() {
+        let h = SceneHandle::new();
+        let (model, library) = crate::inspector::animation::fixtures::demo();
+        h.install_animation_session(Arc::new(model), Arc::new(library), true, Instant::now());
+        let (yaw, pitch) = h.with(|inner| (inner.camera.yaw, inner.camera.pitch));
+        h.frame_animation_current();
+        h.frame_animation_motion();
+        let (yaw_after, pitch_after) = h.with(|inner| (inner.camera.yaw, inner.camera.pitch));
+        assert_eq!((yaw, pitch), (yaw_after, pitch_after));
     }
 
     #[test]

@@ -31,7 +31,9 @@ use std::sync::{Arc, Mutex};
 use bytemuck::{Pod, Zeroable};
 
 use crate::inspector::scene3d::camera::OrbitCamera;
-use crate::inspector::scene3d::mesh::{SceneMesh, SceneTexture, VERTEX_STRIDE, Vertex};
+use crate::inspector::scene3d::mesh::{
+    SKELETON_VERTEX_STRIDE, SceneMesh, SceneTexture, VERTEX_STRIDE, Vertex,
+};
 use crate::inspector::scene3d::scene::{MAX_VIEWPORT_PIXELS, Scene, validate_scene_data};
 
 #[repr(C)]
@@ -83,6 +85,7 @@ pub const WIREFRAME_WGSL: &str = include_str!("shaders/wireframe.wgsl");
 pub const COMPOSITOR_WGSL: &str = include_str!("shaders/compositor.wgsl");
 pub const GRID_WGSL: &str = include_str!("shaders/grid.wgsl");
 pub const GIZMO_WGSL: &str = include_str!("shaders/gizmo.wgsl");
+pub const SKELETON_WGSL: &str = include_str!("shaders/skeleton.wgsl");
 
 pub fn lit_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -116,6 +119,13 @@ pub fn gizmo_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("imgeditor-scene3d/gizmo"),
         source: wgpu::ShaderSource::Wgsl(GIZMO_WGSL.into()),
+    })
+}
+
+pub fn skeleton_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("imgeditor-scene3d/skeleton"),
+        source: wgpu::ShaderSource::Wgsl(SKELETON_WGSL.into()),
     })
 }
 
@@ -359,12 +369,32 @@ pub fn vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
+/// Vertex layout for [`SkeletonVertex`](crate::inspector::scene3d::mesh::SkeletonVertex):
+/// position (`Float32x3`) + RGBA colour (`Float32x4`).
+pub fn skeleton_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: SKELETON_VERTEX_STRIDE as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: 12,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+        ],
+    }
+}
+
 pub struct GpuTexture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub bind_group: wgpu::BindGroup,
 }
-
 impl GpuTexture {
     pub fn from_scene_texture(
         device: &wgpu::Device,
@@ -517,6 +547,8 @@ pub struct ScenePipelines {
     pub wireframe: wgpu::RenderPipeline,
     pub grid: wgpu::RenderPipeline,
     pub gizmo: wgpu::RenderPipeline,
+    /// Unlit coloured line-list pipeline for skeleton/motion-path overlays.
+    pub skeleton: wgpu::RenderPipeline,
     pub compositor: wgpu::RenderPipeline,
     pub camera_layout: wgpu::BindGroupLayout,
     pub texture_layout: wgpu::BindGroupLayout,
@@ -549,6 +581,7 @@ impl ScenePipelines {
         let compositor_module = compositor_shader_module(device);
         let grid_module = grid_shader_module(device);
         let gizmo_module = gizmo_shader_module(device);
+        let skeleton_module = skeleton_shader_module(device);
 
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("imgeditor-scene3d/camera_layout"),
@@ -901,6 +934,53 @@ impl ScenePipelines {
             cache: None,
         });
 
+        let skeleton = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("imgeditor-scene3d/skeleton_pipeline"),
+            layout: Some(&gizmo_layout),
+            vertex: wgpu::VertexState {
+                module: &skeleton_module,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[skeleton_vertex_layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &skeleton_module,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: scene_color_format(),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            // Depth-tested so bones hidden behind geometry stay occluded;
+            // depth writes are disabled so the overlay never disturbs the
+            // model's depth values.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format(),
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: scene_sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             lit,
             lit_cull_back,
@@ -909,6 +989,7 @@ impl ScenePipelines {
             wireframe,
             grid,
             gizmo,
+            skeleton,
             compositor,
             camera_layout,
             texture_layout,

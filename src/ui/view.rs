@@ -96,6 +96,7 @@ struct DockData {
     in_place: bool,
     follow_root: bool,
     show_skeleton: bool,
+    show_motion_path: bool,
     shown: f64,
     duration: f64,
     frame: u64,
@@ -999,6 +1000,7 @@ impl App {
             in_place: session.root_policy == RootMotionPolicy::InPlace,
             follow_root: session.panel.follow_root,
             show_skeleton: session.panel.show_skeleton,
+            show_motion_path: session.panel.show_motion_path,
             shown: session.transport.shown_time(),
             duration: session.transport.duration(),
             frame: session.transport.shown_frame(),
@@ -1122,6 +1124,20 @@ impl App {
         )));
         transport = transport.push(Space::new().width(Length::Fill));
 
+        let frame_button = |label: &'static str, message: Message| {
+            button(fonts::caption(label))
+                .on_press_maybe(enabled.then_some(message))
+                .height(Length::Fixed(24.0))
+        };
+        let framing = row![
+            fonts::caption("Frame:"),
+            frame_button("Rest", Message::AnimationFrameRest),
+            frame_button("Pose", Message::AnimationFramePose),
+            frame_button("Motion", Message::AnimationFrameMotion),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
+
         let mut toggles = Row::new().spacing(12).align_y(Alignment::Center);
         toggles = toggles.push(
             checkbox(data.in_place)
@@ -1147,12 +1163,19 @@ impl App {
                 .text_size(12.0)
                 .on_toggle(Message::AnimationToggleSkeleton),
         );
+        toggles = toggles.push(
+            checkbox(data.show_motion_path)
+                .label("Motion path")
+                .text_size(12.0)
+                .on_toggle(Message::AnimationToggleMotionPath),
+        );
 
         let timeline = crate::ui::animation_timeline::timeline(self.viewer3d_handle.clone());
 
         let dock = column![
             row1.wrap(),
             transport,
+            framing,
             timeline,
             toggles.wrap(),
             fonts::caption("Space play/pause · ←/→ step · Home/End range ends · drag to scrub"),

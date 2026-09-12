@@ -11,6 +11,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::inspector::scene3d::camera::{OrbitCamera, Viewport};
+use crate::inspector::scene3d::mesh::SkeletonVertex;
 use crate::inspector::scene3d::pipeline::{self, GpuMesh, GpuTexture, RenderFlags, ScenePipelines};
 use crate::inspector::scene3d::scene::Scene;
 
@@ -96,6 +97,32 @@ pub fn render_frame(
     width: u32,
     height: u32,
     flags: RenderFlags,
+) -> Result<RenderedFrame, String> {
+    render_frame_impl(renderer, scene, camera, width, height, flags, &[])
+}
+
+/// Render one frame including diagnostic overlay line vertices (skeleton
+/// and motion path), drawn depth-tested over the model.
+pub fn render_frame_overlay(
+    renderer: &HeadlessRenderer,
+    scene: &Scene,
+    camera: &OrbitCamera,
+    width: u32,
+    height: u32,
+    flags: RenderFlags,
+    overlay: &[SkeletonVertex],
+) -> Result<RenderedFrame, String> {
+    render_frame_impl(renderer, scene, camera, width, height, flags, overlay)
+}
+
+fn render_frame_impl(
+    renderer: &HeadlessRenderer,
+    scene: &Scene,
+    camera: &OrbitCamera,
+    width: u32,
+    height: u32,
+    flags: RenderFlags,
+    overlay: &[SkeletonVertex],
 ) -> Result<RenderedFrame, String> {
     let device = &renderer.device;
     let queue = &renderer.queue;
@@ -253,6 +280,19 @@ pub fn render_frame(
                 );
                 pass.draw_indexed(0..gpu_mesh.wire_index_count, 0, 0..1);
             }
+        }
+
+        if !overlay.is_empty() {
+            use wgpu::util::DeviceExt;
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("imgeditor-scene3d-headless/overlay"),
+                contents: bytemuck::cast_slice(overlay),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            pass.set_pipeline(&pipelines.skeleton);
+            pass.set_bind_group(0, &pipelines.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..overlay.len() as u32, 0..1);
         }
 
         if flags.contains(RenderFlags::SHOW_NAVIGATION) {
@@ -427,6 +467,51 @@ mod tests {
     }
 
     #[test]
+    fn overlay_lines_render_over_an_empty_scene() {
+        let renderer = gpu().expect("renderer");
+        let mut scene = triangle_scene();
+        scene.meshes.clear();
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 128,
+            height: 128,
+        });
+        camera.reset_to_aabb(&scene.aabb);
+        let low = glam::Vec3::from(scene.aabb.min);
+        let high = glam::Vec3::from(scene.aabb.max);
+        let overlay = vec![
+            SkeletonVertex {
+                position: low.to_array(),
+                color: [1.0, 0.2, 0.1, 1.0],
+            },
+            SkeletonVertex {
+                position: high.to_array(),
+                color: [1.0, 0.2, 0.1, 1.0],
+            },
+        ];
+        let base =
+            render_frame(&renderer, &scene, &camera, 128, 128, RenderFlags::empty()).expect("base");
+        let with = render_frame_overlay(
+            &renderer,
+            &scene,
+            &camera,
+            128,
+            128,
+            RenderFlags::empty(),
+            &overlay,
+        )
+        .expect("overlay");
+        assert_ne!(
+            base.rgba, with.rgba,
+            "overlay line must change rendered pixels"
+        );
+        let has_line = with
+            .rgba
+            .chunks_exact(4)
+            .any(|pixel| pixel[0] > 150 && pixel[0] > pixel[2] + 60);
+        assert!(has_line, "overlay line colour must be visible");
+    }
+
+    #[test]
     fn readback_strips_alignment_padding() {
         let renderer = gpu().expect("renderer");
         let scene = triangle_scene();
@@ -462,7 +547,13 @@ mod tests {
             height: 64,
         });
         camera.reset_to_aabb(&scene.aabb);
-        pipelines.update_camera(queue, &camera, scene.key_light, scene.ambient, RenderFlags::empty());
+        pipelines.update_camera(
+            queue,
+            &camera,
+            scene.key_light,
+            scene.ambient,
+            RenderFlags::empty(),
+        );
 
         let width = 64u32;
         let height = 64u32;
@@ -566,10 +657,7 @@ mod tests {
         // The triangle covers a solid chunk of the frame; count pixels
         // that differ from the pure-background corner pixel.
         let bg = &mapped[0..4];
-        let lit_pixels = mapped
-            .chunks_exact(4)
-            .filter(|px| *px != bg)
-            .count();
+        let lit_pixels = mapped.chunks_exact(4).filter(|px| *px != bg).count();
         drop(mapped);
         read_buf.unmap();
         assert!(

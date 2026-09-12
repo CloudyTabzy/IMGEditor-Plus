@@ -424,6 +424,10 @@ pub enum Message {
     AnimationToggleSkeleton(bool),
     AnimationRangeDragStart(f64),
     AnimationRangeDragEnd(f64),
+    AnimationFrameRest,
+    AnimationFramePose,
+    AnimationFrameMotion,
+    AnimationToggleMotionPath(bool),
     AutoScrollStarted,
     AutoScrollEnded,
     /// Escape ends autoscroll and dismisses the search prediction dropdown.
@@ -4956,6 +4960,23 @@ impl App {
                     let end = time.max(start + 1e-3);
                     session.set_range(now, start, end);
                 });
+                Task::none()
+            }
+            Message::AnimationFrameRest => {
+                self.viewer3d_handle.frame_animation_rest();
+                Task::none()
+            }
+            Message::AnimationFramePose => {
+                self.viewer3d_handle.frame_animation_current();
+                Task::none()
+            }
+            Message::AnimationFrameMotion => {
+                self.viewer3d_handle.frame_animation_motion();
+                Task::none()
+            }
+            Message::AnimationToggleMotionPath(value) => {
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.panel.show_motion_path = value);
                 Task::none()
             }
             Message::PaneResized(event) => {

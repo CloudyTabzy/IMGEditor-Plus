@@ -375,6 +375,7 @@ pub fn clip_envelope(
     range: (f32, f32),
     samples: usize,
     root_policy: RootMotionPolicy,
+    display_offset: Vec3,
 ) -> Option<Aabb> {
     let (start, end) = range;
     if !start.is_finite() || !end.is_finite() || start > end {
@@ -390,7 +391,7 @@ pub fn clip_envelope(
             start + (end - start) * (step as f32 / (samples - 1) as f32)
         };
         sample_locals(clip, binding, model, t, &mut buffers.locals);
-        evaluate_pose(model, root_policy, Vec3::ZERO, &mut buffers);
+        evaluate_pose(model, root_policy, display_offset, &mut buffers);
         if let Some(bounds) = buffers.posed_bounds {
             envelope = Some(match envelope {
                 Some(acc) => acc.merged(bounds),
@@ -537,6 +538,7 @@ mod tests {
             (0.0, clip.duration),
             16,
             RootMotionPolicy::Source,
+            Vec3::ZERO,
         )
         .unwrap();
         assert!(envelope.max[2] >= 1.4, "envelope must reach travel end");

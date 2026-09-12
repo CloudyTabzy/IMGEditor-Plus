@@ -12,6 +12,8 @@ use bytemuck::{Pod, Zeroable};
 
 /// Number of bytes per vertex. Position (12) + normal (12) + uv (8).
 pub const VERTEX_STRIDE: usize = 32;
+/// Number of bytes per skeleton/overlay vertex. Position (12) + RGBA (16).
+pub const SKELETON_VERTEX_STRIDE: usize = 28;
 const MAX_TEXTURE_DIMENSION: u32 = 8_192;
 
 /// Interleaved vertex format used by every mesh in the viewer.
@@ -32,6 +34,21 @@ pub struct Vertex {
 // padding; the struct is exactly 8 floats long (32 bytes).
 unsafe impl Pod for Vertex {}
 unsafe impl Zeroable for Vertex {}
+
+/// A coloured line-list vertex used by diagnostic overlays (skeleton,
+/// motion path). Kept separate from [`Vertex`] because overlays do not
+/// participate in lighting or texturing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct SkeletonVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+}
+
+// SAFETY: `SkeletonVertex` is `#[repr(C)]` with only plain-old-data
+// fields; it is exactly 7 floats (28 bytes) with no implicit padding.
+unsafe impl Pod for SkeletonVertex {}
+unsafe impl Zeroable for SkeletonVertex {}
 
 /// Axis-aligned bounding box. The render pipeline uses `extent` to size
 /// the orbit camera's initial distance and the bounding-sphere radius to
