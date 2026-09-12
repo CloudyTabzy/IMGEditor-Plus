@@ -110,6 +110,19 @@ pub const ABOUT_TEXT: &str = concat!(
     "- Bully Scholarship Edition"
 );
 
+/// Short, session-stable tips shown in the empty workspace. These point to
+/// useful features that are easy to miss without opening an archive first.
+pub(crate) const EMPTY_STATE_PRO_TIPS: [&str; 8] = [
+    "Press Ctrl+F to focus Search, then use Up/Down and Enter to jump to a match.",
+    "Search predictions reveal a match in its archive context; View → Search selection context enables isolated results.",
+    "Right-click an entry for 3D view, textures, export, rename, and other actions.",
+    "Middle-click the entry list for Firefox-style autoscroll; optional momentum is under View.",
+    "Press 1, 2, or 3 to switch to Export, 3D view, or Texture.",
+    "Middle-click an archive tab to close it quickly.",
+    "Texture UV overlays are available when the selected model supplies matching geometry.",
+    "In 3D view, Wire overlay exposes triangle edges and Grid floor helps judge scale.",
+];
+
 /// Optional inertia layered after Iced's native autoscroll settles in its
 /// neutral zone. It deliberately stores one sampled velocity rather than an
 /// accumulating multiplier, so a long hold at the screen edge cannot run away.
@@ -1132,6 +1145,8 @@ pub struct App {
     pub(crate) shimmer_phase: f32,
     /// Repeating 0..1 clock for the empty-state idle animation.
     pub(crate) empty_state_phase: f32,
+    /// Session-stable random tip shown while the workspace has no archives.
+    pub(crate) empty_state_tip_index: usize,
     /// Decoded 3D scenes keyed by (archive file name, archive generation,
     /// entry index). Lets the viewer restore a previously loaded model
     /// instantly instead of re-reading + re-parsing the NIF. Memory bound
@@ -1200,6 +1215,10 @@ impl Default for App {
 impl App {
     pub fn new(config: Config) -> Self {
         let show_welcome = !config.first_run_complete;
+        let empty_state_tip_index = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| (duration.as_nanos() % EMPTY_STATE_PRO_TIPS.len() as u128) as usize)
+            .unwrap_or_default();
         let mut editor = Editor::new();
         editor.set_default_sort_chain(config.default_sort_chain.clone());
         editor.file_type_literal = config.literal_file_types;
@@ -1297,6 +1316,7 @@ impl App {
             toast_reveal_fading: false,
             shimmer_phase: 0.0,
             empty_state_phase: 0.0,
+            empty_state_tip_index,
             selected_inspector_tab: InspectorTab::Export,
             viewer3d_handle,
             scene_cache: std::sync::Arc::new(quick_cache::sync::Cache::with(
@@ -6461,27 +6481,6 @@ impl App {
         // The View menu contains application-wide interaction preferences.
         let view_toggle = |on: bool| if on { "● " } else { "○ " };
         let view_menu = Menu::new(vec![
-            Item::new(menu_button(
-                format!(
-                    "Go to export tab ({})",
-                    shortcut_display(Shortcut::SwitchTab(InspectorTab::Export))
-                ),
-                Message::Viewer3dSelectTab(InspectorTab::Export),
-            )),
-            Item::new(menu_button(
-                format!(
-                    "Go to 3D viewer ({})",
-                    shortcut_display(Shortcut::SwitchTab(InspectorTab::Model3D))
-                ),
-                Message::Viewer3dSelectTab(InspectorTab::Model3D),
-            )),
-            Item::new(menu_button(
-                format!(
-                    "Go to texture viewer ({})",
-                    shortcut_display(Shortcut::SwitchTab(InspectorTab::Texture))
-                ),
-                Message::Viewer3dSelectTab(InspectorTab::Texture),
-            )),
             Item::new(menu_button(
                 format!(
                     "{}Navigation gizmo",

@@ -1807,6 +1807,8 @@ pub fn build(app: &App) -> Element<'_, Message> {
     let tab_surface = design.chrome();
     let page_bg = design.page();
     let empty_state_accent = design.accent();
+    let empty_state_surface = design.surface_subtle();
+    let empty_state_text = design.text();
     let menubar = app.menubar();
     let toolbar = build_toolbar(design.accent(), design.chrome(), design.divider());
 
@@ -1932,6 +1934,34 @@ pub fn build(app: &App) -> Element<'_, Message> {
         } else {
             icons::archive().size(42).color(empty_state_accent).into()
         };
+        let pro_tip = crate::ui::app::EMPTY_STATE_PRO_TIPS
+            .get(app.empty_state_tip_index)
+            .copied()
+            .unwrap_or(crate::ui::app::EMPTY_STATE_PRO_TIPS[0]);
+        let pro_tip = container(
+            column![
+                fonts::strong("Pro tip:"),
+                fonts::body_wrapped(pro_tip).align_x(iced::alignment::Horizontal::Center),
+            ]
+            .spacing(4)
+            .width(Length::Fill)
+            .align_x(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .max_width(720.0)
+        .padding([10, 16])
+        .style(move |_| iced::widget::container::Style {
+            background: Some(iced::Background::Color(
+                empty_state_surface.scale_alpha(0.72),
+            )),
+            text_color: Some(empty_state_text),
+            border: Border {
+                color: empty_state_accent.scale_alpha(0.38),
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        });
         Container::new(
             column![
                 Space::new().height(Length::Fill),
@@ -1940,6 +1970,8 @@ pub fn build(app: &App) -> Element<'_, Message> {
                 fonts::display("Open or create an archive to get started."),
                 Space::new().height(Length::Fixed(8.0)),
                 fonts::caption("Or drag and drop an .img or .dir file here to open it."),
+                Space::new().height(Length::Fixed(18.0)),
+                pro_tip,
                 Space::new().height(Length::Fill),
             ]
             .align_x(Alignment::Center),
