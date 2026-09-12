@@ -605,4 +605,52 @@ mod tests {
             "fade completion releases the outgoing snapshot"
         );
     }
+
+    #[test]
+    fn full_playback_lifecycle_stays_consistent() {
+        let mut session = demo_session();
+        let t0 = Instant::now();
+
+        session.play(t0);
+        assert!(session.is_playing());
+        let r0 = session.pose.revision;
+        session.advance(t0 + Duration::from_millis(200));
+        assert!(session.pose.revision > r0, "playing advances the pose");
+
+        // Tab/modal suspension freezes the clock and remembers intent.
+        session.suspend(t0 + Duration::from_millis(200));
+        assert!(matches!(
+            session.state(),
+            PlaybackState::Suspended { was_playing: true }
+        ));
+        let frozen = session.pose.revision;
+        session.advance(t0 + Duration::from_millis(5000));
+        assert_eq!(
+            session.pose.revision, frozen,
+            "a suspended transport must not advance"
+        );
+        session.resume(t0 + Duration::from_millis(5100));
+        assert!(session.is_playing());
+        session.advance(t0 + Duration::from_millis(5300));
+        assert!(
+            session.pose.revision > frozen,
+            "resume rebases and advances"
+        );
+
+        // Scrub owns the time and resumes playback on release.
+        session.begin_scrub(t0 + Duration::from_millis(5300));
+        session.scrub_to(t0 + Duration::from_millis(5300), 1.0);
+        assert_eq!(session.transport.shown_time(), 1.0);
+        session.end_scrub(t0 + Duration::from_millis(5400));
+        assert!(session.is_playing(), "scrub during playback resumes");
+
+        // Repeat mode wraps instead of running past the clip end.
+        session.seek(t0 + Duration::from_millis(5400), 1.95);
+        session.advance(t0 + Duration::from_millis(5700));
+        assert!(session.transport.shown_time() < 2.0);
+
+        session.stop(t0 + Duration::from_millis(5700));
+        assert!(matches!(session.state(), PlaybackState::Paused));
+        assert_eq!(session.transport.shown_time(), 0.0);
+    }
 }

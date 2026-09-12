@@ -3,10 +3,12 @@
 Last shipped: **v4.5.0** (Asset Compatibility Engine: corpus-verified validator,
 texture converter, and save-side repair).
 
-Next phase: **DFF/NIF model profiles (Phase D)** plus the remaining
-compatibility and asset-hardening items below. The shipped compatibility-engine
-details are recorded in the release notes and the dedicated documents under
-`docs/`.
+Next phase: **Shared animation viewer infrastructure (AV0–AV7)**, preparing
+for **Bully AGR/CAT resource inspection and playback (Phase E)** and later
+GTA animation adapters. The remaining
+**DFF/NIF model profiles (Phase D)** and compatibility/asset-hardening items
+are tracked below. The shipped compatibility-engine details are recorded in
+the release notes and the dedicated documents under `docs/`.
 
 Shipped in v4.5.0 (previously listed here as unreleased):
 
@@ -116,6 +118,84 @@ Recommended future adaptations, each gated by representative fixtures:
 The current PC inspection path should remain the safe default: unsupported
 platform payloads must be reported clearly rather than guessed into malformed
 geometry or colors.
+
+## 3A. Shared animation viewer infrastructure (planned — AV phases)
+
+Detailed local-only design: `docs/animation-viewer-infrastructure-plan.md`
+(ignored from Git). Build and validate the player with synthetic assets before
+depending on AGR/CAT semantics. The same runtime should accept future GTA
+DFF/IFP adapters. AV0–AV7 are implemented against the synthetic fixtures; AV8
+and AV9 remain pending.
+
+- [x] **AV0 contracts and baselines** — specify coordinate/time/target identity
+  rules, analytical rigid/skinned fixtures, and current static preview baselines.
+- [x] **AV1 persistent sessions** — separate immutable assets from instance
+  pose/camera state; add explicit resource/pose revisions and dependency/request
+  tokens without per-frame scene reloads or stale completions.
+- [x] **AV2 hierarchy and rigid motion** — retain nodes and mesh attachments;
+  bridge existing flattened NIF/DFF/COL scenes with unchanged static output.
+- [x] **AV3 sampler and transport** — deterministic clip sampling, play/pause,
+  seek/step/range/loop/speed, compact timeline and viewer-driven redraws independent
+  of decorative UI animation/toast timing.
+- [x] **AV4 reference skinning** — validated mesh/rig bindings, full-influence CPU
+  deformation and reusable dynamic vertex buffers; solid and wire render the
+  same pose without re-uploading textures or topology.
+- [x] **AV5 framing and overlays** — rest/current/clip framing, posed bounds,
+  root-motion/in-place/follow policies, skeleton and motion-path diagnostics.
+- [x] **AV6 action previews** — compatible clip switching, optional crossfade,
+  finite preview sequences and markers; expose unresolved game conditions.
+- [x] **AV7 integrated readiness** — verify notifications/scroll, focus/modal
+  suspension, scrubbing, resize, archive mutation, cache eviction, bounded
+  resource use and performance; hand off a debug synthetic demo for GUI testing.
+- [ ] **AV8 GPU skinning (optional)** — optimize only after profiling; maintain
+  CPU/GPU parity, device-limit checks and a supported fallback.
+- [ ] **AV9 real format adapters** — connect verified Bully clips/rigs/actions,
+  then GTA frame/skin/HAnim/IFP data with separate corpus acceptance gates.
+
+AV0–AV7 establish the shared player; AV8 is not a prerequisite for real-file
+work. Bully E0–E4 may proceed alongside it; E5 consumes the verified runtime.
+LIP/audio sync, animation authoring and retargeting remain later work.
+
+## 3B. Bully animation/action/script resources (planned — Phase E)
+
+The detailed design is kept in the local-only
+`docs/bully-agr-cat-lip-lur-roadmap.md` roadmap (ignored from Git); this compact
+checklist is tracked here. AGR and CAT are the first deliverable, LIP is
+deliberately deferred, and LUR will eventually receive a dedicated read-only
+Script tab rather than being forced into the 3D or texture viewers.
+
+- [ ] **E0 corpus profiler and fixtures** — inventory AGR/CAT/LIP/LUR/HXD
+  samples from the installed Bully layout, record hashes and byte-order
+  hypotheses, and keep legally obtained fixtures outside Git.
+- [ ] **E1 resource detection and metadata** — classify the four extensions by
+  validated signatures/structure plus archive context; show size, source,
+  confidence, and unsupported/rejected reasons in the inspector.
+- [ ] **E2 AGR structural parser** — add bounded, testable parsing for headers,
+  groups/clips, timing, tracks, and references only as each field is proven.
+- [ ] **E3 CAT action-tree parser** — expose action nodes, paths, parent/child
+  relationships, and raw offsets; preserve unknown bytes and avoid guessed
+  serializers.
+- [ ] **E4 AGR/CAT relationship resolver** — connect logical action names to
+  AGR clips and compatible NIF/NFT/rig candidates with evidence-labelled links.
+- [ ] **E5 animation inspector and playback proof** — play one validated AGR
+  clip on one matched Bully model through the shared AV runtime and animation
+  dock; prove the source rig/bind/timing semantics without duplicating transport,
+  camera or interpolation infrastructure.
+- [ ] **E6 LIP structural inspection (deferred)** — inspect the record table
+  and Speech.bin references only after AGR/CAT are stable; do not claim audio
+  decoding or editing until payload semantics are verified.
+- [ ] **E7 LUR Script tab (future)** — add a read-only Lua 5.0-era bytecode
+  header/prototype/constant/instruction inspector; never execute untrusted LUR
+  chunks in the editor.
+- [ ] **E8 dependency-aware cache and invalidation** — key parsed resource
+  summaries and resolved previews by archive identity, generation, entry, and
+  parser profile; invalidate dependent AGR/CAT/model views after moves or
+  mutations.
+- [ ] **E9 regression and compatibility gates** — add synthetic truncation,
+  count/offset overflow, endian, alias-resolution, and cross-resource tests;
+  validate against representative World, Act, Scripts, and Anim samples.
+- [ ] **E10 editing decision** — keep all four formats read-only until a
+  lossless round-trip contract exists for each format and its dependencies.
 
 ## 4. Other game formats (deferred)
 
