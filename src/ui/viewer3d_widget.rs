@@ -779,7 +779,7 @@ impl primitive::Primitive for ScenePrimitive {
         target: &wgpu::TextureView,
         clip_bounds: &Rectangle<u32>,
     ) {
-        let (scene, camera, flags, gpu_error) = self.handle.with(|i| {
+        let (scene, camera, mut flags, gpu_error) = self.handle.with(|i| {
             (
                 i.scene.clone(),
                 i.camera.clone(),
@@ -789,6 +789,15 @@ impl primitive::Primitive for ScenePrimitive {
         });
         if gpu_error || pipeline.gpu_error().is_some() {
             return;
+        }
+        // A pose with a mirrored node inverts triangle winding, so backface
+        // culling would hide the model; never cull a mirrored pose.
+        if self
+            .handle
+            .animation_session(|session| session.pose.mirrored)
+            .unwrap_or(false)
+        {
+            flags.remove(RenderFlags::CULL_BACK);
         }
         let Some(scene) = scene else { return };
         // First pass: render the model into the offscreen color target.
