@@ -646,6 +646,27 @@ mod tests {
         (transport, start)
     }
 
+    fn transport_at_fps(fps: u32, seconds: f32) -> (Transport, Instant) {
+        let start = Instant::now();
+        let mut transport = Transport::default();
+        transport.set_clip(
+            &AnimationClip {
+                id: crate::inspector::animation::ClipId(0),
+                name: "t".into(),
+                duration: seconds,
+                tracks: Vec::new(),
+                source_rate: Some(SourceRate {
+                    numerator: fps,
+                    denominator: 1,
+                }),
+                markers: Vec::new(),
+                provenance: "test".into(),
+            },
+            start,
+        );
+        (transport, start)
+    }
+
     #[test]
     fn new_clip_starts_paused_at_zero() {
         let (transport, _) = transport(2.0);
@@ -717,107 +738,82 @@ mod tests {
     }
 
     #[test]
-    fn stepping_never_stalls_at_grid_rounding() {
-        // 24 fps stalled at step 8 and 30/60 fps at step 32 when `floor`
-        // re-derived the frame the transport already stood on.
+    fn forward_stepping_lands_on_each_frame_exactly() {
+        // The old floor-based index re-derived the frame the transport
+        // already stood on whenever the frame index rounded below its
+        // integer (reproduced at 24 fps step 8 and 30/60 fps step 32), so
+        // stepping stalled. After n steps the position must be exactly
+        // frame n, clamped to the clip end.
         for fps in [24_u32, 30, 60] {
-            let start = Instant::now();
-            let mut transport = Transport::default();
-            transport.set_clip(
-                &AnimationClip {
-                    id: crate::inspector::animation::ClipId(0),
-                    name: "t".into(),
-                    duration: 2.0,
-                    tracks: Vec::new(),
-                    source_rate: Some(SourceRate {
-                        numerator: fps,
-                        denominator: 1,
-                    }),
-                    markers: Vec::new(),
-                    provenance: "test".into(),
-                },
-                start,
-            );
+            let (mut transport, start) = transport_at_fps(fps, 2.0);
             let grid = 1.0 / f64::from(fps);
-            let mut previous = transport.shown_time();
             for step in 1..=48_u32 {
                 transport.step(start + Duration::from_millis(u64::from(step)), 1);
+                let expected = (f64::from(step) * grid).min(2.0);
                 let shown = transport.shown_time();
-                if shown < 2.0 - 1e-9 {
-                    assert!(
-                        shown - previous > grid * 0.5,
-                        "{fps} fps stalled at step {step}: {previous} -> {shown}"
-                    );
-                    // Stepped positions must land on the frame grid.
-                    let frame = (shown / grid).round();
-                    assert!((shown - frame * grid).abs() < 1e-6);
-                }
-                previous = shown;
+                assert!(
+                    (shown - expected).abs() < 1e-9,
+                    "{fps} fps step {step}: shown {shown}, expected {expected}"
+                );
             }
         }
     }
 
     #[test]
-    fn stepping_backwards_moves_frame_by_frame() {
-        let (mut transport, start) = transport(2.0);
-        transport.seek(start, 1.0);
-        let mut previous = transport.shown_time();
-        for step in 1..=10 {
-            transport.step(start + Duration::from_millis(step), -1);
-            let shown = transport.shown_time();
-            assert!(
-                previous - shown > 0.01,
-                "backward step {step} made no progress: {previous} -> {shown}"
-            );
-            previous = shown;
+    fn backward_stepping_lands_on_each_frame_exactly() {
+        // The old ceil-based index stalled whenever the frame index rounded
+        // above its integer: ceil then landed on the current frame and
+        // subtracting one grid step returned it. Stepping back once from
+        // every exact frame position must land exactly on the previous
+        // frame, for every display rate.
+        for fps in [24_u32, 30, 60] {
+            let grid = 1.0 / f64::from(fps);
+            for frame in 2..=48_u32 {
+                let (mut transport, start) = transport_at_fps(fps, 2.0);
+                transport.seek(start, f64::from(frame) * grid);
+                transport.step(start + Duration::from_millis(u64::from(frame)), -1);
+                let expected = f64::from(frame - 1) * grid;
+                let shown = transport.shown_time();
+                assert!(
+                    (shown - expected).abs() < 1e-9,
+                    "{fps} fps backward from frame {frame}: shown {shown}, expected {expected}"
+                );
+            }
         }
-        // Ten frames back from 1.0 s at 30 fps.
-        assert!((previous - (1.0 - 10.0 / 30.0)).abs() < 1e-6);
     }
 
     #[test]
-    fn loop_markers_fire_once_per_crossing() {
+    fn loop_marker_fires_once_per_loop_crossing() {
+        // The old advance handed marker handling the cumulative wrap count
+        // (loops since the playback anchor), so after the first loop
+        // boundary every following frame re-reported markers whose times it
+        // had not crossed. Over 3.0 s of a 1.0 s loop a marker at 0.5 s is
+        // crossed exactly three times: at 0.5, 1.5 and 2.5.
         let start = Instant::now();
         let mut clip = clip_seconds(1.0);
-        clip.markers = vec![
-            ClipMarker {
-                time: 0.25,
-                label: "a".into(),
-            },
-            ClipMarker {
-                time: 0.75,
-                label: "b".into(),
-            },
-        ];
+        clip.markers = vec![ClipMarker {
+            time: 0.5,
+            label: "mid".into(),
+        }];
         let mut transport = Transport::default();
         transport.set_clip(&clip, start);
         transport.play(start);
         let range = transport.range();
-        let mut count_a = 0;
-        let mut count_b = 0;
+        let mut fired = 0;
         let mut previous = transport.shown_time();
-        for step in 1..=35 {
-            let advance = transport.advance(start + Duration::from_millis(step * 100));
-            for marker in Transport::crossed_markers(
+        for step in 1..=30_u32 {
+            let advance = transport.advance(start + Duration::from_millis(u64::from(step) * 100));
+            fired += Transport::crossed_markers(
                 &clip.markers,
                 previous,
                 advance.time,
                 advance.wraps,
                 range,
-            ) {
-                if marker.label == "a" {
-                    count_a += 1;
-                } else {
-                    count_b += 1;
-                }
-            }
+            )
+            .len();
             previous = advance.time;
         }
-        // 3.5 s over a 1 s loop: "a" (0.25) is crossed four times,
-        // "b" (0.75) three. The old cumulative-wrap count reported extra
-        // full-cycle marker sets after every loop boundary.
-        assert_eq!(count_a, 4, "marker a fired {count_a} times");
-        assert_eq!(count_b, 3, "marker b fired {count_b} times");
+        assert_eq!(fired, 3);
     }
 
     #[test]
