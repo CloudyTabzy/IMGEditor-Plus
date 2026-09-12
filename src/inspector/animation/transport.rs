@@ -761,11 +761,12 @@ mod tests {
 
     #[test]
     fn backward_stepping_lands_on_each_frame_exactly() {
-        // The old ceil-based index stalled whenever the frame index rounded
-        // above its integer: ceil then landed on the current frame and
-        // subtracting one grid step returned it. Stepping back once from
-        // every exact frame position must land exactly on the previous
-        // frame, for every display rate.
+        // Invariant: stepping back once from any exact frame position must
+        // land exactly on the previous frame, for every display rate. This
+        // guards the on-grid branch of the frame-index snap (verified: the
+        // old ceil-based arithmetic happened to be safe for these rates, so
+        // unlike the forward test this one does not fail on the old code —
+        // it pins the contract so a future index change cannot regress it).
         for fps in [24_u32, 30, 60] {
             let grid = 1.0 / f64::from(fps);
             for frame in 2..=48_u32 {
