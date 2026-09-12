@@ -41,7 +41,7 @@ fn logo_element() -> Element<'static, Message> {
 
 /// Height (px) of a single entry row. Must stay in sync with the `height(Length::Fixed(ROW_HEIGHT))`
 /// applied in `build_entry_row`; virtualization math depends on it.
-const ROW_HEIGHT: f32 = 32.0;
+pub(crate) const ROW_HEIGHT: f32 = 32.0;
 /// Maximum accent travel used by the selected-row pulse.
 /// Peak colour travel of the selected-row pulse. Raised so the pulse
 /// reads clearly against the resting selection tint.
@@ -238,6 +238,7 @@ impl App {
             .on_scroll(|viewport| Message::ScrollOffsetChanged {
                 y: viewport.absolute_offset().y,
                 max_y: (viewport.content_bounds().height - viewport.bounds().height).max(0.0),
+                viewport_height: viewport.bounds().height,
             });
 
         // Context menu overlay sits above the scrollable but below the rest of

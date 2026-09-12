@@ -391,6 +391,7 @@ pub enum Message {
     ScrollOffsetChanged {
         y: f32,
         max_y: f32,
+        viewport_height: f32,
     },
 
     FilesDropped(PathBuf),
@@ -535,6 +536,7 @@ pub enum Message {
     ToggleClickRipple(bool),
     ToggleIconMicroMotion(bool),
     ToggleSearchBar(bool),
+    ToggleSearchSelectionContext(bool),
     ToggleLiteralFileTypes(bool),
     ToggleContextAccumulate(bool),
 
@@ -1094,6 +1096,10 @@ pub struct App {
     /// Exact vertical range reported by the native Scrollable. The optional
     /// tail uses it to clamp its virtual offset to the real viewport range.
     entry_table_max_scroll_y: f32,
+    /// Height of the entry-table viewport reported by Iced. Keeping this
+    /// alongside the maximum offset lets row-reveal operations clamp against
+    /// the newly restored list instead of a stale filtered-list range.
+    entry_table_viewport_height: f32,
     entry_table_viewport_known: bool,
     entry_table_hovered: bool,
     /// Native-autoscroll control notice shown once per session.
@@ -1269,6 +1275,7 @@ impl App {
             autoscroll: false,
             autoscroll_momentum: AutoScrollMomentum::default(),
             entry_table_max_scroll_y: 0.0,
+            entry_table_viewport_height: 0.0,
             entry_table_viewport_known: false,
             entry_table_hovered: false,
             autoscroll_notice_shown: false,
@@ -1617,9 +1624,10 @@ impl App {
         }
     }
 
-    /// Commit a prediction: adopt its full name as the query, filter to
-    /// it, select it like a row click, and scroll the table to the top
-    /// (the exact match always sorts first).
+    /// Commit a prediction. The default context mode treats the prediction as
+    /// a navigation request: restore the complete sorted list, select the
+    /// chosen entry, and reveal its row. The opt-out mode preserves the
+    /// original behavior by keeping the full filename as an active filter.
     fn commit_search_prediction(&mut self, entry_index: usize) -> Task<Message> {
         self.close_predictions();
         let Some(archive_index) = self.editor.selected_archive() else {
@@ -1634,23 +1642,58 @@ impl App {
         let Some(name) = name else {
             return Task::none();
         };
-        self.search = name;
-        self.editor.update_filtered_list(&self.search);
-        // The exact match sorts first; keep the virtual offset in sync
-        // with the scroll-to-top.
-        self.scroll_y = 0.0;
-        let click_task = self.update(Message::EntryClicked(0));
+
+        let display_row = if self.config.search_selection_context {
+            // A prediction is a navigation target, not a new persistent
+            // filter. Clearing the query makes the surrounding archive rows
+            // visible immediately and prevents the pending debounce tick
+            // from re-applying the old fuzzy query.
+            self.search.clear();
+            self.filter_pending = false;
+            self.editor.update_filtered_list("");
+            self.editor.archives()[archive_index]
+                .display_row_of(entry_index)
+                .unwrap_or(0)
+        } else {
+            self.search = name;
+            self.filter_pending = false;
+            self.editor.update_filtered_list(&self.search);
+            self.editor.archives()[archive_index]
+                .display_row_of(entry_index)
+                .unwrap_or(0)
+        };
+
+        let click_task = self.update(Message::EntryClicked(display_row));
+        let target_y = if self.config.search_selection_context {
+            let requested_y = display_row as f32 * crate::ui::view::ROW_HEIGHT;
+            if self.entry_table_viewport_known && self.entry_table_viewport_height > 0.0 {
+                let content_height = self.editor.archives()[archive_index]
+                    .selected_indices
+                    .len() as f32
+                    * crate::ui::view::ROW_HEIGHT;
+                let max_y = (content_height - self.entry_table_viewport_height).max(0.0);
+                requested_y.min(max_y)
+            } else {
+                requested_y
+            }
+        } else {
+            0.0
+        };
+        // `Scrollable` clamps this absolute operation against the real
+        // viewport. `scroll_y` is the app's virtual offset, so update it here
+        // as well; operation-driven scrolls do not emit `on_scroll`.
+        self.scroll_y = target_y;
         Task::batch(vec![
             click_task,
-            // Refocusing the text input also moves its caret to the end
-            // of the committed name (State::focus resets the cursor), so
-            // the insertion point doesn't linger at the old typed offset.
+            // Refocusing the text input resets the caret to the end of the
+            // current query (empty in context mode, the committed name in
+            // isolated mode), rather than leaving it at the old offset.
             iced::widget::operation::focus(iced::widget::Id::new(SEARCH_INPUT_ID)),
             iced::advanced::widget::operate(scroll_to(
                 iced::widget::Id::new("entry_table"),
                 AbsoluteOffset {
                     x: None,
-                    y: Some(0.0),
+                    y: Some(target_y),
                 },
             )),
         ])
@@ -4619,8 +4662,15 @@ impl App {
                 self.panes.resize(event.split, event.ratio);
                 Task::none()
             }
-            Message::ScrollOffsetChanged { y, max_y } => {
+            Message::ScrollOffsetChanged {
+                y,
+                max_y,
+                viewport_height,
+            } => {
                 self.entry_table_max_scroll_y = max_y.max(0.0);
+                if viewport_height.is_finite() && viewport_height > 0.0 {
+                    self.entry_table_viewport_height = viewport_height;
+                }
                 self.entry_table_viewport_known = true;
                 self.scroll_y = y.clamp(0.0, self.entry_table_max_scroll_y);
                 Task::none()
@@ -5166,6 +5216,12 @@ impl App {
                     self.search_focused = false;
                     self.close_predictions();
                 }
+                self.save_config();
+                Task::none()
+            }
+
+            Message::ToggleSearchSelectionContext(enabled) => {
+                self.config.search_selection_context = enabled;
                 self.save_config();
                 Task::none()
             }
@@ -6439,6 +6495,13 @@ impl App {
                     view_toggle(self.config.show_search_bar)
                 ),
                 Message::ToggleSearchBar(!self.config.show_search_bar),
+            )),
+            Item::new(menu_button(
+                format!(
+                    "{}Search selection context",
+                    view_toggle(self.config.search_selection_context)
+                ),
+                Message::ToggleSearchSelectionContext(!self.config.search_selection_context),
             )),
             Item::new(menu_button(
                 format!(
@@ -8859,9 +8922,32 @@ mod tests {
 
         // Enter commits the highlighted prediction.
         let _ = app.update(Message::SearchPredictCommit);
+        assert!(app.search.is_empty(), "navigation picks clear the temporary filter");
+        assert_eq!(app.editor.selected_entry(), Some(2));
+        let archive = &app.editor.archives()[0];
+        assert_eq!(archive.selected_indices.len(), 3, "surrounding rows remain visible");
+        let display_row = archive.display_row_of(2).expect("picked entry is visible");
+        assert_eq!(app.scroll_y, display_row as f32 * crate::ui::view::ROW_HEIGHT);
+        assert!(!app.predictions_open(), "dropdown closes after commit");
+    }
+
+    #[test]
+    fn disabling_search_selection_context_keeps_isolated_prediction_mode() {
+        let mut app = test_app_with_entries();
+        let _ = app.update(Message::ToggleSearchSelectionContext(false));
+        assert!(!app.config.search_selection_context);
+        app.editor.archives_mut()[0]
+            .entries
+            .push(EntryInfo::new("firstaid.dff"));
+
+        let _ = app.update(Message::SearchChanged("firs".to_string()));
+        let _ = app.update(Message::DebounceTick);
+        let _ = app.update(Message::SearchPredictPick(1));
+
         assert_eq!(app.search, "firstaid.dff");
         assert_eq!(app.editor.selected_entry(), Some(2));
-        assert!(!app.predictions_open(), "dropdown closes after commit");
+        assert_eq!(app.editor.archives()[0].selected_indices.len(), 1);
+        assert_eq!(app.scroll_y, 0.0);
     }
 
     #[test]
@@ -9009,6 +9095,7 @@ mod tests {
         let _ = app.update(Message::ScrollOffsetChanged {
             y: 200.0,
             max_y: 1_000.0,
+            viewport_height: 500.0,
         });
         assert!(app.autoscroll, "native scrolling must not hide its indicator");
         assert_eq!(app.scroll_y, 200.0);
@@ -9045,6 +9132,7 @@ mod tests {
         let _ = app.update(Message::ScrollOffsetChanged {
             y: start_offset,
             max_y: 10_000.0,
+            viewport_height: 500.0,
         });
         let _ = app.update(Message::PointerMoved(origin));
         let _ = app.update(Message::EntryTableHoverChanged(true));
@@ -9100,6 +9188,7 @@ mod tests {
         let _ = app.update(Message::ScrollOffsetChanged {
             y: 0.0,
             max_y: 10_000.0,
+            viewport_height: 500.0,
         });
         let _ = app.update(Message::AnimationTick(start + Duration::from_millis(100)));
         assert!(app.scroll_y > 0.0);
@@ -9112,6 +9201,7 @@ mod tests {
         let _ = app.update(Message::ScrollOffsetChanged {
             y: 400.0,
             max_y: 10_000.0,
+            viewport_height: 500.0,
         });
         let _ = app.update(Message::PointerMoved(origin));
         let _ = app.update(Message::EntryTableHoverChanged(true));

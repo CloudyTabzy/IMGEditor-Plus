@@ -83,7 +83,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 
 **v4.1.0 release highlights:**
 - ✅ **Fuzzy search** — the entry filter now matches scattered initials and partial names (`pld` → `police_car.dff`), ranks results by relevance (prefix and word-boundary hits, consecutive runs, shorter names first), and falls back to Jaro-Winkler typo matching when nothing matches (`policastr` still finds `police_car.dff`)
-- ✅ **Search prediction dropdown** — a floating overlay under the search box lists the top matches while you type; click a row or use `↑`/`↓` + `Enter` to jump straight to the entry (auto-selected with previews loaded), `Esc` dismisses, and a **"Did you mean …"** suggestion appears for near-miss queries
+- ✅ **Search prediction dropdown** — a floating overlay under the search box lists the top matches while you type; click a row or use `↑`/`↓` + `Enter` to jump straight to the entry (auto-selected with previews loaded) while keeping surrounding archive rows visible, `Esc` dismisses, and a **"Did you mean …"** suggestion appears for near-miss queries; `View → Search selection context` restores isolated-result mode when needed
 - ✅ **Hideable search bar** — `View → Search bar` toggles the strip to free vertical space for the table and info panels; hiding it clears any active filter, and `Ctrl+F` reveals and focuses it again (preference persists in `settings.ini`)
 
 **v4.0.0 release highlights:**

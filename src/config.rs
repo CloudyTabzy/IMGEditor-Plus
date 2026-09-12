@@ -252,6 +252,11 @@ pub struct Config {
     /// vertical space for the entry table and info panels; `Ctrl+F`
     /// reveals it again.
     pub show_search_bar: bool,
+    /// Keep the full archive list visible when a search prediction is
+    /// committed, selecting and revealing the chosen row in context. When
+    /// disabled, committing a prediction keeps the legacy isolated-result
+    /// behavior.
+    pub search_selection_context: bool,
     /// Type column shows raw extensions in capitals (`DFF`, `NIF`)
     /// instead of curated category labels (`Model`, `Texture`).
     pub literal_file_types: bool,
@@ -341,6 +346,7 @@ impl Default for Config {
             click_ripple_enabled: true,
             icon_micro_motion_enabled: true,
             show_search_bar: true,
+            search_selection_context: true,
             literal_file_types: false,
             context_selection_accumulates: true,
             archive_targets: Vec::new(),
@@ -540,6 +546,9 @@ impl Config {
                 "show_search_bar" => {
                     config.show_search_bar = value.eq_ignore_ascii_case("true");
                 }
+                "search_selection_context" => {
+                    config.search_selection_context = value.eq_ignore_ascii_case("true");
+                }
                 "literal_file_types" => {
                     config.literal_file_types = value.eq_ignore_ascii_case("true");
                 }
@@ -716,6 +725,15 @@ impl Config {
         )?;
         writeln!(
             file,
+            "search_selection_context={}",
+            if self.search_selection_context {
+                "true"
+            } else {
+                "false"
+            }
+        )?;
+        writeln!(
+            file,
             "literal_file_types={}",
             if self.literal_file_types {
                 "true"
@@ -805,6 +823,7 @@ mod tests {
         assert!(config.click_ripple_enabled);
         assert!(config.icon_micro_motion_enabled);
         assert!(config.show_search_bar);
+        assert!(config.search_selection_context);
         assert!(!config.literal_file_types);
         assert!(config.context_selection_accumulates);
     }
@@ -837,6 +856,7 @@ mod tests {
             click_ripple_enabled: false,
             icon_micro_motion_enabled: false,
             show_search_bar: false,
+            search_selection_context: false,
             literal_file_types: true,
             context_selection_accumulates: false,
             archive_targets: Vec::new(),
@@ -876,6 +896,7 @@ mod tests {
         assert!(!loaded.click_ripple_enabled);
         assert!(!loaded.icon_micro_motion_enabled);
         assert!(!loaded.show_search_bar);
+        assert!(!loaded.search_selection_context);
         assert!(loaded.literal_file_types);
         assert!(!loaded.context_selection_accumulates);
     }
