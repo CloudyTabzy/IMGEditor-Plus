@@ -2197,11 +2197,24 @@ impl App {
         self.show_texture_uv = false;
     }
 
+    /// Keep only the selected archive entry pinned in the texture cache.
+    /// This lets a large NFT catalog remain available to the active viewer
+    /// while allowing old previews to yield to normal cache pressure.
+    fn set_active_texture_preview_target(&self, target: Option<(usize, usize)>) {
+        for (archive_index, archive) in self.editor.archives().iter().enumerate() {
+            let entry_index = target
+                .filter(|(target_archive, _)| *target_archive == archive_index)
+                .map(|(_, entry_index)| entry_index);
+            archive.set_active_texture_preview_entry(entry_index);
+        }
+    }
+
     /// Keep the active inspector tab in sync with the selected previewable
     /// entry. This is intentionally limited to the tab the user is already
     /// viewing, so ordinary archive browsing does not unexpectedly steal
     /// focus from the export/info panel.
     fn refresh_active_preview(&mut self) -> Task<Message> {
+        self.set_active_texture_preview_target(None);
         match self.selected_inspector_tab {
             InspectorTab::Model3D => {
                 let is_model = self
@@ -2243,6 +2256,13 @@ impl App {
         };
 
         let lower = entry.file_name.to_ascii_lowercase();
+        let previewable = lower.ends_with(".nif")
+            || lower.ends_with(".dff")
+            || lower.ends_with(".txd")
+            || lower.ends_with(".nft");
+        self.set_active_texture_preview_target(
+            previewable.then_some((archive_index, entry_index)),
+        );
         self.selected_inspector_tab = InspectorTab::Texture;
         self.reset_texture_preview_state();
         if lower.ends_with(".nif") || lower.ends_with(".dff") {
@@ -2287,6 +2307,7 @@ impl App {
             return Task::none();
         };
         if !is_renderable_model_name(&entry.file_name) {
+            self.set_active_texture_preview_target(None);
             self.toast = Some(format!(
                 "In-app 3D viewer supports .nif, .dff, and .col ({}).",
                 entry.file_name
@@ -2294,6 +2315,7 @@ impl App {
             return Task::none();
         }
 
+        self.set_active_texture_preview_target(Some((archive_index, entry_index)));
         self.selected_inspector_tab = target_tab;
         let target = (archive_index, entry_index);
         let entry_name = entry.file_name.to_string();
@@ -2612,6 +2634,7 @@ impl App {
             Message::ShortcutPressed(shortcut) => self.begin_shortcut_focus_check(shortcut),
 
             Message::NewArchive => {
+                self.set_active_texture_preview_target(None);
                 self.editor.new_archive();
                 self.active_viewer_entry = None;
                 self.clear_viewer_load();
@@ -3699,6 +3722,7 @@ impl App {
             Message::SelectArchiveTab(index) => {
                 self.start_archive_tab_feedback(index);
                 self.start_click_ripple(RippleTarget::ArchiveTab(index));
+                self.set_active_texture_preview_target(None);
                 self.editor.select_archive(index);
                 self.active_viewer_entry = None;
                 self.clear_viewer_load();
@@ -4000,6 +4024,7 @@ impl App {
                     return Task::none();
                 }
                 self.editor.clear_selection();
+                self.set_active_texture_preview_target(None);
                 self.inspected_entry = None;
                 self.reset_texture_preview_state();
                 self.active_viewer_entry = None;
@@ -4226,6 +4251,7 @@ impl App {
                     let shift = self.modifiers.shift();
                     let ctrl = self.modifiers.command();
                     self.editor.select_entry(entry_index, shift, ctrl);
+                    self.set_active_texture_preview_target(None);
                     self.clear_stale_viewer_load();
                     self.reset_texture_preview_state();
                     let inspection_task = self.refresh_inspection();
@@ -4243,6 +4269,7 @@ impl App {
                 let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
                     self.editor.set_selected_entry(Some(entry_index));
                     self.editor.select_entry(entry_index, false, false);
+                    self.set_active_texture_preview_target(None);
                     self.clear_stale_viewer_load();
                     self.reset_texture_preview_state();
                     if let Some(archive) = self.editor.selected_archive_mut() {
@@ -4264,6 +4291,7 @@ impl App {
             Message::EntryRightClicked(display_row) => {
                 let task = if let Some(entry_index) = self.display_row_to_entry(display_row) {
                     self.editor.select_context_entry(entry_index);
+                    self.set_active_texture_preview_target(None);
                     self.clear_stale_viewer_load();
                     self.reset_texture_preview_state();
                     self.context_menu = Some((entry_index, display_row));
@@ -5077,9 +5105,16 @@ impl App {
                                 archive.texture_cache.insert(index, Arc::clone(&textures));
                             }
                             let count = textures.len();
+                            let retained = archive.texture_cache.contains_key(&index);
                             archive.add_log(format!("Decoded {count} texture preview(s)"));
                             if is_active {
-                                self.toast = Some(format!("Decoded {count} texture(s)"));
+                                self.toast = Some(if retained {
+                                    format!("Decoded {count} texture(s)")
+                                } else {
+                                    format!(
+                                        "Decoded {count} texture(s), but the preview could not be retained"
+                                    )
+                                });
                             }
                         }
                     }
@@ -6033,10 +6068,11 @@ impl App {
         ));
     }
 
-    fn decode_texture_entry(&self, entry_index: usize) -> Task<Message> {
+    fn decode_texture_entry(&mut self, entry_index: usize) -> Task<Message> {
         let Some(archive_index) = self.editor.selected_archive() else {
             return Task::none();
         };
+        self.set_active_texture_preview_target(Some((archive_index, entry_index)));
         let (entry_clone, archive_path, archive_entries, texture_cache) = {
             let Some(archive) = self.editor.archives().get(archive_index) else {
                 return Task::none();
@@ -8599,6 +8635,55 @@ mod tests {
             texture_cache.get_value_or_guard(&0, Some(Duration::ZERO)),
             GuardResult::Guard(_)
         ));
+    }
+
+    #[test]
+    fn oversized_bully_nft_preview_is_retained_and_reports_success_when_present() {
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let archive_path = stream.join("World.img");
+        if !archive_path.is_file() {
+            return;
+        }
+
+        let mut app = test_app();
+        let archive = ArchiveInfo::open(&archive_path).expect("World.img should open");
+        assert!(app.editor.add_opened_archive(archive));
+        let Some(entry_index) = app.editor.archives()[0]
+            .entries
+            .iter()
+            .position(|entry| entry.file_name.eq_ignore_ascii_case("ShopCars.nft"))
+        else {
+            return;
+        };
+
+        app.editor.select_entry(entry_index, false, false);
+        app.selected_inspector_tab = InspectorTab::Texture;
+        let texture_cache = Arc::clone(&app.editor.archives()[0].texture_cache);
+        let messages = drain_task(app.decode_texture_entry(entry_index));
+        assert!(matches!(
+            messages.as_slice(),
+            [Message::TextureDecoded {
+                result: Ok(_),
+                ..
+            }]
+        ));
+
+        for message in messages {
+            let _ = app.update(message);
+        }
+
+        let previews = texture_cache
+            .get(&entry_index)
+            .expect("the oversized NFT preview set should remain cached");
+        assert!(previews.len() > 1, "ShopCars should contain multiple textures");
+        let toast = app.toast.as_deref().unwrap_or_default();
+        assert!(toast.starts_with("Decoded "), "unexpected toast: {toast}");
+        assert!(
+            !toast.contains("could not be retained"),
+            "a retained preview must not report a cache failure: {toast}"
+        );
     }
 
     #[test]

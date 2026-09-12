@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use anyhow::Context;
 use compact_str::CompactString;
@@ -22,6 +22,7 @@ const TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY: u64 = 32 * 1024 * 1024;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 const TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY: u64 = 128 * 1024 * 1024;
 const TEXTURE_PREVIEW_CACHE_ITEM_CAPACITY: usize = 256;
+const NO_ACTIVE_TEXTURE_PREVIEW: usize = usize::MAX;
 
 /// Soft memory budget for the entry-inspection cache, weighted by the
 /// estimated string payload of each inspection. Inspections are small
@@ -65,6 +66,69 @@ impl quick_cache::Weighter<usize, Arc<Vec<DecodedTexture>>> for TexturePreviewWe
             .sum::<u64>()
             .max(1)
     }
+}
+
+/// Lifecycle policy for decoded texture previews.
+///
+/// `quick_cache` normally rejects a value larger than its hot allocation,
+/// even when it would fit the overall cache. NFT catalogs can legitimately
+/// contain dozens of 256/512px textures, so the currently selected entry is
+/// pinned while it is active. This admits an oversized preview set without
+/// making every cache entry permanently resident.
+#[derive(Debug, Clone)]
+pub struct TexturePreviewLifecycle {
+    active_entry: Arc<AtomicUsize>,
+}
+
+impl TexturePreviewLifecycle {
+    fn new(active_entry: Arc<AtomicUsize>) -> Self {
+        Self { active_entry }
+    }
+}
+
+impl Default for TexturePreviewLifecycle {
+    fn default() -> Self {
+        Self::new(Arc::new(AtomicUsize::new(NO_ACTIVE_TEXTURE_PREVIEW)))
+    }
+}
+
+impl quick_cache::Lifecycle<usize, Arc<Vec<DecodedTexture>>> for TexturePreviewLifecycle {
+    type RequestState = [Option<(usize, Arc<Vec<DecodedTexture>>)>; 2];
+
+    fn is_pinned(&self, key: &usize, _value: &Arc<Vec<DecodedTexture>>) -> bool {
+        self.active_entry.load(Ordering::Acquire) == *key
+    }
+
+    fn on_evict(
+        &self,
+        state: &mut Self::RequestState,
+        key: usize,
+        value: Arc<Vec<DecodedTexture>>,
+    ) {
+        if state[0].is_none() {
+            state[0] = Some((key, value));
+        } else if state[1].is_none() {
+            state[1] = Some((key, value));
+        }
+    }
+}
+
+pub type TexturePreviewCache = quick_cache::sync::Cache<
+    usize,
+    Arc<Vec<DecodedTexture>>,
+    TexturePreviewWeight,
+    quick_cache::DefaultHashBuilder,
+    TexturePreviewLifecycle,
+>;
+
+fn new_texture_preview_cache(active_entry: &Arc<AtomicUsize>) -> Arc<TexturePreviewCache> {
+    Arc::new(quick_cache::sync::Cache::with(
+        TEXTURE_PREVIEW_CACHE_ITEM_CAPACITY,
+        TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY,
+        TexturePreviewWeight,
+        Default::default(),
+        TexturePreviewLifecycle::new(Arc::clone(active_entry)),
+    ))
 }
 use crate::sort::{SortChain, SortDirection, SortKey};
 
@@ -359,9 +423,11 @@ pub struct ArchiveInfo {
     /// scenes whose companion textures were resolved by the 3D viewer.
     /// Byte-budgeted LRU (see [`TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY`]);
     /// values are `Arc`-shared so per-frame view lookups clone a pointer,
-    /// not the RGBA buffers. Cleared by `invalidate_entry_caches`.
-    pub texture_cache:
-        Arc<quick_cache::sync::Cache<usize, Arc<Vec<DecodedTexture>>, TexturePreviewWeight>>,
+    /// not the RGBA buffers. The selected entry may exceed the normal
+    /// per-shard admission threshold and is pinned until selection changes.
+    /// Cleared by `invalidate_entry_caches`.
+    pub texture_cache: Arc<TexturePreviewCache>,
+    texture_cache_active_entry: Arc<AtomicUsize>,
     /// Cache for `unique_file_types()` invalidated whenever entries are added,
     /// removed, or renamed.
     cached_file_types: Option<Vec<CompactString>>,
@@ -391,6 +457,8 @@ pub struct ArchiveInfo {
 
 impl ArchiveInfo {
     pub fn new(file_name: impl Into<String>, create_new: bool, version: ImgVersion) -> Self {
+        let texture_cache_active_entry =
+            Arc::new(AtomicUsize::new(NO_ACTIVE_TEXTURE_PREVIEW));
         let mut archive = Self {
             path: None,
             file_name: file_name.into(),
@@ -417,13 +485,8 @@ impl ArchiveInfo {
                 Default::default(),
                 Default::default(),
             )),
-            texture_cache: Arc::new(quick_cache::sync::Cache::with(
-                TEXTURE_PREVIEW_CACHE_ITEM_CAPACITY,
-                TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY,
-                TexturePreviewWeight,
-                Default::default(),
-                Default::default(),
-            )),
+            texture_cache: new_texture_preview_cache(&texture_cache_active_entry),
+            texture_cache_active_entry,
             cached_file_types: None,
             compat_report: None,
             target_game: None,
@@ -440,6 +503,8 @@ impl ArchiveInfo {
     pub fn open(path: impl Into<PathBuf>) -> anyhow::Result<Self> {
         let path = crate::parser::canonical_img_path(&path.into());
         let version = crate::parser::detect_version(&path);
+        let texture_cache_active_entry =
+            Arc::new(AtomicUsize::new(NO_ACTIVE_TEXTURE_PREVIEW));
 
         let mut archive = Self {
             path: Some(path.clone()),
@@ -471,13 +536,8 @@ impl ArchiveInfo {
                 Default::default(),
                 Default::default(),
             )),
-            texture_cache: Arc::new(quick_cache::sync::Cache::with(
-                TEXTURE_PREVIEW_CACHE_ITEM_CAPACITY,
-                TEXTURE_PREVIEW_CACHE_WEIGHT_CAPACITY,
-                TexturePreviewWeight,
-                Default::default(),
-                Default::default(),
-            )),
+            texture_cache: new_texture_preview_cache(&texture_cache_active_entry),
+            texture_cache_active_entry,
             cached_file_types: None,
             compat_report: None,
             target_game: None,
@@ -700,6 +760,16 @@ impl ArchiveInfo {
         self.generation
     }
 
+    /// Pin the selected texture container so a large preview catalog remains
+    /// available while its tab is active. Passing `None` releases the pin;
+    /// normal cache pressure can then evict the old preview.
+    pub(crate) fn set_active_texture_preview_entry(&self, entry_index: Option<usize>) {
+        self.texture_cache_active_entry.store(
+            entry_index.unwrap_or(NO_ACTIVE_TEXTURE_PREVIEW),
+            Ordering::Release,
+        );
+    }
+
     /// Invalidates caches that depend on the entry list or entry metadata.
     /// Call this after add/remove/rename/import operations. Also bumps the
     /// `generation` counter used to key downstream caches and drops the
@@ -718,6 +788,7 @@ impl ArchiveInfo {
     pub fn invalidate_entry_caches_keeping_report(&mut self) {
         self.cached_file_types = None;
         self.inspection_cache.clear();
+        self.set_active_texture_preview_entry(None);
         self.texture_cache.clear();
         self.target_hint = None;
         self.generation = self.generation.wrapping_add(1);
@@ -852,6 +923,22 @@ pub fn infer_file_type(file_name: &str) -> CompactString {
 mod tests {
     use super::*;
     use crate::sort::{SortKey, SortPriority};
+
+    fn synthetic_texture(rgba_len: usize) -> DecodedTexture {
+        DecodedTexture {
+            name: "synthetic.tga".to_string(),
+            width: 1,
+            height: 1,
+            rgba: vec![0; rgba_len],
+            has_alpha: false,
+            format_name: "test".to_string(),
+            mipmap_count: 1,
+            handle: std::sync::OnceLock::new(),
+            palette_colors: None,
+            raster: None,
+            nif_format: None,
+        }
+    }
 
     #[test]
     fn infer_known_types() {
@@ -1122,6 +1209,35 @@ mod tests {
 
         archive.invalidate_entry_caches();
         assert_eq!(archive.generation(), 2);
+    }
+
+    #[test]
+    fn active_texture_preview_admits_value_over_hot_limit() {
+        // Use a small one-shard cache so this regression stays cheap while
+        // exercising quick-cache's oversized-item admission path.
+        let active_entry = Arc::new(AtomicUsize::new(0));
+        let cache = quick_cache::sync::Cache::with(
+            32,
+            1024,
+            TexturePreviewWeight,
+            quick_cache::DefaultHashBuilder::default(),
+            TexturePreviewLifecycle::new(Arc::clone(&active_entry)),
+        );
+        assert_eq!(cache.num_shards(), 1);
+
+        // 1000 bytes exceed quick-cache's default 97% hot allocation (992
+        // bytes), but fit the shard's total 1024-byte budget.
+        cache.insert(0, Arc::new(vec![synthetic_texture(1000)]));
+        assert!(cache.contains_key(&0), "active preview must be retained");
+
+        // Once the entry is no longer active, the same oversized value must
+        // return to normal admission rules instead of staying pinned forever.
+        active_entry.store(NO_ACTIVE_TEXTURE_PREVIEW, Ordering::Release);
+        cache.insert(1, Arc::new(vec![synthetic_texture(1000)]));
+        assert!(
+            !cache.contains_key(&1),
+            "inactive oversized preview must not bypass the cache budget"
+        );
     }
 
     #[test]
