@@ -813,7 +813,10 @@ mod tests {
         session.play(t0);
         session.select_clip(wave_id(&session), t0 + Duration::from_millis(10));
         assert!(session.is_crossfading());
-        session.set_loop_mode(t0 + Duration::from_millis(20), crate::inspector::animation::transport::LoopMode::Once);
+        session.set_loop_mode(
+            t0 + Duration::from_millis(20),
+            crate::inspector::animation::transport::LoopMode::Once,
+        );
         // A 50 ms play range ends playback before the 150 ms fade completes;
         // the held pose must be the clip's end pose, not a blend.
         session.set_range(t0 + Duration::from_millis(30), 0.0, 0.05);
@@ -826,6 +829,47 @@ mod tests {
         assert!(
             pose_matches_displayed_time(&session),
             "the held pose must be the clip's own end pose"
+        );
+    }
+
+    #[test]
+    fn seeking_matches_playback_arrival() {
+        // Adapter contract: reaching a time through playback and seeking to
+        // that time must produce the identical pose. The anchor-rebase clock
+        // exists to guarantee this; it had no direct test.
+        let mut session = demo_session();
+        let t0 = Instant::now();
+        session.play(t0);
+        session.advance(t0 + Duration::from_millis(700));
+        let arrived = session.transport.shown_time();
+        assert!((arrived - 0.7).abs() < 1e-12);
+        let arrived_pose = session.pose.out_vertices.clone();
+
+        session.stop(t0 + Duration::from_millis(700));
+        session.seek(t0 + Duration::from_millis(800), 0.7);
+        assert!(
+            (session.transport.shown_time() - arrived).abs() < 1e-12,
+            "seek must land on the same f64 the playback clock produced"
+        );
+        for (mesh, expected) in session.pose.out_vertices.iter().zip(arrived_pose.iter()) {
+            for (vertex, expected) in mesh.iter().zip(expected.iter()) {
+                for axis in 0..3 {
+                    assert!(
+                        (vertex.position[axis] - expected.position[axis]).abs() < 1e-6,
+                        "seek pose diverges from playback-arrival pose"
+                    );
+                }
+            }
+        }
+        // And the mirrored normal path through the step grid agrees too.
+        session.stop(t0 + Duration::from_millis(900));
+        let grid = 0.7 / 21.0;
+        for _ in 0..21 {
+            session.step(t0 + Duration::from_millis(950), 1);
+        }
+        assert!(
+            (session.transport.shown_time() - arrived).abs() < 1e-6,
+            "stepping must aggregate to the same position as playback"
         );
     }
 
