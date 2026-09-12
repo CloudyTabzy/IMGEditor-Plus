@@ -54,6 +54,9 @@ const HEADER_HEIGHT: f32 = 32.0;
 /// Number of rows to keep rendered above and below the scroll viewport. 10 rows ≈ 320 px of
 /// over-render — negligible cost, eliminates any chance of a blank band at the edges.
 const OVERSCAN_ROWS: i32 = 10;
+/// Keep the table scrollbar away from the pane-grid resize hit region. The
+/// pane grid's 10 px resize leeway reaches 5 px into the table pane.
+const ENTRY_TABLE_SCROLLBAR_INSET: f32 = 8.0;
 
 /// The original editor enabled ImGui's alternating table rows. Use the
 /// design surface rather than a hard-coded color so the separation remains
@@ -263,13 +266,25 @@ impl App {
         // Keep this wrapper and its base Scrollable present regardless of
         // autoscroll state. Iced retains Scrollable offsets by widget-tree
         // position, so inserting a different root on MMB would reset it.
-        let table_body = mouse_area(
-            stack(layers)
-                .width(Length::Fill)
-                .height(Length::Fill),
+        // The pane-grid divider's resize leeway overlaps the outer edge of a
+        // child pane. Insetting the whole table surface leaves a real gap
+        // between that hit region and the scrollbar, so a scrollbar drag can
+        // never start a pane resize.
+        let table_body = container(
+            mouse_area(
+                stack(layers)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_enter(Message::EntryTableHoverChanged(true))
+            .on_exit(Message::EntryTableHoverChanged(false)),
         )
-        .on_enter(Message::EntryTableHoverChanged(true))
-        .on_exit(Message::EntryTableHoverChanged(false));
+        .padding(iced::Padding {
+            right: ENTRY_TABLE_SCROLLBAR_INSET,
+            ..Default::default()
+        })
+        .width(Length::Fill)
+        .height(Length::Fill);
 
         column![headers, w::hairline(design.divider()), table_body]
             .width(Length::Fill)
@@ -2020,7 +2035,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
             )
         })
         .on_resize(10, Message::PaneResized)
-        .spacing(3)
+        .spacing(5)
         .style(move |_| pane_grid::Style {
             hovered_region: pane_grid::Highlight {
                 background: iced::Background::Color(Color::TRANSPARENT),
