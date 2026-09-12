@@ -147,6 +147,10 @@ pub enum ModelError {
     },
     #[error("mesh '{mesh}' has non-finite vertex data")]
     NonFiniteVertex { mesh: String },
+    #[error(
+        "node {node} has a non-finite translation/scale or a degenerate rotation; such a transform propagates NaN into every posed vertex"
+    )]
+    InvalidNodeTransform { node: u32 },
 }
 
 /// Validated, immutable model asset shared through `Arc`.
@@ -194,6 +198,7 @@ impl ModelAsset {
             diagnostics: Vec::new(),
         };
         asset.eval_order = asset.compute_eval_order()?;
+        asset.validate_nodes()?;
         asset.validate_meshes()?;
         Ok(asset)
     }
@@ -224,6 +229,22 @@ impl ModelAsset {
             .iter()
             .find(|node| node.mesh == Some(mesh_index))
             .map(|node| node.id)
+    }
+
+    /// Default locals feed every evaluation, so a non-finite translation,
+    /// scale or degenerate rotation must be rejected here: it would
+    /// otherwise turn into NaN posed vertices at the first `evaluate_pose`.
+    fn validate_nodes(&self) -> Result<(), ModelError> {
+        for node in &self.nodes {
+            let local = &node.local;
+            let finite = local.translation.is_finite()
+                && local.scale.is_finite()
+                && local.rotation.is_finite();
+            if !finite || local.rotation.length_squared() < 1e-12 {
+                return Err(ModelError::InvalidNodeTransform { node: node.id.0 });
+            }
+        }
+        Ok(())
     }
 
     fn compute_eval_order(&self) -> Result<Vec<NodeId>, ModelError> {
@@ -510,6 +531,44 @@ mod tests {
                 mesh: None,
             },
         ]
+    }
+
+    #[test]
+    fn non_finite_or_degenerate_node_transforms_are_rejected() {
+        let build = |local: NodeTransform| {
+            ModelAsset::new(
+                "m".into(),
+                "test".into(),
+                vec![SceneNode {
+                    id: NodeId(0),
+                    parent: None,
+                    name: "root".into(),
+                    local,
+                    mesh: None,
+                }],
+                Vec::new(),
+                Mat4::IDENTITY,
+                BaseOrientation::Yup,
+                None,
+            )
+        };
+        let nan_translation = build(NodeTransform {
+            translation: Vec3::new(f32::NAN, 0.0, 0.0),
+            ..NodeTransform::IDENTITY
+        });
+        assert!(matches!(
+            nan_translation,
+            Err(ModelError::InvalidNodeTransform { node: 0 })
+        ));
+        let zero_rotation = build(NodeTransform {
+            rotation: Quat::from_xyzw(0.0, 0.0, 0.0, 0.0),
+            ..NodeTransform::IDENTITY
+        });
+        assert!(matches!(
+            zero_rotation,
+            Err(ModelError::InvalidNodeTransform { node: 0 })
+        ));
+        assert!(build(NodeTransform::IDENTITY).is_ok());
     }
 
     #[test]

@@ -326,7 +326,7 @@ impl AnimationClip {
 /// Key-window search and interpolation. Deterministic: seeking directly
 /// to a time and reaching it during playback produce the same value.
 /// Exact-key selection picks the key whose timestamp equals `time`.
-fn sample_keys<T: Copy>(
+fn sample_keys<T: Copy + Default>(
     times: &[f32],
     values: &[T],
     time: f32,
@@ -334,12 +334,17 @@ fn sample_keys<T: Copy>(
     blend: impl Fn(T, T, f32) -> T,
 ) -> T {
     debug_assert_eq!(times.len(), values.len());
-    debug_assert!(!times.is_empty());
+    // Invalid clips are rejected at admission, so an empty channel here
+    // means a caller bypassed validation; hold the channel default rather
+    // than panic.
+    let Some(&first) = values.first() else {
+        return T::default();
+    };
     // Count of keys with time <= t; the current key is one before it.
     let after = times.partition_point(|&key| key <= time);
     if after == 0 {
         // Before the first key: hold the first value.
-        return values[0];
+        return first;
     }
     let current = after - 1;
     if current + 1 >= times.len() || interpolation == Interpolation::Step {
@@ -383,6 +388,24 @@ impl AnimationLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_channel_samples_to_the_channel_default() {
+        // Invalid clips are rejected at admission; this guards the sampler
+        // itself against a panic if an unvalidated channel is sampled.
+        let track = PropertyTrack {
+            target: "n".into(),
+            channel: TrackChannel::Translation {
+                times: Vec::new(),
+                values: Vec::new(),
+            },
+            interpolation: Interpolation::Linear,
+        };
+        assert_eq!(
+            AnimationClip::sample_track(&track, 0.5),
+            SampledChannel::Translation(Vec3::ZERO)
+        );
+    }
 
     fn rot_z(degrees: f32) -> Quat {
         Quat::from_rotation_z(degrees.to_radians())

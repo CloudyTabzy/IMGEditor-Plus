@@ -51,12 +51,13 @@ pub const CROSSFADE_DURATION: Duration = Duration::from_millis(150);
 
 /// A running clip crossfade. Captures the outgoing local pose at the
 /// switch instant so seeking or repeated selection can never read an
-/// arbitrary previous frame.
+/// arbitrary previous frame. `elapsed` accumulates only playback time
+/// reported by the transport, so suspension never consumes the fade.
 #[derive(Clone, Debug)]
 pub struct CrossfadeState {
     from_locals: Vec<NodeTransform>,
-    start: Instant,
-    duration: Duration,
+    elapsed: f64,
+    duration: f64,
 }
 
 /// One advance result, shaped for the app's message handlers.
@@ -121,10 +122,16 @@ impl AnimationSession {
             crossfade: None,
             scratch_locals: vec![NodeTransform::IDENTITY; node_count],
         };
-        if let Some(first) = session.library.clips.first().map(|clip| clip.id) {
+        if let Some(first) = session
+            .library
+            .clips
+            .iter()
+            .find(|clip| clip.validate().is_ok())
+            .map(|clip| clip.id)
+        {
             session.select_clip(first, now);
         } else {
-            session.evaluate(now);
+            session.evaluate();
         }
         session
     }
@@ -158,12 +165,19 @@ impl AnimationSession {
 
     /// Select a clip: bind its tracks and reset the transport to a paused
     /// start. When `Crossfade` is enabled and a different clip is already
-    /// active, the outgoing pose is captured and blended into the new clip
-    /// over [`CROSSFADE_DURATION`]; otherwise the switch is an immediate cut.
+    /// playing, the outgoing pose is captured and blended into the new clip
+    /// over [`CROSSFADE_DURATION`] of active playback; otherwise the switch
+    /// is an immediate cut.
     pub fn select_clip(&mut self, id: ClipId, now: Instant) -> bool {
         let Some(clip) = self.library.clip(id) else {
             return false;
         };
+        // The runtime never plays an invalid clip: validation runs before
+        // any sampling, so a broken adapter payload cannot reach the pose
+        // path (and cannot panic inside it).
+        if clip.validate().is_err() {
+            return false;
+        }
         let switching = self.clip.is_some() && self.clip != Some(id);
         let was_playing = self.is_playing();
         let crossfade =
@@ -177,10 +191,10 @@ impl AnimationSession {
         self.transport.set_clip(clip, now);
         self.crossfade = from_locals.map(|from_locals| CrossfadeState {
             from_locals,
-            start: now,
-            duration: CROSSFADE_DURATION,
+            elapsed: 0.0,
+            duration: CROSSFADE_DURATION.as_secs_f64(),
         });
-        self.evaluate(now);
+        self.evaluate();
         if was_playing {
             self.transport.play(now);
         }
@@ -190,8 +204,8 @@ impl AnimationSession {
     /// Sample the current time, apply any running crossfade, and deform the
     /// geometry into the pose buffers. Called by every transport transition
     /// and every advance.
-    pub fn evaluate(&mut self, now: Instant) {
-        let progress = self.crossfade_progress(now);
+    pub fn evaluate(&mut self) {
+        let progress = self.crossfade_progress();
         let scratch = &mut self.scratch_locals;
         let sampled = match (self.clip, self.binding.as_ref()) {
             (Some(id), Some(binding)) => self.library.clip(id).map(|clip| {
@@ -234,12 +248,11 @@ impl AnimationSession {
     }
 
     /// Progress of a running crossfade in `0..=1`, or `None` when no fade
-    /// is active.
-    fn crossfade_progress(&self, now: Instant) -> Option<f32> {
+    /// is active. The fade advances only by playback time reported by the
+    /// transport, so suspension, scrubbing and stalls never consume it.
+    fn crossfade_progress(&self) -> Option<f32> {
         let fade = self.crossfade.as_ref()?;
-        let elapsed = now.saturating_duration_since(fade.start).as_secs_f64();
-        let duration = fade.duration.as_secs_f64().max(1e-6);
-        Some((elapsed / duration).clamp(0.0, 1.0) as f32)
+        Some((fade.elapsed / fade.duration.max(1e-6)).clamp(0.0, 1.0) as f32)
     }
 
     /// `true` while a clip crossfade is blending.
@@ -248,10 +261,17 @@ impl AnimationSession {
     }
 
     /// Advance the transport once per host redraw and return the crossed
-    /// marker events. Only an actual time change re-evaluates the pose.
+    /// marker events. Only an actual time change re-evaluates the pose;
+    /// crossfade progress accumulates from the played time the transport
+    /// reports, independent of wall-clock gaps.
     pub fn advance(&mut self, now: Instant) -> SessionAdvance {
         let before = self.transport.shown_time();
         let advance = self.transport.advance(now);
+        if let Some(fade) = self.crossfade.as_mut()
+            && advance.played > 0.0
+        {
+            fade.elapsed += advance.played;
+        }
         let markers = if let Some(clip) = self.clip() {
             Transport::crossed_markers(
                 &clip.markers,
@@ -265,7 +285,7 @@ impl AnimationSession {
         };
         let time_changed = (advance.time - before).abs() > 1e-12;
         if time_changed || advance.paused_by_gap {
-            self.evaluate(now);
+            self.evaluate();
         }
         SessionAdvance {
             time_changed,
@@ -277,46 +297,58 @@ impl AnimationSession {
 
     pub fn play(&mut self, now: Instant) {
         self.transport.play(now);
+        self.evaluate();
     }
 
     pub fn pause(&mut self, now: Instant) {
         self.transport.pause(now);
+        self.evaluate();
     }
 
     pub fn toggle_play_pause(&mut self, now: Instant) {
         self.transport.toggle_play_pause(now);
+        self.evaluate();
     }
 
     pub fn stop(&mut self, now: Instant) {
         self.transport.stop(now);
-        self.evaluate(now);
+        self.evaluate();
     }
 
     pub fn seek(&mut self, now: Instant, time: f64) {
         self.transport.seek(now, time);
-        self.evaluate(now);
+        self.evaluate();
     }
 
     pub fn step(&mut self, now: Instant, direction: i32) {
         self.transport.step(now, direction);
-        self.evaluate(now);
+        self.evaluate();
     }
 
     pub fn begin_scrub(&mut self, now: Instant) {
         self.transport.begin_scrub(now);
     }
 
-    pub fn scrub_to(&mut self, now: Instant, time: f64) {
+    pub fn scrub_to(&mut self, time: f64) {
         self.transport.scrub_to(time);
-        self.evaluate(now);
+        self.evaluate();
     }
 
     pub fn end_scrub(&mut self, now: Instant) {
         self.transport.end_scrub(now);
     }
 
+    /// Focus/suspension loss during a scrub: drop the drag, keep the last
+    /// time, pause. The timeline widget cancels its own drag state on the
+    /// same event so no scrub message can follow.
+    pub fn cancel_scrub(&mut self) {
+        self.transport.cancel_scrub();
+    }
+
     pub fn suspend(&mut self, now: Instant) {
         self.transport.suspend(now);
+        // The rebase moved the shown time; the displayed pose must follow.
+        self.evaluate();
     }
 
     pub fn resume(&mut self, now: Instant) {
@@ -325,16 +357,18 @@ impl AnimationSession {
 
     pub fn set_speed(&mut self, now: Instant, speed: f64) {
         self.transport.set_speed(now, speed);
+        self.evaluate();
     }
 
     pub fn set_range(&mut self, now: Instant, start: f64, end: f64) {
         self.transport.set_range(now, start, end);
         self.motion_path = None;
-        self.evaluate(now);
+        self.evaluate();
     }
 
     pub fn set_loop_mode(&mut self, now: Instant, mode: LoopMode) {
         self.transport.set_loop_mode(now, mode);
+        self.evaluate();
     }
 
     pub fn set_root_policy(&mut self, policy: RootMotionPolicy) {
@@ -343,7 +377,7 @@ impl AnimationSession {
         }
         self.root_policy = policy;
         self.motion_path = None;
-        self.evaluate(Instant::now());
+        self.evaluate();
     }
 
     pub fn set_display_offset(&mut self, offset: Vec3) {
@@ -352,7 +386,7 @@ impl AnimationSession {
         }
         self.display_offset = offset;
         self.motion_path = None;
-        self.evaluate(Instant::now());
+        self.evaluate();
     }
 
     /// Bounds of the currently evaluated pose, in display space.
@@ -599,7 +633,14 @@ mod tests {
                 "at fade start the pose must equal the captured outgoing pose"
             );
         }
-        session.advance(switch_at + CROSSFADE_DURATION + Duration::from_millis(20));
+        // The first playing advance re-establishes the played-time delta;
+        // the fade completes from accumulated playback time only.
+        session.advance(switch_at + Duration::from_millis(50));
+        assert!(
+            session.is_crossfading(),
+            "the fade may not complete before any playback time accrues"
+        );
+        session.advance(switch_at + CROSSFADE_DURATION + Duration::from_millis(70));
         assert!(
             !session.is_crossfading(),
             "fade completion releases the outgoing snapshot"
@@ -639,7 +680,7 @@ mod tests {
 
         // Scrub owns the time and resumes playback on release.
         session.begin_scrub(t0 + Duration::from_millis(5300));
-        session.scrub_to(t0 + Duration::from_millis(5300), 1.0);
+        session.scrub_to(1.0);
         assert_eq!(session.transport.shown_time(), 1.0);
         session.end_scrub(t0 + Duration::from_millis(5400));
         assert!(session.is_playing(), "scrub during playback resumes");
@@ -652,5 +693,141 @@ mod tests {
         session.stop(t0 + Duration::from_millis(5700));
         assert!(matches!(session.state(), PlaybackState::Paused));
         assert_eq!(session.transport.shown_time(), 0.0);
+    }
+
+    /// The displayed pose must equal a fresh evaluation at the displayed
+    /// time — the invariant pausing used to break.
+    fn pose_matches_displayed_time(session: &AnimationSession) -> bool {
+        let mut reference = PoseBuffers::new(&session.asset);
+        if let (Some(id), Some(binding)) = (session.clip, session.binding.as_ref())
+            && let Some(clip) = session.library.clip(id)
+        {
+            sample_locals(
+                clip,
+                binding,
+                &session.asset,
+                session.transport.shown_time() as f32,
+                &mut reference.locals,
+            );
+        }
+        evaluate_pose(
+            &session.asset,
+            session.root_policy,
+            session.display_offset,
+            &mut reference,
+        );
+        session
+            .pose
+            .out_vertices
+            .iter()
+            .zip(reference.out_vertices.iter())
+            .all(|(mesh, expected)| {
+                mesh.iter().zip(expected.iter()).all(|(vertex, expected)| {
+                    vertex
+                        .position
+                        .iter()
+                        .zip(expected.position.iter())
+                        .all(|(a, b)| (a - b).abs() < 1e-4)
+                })
+            })
+    }
+
+    #[test]
+    fn pausing_evaluates_the_displayed_pose() {
+        let mut session = demo_session();
+        let t0 = Instant::now();
+        session.play(t0);
+        session.advance(t0 + Duration::from_millis(100));
+        assert!(pose_matches_displayed_time(&session));
+        // Pause rebases the shown time past the last evaluated frame; the
+        // mesh must follow instead of freezing at the previous pose.
+        session.pause(t0 + Duration::from_millis(200));
+        assert!(
+            pose_matches_displayed_time(&session),
+            "pause must evaluate the rebased shown time"
+        );
+        session.suspend(t0 + Duration::from_millis(300));
+        assert!(pose_matches_displayed_time(&session));
+        session.toggle_play_pause(t0 + Duration::from_millis(400));
+        session.advance(t0 + Duration::from_millis(500));
+        session.toggle_play_pause(t0 + Duration::from_millis(600));
+        assert!(pose_matches_displayed_time(&session));
+    }
+
+    #[test]
+    fn crossfade_ignores_suspended_time() {
+        let mut session = demo_session();
+        session.panel.crossfade = true;
+        let t0 = Instant::now();
+        session.play(t0);
+        let switch_at = t0 + Duration::from_millis(100);
+        session.select_clip(wave_id(&session), switch_at);
+        assert!(session.is_crossfading());
+        // One second of suspension must not consume the 150 ms fade.
+        session.suspend(switch_at + Duration::from_millis(60));
+        session.advance(switch_at + Duration::from_millis(1060));
+        assert!(
+            session.is_crossfading(),
+            "suspension must not advance the fade"
+        );
+        session.resume(switch_at + Duration::from_millis(1100));
+        session.advance(switch_at + Duration::from_millis(1150));
+        assert!(
+            session.is_crossfading(),
+            "only 50 ms of playback has accrued"
+        );
+        session.advance(switch_at + Duration::from_millis(1310));
+        assert!(!session.is_crossfading());
+    }
+
+    #[test]
+    fn cancel_scrub_keeps_time_and_pauses() {
+        let mut session = demo_session();
+        let t0 = Instant::now();
+        session.play(t0);
+        session.begin_scrub(t0 + Duration::from_millis(100));
+        session.scrub_to(0.5);
+        session.cancel_scrub();
+        assert!(matches!(session.state(), PlaybackState::Paused));
+        assert_eq!(session.transport.shown_time(), 0.5);
+    }
+
+    #[test]
+    fn invalid_clips_are_never_sampled() {
+        let (model, library) = fixtures::demo();
+        let invalid = crate::inspector::animation::PropertyTrack {
+            target: "Spine".into(),
+            channel: crate::inspector::animation::TrackChannel::Translation {
+                times: Vec::new(),
+                values: Vec::new(),
+            },
+            interpolation: crate::inspector::animation::Interpolation::Linear,
+        };
+        let broken = crate::inspector::animation::AnimationClip {
+            id: ClipId(999),
+            name: "broken".into(),
+            duration: 1.0,
+            tracks: vec![invalid],
+            source_rate: None,
+            markers: Vec::new(),
+            provenance: "test".into(),
+        };
+        let mut clips = library.clips.clone();
+        clips.insert(0, broken);
+        let library = Arc::new(crate::inspector::animation::AnimationLibrary {
+            name: library.name.clone(),
+            clips,
+            provenance: library.provenance.clone(),
+        });
+        // Session creation must skip the invalid first clip instead of
+        // panicking inside the sampler.
+        let mut session =
+            AnimationSession::new(Arc::new(model), library, Vec3::ZERO, true, Instant::now());
+        assert_eq!(session.clip_name(), Some("Idle"));
+        assert!(
+            !session.select_clip(ClipId(999), Instant::now()),
+            "an invalid clip must be rejected before sampling"
+        );
+        assert_eq!(session.clip_name(), Some("Idle"));
     }
 }

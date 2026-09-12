@@ -417,6 +417,9 @@ pub enum Message {
     AnimationScrubStart(f64),
     AnimationScrubTo(f64),
     AnimationScrubEnd,
+    /// Focus loss during a timeline drag: cancel scrubbing (keep time, pause)
+    /// instead of resuming playback.
+    AnimationScrubCancel,
     AnimationSetSpeed(f64),
     AnimationSetLoop(crate::inspector::animation::transport::LoopMode),
     AnimationSetRootPolicy(crate::inspector::animation::pose::RootMotionPolicy),
@@ -4902,14 +4905,18 @@ impl App {
                 let now = Instant::now();
                 self.viewer3d_handle.with_animation_session_mut(|session| {
                     session.begin_scrub(now);
-                    session.scrub_to(now, time);
+                    session.scrub_to(time);
                 });
                 Task::none()
             }
             Message::AnimationScrubTo(time) => {
-                let now = Instant::now();
                 self.viewer3d_handle
-                    .with_animation_session_mut(|session| session.scrub_to(now, time));
+                    .with_animation_session_mut(|session| session.scrub_to(time));
+                Task::none()
+            }
+            Message::AnimationScrubCancel => {
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.cancel_scrub());
                 Task::none()
             }
             Message::AnimationScrubEnd => {

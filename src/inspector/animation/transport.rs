@@ -59,8 +59,14 @@ pub enum PlaybackState {
 pub struct Advance {
     /// The sample time to evaluate and display.
     pub time: f64,
-    /// Full loop wraps crossed during this advance (Repeat mode).
+    /// Range wraps crossed during THIS advance relative to the previous
+    /// playing advance (Repeat mode). Marker handling expects a per-frame
+    /// count, never the cumulative count since the playback anchor.
     pub wraps: u32,
+    /// Host seconds elapsed since the previous playing advance; zero when
+    /// this advance did not continue an active playback (paused, scrubbing,
+    /// suspended, or the first advance after a transition).
+    pub played: f64,
     /// `Once` playback reached the range end this advance.
     pub ended: bool,
     /// Playback auto-paused because the redraw gap exceeded [`LONG_GAP`].
@@ -86,6 +92,10 @@ pub struct Transport {
     /// Last evaluated/shown time — what the viewport is displaying.
     shown_time: f64,
     last_advance: Option<Instant>,
+    /// Cumulative range wraps at the last marker-relevant playing advance.
+    /// `None` after any clock transition, so the next advance reports zero
+    /// wraps for the frame and marker crossing stays per-frame exact.
+    wraps_since_mark: Option<u32>,
 }
 
 impl Default for Transport {
@@ -102,6 +112,7 @@ impl Default for Transport {
             anchor_host: None,
             shown_time: 0.0,
             last_advance: None,
+            wraps_since_mark: None,
         }
     }
 }
@@ -115,7 +126,7 @@ impl Transport {
         self.anchor_clip = 0.0;
         self.shown_time = 0.0;
         self.anchor_host = None;
-        self.last_advance = None;
+        self.clock_dirty();
         self.state = PlaybackState::Paused;
         match clip.source_rate {
             Some(rate) => {
@@ -240,7 +251,15 @@ impl Transport {
         self.anchor_clip = sample;
         self.shown_time = sample;
         self.anchor_host = if self.is_playing() { Some(now) } else { None };
+        self.clock_dirty();
+    }
+
+    /// Any transition outside a playing advance mutates the clock base:
+    /// the per-frame played-time delta and the marker-wrap base both become
+    /// invalid until the next playing advance re-establishes them.
+    fn clock_dirty(&mut self) {
         self.last_advance = None;
+        self.wraps_since_mark = None;
     }
 
     /// Advance once per redraw while playing. Returns the time to
@@ -260,21 +279,31 @@ impl Transport {
             self.anchor_clip = self.shown_time;
             self.anchor_host = None;
             self.state = PlaybackState::Paused;
-            self.last_advance = None;
+            self.clock_dirty();
             return Advance {
                 time: self.shown_time,
                 paused_by_gap: true,
                 ..Advance::default()
             };
         }
+        let played = self
+            .last_advance
+            .map(|previous| now.saturating_duration_since(previous).as_secs_f64())
+            .unwrap_or(0.0);
         self.last_advance = Some(now);
-        let (sample, wraps) = self.apply_loop(self.unwrapped(now));
-        if self.loop_mode == LoopMode::Once && self.unwrapped(now) >= self.range.1 {
+        let unwrapped = self.unwrapped(now);
+        let (sample, wraps_total) = self.apply_loop(unwrapped);
+        let wraps = match self.wraps_since_mark {
+            Some(previous) => wraps_total.saturating_sub(previous),
+            None => 0,
+        };
+        self.wraps_since_mark = Some(wraps_total);
+        if self.loop_mode == LoopMode::Once && unwrapped >= self.range.1 {
             self.shown_time = self.range.1;
             self.anchor_clip = self.range.1;
             self.anchor_host = None;
             self.state = PlaybackState::Ended;
-            self.last_advance = None;
+            self.clock_dirty();
             return Advance {
                 time: self.range.1,
                 ended: true,
@@ -284,6 +313,7 @@ impl Transport {
         let advance = Advance {
             time: sample,
             wraps,
+            played,
             ..Advance::default()
         };
         self.shown_time = sample;
@@ -301,7 +331,7 @@ impl Transport {
         }
         self.state = PlaybackState::Playing;
         self.anchor_host = Some(now);
-        self.last_advance = None;
+        self.clock_dirty();
     }
 
     /// Pause, keeping the exact time and pose.
@@ -332,7 +362,7 @@ impl Transport {
         self.anchor_host = None;
         self.anchor_clip = self.range.0;
         self.shown_time = self.range.0;
-        self.last_advance = None;
+        self.clock_dirty();
         let _ = now;
     }
 
@@ -352,7 +382,7 @@ impl Transport {
         if self.is_playing() {
             self.anchor_host = Some(now);
         }
-        self.last_advance = None;
+        self.clock_dirty();
     }
 
     /// Begin a timeline scrub: remember whether playback was active and
@@ -370,7 +400,7 @@ impl Transport {
         }
         self.state = PlaybackState::Scrubbing { was_playing };
         self.anchor_host = None;
-        self.last_advance = None;
+        self.clock_dirty();
     }
 
     /// Move the playhead during a scrub (clamped to the range).
@@ -396,7 +426,7 @@ impl Transport {
             self.state = PlaybackState::Paused;
             self.anchor_host = None;
         }
-        self.last_advance = None;
+        self.clock_dirty();
     }
 
     /// Lost focus during a scrub: cancel the drag cleanly, retain the
@@ -405,7 +435,7 @@ impl Transport {
         if matches!(self.state, PlaybackState::Scrubbing { .. }) {
             self.state = PlaybackState::Paused;
             self.anchor_host = None;
-            self.last_advance = None;
+            self.clock_dirty();
         }
     }
 
@@ -440,7 +470,7 @@ impl Transport {
             self.state = PlaybackState::Paused;
             self.anchor_host = None;
         }
-        self.last_advance = None;
+        self.clock_dirty();
     }
 
     /// Change playback speed, keeping the current time continuous.
@@ -498,27 +528,41 @@ impl Transport {
         let (start, end) = self.range;
         let eps = 1e-9 * (end - start).max(1.0);
         let t = self.shown_time;
+        // Frame-grid arithmetic in f64 drifts by ~1 ulp: `floor` then
+        // re-derives the frame we are already standing on and stepping
+        // stalls (reproduced at step 8 for 24 fps, step 32 for 30/60 fps).
+        // Snap to the frame index when we are on one within a tolerance
+        // that no real mid-frame position can reach.
+        let k_raw = (t - start) / grid;
+        let k_on = k_raw.round();
+        let on_grid = (k_raw - k_on).abs() < 1e-6;
+        let target_index = if direction >= 0 {
+            if on_grid {
+                k_on + 1.0
+            } else {
+                k_raw.floor() + 1.0
+            }
+        } else if on_grid {
+            k_on - 1.0
+        } else {
+            k_raw.floor()
+        };
+        let candidate = start + target_index * grid;
         let next = if direction >= 0 {
-            let k = ((t - start) / grid).floor();
-            let candidate = start + (k + 1.0) * grid;
             if candidate > end - eps {
                 end
             } else {
                 candidate
             }
+        } else if candidate < start + eps {
+            start
         } else {
-            let k = ((t - start) / grid).ceil();
-            let candidate = start + (k - 1.0) * grid;
-            if candidate < start + eps {
-                start
-            } else {
-                candidate
-            }
+            candidate
         };
         self.anchor_clip = next;
         self.shown_time = next;
         self.anchor_host = None;
-        self.last_advance = None;
+        self.clock_dirty();
     }
 
     /// Marker events crossed during forward playback over
@@ -658,10 +702,136 @@ mod tests {
     fn repeat_wraps_half_open_interval() {
         let (mut transport, start) = transport(1.0);
         transport.play(start);
-        // 2.25 s at 1x over a 1 s range: wraps twice, samples 0.25.
-        let advance = transport.advance(start + Duration::from_millis(2250));
-        assert_eq!(advance.wraps, 2);
-        assert!((advance.time - 0.25).abs() < 1e-9);
+        // Frame-sized advances: exactly the frames that cross a boundary
+        // report a wrap, so marker handling sees per-frame crossings.
+        let mut total_wraps = 0;
+        let mut sample = 0.0;
+        for step in 1..=23 {
+            let advance = transport.advance(start + Duration::from_millis(step * 100));
+            total_wraps += advance.wraps;
+            sample = advance.time;
+        }
+        // 2.3 s of playback over a 1 s range: two boundaries crossed.
+        assert_eq!(total_wraps, 2);
+        assert!((sample - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stepping_never_stalls_at_grid_rounding() {
+        // 24 fps stalled at step 8 and 30/60 fps at step 32 when `floor`
+        // re-derived the frame the transport already stood on.
+        for fps in [24_u32, 30, 60] {
+            let start = Instant::now();
+            let mut transport = Transport::default();
+            transport.set_clip(
+                &AnimationClip {
+                    id: crate::inspector::animation::ClipId(0),
+                    name: "t".into(),
+                    duration: 2.0,
+                    tracks: Vec::new(),
+                    source_rate: Some(SourceRate {
+                        numerator: fps,
+                        denominator: 1,
+                    }),
+                    markers: Vec::new(),
+                    provenance: "test".into(),
+                },
+                start,
+            );
+            let grid = 1.0 / f64::from(fps);
+            let mut previous = transport.shown_time();
+            for step in 1..=48_u32 {
+                transport.step(start + Duration::from_millis(u64::from(step)), 1);
+                let shown = transport.shown_time();
+                if shown < 2.0 - 1e-9 {
+                    assert!(
+                        shown - previous > grid * 0.5,
+                        "{fps} fps stalled at step {step}: {previous} -> {shown}"
+                    );
+                    // Stepped positions must land on the frame grid.
+                    let frame = (shown / grid).round();
+                    assert!((shown - frame * grid).abs() < 1e-6);
+                }
+                previous = shown;
+            }
+        }
+    }
+
+    #[test]
+    fn stepping_backwards_moves_frame_by_frame() {
+        let (mut transport, start) = transport(2.0);
+        transport.seek(start, 1.0);
+        let mut previous = transport.shown_time();
+        for step in 1..=10 {
+            transport.step(start + Duration::from_millis(step), -1);
+            let shown = transport.shown_time();
+            assert!(
+                previous - shown > 0.01,
+                "backward step {step} made no progress: {previous} -> {shown}"
+            );
+            previous = shown;
+        }
+        // Ten frames back from 1.0 s at 30 fps.
+        assert!((previous - (1.0 - 10.0 / 30.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn loop_markers_fire_once_per_crossing() {
+        let start = Instant::now();
+        let mut clip = clip_seconds(1.0);
+        clip.markers = vec![
+            ClipMarker {
+                time: 0.25,
+                label: "a".into(),
+            },
+            ClipMarker {
+                time: 0.75,
+                label: "b".into(),
+            },
+        ];
+        let mut transport = Transport::default();
+        transport.set_clip(&clip, start);
+        transport.play(start);
+        let range = transport.range();
+        let mut count_a = 0;
+        let mut count_b = 0;
+        let mut previous = transport.shown_time();
+        for step in 1..=35 {
+            let advance = transport.advance(start + Duration::from_millis(step * 100));
+            for marker in Transport::crossed_markers(
+                &clip.markers,
+                previous,
+                advance.time,
+                advance.wraps,
+                range,
+            ) {
+                if marker.label == "a" {
+                    count_a += 1;
+                } else {
+                    count_b += 1;
+                }
+            }
+            previous = advance.time;
+        }
+        // 3.5 s over a 1 s loop: "a" (0.25) is crossed four times,
+        // "b" (0.75) three. The old cumulative-wrap count reported extra
+        // full-cycle marker sets after every loop boundary.
+        assert_eq!(count_a, 4, "marker a fired {count_a} times");
+        assert_eq!(count_b, 3, "marker b fired {count_b} times");
+    }
+
+    #[test]
+    fn played_time_is_reported_only_for_continuous_playback() {
+        let (mut transport, start) = transport(10.0);
+        transport.play(start);
+        let first = transport.advance(start + Duration::from_millis(50));
+        assert_eq!(first.played, 0.0, "no previous playing frame exists");
+        let second = transport.advance(start + Duration::from_millis(150));
+        assert!((second.played - 0.1).abs() < 1e-9);
+        transport.pause(start + Duration::from_millis(200));
+        let paused = transport.advance(start + Duration::from_millis(300));
+        assert_eq!(paused.played, 0.0, "paused holds time and plays nothing");
+        assert_eq!(paused.time, transport.shown_time());
     }
 
     #[test]

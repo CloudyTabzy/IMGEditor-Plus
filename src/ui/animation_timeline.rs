@@ -151,18 +151,26 @@ impl canvas::Program<Message> for TimelineProgram {
 
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                // Only a press inside the widget starts a drag; clicks above
+                // or beside the timeline must fall through to the viewport.
+                if !inside {
+                    return None;
+                }
                 let p = cursor.position()?;
                 let x = p.x - bounds.x;
                 let t = x_to_time(x, window, width);
                 let range_start_x = time_to_x(view.range.0, window, width);
                 let range_end_x = time_to_x(view.range.1, window, width);
-                if (x - range_start_x).abs() <= HANDLE_GRAB && range_start_x > LANE_PAD + 1.0 {
+                // Range handles are grabbed unconditionally: at the default
+                // full-clip range they sit exactly on the lane edges, and a
+                // boundary guard would make them undraggable.
+                if (x - range_start_x).abs() <= HANDLE_GRAB {
                     state.drag = Some(DragKind::RangeStart);
                     return Some(
                         Action::publish(Message::AnimationRangeDragStart(t)).and_capture(),
                     );
                 }
-                if (x - range_end_x).abs() <= HANDLE_GRAB && range_end_x < width - LANE_PAD - 1.0 {
+                if (x - range_end_x).abs() <= HANDLE_GRAB {
                     state.drag = Some(DragKind::RangeEnd);
                     return Some(Action::publish(Message::AnimationRangeDragEnd(t)).and_capture());
                 }
@@ -233,6 +241,15 @@ impl canvas::Program<Message> for TimelineProgram {
                 if state.drag.is_some() {
                     state.drag = None;
                     return Some(Action::request_redraw().and_capture());
+                }
+                None
+            }
+            // Focus loss ends any active drag: clear the widget state and
+            // cancel transport scrubbing so a later cursor move cannot emit
+            // scrub messages for a drag the user is no longer making.
+            canvas::Event::Window(iced::window::Event::Unfocused) => {
+                if state.drag.take().is_some() {
+                    return Some(Action::publish(Message::AnimationScrubCancel).and_capture());
                 }
                 None
             }
@@ -442,6 +459,127 @@ pub fn timeline(handle: Arc<SceneHandle>) -> Canvas<TimelineProgram, Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced::widget::canvas::Program;
+
+    fn demo_handle() -> Arc<SceneHandle> {
+        let handle = SceneHandle::new();
+        let (model, library) = crate::inspector::animation::fixtures::demo();
+        handle.install_animation_session(
+            Arc::new(model),
+            Arc::new(library),
+            true,
+            std::time::Instant::now(),
+        );
+        handle.into()
+    }
+
+    const BOUNDS: Rectangle =
+        Rectangle::new(Point::new(0.0, 0.0), Size::new(400.0, TIMELINE_HEIGHT));
+
+    fn press_left() -> canvas::Event {
+        canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+    }
+
+    fn message_of(action: Option<Action<Message>>) -> Option<Message> {
+        action.and_then(|action| action.into_inner().0)
+    }
+
+    #[test]
+    fn press_outside_the_timeline_is_ignored() {
+        let program = TimelineProgram::new(demo_handle());
+        let mut state = TimelineState::default();
+        let outside = Program::update(
+            &program,
+            &mut state,
+            &press_left(),
+            BOUNDS,
+            mouse::Cursor::Available(Point::new(900.0, 900.0)),
+        );
+        assert!(
+            outside.is_none(),
+            "clicks outside the widget must not be captured"
+        );
+        assert!(state.drag.is_none());
+        let inside = Program::update(
+            &program,
+            &mut state,
+            &press_left(),
+            BOUNDS,
+            mouse::Cursor::Available(Point::new(200.0, 30.0)),
+        );
+        assert!(inside.is_some(), "an inside press starts a drag");
+        assert!(state.drag.is_some());
+    }
+
+    #[test]
+    fn default_range_handles_are_draggable() {
+        let program = TimelineProgram::new(demo_handle());
+        // The default full-clip range puts the start handle at the left
+        // lane edge and the end handle at the right lane edge.
+        let mut start_state = TimelineState::default();
+        let start_press = Program::update(
+            &program,
+            &mut start_state,
+            &press_left(),
+            BOUNDS,
+            mouse::Cursor::Available(Point::new(LANE_PAD, 30.0)),
+        );
+        assert!(matches!(
+            message_of(start_press),
+            Some(Message::AnimationRangeDragStart(_))
+        ));
+        assert!(matches!(start_state.drag, Some(DragKind::RangeStart)));
+        let mut end_state = TimelineState::default();
+        let end_press = Program::update(
+            &program,
+            &mut end_state,
+            &press_left(),
+            BOUNDS,
+            mouse::Cursor::Available(Point::new(400.0 - LANE_PAD, 30.0)),
+        );
+        assert!(matches!(
+            message_of(end_press),
+            Some(Message::AnimationRangeDragEnd(_))
+        ));
+        assert!(matches!(end_state.drag, Some(DragKind::RangeEnd)));
+    }
+
+    #[test]
+    fn focus_loss_cancels_an_active_drag() {
+        let program = TimelineProgram::new(demo_handle());
+        let mut state = TimelineState::default();
+        let _ = Program::update(
+            &program,
+            &mut state,
+            &press_left(),
+            BOUNDS,
+            mouse::Cursor::Available(Point::new(200.0, 30.0)),
+        );
+        assert!(state.drag.is_some());
+        let unfocus = Program::update(
+            &program,
+            &mut state,
+            &canvas::Event::Window(iced::window::Event::Unfocused),
+            BOUNDS,
+            mouse::Cursor::Available(Point::new(200.0, 30.0)),
+        );
+        assert!(matches!(
+            message_of(unfocus),
+            Some(Message::AnimationScrubCancel)
+        ));
+        assert!(state.drag.is_none(), "the drag must be cleared");
+        // A later cursor move must not emit scrub messages.
+        let moved = Program::update(
+            &program,
+            &mut state,
+            &canvas::Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(300.0, 30.0),
+            }),
+            BOUNDS,
+            mouse::Cursor::Available(Point::new(300.0, 30.0)),
+        );
+        assert!(moved.is_none());
+    }
 
     #[test]
     fn time_round_trips_through_x() {
