@@ -428,6 +428,7 @@ pub enum Message {
     AnimationFramePose,
     AnimationFrameMotion,
     AnimationToggleMotionPath(bool),
+    AnimationToggleCrossfade(bool),
     AutoScrollStarted,
     AutoScrollEnded,
     /// Escape ends autoscroll and dismisses the search prediction dropdown.
@@ -4901,13 +4902,14 @@ impl App {
                 let now = Instant::now();
                 self.viewer3d_handle.with_animation_session_mut(|session| {
                     session.begin_scrub(now);
-                    session.scrub_to(time);
+                    session.scrub_to(now, time);
                 });
                 Task::none()
             }
             Message::AnimationScrubTo(time) => {
+                let now = Instant::now();
                 self.viewer3d_handle
-                    .with_animation_session_mut(|session| session.scrub_to(time));
+                    .with_animation_session_mut(|session| session.scrub_to(now, time));
                 Task::none()
             }
             Message::AnimationScrubEnd => {
@@ -4977,6 +4979,11 @@ impl App {
             Message::AnimationToggleMotionPath(value) => {
                 self.viewer3d_handle
                     .with_animation_session_mut(|session| session.panel.show_motion_path = value);
+                Task::none()
+            }
+            Message::AnimationToggleCrossfade(value) => {
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.panel.crossfade = value);
                 Task::none()
             }
             Message::PaneResized(event) => {

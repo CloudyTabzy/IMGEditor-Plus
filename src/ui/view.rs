@@ -97,6 +97,7 @@ struct DockData {
     follow_root: bool,
     show_skeleton: bool,
     show_motion_path: bool,
+    crossfade: bool,
     shown: f64,
     duration: f64,
     frame: u64,
@@ -1001,6 +1002,7 @@ impl App {
             follow_root: session.panel.follow_root,
             show_skeleton: session.panel.show_skeleton,
             show_motion_path: session.panel.show_motion_path,
+            crossfade: session.panel.crossfade,
             shown: session.transport.shown_time(),
             duration: session.transport.duration(),
             frame: session.transport.shown_frame(),
@@ -1168,6 +1170,12 @@ impl App {
                 .label("Motion path")
                 .text_size(12.0)
                 .on_toggle(Message::AnimationToggleMotionPath),
+        );
+        toggles = toggles.push(
+            checkbox(data.crossfade)
+                .label("Crossfade")
+                .text_size(12.0)
+                .on_toggle(Message::AnimationToggleCrossfade),
         );
 
         let timeline = crate::ui::animation_timeline::timeline(self.viewer3d_handle.clone());

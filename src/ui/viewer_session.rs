@@ -8,15 +8,15 @@
 //! already-evaluated revision. Drawing never advances time.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use glam::Vec3;
 
 use crate::inspector::animation::binding::{ClipBinding, bind_clip};
 use crate::inspector::animation::clip::{AnimationClip, AnimationLibrary, ClipMarker};
-use crate::inspector::animation::model::ModelAsset;
+use crate::inspector::animation::model::{ModelAsset, NodeTransform};
 use crate::inspector::animation::pose::{
-    PoseBuffers, RootMotionPolicy, clip_envelope, evaluate_pose, sample_locals,
+    PoseBuffers, RootMotionPolicy, blend_locals, clip_envelope, evaluate_pose, sample_locals,
 };
 use crate::inspector::animation::transport::{LoopMode, PlaybackState, Transport};
 use crate::inspector::animation::{ClipId, PlaybackCapability};
@@ -29,6 +29,8 @@ pub struct AnimationPanel {
     pub follow_root: bool,
     pub show_skeleton: bool,
     pub show_motion_path: bool,
+    /// Blend compatible clip switches instead of cutting (viewer preview).
+    pub crossfade: bool,
 }
 
 impl Default for AnimationPanel {
@@ -38,8 +40,23 @@ impl Default for AnimationPanel {
             follow_root: false,
             show_skeleton: false,
             show_motion_path: false,
+            crossfade: false,
         }
     }
+}
+
+/// Fixed viewer-preview crossfade length. This is not a claimed game
+/// transition; it only blends two compatible clips for inspection.
+pub const CROSSFADE_DURATION: Duration = Duration::from_millis(150);
+
+/// A running clip crossfade. Captures the outgoing local pose at the
+/// switch instant so seeking or repeated selection can never read an
+/// arbitrary previous frame.
+#[derive(Clone, Debug)]
+pub struct CrossfadeState {
+    from_locals: Vec<NodeTransform>,
+    start: Instant,
+    duration: Duration,
 }
 
 /// One advance result, shaped for the app's message handlers.
@@ -70,6 +87,9 @@ pub struct AnimationSession {
     /// Cached sampled root trajectory for the motion-path overlay; cleared
     /// whenever the clip, range, root policy or display offset changes.
     pub motion_path: Option<Vec<Vec3>>,
+    crossfade: Option<CrossfadeState>,
+    /// Scratch for sampling the incoming clip before a blend.
+    scratch_locals: Vec<NodeTransform>,
 }
 
 impl AnimationSession {
@@ -82,6 +102,7 @@ impl AnimationSession {
     ) -> Self {
         let pose = PoseBuffers::new(&asset);
         let capability = capability_for(&asset, &library, None, None);
+        let node_count = asset.nodes.len();
         let mut session = Self {
             asset,
             library,
@@ -97,11 +118,13 @@ impl AnimationSession {
             last_marker: None,
             demo,
             motion_path: None,
+            crossfade: None,
+            scratch_locals: vec![NodeTransform::IDENTITY; node_count],
         };
         if let Some(first) = session.library.clips.first().map(|clip| clip.id) {
             session.select_clip(first, now);
         } else {
-            session.evaluate();
+            session.evaluate(now);
         }
         session
     }
@@ -133,40 +156,72 @@ impl AnimationSession {
         self.transport.state()
     }
 
-    /// Select a clip: bind its tracks, reset the transport to a paused
-    /// start, and evaluate the opening pose.
+    /// Select a clip: bind its tracks and reset the transport to a paused
+    /// start. When `Crossfade` is enabled and a different clip is already
+    /// active, the outgoing pose is captured and blended into the new clip
+    /// over [`CROSSFADE_DURATION`]; otherwise the switch is an immediate cut.
     pub fn select_clip(&mut self, id: ClipId, now: Instant) -> bool {
         let Some(clip) = self.library.clip(id) else {
             return false;
         };
-        self.clip = Some(id);
+        let switching = self.clip.is_some() && self.clip != Some(id);
+        let was_playing = self.is_playing();
+        let crossfade =
+            switching && self.panel.crossfade && was_playing && !self.pose.locals.is_empty();
+        let from_locals = crossfade.then(|| self.pose.locals.clone());
         let binding = bind_clip(&self.asset, clip);
         self.capability = capability_for(&self.asset, &self.library, Some(clip), Some(&binding));
+        self.clip = Some(id);
         self.binding = Some(binding);
         self.motion_path = None;
         self.transport.set_clip(clip, now);
-        self.evaluate();
+        self.crossfade = from_locals.map(|from_locals| CrossfadeState {
+            from_locals,
+            start: now,
+            duration: CROSSFADE_DURATION,
+        });
+        self.evaluate(now);
+        if was_playing {
+            self.transport.play(now);
+        }
         self.can_play()
     }
 
-    /// Sample the current time and deform the geometry into the pose
-    /// buffers. Called by every transport transition and every advance.
-    pub fn evaluate(&mut self) {
-        match (self.clip, self.binding.as_ref()) {
-            (Some(id), Some(binding)) => {
-                if let Some(clip) = self.library.clip(id) {
-                    sample_locals(
-                        clip,
-                        binding,
-                        &self.asset,
-                        self.transport.shown_time() as f32,
-                        &mut self.pose.locals,
-                    );
-                }
+    /// Sample the current time, apply any running crossfade, and deform the
+    /// geometry into the pose buffers. Called by every transport transition
+    /// and every advance.
+    pub fn evaluate(&mut self, now: Instant) {
+        let progress = self.crossfade_progress(now);
+        let scratch = &mut self.scratch_locals;
+        let sampled = match (self.clip, self.binding.as_ref()) {
+            (Some(id), Some(binding)) => self.library.clip(id).map(|clip| {
+                sample_locals(
+                    clip,
+                    binding,
+                    &self.asset,
+                    self.transport.shown_time() as f32,
+                    scratch,
+                );
+            }),
+            _ => None,
+        };
+        if sampled.is_none() {
+            reset_locals(&self.asset, scratch);
+        }
+        match progress {
+            Some(t) if t < 1.0 => {
+                let from = self
+                    .crossfade
+                    .as_ref()
+                    .map(|fade| fade.from_locals.as_slice())
+                    .unwrap_or(scratch);
+                blend_locals(from, scratch, t, &mut self.pose.locals);
             }
             _ => {
-                for (index, node) in self.asset.nodes.iter().enumerate() {
-                    self.pose.locals[index] = node.local;
+                self.pose.locals.copy_from_slice(scratch);
+                if progress.is_some() {
+                    // Fade finished: release the outgoing pose snapshot.
+                    self.crossfade = None;
                 }
             }
         }
@@ -176,6 +231,20 @@ impl AnimationSession {
             self.display_offset,
             &mut self.pose,
         );
+    }
+
+    /// Progress of a running crossfade in `0..=1`, or `None` when no fade
+    /// is active.
+    fn crossfade_progress(&self, now: Instant) -> Option<f32> {
+        let fade = self.crossfade.as_ref()?;
+        let elapsed = now.saturating_duration_since(fade.start).as_secs_f64();
+        let duration = fade.duration.as_secs_f64().max(1e-6);
+        Some((elapsed / duration).clamp(0.0, 1.0) as f32)
+    }
+
+    /// `true` while a clip crossfade is blending.
+    pub fn is_crossfading(&self) -> bool {
+        self.crossfade.is_some()
     }
 
     /// Advance the transport once per host redraw and return the crossed
@@ -196,7 +265,7 @@ impl AnimationSession {
         };
         let time_changed = (advance.time - before).abs() > 1e-12;
         if time_changed || advance.paused_by_gap {
-            self.evaluate();
+            self.evaluate(now);
         }
         SessionAdvance {
             time_changed,
@@ -220,26 +289,26 @@ impl AnimationSession {
 
     pub fn stop(&mut self, now: Instant) {
         self.transport.stop(now);
-        self.evaluate();
+        self.evaluate(now);
     }
 
     pub fn seek(&mut self, now: Instant, time: f64) {
         self.transport.seek(now, time);
-        self.evaluate();
+        self.evaluate(now);
     }
 
     pub fn step(&mut self, now: Instant, direction: i32) {
         self.transport.step(now, direction);
-        self.evaluate();
+        self.evaluate(now);
     }
 
     pub fn begin_scrub(&mut self, now: Instant) {
         self.transport.begin_scrub(now);
     }
 
-    pub fn scrub_to(&mut self, time: f64) {
+    pub fn scrub_to(&mut self, now: Instant, time: f64) {
         self.transport.scrub_to(time);
-        self.evaluate();
+        self.evaluate(now);
     }
 
     pub fn end_scrub(&mut self, now: Instant) {
@@ -261,7 +330,7 @@ impl AnimationSession {
     pub fn set_range(&mut self, now: Instant, start: f64, end: f64) {
         self.transport.set_range(now, start, end);
         self.motion_path = None;
-        self.evaluate();
+        self.evaluate(now);
     }
 
     pub fn set_loop_mode(&mut self, now: Instant, mode: LoopMode) {
@@ -274,7 +343,7 @@ impl AnimationSession {
         }
         self.root_policy = policy;
         self.motion_path = None;
-        self.evaluate();
+        self.evaluate(Instant::now());
     }
 
     pub fn set_display_offset(&mut self, offset: Vec3) {
@@ -283,7 +352,7 @@ impl AnimationSession {
         }
         self.display_offset = offset;
         self.motion_path = None;
-        self.evaluate();
+        self.evaluate(Instant::now());
     }
 
     /// Bounds of the currently evaluated pose, in display space.
@@ -359,6 +428,11 @@ impl AnimationSession {
 
     pub fn mark_uploaded(&mut self) {
         self.uploaded_revision = self.pose.revision;
+    }
+}
+fn reset_locals(asset: &ModelAsset, locals: &mut [NodeTransform]) {
+    for (index, node) in asset.nodes.iter().enumerate() {
+        locals[index] = node.local;
     }
 }
 
@@ -492,5 +566,43 @@ mod tests {
         let root = session.asset.root_motion_node.unwrap();
         let expected = session.pose.node_positions_view[root.0 as usize];
         assert_eq!(session.root_position_view(), Some(expected));
+    }
+
+    fn wave_id(session: &AnimationSession) -> ClipId {
+        session.library.find_by_name("Wave").unwrap().id
+    }
+
+    #[test]
+    fn crossfade_disabled_cuts_immediately() {
+        let mut session = demo_session();
+        let start = Instant::now();
+        session.play(start);
+        session.advance(start + Duration::from_millis(300));
+        session.select_clip(wave_id(&session), start + Duration::from_millis(300));
+        assert!(!session.is_crossfading(), "default switch must cut");
+    }
+
+    #[test]
+    fn crossfade_blends_from_the_outgoing_pose_when_playing() {
+        let mut session = demo_session();
+        session.panel.crossfade = true;
+        let start = Instant::now();
+        session.play(start);
+        session.advance(start + Duration::from_millis(300));
+        let outgoing = session.pose.locals.clone();
+        let switch_at = start + Duration::from_millis(300);
+        session.select_clip(wave_id(&session), switch_at);
+        assert!(session.is_crossfading());
+        for (blended, from) in session.pose.locals.iter().zip(outgoing.iter()) {
+            assert!(
+                blended.translation.abs_diff_eq(from.translation, 1e-5),
+                "at fade start the pose must equal the captured outgoing pose"
+            );
+        }
+        session.advance(switch_at + CROSSFADE_DURATION + Duration::from_millis(20));
+        assert!(
+            !session.is_crossfading(),
+            "fade completion releases the outgoing snapshot"
+        );
     }
 }
