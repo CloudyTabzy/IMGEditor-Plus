@@ -54,9 +54,11 @@ const HEADER_HEIGHT: f32 = 32.0;
 /// Number of rows to keep rendered above and below the scroll viewport. 10 rows ≈ 320 px of
 /// over-render — negligible cost, eliminates any chance of a blank band at the edges.
 const OVERSCAN_ROWS: i32 = 10;
-/// Keep the table scrollbar away from the pane-grid resize hit region. The
-/// pane grid's 10 px resize leeway reaches 5 px into the table pane.
-const ENTRY_TABLE_SCROLLBAR_INSET: f32 = 8.0;
+/// Keep the table scrollbar away from the pane-grid resize hit region. With
+/// an 8 px resize leeway, the hit region reaches 4 px into the table pane;
+/// this inset leaves a 2 px pointer-safe gap.
+const ENTRY_TABLE_SCROLLBAR_INSET: f32 = 6.0;
+const PANE_SPLIT_RESIZE_LEEWAY: f32 = 8.0;
 
 /// The original editor enabled ImGui's alternating table rows. Use the
 /// design surface rather than a hard-coded color so the separation remains
@@ -238,6 +240,7 @@ impl App {
             .direction(iced::widget::scrollable::Direction::Vertical(
                 iced::widget::scrollable::Scrollbar::new().scroller_width(16.0),
             ))
+            .style(entry_table_scrollbar_style)
             .on_scroll(|viewport| Message::ScrollOffsetChanged {
                 y: viewport.absolute_offset().y,
                 max_y: (viewport.content_bounds().height - viewport.bounds().height).max(0.0),
@@ -2034,7 +2037,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
                     }),
             )
         })
-        .on_resize(10, Message::PaneResized)
+        .on_resize(PANE_SPLIT_RESIZE_LEEWAY, Message::PaneResized)
         .spacing(5)
         .style(move |_| pane_grid::Style {
             hovered_region: pane_grid::Highlight {
@@ -3239,6 +3242,76 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
             })
             .into()
     })))
+}
+
+/// Theme-aware scrollbar for the entry table. The scroller is a full pill so
+/// the existing 16 px grab target stays easy to catch, while hover and drag
+/// states provide immediate visual feedback.
+fn entry_table_scrollbar_style(
+    theme: &iced::Theme,
+    status: iced::widget::scrollable::Status,
+) -> iced::widget::scrollable::Style {
+    use iced::widget::scrollable::{Rail, Scroller, Status};
+
+    let palette = theme.extended_palette();
+    let (vertical_hovered, vertical_dragged) = match status {
+        Status::Active { .. } => (false, false),
+        Status::Hovered {
+            is_vertical_scrollbar_hovered,
+            ..
+        } => (is_vertical_scrollbar_hovered, false),
+        Status::Dragged {
+            is_vertical_scrollbar_dragged,
+            ..
+        } => (is_vertical_scrollbar_dragged, is_vertical_scrollbar_dragged),
+    };
+
+    let rail_alpha = if vertical_hovered { 0.48 } else { 0.30 };
+    let scroller_color = if vertical_dragged {
+        palette.primary.base.color
+    } else if vertical_hovered {
+        palette.primary.strong.color
+    } else {
+        palette.background.strongest.color
+    };
+    let scroller_alpha = if vertical_dragged {
+        1.0
+    } else if vertical_hovered {
+        0.96
+    } else {
+        0.78
+    };
+    let border = |color: Color, width: f32, radius: f32| Border {
+        color,
+        width,
+        radius: radius.into(),
+    };
+
+    let rail = Rail {
+        background: Some(palette.background.weak.color.scale_alpha(rail_alpha).into()),
+        border: border(
+            palette.background.strong.color.scale_alpha(0.42),
+            1.0,
+            8.0,
+        ),
+        scroller: Scroller {
+            background: scroller_color.scale_alpha(scroller_alpha).into(),
+            border: border(
+                if vertical_dragged {
+                    palette.primary.strong.color.scale_alpha(0.82)
+                } else {
+                    palette.background.base.text.scale_alpha(0.28)
+                },
+                1.0,
+                8.0,
+            ),
+        },
+    };
+
+    let mut style = iced::widget::scrollable::default(theme, status);
+    style.vertical_rail = rail;
+    style.horizontal_rail = rail;
+    style
 }
 
 /// Floating, accent-tinted scrollbar for the validator popup: a round
