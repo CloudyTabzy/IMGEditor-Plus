@@ -380,41 +380,21 @@ pub fn build_scene_from_col(
     col: &ColFile,
     base_orientation: BaseOrientation,
 ) -> Result<Scene, DecodeError> {
+    let raw_meshes = collision_mesh_data(col);
+    if raw_meshes.is_empty() {
+        return Err(DecodeError::NoGeometry);
+    }
+
     let mut meshes = Vec::new();
     let mut scene_aabb: Option<Aabb> = None;
 
-    for entry in &col.entries {
-        let mut builder = CollisionMeshBuilder::default();
-        builder.append_triangle_mesh(&entry.vertices, &entry.indices);
-        for collision_box in &entry.boxes {
-            builder.append_box(collision_box);
-        }
-        for sphere in &entry.spheres {
-            builder.append_sphere(sphere);
-        }
-        append_collision_mesh(
-            &mut meshes,
-            &mut scene_aabb,
-            builder,
-            format!("{} collision", display_collision_name(entry)),
-            base_orientation,
-        );
-
-        if !entry.shadow_indices.is_empty() {
-            let mut shadow = CollisionMeshBuilder::default();
-            shadow.append_triangle_mesh(&entry.shadow_vertices, &entry.shadow_indices);
-            append_collision_mesh(
-                &mut meshes,
-                &mut scene_aabb,
-                shadow,
-                format!("{} shadow", display_collision_name(entry)),
-                base_orientation,
-            );
-        }
-    }
-
-    if meshes.is_empty() {
-        return Err(DecodeError::NoGeometry);
+    for data in raw_meshes {
+        let mesh = mesh_from_data(&data, base_orientation, None);
+        scene_aabb = Some(match scene_aabb {
+            Some(aabb) => aabb.merged(mesh.aabb),
+            None => mesh.aabb,
+        });
+        meshes.push(mesh);
     }
 
     Ok(Scene {
@@ -426,6 +406,41 @@ pub fn build_scene_from_col(
     })
 }
 
+/// Convert parsed collision entries into raw preview meshes. The helper is
+/// shared by the embedded scene builder and the external PLY fallback so
+/// primitive-only Bully records are rendered consistently in both paths.
+pub(crate) fn collision_mesh_data(col: &ColFile) -> Vec<MeshData> {
+    let mut meshes = Vec::new();
+
+    for entry in &col.entries {
+        let mut builder = CollisionMeshBuilder::default();
+        builder.append_triangle_mesh(&entry.vertices, &entry.indices);
+        for collision_box in &entry.boxes {
+            builder.append_box(collision_box);
+        }
+        for sphere in &entry.spheres {
+            builder.append_sphere(sphere);
+        }
+        append_collision_mesh_data(
+            &mut meshes,
+            builder,
+            format!("{} collision", display_collision_name(entry)),
+        );
+
+        if !entry.shadow_indices.is_empty() {
+            let mut shadow = CollisionMeshBuilder::default();
+            shadow.append_triangle_mesh(&entry.shadow_vertices, &entry.shadow_indices);
+            append_collision_mesh_data(
+                &mut meshes,
+                shadow,
+                format!("{} shadow", display_collision_name(entry)),
+            );
+        }
+    }
+
+    meshes
+}
+
 /// Convenience: parse COL bytes, then build the embedded viewer scene.
 pub fn parse_and_build_scene_from_col(
     bytes: &[u8],
@@ -435,22 +450,15 @@ pub fn parse_and_build_scene_from_col(
     build_scene_from_col(&col, base_orientation)
 }
 
-fn append_collision_mesh(
-    meshes: &mut Vec<SceneMesh>,
-    scene_aabb: &mut Option<Aabb>,
+fn append_collision_mesh_data(
+    meshes: &mut Vec<MeshData>,
     builder: CollisionMeshBuilder,
     name: String,
-    base_orientation: BaseOrientation,
 ) {
     let Some(data) = builder.into_mesh_data(name) else {
         return;
     };
-    let mesh = mesh_from_data(&data, base_orientation, None);
-    *scene_aabb = Some(match *scene_aabb {
-        Some(aabb) => aabb.merged(mesh.aabb),
-        None => mesh.aabb,
-    });
-    meshes.push(mesh);
+    meshes.push(data);
 }
 
 fn display_collision_name(entry: &crate::parser::col::ColEntry) -> &str {
@@ -546,6 +554,8 @@ fn mesh_from_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::archive::ArchiveInfo;
+    use crate::parser::read_entry_data;
     use std::cell::RefCell;
 
     fn approx_pt(a: [f32; 3], b: [f32; 3]) -> bool {
@@ -644,6 +654,34 @@ mod tests {
         assert!(scene.has_geometry());
         assert!(scene.total_triangles() >= 12);
         assert!(scene.aabb.bounding_radius() > 0.0);
+    }
+
+    #[test]
+    fn decoder_builds_bully_collision_shape_variants_when_present() {
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let archive_path = stream.join("World.img");
+        if !archive_path.is_file() {
+            return;
+        }
+        let archive = ArchiveInfo::open(&archive_path)
+            .unwrap_or_else(|error| panic!("{} should open: {error}", archive_path.display()));
+
+        for name in ["aquabike.col", "AddBook.col", "AniPillo.col"] {
+            let entry = archive
+                .entries
+                .iter()
+                .find(|entry| entry.file_name.eq_ignore_ascii_case(name))
+                .unwrap_or_else(|| panic!("{name} should be present in World.img"));
+            let bytes = read_entry_data(&archive, entry)
+                .unwrap_or_else(|error| panic!("{name} should be readable: {error}"));
+            let scene = parse_and_build_scene_from_col(&bytes, BaseOrientation::Zup)
+                .unwrap_or_else(|error| panic!("{name} should build a scene: {error:?}"));
+            assert!(scene.has_geometry(), "{name} should have renderable geometry");
+            assert!(scene.total_triangles() > 0, "{name} should have triangles");
+            assert!(scene.aabb.bounding_radius().is_finite());
+        }
     }
 
     #[test]

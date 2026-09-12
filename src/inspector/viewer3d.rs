@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use crate::inspector::nif::{
     self, BlockPayload, NiTriShapeDataPayload, NiTriStripsDataPayload, NifFile,
 };
+use crate::inspector::scene3d::decode::collision_mesh_data;
 use crate::inspector::texture::{IdeMap, resolve_textures_for_nif};
 use crate::parser::col::ColFile;
 use crate::parser::dff::DffMesh;
@@ -501,8 +502,9 @@ fn export_col_viewer(col_data: Vec<u8>, name: String, tx: mpsc::UnboundedSender<
 }
 
 fn write_ply_from_col(path: &Path, col: &ColFile) -> std::io::Result<()> {
-    let total_verts: usize = col.entries.iter().map(|e| e.vertices.len()).sum();
-    let total_faces: usize = col.entries.iter().map(|e| e.indices.len() / 3).sum();
+    let meshes = collision_mesh_data(col);
+    let total_verts: usize = meshes.iter().map(|mesh| mesh.positions.len()).sum();
+    let total_faces: usize = meshes.iter().map(|mesh| mesh.indices.len() / 3).sum();
 
     if total_verts == 0 || total_faces == 0 {
         return Err(std::io::Error::new(
@@ -522,15 +524,15 @@ fn write_ply_from_col(path: &Path, col: &ColFile) -> std::io::Result<()> {
     writeln!(f, "property list uchar int vertex_indices")?;
     writeln!(f, "end_header")?;
 
-    for entry in &col.entries {
-        for p in &entry.vertices {
+    for mesh in &meshes {
+        for p in &mesh.positions {
             writeln!(f, "{} {} {}", p[0], p[1], p[2])?;
         }
     }
 
     let mut base: u32 = 0;
-    for entry in &col.entries {
-        for chunk in entry.indices.chunks(3) {
+    for mesh in &meshes {
+        for chunk in mesh.indices.chunks(3) {
             if chunk.len() == 3 {
                 writeln!(
                     f,
@@ -541,7 +543,7 @@ fn write_ply_from_col(path: &Path, col: &ColFile) -> std::io::Result<()> {
                 )?;
             }
         }
-        base += entry.vertices.len() as u32;
+        base += mesh.positions.len() as u32;
     }
 
     Ok(())
@@ -1066,6 +1068,7 @@ mod tests {
         BlockMeta, Endian, Footer, Matrix33, NiSourceTextureData, NiTexturingPropertyData, NifFile,
         TexDesc, Triangle, Vector3,
     };
+    use crate::parser::col::{ColEntry, ColSphere, ColSurface, ColVersion};
 
     fn identity_transform(translation: [f32; 3], scale: f32) -> Transform3d {
         Transform3d {
@@ -1185,6 +1188,44 @@ mod tests {
                 "{name} head should be above the viewer origin"
             );
         }
+    }
+
+    #[test]
+    fn external_col_ply_writer_includes_primitive_only_geometry() {
+        let col = ColFile {
+            entries: vec![ColEntry {
+                version: ColVersion::Bully,
+                model_name: String::from("sphere"),
+                num_vertices: 0,
+                vertices: Vec::new(),
+                num_faces: 0,
+                indices: Vec::new(),
+                faces: Vec::new(),
+                spheres: vec![ColSphere {
+                    center: [0.0, 0.0, 0.0],
+                    radius: 1.0,
+                    surface: ColSurface::default(),
+                }],
+                boxes: Vec::new(),
+                face_groups: Vec::new(),
+                shadow_vertices: Vec::new(),
+                shadow_faces: Vec::new(),
+                shadow_indices: Vec::new(),
+                num_spheres: 1,
+                num_boxes: 0,
+                has_shadow: false,
+            }],
+        };
+        let path = std::env::temp_dir().join(format!(
+            "imgeditor-col-ply-test-{}.ply",
+            std::process::id()
+        ));
+
+        write_ply_from_col(&path, &col).expect("primitive COL should export to PLY");
+        let output = std::fs::read_to_string(&path).expect("PLY should be readable");
+        let _ = std::fs::remove_file(&path);
+        assert!(output.contains("element vertex 153"));
+        assert!(output.contains("element face 256"));
     }
 
     #[test]

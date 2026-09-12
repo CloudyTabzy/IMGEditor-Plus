@@ -1,10 +1,16 @@
-//! GTA Collision (`.col`) file parser.
+//! GTA and Bully collision (`.col`) file parser.
 //!
-//! Supported versions:
+//! Classic RenderWare versions:
 //! - **COL1** (`COLL`): legacy float32 vertices and 32-bit face indices
 //! - **COL2** (`COL2`): offset-based collision records with int16 vertices
 //! - **COL3** (`COL3`): COL2 plus an optional shadow mesh
 //! - **COL4** (`COL4`): COL3 with an additional header word
+//!
+//! Bully: Scholarship Edition also uses `COL3` (along with legacy `COL2` and
+//! `COLL` records), but its embedded collision records have a different
+//! header and a tagged union of sphere, box, or compressed-mesh payloads.
+//! Those records are normalized into the same geometry model as the classic
+//! formats so callers do not need a game-specific viewer path.
 //!
 //! A `.col` file is a concatenation of entries (one per model). Each entry
 //! carries its own header, bounding shapes, and optionally a collision mesh.
@@ -21,6 +27,9 @@ pub enum ColVersion {
     V2, // COL2
     V3, // COL3
     V4, // COL4
+    /// Bully: Scholarship Edition's custom collision dialect. Bully files
+    /// can retain `COLL`, `COL2`, or `COL3` magic while using this layout.
+    Bully,
 }
 
 /// Surface metadata carried by a collision primitive or face.
@@ -108,9 +117,32 @@ pub struct ColEntry {
 }
 
 /// Parse a complete `.col` file, returning every entry that contains
-/// triangles, spheres, boxes, or a shadow mesh. The scene decoder can
-/// tessellate the primitive-only entries for the embedded viewer.
+/// triangles, spheres, boxes, or a shadow mesh. Classic RenderWare COL
+/// records are attempted first; a recognized Bully stream that does not
+/// match the classic layout is then tested against the Bully dialect.
 pub fn parse_col(bytes: &[u8]) -> Result<ColFile, ColError> {
+    let classic = parse_classic_col(bytes);
+    if classic.is_ok() || !is_bully_magic(bytes) {
+        return classic;
+    }
+
+    // Keep the classic error when neither parser accepts the stream. This
+    // prevents a malformed classic file from being reported only through a
+    // less-specific Bully fallback diagnostic.
+    match parse_bully_col(bytes) {
+        Ok(col) => Ok(col),
+        Err(ColError::NoGeometry) => Err(ColError::NoGeometry),
+        Err(_) => classic,
+    }
+}
+
+fn is_bully_magic(bytes: &[u8]) -> bool {
+    bytes
+        .get(..4)
+        .is_some_and(|magic| matches!(magic, b"COLL" | b"COL2" | b"COL3"))
+}
+
+fn parse_classic_col(bytes: &[u8]) -> Result<ColFile, ColError> {
     if bytes.len() < 8 {
         return Err(ColError::TooShort);
     }
@@ -175,6 +207,383 @@ pub fn parse_col(bytes: &[u8]) -> Result<ColFile, ColError> {
     Ok(ColFile { entries })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BullyColLayout {
+    /// `COL2`/`COL3`: the type words precede the object id and bounds.
+    Typed,
+    /// `COLL`: an older Bully record without the type words.
+    Legacy,
+}
+
+impl BullyColLayout {
+    fn from_magic(magic: [u8; 4]) -> Option<Self> {
+        match &magic {
+            b"COL2" | b"COL3" => Some(Self::Typed),
+            b"COLL" => Some(Self::Legacy),
+            _ => None,
+        }
+    }
+
+    fn object_id_offset(self) -> usize {
+        match self {
+            Self::Typed => 32,
+            Self::Legacy => 28,
+        }
+    }
+
+    fn sphere_count_offset(self) -> usize {
+        match self {
+            Self::Typed => 84,
+            Self::Legacy => 80,
+        }
+    }
+
+    fn sphere_data_offset(self) -> usize {
+        match self {
+            Self::Typed => 88,
+            Self::Legacy => 84,
+        }
+    }
+
+    fn box_count_offset(self) -> Option<usize> {
+        match self {
+            Self::Typed => Some(92),
+            Self::Legacy => None,
+        }
+    }
+
+    fn vertex_count_offset(self) -> Option<usize> {
+        match self {
+            Self::Typed => Some(96),
+            Self::Legacy => None,
+        }
+    }
+
+    fn minimum_entry_size(self) -> usize {
+        match self {
+            // The vertex-count word is at offset 96 for the typed layout.
+            Self::Typed => 100,
+            // The sphere-count word is at offset 80 for the legacy layout.
+            Self::Legacy => 84,
+        }
+    }
+}
+
+/// Parse the Bully: Scholarship Edition collision dialect.
+///
+/// Unlike the classic GTA COL layouts, a Bully record has no model name and
+/// stores its type/object metadata before the bounds. The typed `COL2`/`COL3`
+/// layout selects its payload by the first non-zero count: sphere records
+/// start at offset 88, box records at offset 96, and compressed mesh records
+/// begin with a vertex count at offset 96. Legacy `COLL` records use the same
+/// sphere representation at offsets 80/84 and do not carry the typed words.
+/// The declared record size remains the authoritative boundary; sector
+/// padding outside the last record is ignored.
+pub fn parse_bully_col(bytes: &[u8]) -> Result<ColFile, ColError> {
+    if bytes.len() < 8 {
+        return Err(ColError::TooShort);
+    }
+
+    let mut entries = Vec::new();
+    let mut position = 0usize;
+
+    while position < bytes.len() {
+        if bytes.len() - position < 8 {
+            if bytes[position..].iter().all(|&byte| byte == 0) {
+                break;
+            }
+            return Err(ColError::Truncated);
+        }
+
+        let magic: [u8; 4] = bytes[position..position + 4]
+            .try_into()
+            .expect("four-byte Bully COL magic");
+        if magic == [0; 4] {
+            if bytes[position..].iter().any(|&byte| byte != 0) {
+                return Err(ColError::Invalid(
+                    "non-zero bytes follow the final Bully COL entry".to_string(),
+                ));
+            }
+            break;
+        }
+        let Some(layout) = BullyColLayout::from_magic(magic) else {
+            return Err(ColError::UnknownMagic(magic));
+        };
+
+        let body_size = read_u32_at(bytes, position + 4, bytes.len())? as usize;
+        let entry_end = position
+            .checked_add(8)
+            .and_then(|start| start.checked_add(body_size))
+            .ok_or(ColError::Truncated)?;
+        if entry_end > bytes.len() {
+            return Err(ColError::Truncated);
+        }
+        if entry_end - position < layout.minimum_entry_size() {
+            return Err(ColError::Invalid(
+                "Bully COL entry is smaller than its fixed header".to_string(),
+            ));
+        }
+
+        if let Some(entry) = parse_bully_entry(bytes, position, entry_end, layout)? {
+            entries.push(entry);
+        }
+        position = entry_end;
+    }
+
+    if entries.is_empty() {
+        return Err(ColError::NoGeometry);
+    }
+
+    Ok(ColFile { entries })
+}
+
+fn parse_bully_entry(
+    bytes: &[u8],
+    entry_start: usize,
+    entry_end: usize,
+    layout: BullyColLayout,
+) -> Result<Option<ColEntry>, ColError> {
+    // The object id/type fields are retained in the generated name because
+    // Bully records do not carry the model name used by classic COL files.
+    let object_id = read_u32_at(
+        bytes,
+        entry_offset(entry_start, layout.object_id_offset(), entry_end)?,
+        entry_end,
+    )?;
+    let model_name = match layout {
+        BullyColLayout::Typed => {
+            let major_type = read_u16_at(
+                bytes,
+                entry_offset(entry_start, 8, entry_end)?,
+                entry_end,
+            )?;
+            let minor_type = read_u16_at(
+                bytes,
+                entry_offset(entry_start, 10, entry_end)?,
+                entry_end,
+            )?;
+            format!("object_{object_id}_{major_type}_{minor_type}")
+        }
+        BullyColLayout::Legacy => format!("object_{object_id}"),
+    };
+
+    let sphere_count = read_u32_at(
+        bytes,
+        entry_offset(entry_start, layout.sphere_count_offset(), entry_end)?,
+        entry_end,
+    )?;
+    if sphere_count != 0 {
+        let spheres = parse_bully_spheres(
+            bytes,
+            entry_start,
+            entry_end,
+            layout.sphere_data_offset(),
+            sphere_count,
+        )?;
+        return Ok(make_entry(
+            ColEntryMetadata {
+                version: ColVersion::Bully,
+                model_name,
+                num_vertices: 0,
+                num_faces: 0,
+                num_spheres: sphere_count,
+                num_boxes: 0,
+                has_shadow: false,
+            },
+            ColGeometry {
+                spheres,
+                ..ColGeometry::default()
+            },
+        ));
+    }
+
+    let Some(box_count_offset) = layout.box_count_offset() else {
+        return Ok(None);
+    };
+    let box_count = read_u32_at(
+        bytes,
+        entry_offset(entry_start, box_count_offset, entry_end)?,
+        entry_end,
+    )?;
+    if box_count != 0 {
+        let boxes = parse_bully_boxes(bytes, entry_start, entry_end, box_count)?;
+        return Ok(make_entry(
+            ColEntryMetadata {
+                version: ColVersion::Bully,
+                model_name,
+                num_vertices: 0,
+                num_faces: 0,
+                num_spheres: 0,
+                num_boxes: box_count,
+                has_shadow: false,
+            },
+            ColGeometry {
+                boxes,
+                ..ColGeometry::default()
+            },
+        ));
+    }
+
+    let Some(vertex_count_offset) = layout.vertex_count_offset() else {
+        return Ok(None);
+    };
+    let vertex_count = read_u32_at(
+        bytes,
+        entry_offset(entry_start, vertex_count_offset, entry_end)?,
+        entry_end,
+    )?;
+    if vertex_count == 0 {
+        return Ok(None);
+    }
+    let (vertices, indices, faces, face_count) =
+        parse_bully_mesh(bytes, entry_start, entry_end, vertex_count)?;
+
+    Ok(make_entry(
+        ColEntryMetadata {
+            version: ColVersion::Bully,
+            model_name,
+            num_vertices: vertex_count,
+            num_faces: face_count,
+            num_spheres: 0,
+            num_boxes: 0,
+            has_shadow: false,
+        },
+        ColGeometry {
+            vertices,
+            indices,
+            faces,
+            ..ColGeometry::default()
+        },
+    ))
+}
+
+fn parse_bully_spheres(
+    bytes: &[u8],
+    entry_start: usize,
+    entry_end: usize,
+    sphere_data_offset: usize,
+    sphere_count: u32,
+) -> Result<Vec<ColSphere>, ColError> {
+    let count = checked_count(sphere_count, "Bully spheres")?;
+    let start = entry_offset(entry_start, sphere_data_offset, entry_end)?;
+    checked_items_end(start, count, 20, entry_end)?;
+    let mut cursor = start;
+    let mut spheres = Vec::with_capacity(count);
+    for _ in 0..count {
+        let center = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        let radius = read_f32(bytes, &mut cursor, entry_end)?;
+        spheres.push(ColSphere {
+            center,
+            radius,
+            surface: read_surface(bytes, &mut cursor, entry_end)?,
+        });
+    }
+    Ok(spheres)
+}
+
+fn parse_bully_boxes(
+    bytes: &[u8],
+    entry_start: usize,
+    entry_end: usize,
+    box_count: u32,
+) -> Result<Vec<ColBox>, ColError> {
+    let count = checked_count(box_count, "Bully boxes")?;
+    let geometry_start = entry_offset(entry_start, 96, entry_end)?;
+    let geometry_end = checked_items_end(geometry_start, count, 32, entry_end)?;
+    let surface_end = checked_items_end(geometry_end, count, 4, entry_end)?;
+
+    let mut cursor = geometry_start;
+    let mut bounds = Vec::with_capacity(count);
+    for _ in 0..count {
+        let min = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        // Bully stores one unused word between the minimum and maximum
+        // vectors and another at the end of the 32-byte box record.
+        read_bytes(bytes, &mut cursor, entry_end, 4)?;
+        let max = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        read_bytes(bytes, &mut cursor, entry_end, 4)?;
+        bounds.push((min, max));
+    }
+
+    let mut surface_cursor = geometry_end;
+    let mut boxes = Vec::with_capacity(count);
+    for (min, max) in bounds {
+        boxes.push(ColBox {
+            min,
+            max,
+            surface: read_surface(bytes, &mut surface_cursor, entry_end)?,
+        });
+    }
+    debug_assert_eq!(surface_cursor, surface_end);
+    Ok(boxes)
+}
+
+fn parse_bully_mesh(
+    bytes: &[u8],
+    entry_start: usize,
+    entry_end: usize,
+    vertex_count: u32,
+) -> Result<(Vec<[f32; 3]>, Vec<u32>, Vec<ColFace>, u32), ColError> {
+    let vertex_count_usize = checked_count(vertex_count, "Bully vertices")?;
+    let vertex_start = entry_offset(entry_start, 100, entry_end)?;
+    let vertex_end = checked_items_end(vertex_start, vertex_count_usize, 6, entry_end)?;
+    let face_start = vertex_end
+        .checked_add(3)
+        .map(|offset| offset & !3)
+        .ok_or(ColError::Truncated)?;
+    let face_count = read_u32_at(bytes, face_start, entry_end)?;
+    let face_count_usize = checked_count(face_count, "Bully faces")?;
+    let face_data_start = face_start.checked_add(4).ok_or(ColError::Truncated)?;
+    checked_items_end(face_data_start, face_count_usize, 8, entry_end)?;
+
+    let mut vertex_cursor = vertex_start;
+    let mut vertices = Vec::with_capacity(vertex_count_usize);
+    for _ in 0..vertex_count_usize {
+        vertices.push([
+            read_i16(bytes, &mut vertex_cursor, entry_end)? as f32 / 128.0,
+            read_i16(bytes, &mut vertex_cursor, entry_end)? as f32 / 128.0,
+            read_i16(bytes, &mut vertex_cursor, entry_end)? as f32 / 128.0,
+        ]);
+    }
+
+    let mut face_cursor = face_data_start;
+    let mut faces = Vec::with_capacity(face_count_usize);
+    let mut indices = Vec::with_capacity(face_count_usize.saturating_mul(3));
+    for _ in 0..face_count_usize {
+        let a = read_u16(bytes, &mut face_cursor, entry_end)? as u32;
+        let b = read_u16(bytes, &mut face_cursor, entry_end)? as u32;
+        let c = read_u16(bytes, &mut face_cursor, entry_end)? as u32;
+        let material = read_u8(bytes, &mut face_cursor, entry_end)?;
+        let light = read_u8(bytes, &mut face_cursor, entry_end)?;
+        faces.push(ColFace {
+            a,
+            b,
+            c,
+            surface: ColSurface {
+                material,
+                light,
+                ..ColSurface::default()
+            },
+        });
+        if valid_triangle([a, b, c], vertices.len()) {
+            indices.extend_from_slice(&[a, b, c]);
+        }
+    }
+
+    Ok((vertices, indices, faces, face_count))
+}
+
 fn parse_entry(
     bytes: &[u8],
     entry_start: usize,
@@ -201,6 +610,7 @@ fn parse_entry(
         ColVersion::V2 | ColVersion::V3 | ColVersion::V4 => {
             parse_offset_entry(bytes, entry_start, cursor, entry_end, version, model_name)
         }
+        ColVersion::Bully => unreachable!("Bully entries use the dedicated parser"),
     }
 }
 
@@ -815,6 +1225,14 @@ fn relative_position(base: usize, offset: u32, limit: usize) -> Result<usize, Co
     Ok(position)
 }
 
+fn entry_offset(entry_start: usize, offset: usize, entry_end: usize) -> Result<usize, ColError> {
+    let position = entry_start.checked_add(offset).ok_or(ColError::Truncated)?;
+    if position > entry_end {
+        return Err(ColError::Truncated);
+    }
+    Ok(position)
+}
+
 fn read_bytes<'a>(
     bytes: &'a [u8],
     cursor: &mut usize,
@@ -837,6 +1255,18 @@ fn read_u8(bytes: &[u8], cursor: &mut usize, limit: usize) -> Result<u8, ColErro
 fn read_u16(bytes: &[u8], cursor: &mut usize, limit: usize) -> Result<u16, ColError> {
     Ok(u16::from_le_bytes(
         read_bytes(bytes, cursor, limit, 2)?
+            .try_into()
+            .expect("bounded u16 read"),
+    ))
+}
+
+fn read_u16_at(bytes: &[u8], position: usize, limit: usize) -> Result<u16, ColError> {
+    let end = position.checked_add(2).ok_or(ColError::Truncated)?;
+    if end > limit || end > bytes.len() {
+        return Err(ColError::Truncated);
+    }
+    Ok(u16::from_le_bytes(
+        bytes[position..end]
             .try_into()
             .expect("bounded u16 read"),
     ))
@@ -981,6 +1411,119 @@ mod tests {
         data[4..8].copy_from_slice(&body_size.to_le_bytes());
         data.extend_from_slice(&body);
         data
+    }
+
+    fn finish_bully_record(mut data: Vec<u8>) -> Vec<u8> {
+        let body_size = u32::try_from(data.len() - 8).expect("Bully fixture fits");
+        data[4..8].copy_from_slice(&body_size.to_le_bytes());
+        data
+    }
+
+    fn bully_typed_sphere_fixture(magic: &[u8; 4]) -> Vec<u8> {
+        let mut data = vec![0u8; 88];
+        data[0..4].copy_from_slice(magic);
+        data[8..10].copy_from_slice(&4u16.to_le_bytes());
+        data[10..12].copy_from_slice(&1u16.to_le_bytes());
+        data[32..36].copy_from_slice(&123u32.to_le_bytes());
+        data[84..88].copy_from_slice(&1u32.to_le_bytes());
+        for value in [1.0f32, 2.0, 3.0, 4.0] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&[5, 6, 7, 8]);
+        data.extend_from_slice(&[0; 16]);
+        finish_bully_record(data)
+    }
+
+    fn bully_legacy_sphere_fixture() -> Vec<u8> {
+        let mut data = vec![0u8; 84];
+        data[0..4].copy_from_slice(b"COLL");
+        data[28..32].copy_from_slice(&456u32.to_le_bytes());
+        data[80..84].copy_from_slice(&1u32.to_le_bytes());
+        for value in [-1.0f32, -2.0, -3.0, 0.5] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&[9, 10, 11, 12]);
+        data.extend_from_slice(&[0; 16]);
+        finish_bully_record(data)
+    }
+
+    fn bully_box_fixture() -> Vec<u8> {
+        let mut data = vec![0u8; 96];
+        data[0..4].copy_from_slice(b"COL3");
+        data[8..10].copy_from_slice(&4u16.to_le_bytes());
+        data[10..12].copy_from_slice(&1u16.to_le_bytes());
+        data[32..36].copy_from_slice(&789u32.to_le_bytes());
+        data[92..96].copy_from_slice(&1u32.to_le_bytes());
+        for value in [-1.0f32, -2.0, -3.0] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&[0; 4]);
+        for value in [1.0f32, 2.0, 3.0] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&[0; 4]);
+        data.extend_from_slice(&[13, 14, 15, 16]);
+        data.extend_from_slice(&[0; 8]);
+        finish_bully_record(data)
+    }
+
+    fn bully_mesh_fixture() -> Vec<u8> {
+        let mut data = vec![0u8; 100];
+        data[0..4].copy_from_slice(b"COL2");
+        data[8..10].copy_from_slice(&4u16.to_le_bytes());
+        data[10..12].copy_from_slice(&3u16.to_le_bytes());
+        data[32..36].copy_from_slice(&987u32.to_le_bytes());
+        data[96..100].copy_from_slice(&3u32.to_le_bytes());
+        for vertex in [[0i16, 0, 0], [128, 0, 0], [0, 128, 0]] {
+            for value in vertex {
+                data.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        data.extend_from_slice(&[0; 2]);
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&2u16.to_le_bytes());
+        data.extend_from_slice(&[17, 18]);
+        data.extend_from_slice(&[0; 8]);
+        finish_bully_record(data)
+    }
+
+    #[test]
+    fn parses_bully_sphere_layouts_across_magic_variants() {
+        let mut data = bully_typed_sphere_fixture(b"COL3");
+        data.extend_from_slice(&bully_typed_sphere_fixture(b"COL2"));
+        data.extend_from_slice(&bully_legacy_sphere_fixture());
+
+        let parsed = parse_col(&data).expect("Bully sphere records should parse");
+        assert_eq!(parsed.entries.len(), 3);
+        assert!(parsed.entries.iter().all(|entry| {
+            entry.version == ColVersion::Bully
+                && entry.vertices.is_empty()
+                && entry.indices.is_empty()
+                && entry.spheres.len() == 1
+        }));
+        assert_eq!(parsed.entries[0].model_name, "object_123_4_1");
+        assert_eq!(parsed.entries[2].model_name, "object_456");
+        assert_eq!(parsed.entries[0].spheres[0].surface.material, 5);
+        assert_eq!(parsed.entries[2].spheres[0].surface.light, 12);
+    }
+
+    #[test]
+    fn parses_bully_boxes_and_compressed_meshes() {
+        let mut data = bully_box_fixture();
+        data.extend_from_slice(&bully_mesh_fixture());
+
+        let parsed = parse_col(&data).expect("Bully box and mesh records should parse");
+        assert_eq!(parsed.entries.len(), 2);
+        assert_eq!(parsed.entries[0].boxes.len(), 1);
+        assert_eq!(parsed.entries[0].boxes[0].min, [-1.0, -2.0, -3.0]);
+        assert_eq!(parsed.entries[0].boxes[0].max, [1.0, 2.0, 3.0]);
+        assert_eq!(parsed.entries[0].boxes[0].surface.material, 13);
+        assert_eq!(parsed.entries[1].vertices.len(), 3);
+        assert_eq!(parsed.entries[1].vertices[1], [1.0, 0.0, 0.0]);
+        assert_eq!(parsed.entries[1].indices, vec![0, 1, 2]);
+        assert_eq!(parsed.entries[1].faces[0].surface.material, 17);
     }
 
     #[test]
@@ -1144,5 +1687,75 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "expected at least one retail Vice City COL fixture");
+    }
+
+    #[test]
+    fn parses_bully_world_collision_variants_when_present() {
+        let Some(stream) = crate::test_paths::bully_stream() else {
+            return;
+        };
+        let archive_path = stream.join("World.img");
+        if !archive_path.is_file() {
+            return;
+        }
+
+        let archive = ArchiveInfo::open(&archive_path)
+            .unwrap_or_else(|error| panic!("{} should open: {error}", archive_path.display()));
+        let mut checked = 0;
+        let mut magic_counts = [0usize; 3];
+        let mut sphere_entries = 0;
+        let mut box_entries = 0;
+        let mut mesh_entries = 0;
+
+        for entry in archive
+            .entries
+            .iter()
+            .filter(|entry| entry.file_name.to_ascii_lowercase().ends_with(".col"))
+        {
+            let bytes = read_entry_data(&archive, entry).unwrap_or_else(|error| {
+                panic!("{} should be readable: {error}", entry.file_name)
+            });
+            match bytes.get(..4) {
+                Some(b"COLL") => magic_counts[0] += 1,
+                Some(b"COL2") => magic_counts[1] += 1,
+                Some(b"COL3") => magic_counts[2] += 1,
+                other => panic!(
+                    "{} has unexpected Bully COL magic: {other:?}",
+                    entry.file_name
+                ),
+            }
+
+            match parse_col(&bytes) {
+                Ok(parsed) => {
+                    assert!(
+                        parsed
+                            .entries
+                            .iter()
+                            .all(|entry| entry.version == ColVersion::Bully),
+                        "{} should use the Bully parser",
+                        entry.file_name
+                    );
+                    for parsed_entry in parsed.entries {
+                        sphere_entries += usize::from(!parsed_entry.spheres.is_empty());
+                        box_entries += usize::from(!parsed_entry.boxes.is_empty());
+                        mesh_entries += usize::from(
+                            !parsed_entry.vertices.is_empty() && !parsed_entry.indices.is_empty(),
+                        );
+                    }
+                }
+                Err(ColError::NoGeometry) => {
+                    // A few shipped collision containers are intentionally
+                    // empty; they are valid but have nothing to render.
+                }
+                Err(error) => panic!("{} should parse: {error}", entry.file_name),
+            }
+            checked += 1;
+        }
+
+        assert!(checked > 0, "expected Bully World.img collision entries");
+        assert!(magic_counts.iter().all(|count| *count > 0));
+        assert!(sphere_entries > 0, "Bully sphere records should be visible");
+        assert!(box_entries > 0, "Bully box records should be visible");
+        assert!(mesh_entries > 0, "Bully mesh records should be visible");
     }
 }

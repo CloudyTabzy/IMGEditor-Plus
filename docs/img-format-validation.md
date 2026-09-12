@@ -239,6 +239,18 @@ The collision parser now recognizes the legacy `COLL` header and the later
   normal scene cache, Z-up conversion, camera framing, wire overlay, and wgpu
   validation used by DFF/NIF previews.
 
+Bully Scholarship Edition requires a separate dialect despite reusing the
+`COLL`/`COL2`/`COL3` magic values. In the retail `World.img` corpus, the Rust
+parser observed 68 typed `COL2`, 3,781 typed `COL3`, and 14 legacy `COLL`
+records. Bully's typed records use a 96-byte header followed by a tagged
+union of spheres, AABB boxes, or signed-int16 compressed meshes; its legacy
+`COLL` records use the same sphere representation four bytes earlier and omit
+the type words. `ColVersion::Bully` is selected only after classic parsing
+does not accept the record and the Bully layout passes its bounded count,
+offset, and record-size checks. The embedded and external PLY viewers share
+the same tessellation path, so Bully files containing only spheres or boxes
+are still renderable.
+
 The optional San Andreas corpus test parses representative COL2/COL3 entries
 from the supplied `gta3.img` and `gta_int.img` archives, including renderable
 collision triangles. A real Vice City `airport.col` is also covered by the

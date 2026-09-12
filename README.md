@@ -141,7 +141,7 @@ for the engineering story.
 ### 🖼️ 3D Model Viewer
 - ✅ **NIF** (Gamebryo 20.3.0.9) — Bully Scholarship Edition models, textured OBJ+MTL or PLY export → system viewer
 - ✅ **DFF** (RenderWare Clump) — GTA III/VC/SA-style PC models in the embedded viewer with frame/atomic transforms, material splits, and TXD diffuse textures; PLY fallback remains available
-- ✅ **COL** (Collision v1/v2/v3/v4) — embedded collision mesh preview with tessellated sphere/box debug shapes and shadow meshes; PLY export → system viewer remains available
+- ✅ **COL** (Collision v1/v2/v3/v4) — embedded collision mesh preview with tessellated sphere/box debug shapes and shadow meshes; Bully Scholarship Edition's validated `COLL`/`COL2`/`COL3` dialect is supported too, including primitive-only files; PLY export → system viewer remains available
 
 ### 🎨 Texture Viewer
 - ✅ **TXD** (RenderWare Texture Dictionary) — PC D3D8/D3D9 plus legacy platform-independent parser + bounded raster decoder (DXT1/2/3/4/5, 1555, 565, 4444, 8888, PAL4, PAL8, + more)
