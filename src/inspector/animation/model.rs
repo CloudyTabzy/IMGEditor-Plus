@@ -151,6 +151,8 @@ pub enum ModelError {
         "node {node} has a non-finite translation/scale or a degenerate rotation; such a transform propagates NaN into every posed vertex"
     )]
     InvalidNodeTransform { node: u32 },
+    #[error("the source_to_view display transform contains non-finite values")]
+    InvalidDisplayTransform,
 }
 
 /// Validated, immutable model asset shared through `Arc`.
@@ -199,6 +201,7 @@ impl ModelAsset {
         };
         asset.eval_order = asset.compute_eval_order()?;
         asset.validate_nodes()?;
+        asset.validate_display_transform()?;
         asset.validate_meshes()?;
         Ok(asset)
     }
@@ -229,6 +232,22 @@ impl ModelAsset {
             .iter()
             .find(|node| node.mesh == Some(mesh_index))
             .map(|node| node.id)
+    }
+
+    /// The display transform enters every evaluated pose; a non-finite
+    /// matrix would turn every posed vertex into NaN. Node transforms and
+    /// vertex data are validated separately.
+    fn validate_display_transform(&self) -> Result<(), ModelError> {
+        if self
+            .source_to_view
+            .to_cols_array()
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            Ok(())
+        } else {
+            Err(ModelError::InvalidDisplayTransform)
+        }
     }
 
     /// Default locals feed every evaluation, so a non-finite translation,
@@ -569,6 +588,31 @@ mod tests {
             Err(ModelError::InvalidNodeTransform { node: 0 })
         ));
         assert!(build(NodeTransform::IDENTITY).is_ok());
+    }
+
+    #[test]
+    fn non_finite_source_to_view_is_rejected() {
+        let result = ModelAsset::new(
+            "m".into(),
+            "test".into(),
+            simple_nodes(),
+            Vec::new(),
+            Mat4::from_cols_array(&[f32::NAN; 16]),
+            BaseOrientation::Yup,
+            None,
+        );
+        assert!(matches!(result, Err(ModelError::InvalidDisplayTransform)));
+        // An identity display transform is still admitted.
+        let ok = ModelAsset::new(
+            "m".into(),
+            "test".into(),
+            simple_nodes(),
+            Vec::new(),
+            Mat4::IDENTITY,
+            BaseOrientation::Yup,
+            None,
+        );
+        assert!(ok.is_ok());
     }
 
     #[test]

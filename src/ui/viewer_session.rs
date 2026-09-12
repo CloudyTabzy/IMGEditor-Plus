@@ -284,6 +284,11 @@ impl AnimationSession {
             Vec::new()
         };
         let time_changed = (advance.time - before).abs() > 1e-12;
+        if advance.ended {
+            // The held end pose is the clip's own final pose, never a
+            // leftover blend with the outgoing clip.
+            self.crossfade = None;
+        }
         if time_changed || advance.paused_by_gap {
             self.evaluate();
         }
@@ -312,6 +317,9 @@ impl AnimationSession {
 
     pub fn stop(&mut self, now: Instant) {
         self.transport.stop(now);
+        // Stop inspects the incoming clip at its start; a running fade must
+        // not leave the pose blended with the outgoing clip.
+        self.crossfade = None;
         self.evaluate();
     }
 
@@ -778,6 +786,47 @@ mod tests {
         );
         session.advance(switch_at + Duration::from_millis(1310));
         assert!(!session.is_crossfading());
+    }
+
+    #[test]
+    fn stop_finalizes_a_running_crossfade() {
+        let mut session = demo_session();
+        session.panel.crossfade = true;
+        let t0 = Instant::now();
+        session.play(t0);
+        session.advance(t0 + Duration::from_millis(50));
+        session.select_clip(wave_id(&session), t0 + Duration::from_millis(50));
+        assert!(session.is_crossfading());
+        session.stop(t0 + Duration::from_millis(60));
+        assert!(!session.is_crossfading(), "stop must not hold a blend");
+        assert!(
+            pose_matches_displayed_time(&session),
+            "stopped pose must be the incoming clip's start pose"
+        );
+    }
+
+    #[test]
+    fn reaching_the_end_finalizes_a_running_crossfade() {
+        let mut session = demo_session();
+        session.panel.crossfade = true;
+        let t0 = Instant::now();
+        session.play(t0);
+        session.select_clip(wave_id(&session), t0 + Duration::from_millis(10));
+        assert!(session.is_crossfading());
+        session.set_loop_mode(t0 + Duration::from_millis(20), crate::inspector::animation::transport::LoopMode::Once);
+        // A 50 ms play range ends playback before the 150 ms fade completes;
+        // the held pose must be the clip's end pose, not a blend.
+        session.set_range(t0 + Duration::from_millis(30), 0.0, 0.05);
+        let advance = session.advance(t0 + Duration::from_millis(200));
+        assert!(advance.ended, "playback must end inside the fade");
+        assert!(
+            !session.is_crossfading(),
+            "the end pose must not stay blended"
+        );
+        assert!(
+            pose_matches_displayed_time(&session),
+            "the held pose must be the clip's own end pose"
+        );
     }
 
     #[test]

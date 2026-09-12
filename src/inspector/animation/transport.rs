@@ -255,11 +255,20 @@ impl Transport {
     }
 
     /// Any transition outside a playing advance mutates the clock base:
-    /// the per-frame played-time delta and the marker-wrap base both become
-    /// invalid until the next playing advance re-establishes them.
+    /// the per-frame played-time delta resets, and the marker wrap baseline
+    /// re-anchors at the current position instead of being discarded — the
+    /// first advance after a transition may already carry the position
+    /// across a loop boundary (resume from 0.98 s into a fresh loop), and
+    /// those crossings must still be reported.
     fn clock_dirty(&mut self) {
         self.last_advance = None;
-        self.wraps_since_mark = None;
+        let (start, end) = self.range;
+        let span = end - start;
+        self.wraps_since_mark = Some(if span > 0.0 {
+            (((self.anchor_clip - start) / span).floor()).max(0.0) as u32
+        } else {
+            0
+        });
     }
 
     /// Advance once per redraw while playing. Returns the time to
@@ -815,6 +824,42 @@ mod tests {
             previous = advance.time;
         }
         assert_eq!(fired, 3);
+    }
+
+    #[test]
+    fn markers_survive_the_first_advance_after_a_resume() {
+        // Pausing at 0.98 s rebases the clock; the first advance after
+        // resuming carries the position across the loop boundary into
+        // 0.02 s. The old baseline reset reported zero wraps for that
+        // frame and swallowed both boundary markers.
+        let start = Instant::now();
+        let mut clip = clip_seconds(1.0);
+        clip.markers = vec![
+            ClipMarker {
+                time: 0.99,
+                label: "tail".into(),
+            },
+            ClipMarker {
+                time: 0.01,
+                label: "head".into(),
+            },
+        ];
+        let mut transport = Transport::default();
+        transport.set_clip(&clip, start);
+        transport.play(start);
+        transport.pause(start + Duration::from_millis(980));
+        transport.play(start + Duration::from_millis(1000));
+        let advance = transport.advance(start + Duration::from_millis(1040));
+        assert_eq!(advance.wraps, 1, "the resumed frame crossed one boundary");
+        assert!((advance.time - 0.02).abs() < 1e-9);
+        let crossed = Transport::crossed_markers(
+            &clip.markers,
+            0.98,
+            advance.time,
+            advance.wraps,
+            transport.range(),
+        );
+        assert_eq!(crossed.len(), 2, "both boundary markers must be reported");
     }
 
     #[test]

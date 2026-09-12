@@ -210,8 +210,11 @@ impl canvas::Program<Message> for TimelineProgram {
                     ),
                     DragKind::Pan { last_x } => {
                         let dx = x - last_x;
-                        if dx.abs() > f32::EPSILON {
-                            let span = window.1 - window.0;
+                        let span = window.1 - window.0;
+                        // Panning only makes sense while part of the clip is
+                        // scrolled out of view; a zero-duration clip has no
+                        // scrollable range and `clamp` would panic.
+                        if dx.abs() > f32::EPSILON && view.duration > span {
                             let usable = (width - 2.0 * LANE_PAD).max(1.0) as f64;
                             let shift = -(dx as f64 / usable) * span;
                             let mut start = (window.0 + shift).clamp(0.0, view.duration - span);
@@ -579,6 +582,47 @@ mod tests {
             mouse::Cursor::Available(Point::new(300.0, 30.0)),
         );
         assert!(moved.is_none());
+    }
+
+    #[test]
+    fn panning_a_zero_duration_clip_does_not_panic() {
+        let handle = SceneHandle::new();
+        let (model, _) = crate::inspector::animation::fixtures::demo();
+        let library = Arc::new(crate::inspector::animation::AnimationLibrary {
+            name: "static".into(),
+            clips: vec![crate::inspector::animation::AnimationClip {
+                id: crate::inspector::animation::ClipId(7),
+                name: "static".into(),
+                duration: 0.0,
+                tracks: Vec::new(),
+                source_rate: None,
+                markers: Vec::new(),
+                provenance: "test".into(),
+            }],
+            provenance: "test".into(),
+        });
+        handle.install_animation_session(Arc::new(model), library, true, std::time::Instant::now());
+        let program = TimelineProgram::new(handle.into());
+        let mut state = TimelineState::default();
+        let press = Program::update(
+            &program,
+            &mut state,
+            &canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle)),
+            BOUNDS,
+            mouse::Cursor::Available(Point::new(200.0, 30.0)),
+        );
+        assert!(press.is_some(), "MMB inside the lane starts a pan");
+        // A drag used to clamp to (0.0, -0.001) and panic; it must be a
+        // no-op instead.
+        let _ = Program::update(
+            &program,
+            &mut state,
+            &canvas::Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(260.0, 30.0),
+            }),
+            BOUNDS,
+            mouse::Cursor::Available(Point::new(260.0, 30.0)),
+        );
     }
 
     #[test]
