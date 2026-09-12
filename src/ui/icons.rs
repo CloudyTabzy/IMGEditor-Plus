@@ -175,6 +175,30 @@ pub fn repeat_once<'a>() -> Text<'a> {
     lucide::repeat_one()
 }
 
+pub fn film<'a>() -> Text<'a> {
+    lucide::film()
+}
+
+pub fn flag<'a>() -> Text<'a> {
+    lucide::flag()
+}
+
+pub fn stop<'a>() -> Text<'a> {
+    lucide::square()
+}
+
+pub fn follow<'a>() -> Text<'a> {
+    lucide::locate_fixed()
+}
+
+pub fn skeleton<'a>() -> Text<'a> {
+    lucide::git_merge()
+}
+
+pub fn crossfade<'a>() -> Text<'a> {
+    lucide::shuffle()
+}
+
 pub fn person<'a>() -> Text<'a> {
     lucide::person_standing()
 }

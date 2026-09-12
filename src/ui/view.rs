@@ -959,21 +959,9 @@ impl App {
         let toolbar = self.build_viewer3d_toolbar(true, true, false);
         let body: Element<'_, Message> =
             crate::ui::viewer3d_widget::Scene3dWidget::new(self.viewer3d_handle.clone()).into();
-        let banner: Element<'_, Message> = if self.animation_demo_active() {
-            row![
-                icons::animation().size(14),
-                fonts::caption("Synthetic animation demo — fixtures only, no game data."),
-                button(fonts::caption("Exit demo")).on_press(Message::AnimationDemoExit),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into()
-        } else {
-            Space::new().height(Length::Fixed(0.0)).into()
-        };
         let dock = self.build_animation_dock();
         let stats = self.build_viewer3d_stats(true);
-        column![toolbar, body, banner, dock, stats]
+        column![toolbar, body, dock, stats]
             .spacing(4)
             .padding(4)
             .width(Length::Fill)
@@ -1014,6 +1002,58 @@ impl App {
             return Space::new().height(Length::Fixed(0.0)).into();
         };
 
+        let demo = self.animation_demo_active();
+        let enabled = data.playable;
+        let press = move |message: Message| enabled.then_some(message);
+
+        let loop_toggle = w::styled_tooltip(
+            button(icons::repeat().size(14))
+                .on_press_maybe(press(Message::AnimationSetLoop(if data.loop_repeat {
+                    LoopMode::Once
+                } else {
+                    LoopMode::Repeat
+                })))
+                .width(Length::Fixed(28.0))
+                .height(Length::Fixed(28.0))
+                .style(move |theme, status| animation_toggle_style(theme, status, data.loop_repeat)),
+            fonts::caption("Loop playback"),
+            tooltip::Position::Top,
+        );
+        let speed_labels: Vec<String> = SPEED_CHOICES
+            .iter()
+            .map(|speed| speed_label(*speed))
+            .collect();
+        let speed_picker = pick_list(speed_labels, Some(speed_label(data.speed)), |label| {
+            Message::AnimationSetSpeed(speed_from_label(&label))
+        })
+        .text_size(12.0);
+        let speed_row = row![fonts::caption("Speed"), speed_picker]
+            .spacing(6)
+            .align_y(Alignment::Center);
+
+        let mut header = Row::new().spacing(8).align_y(Alignment::Center);
+        header = header.push(icons::animation().size(15));
+        header = header.push(fonts::header(if demo {
+            "Animation demo"
+        } else {
+            "Animation"
+        }));
+        if demo {
+            header = header.push(muted_caption("synthetic fixtures — no game data".to_string()));
+        }
+        header = header.push(Space::new().width(Length::Fill));
+        header = header.push(loop_toggle);
+        header = header.push(speed_row);
+        if demo {
+            header = header.push(
+                button(w::icon_label(icons::close().size(13), fonts::caption("Exit demo")))
+                    .on_press(Message::AnimationDemoExit)
+                    .height(Length::Fixed(28.0))
+                    .padding([2.0, 10.0])
+                    .style(animation_subtle_button_style),
+            );
+        }
+
         let clip_names: Vec<String> = data.clips.iter().map(|(_, name)| name.clone()).collect();
         let clip_map: std::collections::HashMap<String, ClipId> = data
             .clips
@@ -1026,185 +1066,251 @@ impl App {
         })
         .text_size(12.0);
 
-        let speed_labels: Vec<String> = SPEED_CHOICES
-            .iter()
-            .map(|speed| speed_label(*speed))
-            .collect();
-        let speed_picker = pick_list(speed_labels, Some(speed_label(data.speed)), |label| {
-            Message::AnimationSetSpeed(speed_from_label(&label))
-        })
-        .text_size(12.0);
+        let capability_badge = container(fonts::caption(data.capability.clone()))
+            .padding([2, 6])
+            .style(move |theme| {
+                let design = crate::ui::design::design_for_theme(theme);
+                container::Style {
+                    background: Some(design.surface_subtle().into()),
+                    border: Border {
+                        color: design.divider(),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }
+            });
 
-        let mut row1 = Row::new().spacing(6).align_y(Alignment::Center);
-        row1 = row1.push(fonts::caption("Clip:"));
-        row1 = row1.push(clip_picker);
-        row1 = row1.push(
-            container(fonts::caption(data.capability.clone()))
-                .padding([2, 6])
-                .style(move |theme| {
-                    let design = crate::ui::design::design_for_theme(theme);
-                    container::Style {
-                        background: Some(design.surface_subtle().into()),
-                        border: Border {
-                            color: design.divider(),
-                            width: 1.0,
-                            radius: 4.0.into(),
-                        },
-                        ..Default::default()
-                    }
-                }),
-        );
-        row1 = row1.push(fonts::caption("Speed:"));
-        row1 = row1.push(speed_picker);
-        row1 = row1.push(
-            checkbox(data.loop_repeat)
-                .label("Loop")
-                .text_size(12.0)
-                .on_toggle(move |repeat| {
-                    Message::AnimationSetLoop(if repeat {
-                        LoopMode::Repeat
-                    } else {
-                        LoopMode::Once
-                    })
-                }),
-        );
-        if let Some(marker) = &data.last_marker {
-            row1 = row1.push(fonts::caption(format!("marker: {marker}")));
-        }
-
-        let enabled = data.playable;
-        let press = |message: Message| enabled.then_some(message);
-        let mut transport = Row::new().spacing(2).align_y(Alignment::Center);
-        transport = transport.push(
-            button(icons::skip_back().size(14))
-                .on_press_maybe(press(Message::AnimationJumpToStart))
-                .height(Length::Fixed(28.0))
-                .padding([2, 6]),
-        );
-        transport = transport.push(
-            button(icons::step_back().size(14))
-                .on_press_maybe(press(Message::AnimationStep(-1)))
-                .height(Length::Fixed(28.0))
-                .padding([2, 6]),
-        );
-        let play_icon = if data.playing {
-            icons::pause()
-        } else {
-            icons::play()
+        let marker_chip: Element<'static, Message> = match &data.last_marker {
+            Some(marker) => container(
+                row![icons::flag().size(11), fonts::caption(marker.clone())]
+                    .spacing(4)
+                    .align_y(Alignment::Center),
+            )
+            .padding([2, 6])
+            .style(|theme: &iced::Theme| {
+                let design = crate::ui::design::design_for_theme(theme);
+                container::Style {
+                    background: Some(design.surface_subtle().into()),
+                    text_color: Some(design.warning()),
+                    border: Border {
+                        color: design.divider(),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .into(),
+            None => Space::new().width(Length::Fixed(0.0)).into(),
         };
-        transport = transport.push(
+
+        let clip_row = row![
+            icons::film().size(13),
+            fonts::caption("Clip"),
+            clip_picker,
+            capability_badge,
+            marker_chip,
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+
+        let transport_button =
+            |icon: iced::widget::Text<'static>, message: Message, tip: &'static str| {
+                w::styled_tooltip(
+                    button(icon.size(14))
+                        .on_press_maybe(press(message))
+                        .width(Length::Fixed(28.0))
+                        .height(Length::Fixed(28.0))
+                        .style(move |theme, status| {
+                            animation_icon_button_style(theme, status, enabled)
+                        }),
+                    fonts::caption(tip),
+                    tooltip::Position::Top,
+                )
+            };
+        let (play_icon, play_tip) = if data.playing {
+            (icons::pause(), "Pause (Space)")
+        } else {
+            (icons::play(), "Play (Space)")
+        };
+        let play_button = w::styled_tooltip(
             button(play_icon.size(14))
                 .on_press_maybe(press(Message::AnimationTogglePlay))
+                .width(Length::Fixed(28.0))
                 .height(Length::Fixed(28.0))
-                .padding([2, 8]),
+                .style(move |theme, status| {
+                    if enabled {
+                        animation_primary_button_style(theme, status)
+                    } else {
+                        animation_icon_button_style(theme, status, false)
+                    }
+                }),
+            fonts::caption(play_tip),
+            tooltip::Position::Top,
         );
-        transport = transport.push(
-            button(icons::step_forward().size(14))
-                .on_press_maybe(press(Message::AnimationStep(1)))
-                .height(Length::Fixed(28.0))
-                .padding([2, 6]),
-        );
-        transport = transport.push(
-            button(icons::skip_forward().size(14))
-                .on_press_maybe(press(Message::AnimationJumpToEnd))
-                .height(Length::Fixed(28.0))
-                .padding([2, 6]),
-        );
-        transport = transport.push(
-            button(fonts::caption("Stop"))
-                .on_press_maybe(press(Message::AnimationStop))
-                .height(Length::Fixed(28.0)),
-        );
+        let transport_group = container(
+            row![
+                transport_button(
+                    icons::skip_back(),
+                    Message::AnimationJumpToStart,
+                    "Jump to start (Home)"
+                ),
+                transport_button(
+                    icons::step_back(),
+                    Message::AnimationStep(-1),
+                    "Step one frame back (←)"
+                ),
+                play_button,
+                transport_button(
+                    icons::step_forward(),
+                    Message::AnimationStep(1),
+                    "Step one frame forward (→)"
+                ),
+                transport_button(
+                    icons::skip_forward(),
+                    Message::AnimationJumpToEnd,
+                    "Jump to end (End)"
+                ),
+                transport_button(icons::stop(), Message::AnimationStop, "Stop"),
+            ]
+            .spacing(2)
+            .align_y(Alignment::Center),
+        )
+        .padding(3)
+        .style(animation_group_surface);
+
         let rate = if data.rate_from_source {
             format!("{:.0} fps source", data.step_rate)
         } else {
             format!("{:.0} fps preview", data.step_rate)
         };
-        transport = transport.push(fonts::caption(format!(
-            "{:.2} / {:.2} s   frame {}/{}   {}",
-            data.shown, data.duration, data.frame, data.total_frames, rate
-        )));
-        transport = transport.push(Space::new().width(Length::Fill));
+        let readout = row![
+            iced::widget::text(format!("{:.2} / {:.2} s", data.shown, data.duration))
+                .size(12.0)
+                .font(iced::Font::MONOSPACE),
+            muted_caption(format!(
+                "frame {}/{} · {}",
+                data.frame, data.total_frames, rate
+            )),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
 
-        let frame_button = |label: &'static str, message: Message| {
-            button(fonts::caption(label))
-                .on_press_maybe(enabled.then_some(message))
-                .height(Length::Fixed(24.0))
+        let transport_row = row![
+            clip_row,
+            Space::new().width(Length::Fill),
+            transport_group,
+            readout,
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+
+        let frame_button = |label: &'static str, message: Message, tip: &'static str| {
+            w::styled_tooltip(
+                button(fonts::caption(label))
+                    .on_press_maybe(press(message))
+                    .height(Length::Fixed(24.0))
+                    .padding([2.0, 10.0])
+                    .style(move |theme, status| {
+                        animation_icon_button_style(theme, status, enabled)
+                    }),
+                fonts::caption(tip),
+                tooltip::Position::Top,
+            )
         };
-        let framing = row![
-            fonts::caption("Frame:"),
-            frame_button("Rest", Message::AnimationFrameRest),
-            frame_button("Pose", Message::AnimationFramePose),
-            frame_button("Motion", Message::AnimationFrameMotion),
+        let framing = container(
+            row![
+                fonts::caption("Frame"),
+                frame_button("Rest", Message::AnimationFrameRest, "Frame the rest pose"),
+                frame_button("Pose", Message::AnimationFramePose, "Frame the current pose"),
+                frame_button(
+                    "Motion",
+                    Message::AnimationFrameMotion,
+                    "Frame the full motion"
+                ),
+            ]
+            .spacing(2)
+            .align_y(Alignment::Center),
+        )
+        .padding(3)
+        .style(animation_group_surface);
+
+        let overlay_toggle =
+            |icon: fn() -> iced::widget::Text<'static>,
+             active: bool,
+             tip: &'static str,
+             message: Message| {
+                w::styled_tooltip(
+                    button(icon().size(14))
+                        .on_press_maybe(press(message))
+                        .width(Length::Fixed(28.0))
+                        .height(Length::Fixed(28.0))
+                        .style(move |theme, status| animation_toggle_style(theme, status, active)),
+                    fonts::caption(tip),
+                    tooltip::Position::Top,
+                )
+            };
+        let toggles = row![
+            overlay_toggle(
+                icons::person,
+                data.in_place,
+                "In-place root — discard root translation",
+                Message::AnimationSetRootPolicy(if data.in_place {
+                    RootMotionPolicy::Source
+                } else {
+                    RootMotionPolicy::InPlace
+                }),
+            ),
+            overlay_toggle(
+                icons::follow,
+                data.follow_root,
+                "Follow root motion with the camera",
+                Message::AnimationToggleFollowRoot(!data.follow_root),
+            ),
+            overlay_toggle(
+                icons::skeleton,
+                data.show_skeleton,
+                "Show the skeleton overlay",
+                Message::AnimationToggleSkeleton(!data.show_skeleton),
+            ),
+            overlay_toggle(
+                icons::route,
+                data.show_motion_path,
+                "Show the root motion path",
+                Message::AnimationToggleMotionPath(!data.show_motion_path),
+            ),
+            overlay_toggle(
+                icons::crossfade,
+                data.crossfade,
+                "Crossfade when switching clips",
+                Message::AnimationToggleCrossfade(!data.crossfade),
+            ),
         ]
         .spacing(4)
         .align_y(Alignment::Center);
 
-        let mut toggles = Row::new().spacing(12).align_y(Alignment::Center);
-        toggles = toggles.push(
-            checkbox(data.in_place)
-                .label("In-place root")
-                .text_size(12.0)
-                .on_toggle(move |value| {
-                    Message::AnimationSetRootPolicy(if value {
-                        RootMotionPolicy::InPlace
-                    } else {
-                        RootMotionPolicy::Source
-                    })
-                }),
-        );
-        toggles = toggles.push(
-            checkbox(data.follow_root)
-                .label("Follow root")
-                .text_size(12.0)
-                .on_toggle(Message::AnimationToggleFollowRoot),
-        );
-        toggles = toggles.push(
-            checkbox(data.show_skeleton)
-                .label("Skeleton")
-                .text_size(12.0)
-                .on_toggle(Message::AnimationToggleSkeleton),
-        );
-        toggles = toggles.push(
-            checkbox(data.show_motion_path)
-                .label("Motion path")
-                .text_size(12.0)
-                .on_toggle(Message::AnimationToggleMotionPath),
-        );
-        toggles = toggles.push(
-            checkbox(data.crossfade)
-                .label("Crossfade")
-                .text_size(12.0)
-                .on_toggle(Message::AnimationToggleCrossfade),
-        );
+        let bottom_row = row![
+            framing,
+            Space::new().width(Length::Fill),
+            toggles,
+            animation_vdivider(),
+            muted_caption(
+                "Space play/pause · ←/→ step · Home/End range ends · drag to scrub".to_string()
+            ),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
 
         let timeline = crate::ui::animation_timeline::timeline(self.viewer3d_handle.clone());
 
-        let dock = column![
-            row1.wrap(),
-            transport,
-            framing,
-            timeline,
-            toggles.wrap(),
-            fonts::caption("Space play/pause · ←/→ step · Home/End range ends · drag to scrub"),
-        ]
-        .spacing(4)
-        .padding(6);
+        let dock = column![header, transport_row, timeline, bottom_row]
+            .spacing(10)
+            .padding([10, 12]);
 
         container(dock)
             .width(Length::Fill)
-            .style(|theme| {
-                let design = crate::ui::design::design_for_theme(theme);
-                container::Style {
-                    background: Some(design.surface().into()),
-                    border: Border {
-                        color: design.divider(),
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..Default::default()
-                }
-            })
+            .style(animation_dock_surface)
             .into()
     }
 
@@ -4272,6 +4378,174 @@ fn sort_tooltip_text(
         }
         .to_string(),
     }
+}
+
+/// Caption that resolves to the theme's muted text color.
+fn muted_caption(label: String) -> Container<'static, Message> {
+    container(fonts::caption(label)).style(|theme: &iced::Theme| {
+        let design = crate::ui::design::design_for_theme(theme);
+        container::Style {
+            text_color: Some(design.text_muted()),
+            ..Default::default()
+        }
+    })
+}
+
+/// Outer surface of the animation dock.
+fn animation_dock_surface(theme: &iced::Theme) -> container::Style {
+    let design = crate::ui::design::design_for_theme(theme);
+    container::Style {
+        background: Some(design.surface().into()),
+        border: Border {
+            color: design.divider(),
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Subtle raised surface grouping related controls (transport cluster,
+/// framing presets) so they read as one unit.
+fn animation_group_surface(theme: &iced::Theme) -> container::Style {
+    let design = crate::ui::design::design_for_theme(theme);
+    container::Style {
+        background: Some(design.surface_subtle().into()),
+        border: Border {
+            color: design.divider(),
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Transparent icon button; only the hover tint (or muted color, when
+/// disabled) distinguishes it from its neighbours.
+fn animation_icon_button_style(
+    theme: &iced::Theme,
+    status: button::Status,
+    enabled: bool,
+) -> button::Style {
+    let design = crate::ui::design::design_for_theme(theme);
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: if hovered {
+            Some(design.hover_overlay().into())
+        } else {
+            None
+        },
+        text_color: if enabled {
+            design.text()
+        } else {
+            design.text_muted()
+        },
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 5.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Accent-filled primary button for the dock's play control.
+fn animation_primary_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
+    let design = crate::ui::design::design_for_theme(theme);
+    let background = match status {
+        button::Status::Hovered => design.accent_hover(),
+        button::Status::Pressed => design.accent_pressed(),
+        _ => design.accent(),
+    };
+    button::Style {
+        background: Some(background.into()),
+        text_color: design.accent_text(),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 5.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Icon toggle: accent-tinted while active, muted and transparent while off.
+fn animation_toggle_style(
+    theme: &iced::Theme,
+    status: button::Status,
+    active: bool,
+) -> button::Style {
+    let design = crate::ui::design::design_for_theme(theme);
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    if active {
+        let background = if hovered {
+            iced::theme::palette::mix(design.accent_weak(), design.accent(), 0.18)
+        } else {
+            design.accent_weak()
+        };
+        let border = Color {
+            a: design.accent().a * 0.45,
+            ..design.accent()
+        };
+        button::Style {
+            background: Some(background.into()),
+            text_color: design.accent(),
+            border: Border {
+                color: border,
+                width: 1.0,
+                radius: 5.0.into(),
+            },
+            ..Default::default()
+        }
+    } else {
+        button::Style {
+            background: if hovered {
+                Some(design.hover_overlay().into())
+            } else {
+                None
+            },
+            text_color: design.text_muted(),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 5.0.into(),
+            },
+            ..Default::default()
+        }
+    }
+}
+
+/// Bordered secondary button for the dock's exit control.
+fn animation_subtle_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
+    let design = crate::ui::design::design_for_theme(theme);
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: if hovered {
+            Some(design.hover_overlay().into())
+        } else {
+            Some(design.surface_subtle().into())
+        },
+        text_color: design.text(),
+        border: Border {
+            color: design.divider(),
+            width: 1.0,
+            radius: 5.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Thin vertical separator between the overlay toggles and shortcut hints.
+fn animation_vdivider() -> Container<'static, Message> {
+    container(Space::new().width(Length::Fixed(1.0)).height(Length::Fixed(18.0))).style(
+        |theme: &iced::Theme| {
+            let design = crate::ui::design::design_for_theme(theme);
+            container::Style {
+                background: Some(design.divider().into()),
+                ..Default::default()
+            }
+        },
+    )
 }
 
 pub fn menu_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
