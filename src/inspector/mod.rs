@@ -19,7 +19,11 @@
 //! 4. [`scene3d`] — embedded viewer CPU side. Interleaved vertices, orbit
 //!    camera math, `Scene` aggregation, and NIF/DFF/COL scene decoders feed
 //!    the wgpu render pipeline.
+//! 5. [`animation`] — format-independent animation player core: immutable
+//!    model/clip assets, deterministic pose evaluation and the transport.
+//!    Format adapters (Bully AGR/CAT, GTA DFF/IFP) plug into it later.
 
+pub mod animation;
 pub mod nif;
 pub mod scene3d;
 pub mod texture;
