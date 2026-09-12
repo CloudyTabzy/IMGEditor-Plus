@@ -59,6 +59,13 @@ const OVERSCAN_ROWS: i32 = 10;
 /// this inset leaves a 2 px pointer-safe gap.
 const ENTRY_TABLE_SCROLLBAR_INSET: f32 = 6.0;
 const PANE_SPLIT_RESIZE_LEEWAY: f32 = 8.0;
+/// Keep texture slot labels on one line, including the selected marker and
+/// three-digit indices. Every slot in a strip uses the same cell width so
+/// labels never shift when the index crosses 10, 100, or another digit
+/// boundary.
+const TEXTURE_SLOT_WIDTH: f32 = 54.0;
+const TEXTURE_SLOT_HEIGHT: f32 = 30.0;
+const TEXTURE_SLOT_RAIL_HEIGHT: f32 = 38.0;
 
 /// The original editor enabled ImGui's alternating table rows. Use the
 /// design surface rather than a hard-coded color so the separation remains
@@ -1078,22 +1085,26 @@ impl App {
                 .height(Length::Fixed(32.0))
                 .align_y(Alignment::Center);
             for (i, texture) in textures.iter().enumerate() {
-                let label = if i == tex_idx {
-                    format!("● {}", i + 1)
-                } else {
-                    format!("○ {}", i + 1)
-                };
+                let marker = if i == tex_idx { "●" } else { "○" };
+                let slot_label = row![
+                    fonts::caption(marker),
+                    fonts::caption((i + 1).to_string())
+                        .wrapping(iced::widget::text::Wrapping::None),
+                ]
+                .spacing(2)
+                .align_y(Alignment::Center)
+                .width(Length::Shrink);
                 let slot_button = button(
-                    fonts::caption(label)
+                    container(slot_label)
                         .width(Length::Fill)
                         .align_x(Alignment::Center),
                 )
-                // Keep the slot label in one line even for slots 10+.
-                // The default button padding leaves too little content
-                // width inside a compact fixed-width button.
-                .width(Length::Fixed(42.0))
-                .height(Length::Fixed(32.0))
-                .padding([4.0, 5.0])
+                // Keep the marker and index in separate, non-wrapping cells.
+                // A single text node can wrap "○ 100" inside a compact button,
+                // placing the last digit underneath the horizontal scrollbar.
+                .width(Length::Fixed(TEXTURE_SLOT_WIDTH))
+                .height(Length::Fixed(TEXTURE_SLOT_HEIGHT))
+                .padding([3.0, 5.0])
                 .on_press(Message::TextureSelect(i))
                 .style(button::text);
                 sel_row = sel_row.push(w::styled_tooltip(
@@ -1104,7 +1115,7 @@ impl App {
             }
             let slot_rail = Scrollable::new(sel_row)
                 .width(Length::Fill)
-                .height(Length::Fixed(38.0))
+                .height(Length::Fixed(TEXTURE_SLOT_RAIL_HEIGHT))
                 .direction(iced::widget::scrollable::Direction::Horizontal(
                     iced::widget::scrollable::Scrollbar::new().scroller_width(10.0),
                 ));
