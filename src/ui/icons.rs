@@ -139,6 +139,58 @@ pub fn generic_file<'a>() -> Text<'a> {
     lucide::file()
 }
 
+pub fn animation<'a>() -> Text<'a> {
+    lucide::activity()
+}
+
+pub fn play<'a>() -> Text<'a> {
+    lucide::play()
+}
+
+pub fn pause<'a>() -> Text<'a> {
+    lucide::pause()
+}
+
+pub fn skip_back<'a>() -> Text<'a> {
+    lucide::skip_back()
+}
+
+pub fn skip_forward<'a>() -> Text<'a> {
+    lucide::skip_forward()
+}
+
+pub fn step_back<'a>() -> Text<'a> {
+    lucide::chevron_left()
+}
+
+pub fn step_forward<'a>() -> Text<'a> {
+    lucide::chevron_right()
+}
+
+pub fn repeat<'a>() -> Text<'a> {
+    lucide::repeat()
+}
+
+pub fn repeat_once<'a>() -> Text<'a> {
+    lucide::repeat_one()
+}
+
+pub fn person<'a>() -> Text<'a> {
+    lucide::person_standing()
+}
+
+pub fn route<'a>() -> Text<'a> {
+    lucide::map_pin()
+}
+
+pub fn crosshair<'a>() -> Text<'a> {
+    lucide::crosshair()
+}
+
+pub fn eye<'a>() -> Text<'a> {
+    lucide::eye()
+}
+
 pub fn file_type<'a>(file_name: &str) -> Text<'a> {
     match file_name
         .rsplit_once('.')

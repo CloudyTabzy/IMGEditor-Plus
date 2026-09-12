@@ -2,18 +2,18 @@ use crate::archive::{ExportStatus, SortColumn};
 use crate::sort::SortDirection;
 use iced::widget::{
     Column, Container, Float, Row, Scrollable, Space, button, canvas, checkbox, column, container,
-    image, mouse_area, opaque, pane_grid, progress_bar, responsive, row, stack, text_input,
-    tooltip,
+    image, mouse_area, opaque, pane_grid, pick_list, progress_bar, responsive, row, stack,
+    text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length, Rectangle, Vector};
 
+use crate::inspector::animation::ClipId;
 use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::tasks::FolderDuplicatePolicy;
 use crate::ui::app::{
-    ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget,
-    renderable_model_kind,
+    ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget, renderable_model_kind,
 };
 use crate::ui::design::Design;
 use crate::ui::fonts;
@@ -66,6 +66,44 @@ const PANE_SPLIT_RESIZE_LEEWAY: f32 = 8.0;
 const TEXTURE_SLOT_WIDTH: f32 = 54.0;
 const TEXTURE_SLOT_HEIGHT: f32 = 30.0;
 const TEXTURE_SLOT_RAIL_HEIGHT: f32 = 38.0;
+
+/// Playback speed presets offered by the animation dock.
+const SPEED_CHOICES: [f64; 6] = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0];
+
+fn speed_label(speed: f64) -> String {
+    let rendered = format!("{speed}");
+    format!("{rendered}×")
+}
+
+fn speed_from_label(label: &str) -> f64 {
+    label
+        .trim_end_matches('×')
+        .trim()
+        .parse::<f64>()
+        .map(|speed| speed.clamp(0.05, 8.0))
+        .unwrap_or(1.0)
+}
+
+/// Session snapshot read once per frame for the animation dock.
+struct DockData {
+    clips: Vec<(ClipId, String)>,
+    current: Option<String>,
+    capability: String,
+    playable: bool,
+    playing: bool,
+    speed: f64,
+    loop_repeat: bool,
+    in_place: bool,
+    follow_root: bool,
+    show_skeleton: bool,
+    shown: f64,
+    duration: f64,
+    frame: u64,
+    total_frames: u64,
+    step_rate: f64,
+    rate_from_source: bool,
+    last_marker: Option<String>,
+}
 
 /// The original editor enabled ImGui's alternating table rows. Use the
 /// design surface rather than a hard-coded color so the separation remains
@@ -154,12 +192,12 @@ impl App {
         .height(Length::Fixed(HEADER_HEIGHT));
 
         let header_bg = design.surface();
-        let headers = Container::new(headers)
-            .width(Length::Fill)
-            .style(move |_| iced::widget::container::Style {
+        let headers = Container::new(headers).width(Length::Fill).style(move |_| {
+            iced::widget::container::Style {
                 background: Some(iced::Background::Color(header_bg)),
                 ..Default::default()
-            });
+            }
+        });
 
         if archive.selected_indices.is_empty() {
             return column![headers, w::hairline(design.divider()), empty_state()]
@@ -281,13 +319,9 @@ impl App {
         // between that hit region and the scrollbar, so a scrollbar drag can
         // never start a pane resize.
         let table_body = container(
-            mouse_area(
-                stack(layers)
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .on_enter(Message::EntryTableHoverChanged(true))
-            .on_exit(Message::EntryTableHoverChanged(false)),
+            mouse_area(stack(layers).width(Length::Fill).height(Length::Fill))
+                .on_enter(Message::EntryTableHoverChanged(true))
+                .on_exit(Message::EntryTableHoverChanged(false)),
         )
         .padding(iced::Padding {
             right: ENTRY_TABLE_SCROLLBAR_INSET,
@@ -331,8 +365,8 @@ impl App {
         // Use the visible-row position so filtering and sorting preserve a
         // stable zebra pattern instead of making stripes appear to jump.
         let design = self.design();
-        let alternate_background = (display_row % 2 == 1)
-            .then(|| alternate_entry_row_background(&design));
+        let alternate_background =
+            (display_row % 2 == 1).then(|| alternate_entry_row_background(&design));
         let literal_types = self.config.literal_file_types;
 
         // Render display strings on demand for the visible row only. Pre-caching
@@ -427,8 +461,8 @@ impl App {
             // The tooltip must stay a self-contained box: a bounded,
             // glyph-wrapping text so long unbroken names wrap inside it
             // instead of running across the table.
-            let hint = container(fonts::caption_wrapped(full_name.clone()))
-                .width(Length::Fixed(380.0));
+            let hint =
+                container(fonts::caption_wrapped(full_name.clone())).width(Length::Fixed(380.0));
             w::styled_tooltip(name_widget, hint, tooltip::Position::Top).into()
         } else {
             name_widget
@@ -775,22 +809,39 @@ impl App {
     }
 
     fn build_model_tab(&self) -> Element<'_, Message> {
+        if self.viewer3d_handle.has_animation_session() {
+            return self.build_animation_tab();
+        }
         let Some(archive) = self
             .editor
             .archives()
             .get(self.editor.selected_archive().unwrap_or(0))
         else {
-            return container(fonts::caption("No archive open."))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
-                .into();
+            return container(
+                column![
+                    fonts::caption("No archive open."),
+                    button(fonts::caption("Try the synthetic animation demo"))
+                        .on_press(Message::AnimationDemoStart),
+                ]
+                .spacing(8)
+                .align_x(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .into();
         };
         let Some(entry_index) = self.editor.selected_entry() else {
-            return container(fonts::caption(
-                "Select a .nif, .dff, or .col entry to preview it in 3D.",
-            ))
+            return container(
+                column![
+                    fonts::caption("Select a .nif, .dff, or .col entry to preview it in 3D."),
+                    button(fonts::caption("Try the synthetic animation demo"))
+                        .on_press(Message::AnimationDemoStart),
+                ]
+                .spacing(8)
+                .align_x(Alignment::Center),
+            )
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
@@ -886,7 +937,7 @@ impl App {
             fonts::caption(
                 "Select a .nif, .dff, or .col entry, then right-click → Open in 3D viewer.",
             )
-                .into()
+            .into()
         } else {
             Space::new().height(Length::Fixed(0.0)).into()
         };
@@ -900,6 +951,230 @@ impl App {
         col = col.push(stats);
         col = col.push(prompt);
         col.into()
+    }
+
+    fn build_animation_tab(&self) -> Element<'_, Message> {
+        let toolbar = self.build_viewer3d_toolbar(true, true, false);
+        let body: Element<'_, Message> =
+            crate::ui::viewer3d_widget::Scene3dWidget::new(self.viewer3d_handle.clone()).into();
+        let banner: Element<'_, Message> = if self.animation_demo_active() {
+            row![
+                icons::animation().size(14),
+                fonts::caption("Synthetic animation demo — fixtures only, no game data."),
+                button(fonts::caption("Exit demo")).on_press(Message::AnimationDemoExit),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into()
+        } else {
+            Space::new().height(Length::Fixed(0.0)).into()
+        };
+        let dock = self.build_animation_dock();
+        let stats = self.build_viewer3d_stats(true);
+        column![toolbar, body, banner, dock, stats]
+            .spacing(4)
+            .padding(4)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn build_animation_dock(&self) -> Element<'_, Message> {
+        use crate::inspector::animation::pose::RootMotionPolicy;
+        use crate::inspector::animation::transport::LoopMode;
+
+        let Some(data) = self.viewer3d_handle.animation_session(|session| DockData {
+            clips: session
+                .library
+                .clips
+                .iter()
+                .map(|clip| (clip.id, clip.name.clone()))
+                .collect(),
+            current: session.clip_name().map(str::to_string),
+            capability: session.capability.badge(),
+            playable: session.capability.is_playable(),
+            playing: session.is_playing(),
+            speed: session.transport.speed(),
+            loop_repeat: session.transport.loop_mode() == LoopMode::Repeat,
+            in_place: session.root_policy == RootMotionPolicy::InPlace,
+            follow_root: session.panel.follow_root,
+            show_skeleton: session.panel.show_skeleton,
+            shown: session.transport.shown_time(),
+            duration: session.transport.duration(),
+            frame: session.transport.shown_frame(),
+            total_frames: session.transport.total_frames(),
+            step_rate: session.transport.step_rate(),
+            rate_from_source: session.transport.rate_from_source(),
+            last_marker: session.last_marker.as_ref().map(|(label, _)| label.clone()),
+        }) else {
+            return Space::new().height(Length::Fixed(0.0)).into();
+        };
+
+        let clip_names: Vec<String> = data.clips.iter().map(|(_, name)| name.clone()).collect();
+        let clip_map: std::collections::HashMap<String, ClipId> = data
+            .clips
+            .iter()
+            .map(|(id, name)| (name.clone(), *id))
+            .collect();
+        let clip_map = std::sync::Arc::new(clip_map);
+        let clip_picker = pick_list(clip_names, data.current.clone(), move |name| {
+            Message::AnimationSelectClip(clip_map[&name])
+        })
+        .text_size(12.0);
+
+        let speed_labels: Vec<String> = SPEED_CHOICES
+            .iter()
+            .map(|speed| speed_label(*speed))
+            .collect();
+        let speed_picker = pick_list(speed_labels, Some(speed_label(data.speed)), |label| {
+            Message::AnimationSetSpeed(speed_from_label(&label))
+        })
+        .text_size(12.0);
+
+        let mut row1 = Row::new().spacing(6).align_y(Alignment::Center);
+        row1 = row1.push(fonts::caption("Clip:"));
+        row1 = row1.push(clip_picker);
+        row1 = row1.push(
+            container(fonts::caption(data.capability.clone()))
+                .padding([2, 6])
+                .style(move |theme| {
+                    let design = crate::ui::design::design_for_theme(theme);
+                    container::Style {
+                        background: Some(design.surface_subtle().into()),
+                        border: Border {
+                            color: design.divider(),
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                }),
+        );
+        row1 = row1.push(fonts::caption("Speed:"));
+        row1 = row1.push(speed_picker);
+        row1 = row1.push(
+            checkbox(data.loop_repeat)
+                .label("Loop")
+                .text_size(12.0)
+                .on_toggle(move |repeat| {
+                    Message::AnimationSetLoop(if repeat {
+                        LoopMode::Repeat
+                    } else {
+                        LoopMode::Once
+                    })
+                }),
+        );
+        if let Some(marker) = &data.last_marker {
+            row1 = row1.push(fonts::caption(format!("marker: {marker}")));
+        }
+
+        let enabled = data.playable;
+        let press = |message: Message| enabled.then_some(message);
+        let mut transport = Row::new().spacing(2).align_y(Alignment::Center);
+        transport = transport.push(
+            button(icons::skip_back().size(14))
+                .on_press_maybe(press(Message::AnimationJumpToStart))
+                .height(Length::Fixed(28.0))
+                .padding([2, 6]),
+        );
+        transport = transport.push(
+            button(icons::step_back().size(14))
+                .on_press_maybe(press(Message::AnimationStep(-1)))
+                .height(Length::Fixed(28.0))
+                .padding([2, 6]),
+        );
+        let play_icon = if data.playing {
+            icons::pause()
+        } else {
+            icons::play()
+        };
+        transport = transport.push(
+            button(play_icon.size(14))
+                .on_press_maybe(press(Message::AnimationTogglePlay))
+                .height(Length::Fixed(28.0))
+                .padding([2, 8]),
+        );
+        transport = transport.push(
+            button(icons::step_forward().size(14))
+                .on_press_maybe(press(Message::AnimationStep(1)))
+                .height(Length::Fixed(28.0))
+                .padding([2, 6]),
+        );
+        transport = transport.push(
+            button(icons::skip_forward().size(14))
+                .on_press_maybe(press(Message::AnimationJumpToEnd))
+                .height(Length::Fixed(28.0))
+                .padding([2, 6]),
+        );
+        transport = transport.push(
+            button(fonts::caption("Stop"))
+                .on_press_maybe(press(Message::AnimationStop))
+                .height(Length::Fixed(28.0)),
+        );
+        let rate = if data.rate_from_source {
+            format!("{:.0} fps source", data.step_rate)
+        } else {
+            format!("{:.0} fps preview", data.step_rate)
+        };
+        transport = transport.push(fonts::caption(format!(
+            "{:.2} / {:.2} s   frame {}/{}   {}",
+            data.shown, data.duration, data.frame, data.total_frames, rate
+        )));
+        transport = transport.push(Space::new().width(Length::Fill));
+
+        let mut toggles = Row::new().spacing(12).align_y(Alignment::Center);
+        toggles = toggles.push(
+            checkbox(data.in_place)
+                .label("In-place root")
+                .text_size(12.0)
+                .on_toggle(move |value| {
+                    Message::AnimationSetRootPolicy(if value {
+                        RootMotionPolicy::InPlace
+                    } else {
+                        RootMotionPolicy::Source
+                    })
+                }),
+        );
+        toggles = toggles.push(
+            checkbox(data.follow_root)
+                .label("Follow root")
+                .text_size(12.0)
+                .on_toggle(Message::AnimationToggleFollowRoot),
+        );
+        toggles = toggles.push(
+            checkbox(data.show_skeleton)
+                .label("Skeleton")
+                .text_size(12.0)
+                .on_toggle(Message::AnimationToggleSkeleton),
+        );
+
+        let timeline = crate::ui::animation_timeline::timeline(self.viewer3d_handle.clone());
+
+        let dock = column![
+            row1.wrap(),
+            transport,
+            timeline,
+            toggles.wrap(),
+            fonts::caption("Space play/pause · ←/→ step · Home/End range ends · drag to scrub"),
+        ]
+        .spacing(4)
+        .padding(6);
+
+        container(dock)
+            .width(Length::Fill)
+            .style(|theme| {
+                let design = crate::ui::design::design_for_theme(theme);
+                container::Style {
+                    background: Some(design.surface().into()),
+                    border: Border {
+                        color: design.divider(),
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .into()
     }
 
     fn build_viewer3d_stats(&self, scene_matches: bool) -> Element<'_, Message> {
@@ -1164,11 +1439,7 @@ impl App {
         .width(Length::Fill);
         if let Some(report) = texture_verdict {
             let accent = compat_verdict_accent(report.verdict);
-            let background = iced::theme::palette::mix(
-                palette.background.base.color,
-                accent,
-                0.55,
-            );
+            let background = iced::theme::palette::mix(palette.background.base.color, accent, 0.55);
             let chip = w::badge(
                 report.verdict.label().to_string(),
                 background,
@@ -1682,18 +1953,27 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
         ),
         w::vhairline(divider),
         w::styled_tooltip(
-            toolbar_button(icons::shield_check().size(18).into(), Message::OpenValidatorPopup),
+            toolbar_button(
+                icons::shield_check().size(18).into(),
+                Message::OpenValidatorPopup
+            ),
             fonts::body("Validate textures"),
             tooltip::Position::Bottom,
         ),
         w::vhairline(divider),
         w::styled_tooltip(
-            toolbar_button(icons::texture().size(18).into(), Message::ImportImageAsTxdRequested),
+            toolbar_button(
+                icons::texture().size(18).into(),
+                Message::ImportImageAsTxdRequested
+            ),
             fonts::body("Import image as TXD"),
             tooltip::Position::Bottom,
         ),
         w::styled_tooltip(
-            toolbar_button(icons::verdict_convert().size(18).into(), Message::BulkConvertRequested),
+            toolbar_button(
+                icons::verdict_convert().size(18).into(),
+                Message::BulkConvertRequested
+            ),
             fonts::body("Convert selection to target dialect"),
             tooltip::Position::Bottom,
         ),
@@ -2001,12 +2281,9 @@ pub fn build(app: &App) -> Element<'_, Message> {
             // is deterministic: SEARCH_DROPDOWN_X anchors the floating
             // dropdown under the input, not under the strip's left edge.
             let label = container(
-                row![
-                    icons::search().size(15),
-                    fonts::header("Search:"),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
+                row![icons::search().size(15), fonts::header("Search:"),]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
             )
             .width(Length::Fixed(SEARCH_LABEL_WIDTH))
             .align_y(Alignment::Center);
@@ -2014,11 +2291,14 @@ pub fn build(app: &App) -> Element<'_, Message> {
                 .id(iced::widget::Id::new("search_input"))
                 .on_input(Message::SearchChanged)
                 .width(Length::Fill);
-            let mut search = row![mouse_area(label).on_press(Message::FocusSearchInput), search_input]
-                .spacing(8)
-                .padding([6, 8])
-                .height(Length::Fill)
-                .align_y(Alignment::Center);
+            let mut search = row![
+                mouse_area(label).on_press(Message::FocusSearchInput),
+                search_input
+            ]
+            .spacing(8)
+            .padding([6, 8])
+            .height(Length::Fill)
+            .align_y(Alignment::Center);
             // Trailing clear button: wipes the query and refocuses the
             // input. Only rendered when there is something to clear.
             if !app.search.is_empty() {
@@ -2035,10 +2315,8 @@ pub fn build(app: &App) -> Element<'_, Message> {
                         .width(Length::Fixed(22.0))
                         .height(Length::Fixed(22.0))
                         .style(move |theme, status| {
-                            let highlighted = matches!(
-                                status,
-                                button::Status::Hovered | button::Status::Pressed
-                            );
+                            let highlighted =
+                                matches!(status, button::Status::Hovered | button::Status::Pressed);
                             let palette = theme.extended_palette();
                             iced::widget::button::Style {
                                 background: highlighted
@@ -2119,33 +2397,32 @@ pub fn build(app: &App) -> Element<'_, Message> {
                 // when closed) so toggling predictions never reshapes
                 // the widget tree — reshaping would drop the text
                 // input's focus state.
-                let dropdown =
-                    Float::new(responsive(move |size| {
-                        if open {
-                            search_prediction_dropdown(
-                                app,
-                                size.width - SEARCH_DROPDOWN_X,
-                                accent,
-                                surface,
-                                divider,
-                            )
-                        } else {
-                            container(column![]).into()
-                        }
-                    }))
-                    .translate(move |bounds, viewport| {
-                        if !open {
-                            return Vector::ZERO;
-                        }
-                        // Anchor just below the search strip and inside
-                        // the window on short viewports.
-                        let y = if bounds.height + SEARCH_STRIP_HEIGHT > viewport.height {
-                            (viewport.height - bounds.height).max(0.0)
-                        } else {
-                            SEARCH_STRIP_HEIGHT
-                        };
-                        Vector::new(SEARCH_DROPDOWN_X, y)
-                    });
+                let dropdown = Float::new(responsive(move |size| {
+                    if open {
+                        search_prediction_dropdown(
+                            app,
+                            size.width - SEARCH_DROPDOWN_X,
+                            accent,
+                            surface,
+                            divider,
+                        )
+                    } else {
+                        container(column![]).into()
+                    }
+                }))
+                .translate(move |bounds, viewport| {
+                    if !open {
+                        return Vector::ZERO;
+                    }
+                    // Anchor just below the search strip and inside
+                    // the window on short viewports.
+                    let y = if bounds.height + SEARCH_STRIP_HEIGHT > viewport.height {
+                        (viewport.height - bounds.height).max(0.0)
+                    } else {
+                        SEARCH_STRIP_HEIGHT
+                    };
+                    Vector::new(SEARCH_DROPDOWN_X, y)
+                });
                 stack(vec![column![strip, main_row].into(), dropdown.into()]).into()
             }
             None => main_row.into(),
@@ -2336,7 +2613,11 @@ fn format_options_for(app: &App, archive_index: usize) -> Vec<FormatOption> {
         .collect()
 }
 
-fn format_note_for(app: &App, archive_index: usize, format: crate::compat::encode::EncodeFormat) -> &'static str {
+fn format_note_for(
+    app: &App,
+    archive_index: usize,
+    format: crate::compat::encode::EncodeFormat,
+) -> &'static str {
     let Some(archive) = app.editor.archives().get(archive_index) else {
         return "";
     };
@@ -2357,8 +2638,9 @@ fn plan_warnings(warnings: &[String]) -> Element<'_, Message> {
     let mut list = Column::new().spacing(3).width(Length::Fill);
     for warning in warnings.iter().take(6) {
         list = list.push(
-            fonts::caption_wrapped(warning.clone())
-                .color(compat_verdict_accent(crate::compat::games::Verdict::LossyConvertible)),
+            fonts::caption_wrapped(warning.clone()).color(compat_verdict_accent(
+                crate::compat::games::Verdict::LossyConvertible,
+            )),
         );
     }
     list.into()
@@ -2398,7 +2680,10 @@ fn preview_column(title: &str, handle: image::Handle) -> Element<'static, Messag
 fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
     let state = app.pending_replace.as_ref()?;
     let options = format_options_for(app, state.archive_index);
-    let selected = options.iter().find(|option| option.format == state.chooser).cloned();
+    let selected = options
+        .iter()
+        .find(|option| option.format == state.chooser)
+        .cloned();
     let note = format_note_for(app, state.archive_index, state.chooser);
     let mut body = Column::new().spacing(6).width(Length::Fill);
     body = body.push(fonts::body_wrapped(format!(
@@ -2449,8 +2734,11 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
             .into()
     };
     body = body.push(
-        row![confirm, button(fonts::body("Cancel")).on_press(Message::ReplaceCancelled)]
-            .spacing(8),
+        row![
+            confirm,
+            button(fonts::body("Cancel")).on_press(Message::ReplaceCancelled)
+        ]
+        .spacing(8),
     );
     Some(modal_box(
         "Replace texture",
@@ -2462,7 +2750,10 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
 fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
     let state = app.pending_new_txd.as_ref()?;
     let options = format_options_for(app, state.archive_index);
-    let selected = options.iter().find(|option| option.format == state.chooser).cloned();
+    let selected = options
+        .iter()
+        .find(|option| option.format == state.chooser)
+        .cloned();
     let note = format_note_for(app, state.archive_index, state.chooser);
     let mut body = Column::new().spacing(6).width(Length::Fill);
     body = body.push(fonts::body_wrapped(format!(
@@ -2512,8 +2803,11 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
             .into()
     };
     body = body.push(
-        row![confirm, button(fonts::body("Cancel")).on_press(Message::NewTxdCancelled)]
-            .spacing(8),
+        row![
+            confirm,
+            button(fonts::body("Cancel")).on_press(Message::NewTxdCancelled)
+        ]
+        .spacing(8),
     );
     Some(modal_box(
         "Import image as TXD",
@@ -2611,19 +2905,22 @@ fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
     )));
 
     if let Some(note) = &issue.container_note {
-        body = body.push(
-            fonts::body_wrapped(format!("Container: {note}"))
-                .color(compat_verdict_accent(crate::compat::games::Verdict::Unsupported)),
-        );
+        body = body.push(fonts::body_wrapped(format!("Container: {note}")).color(
+            compat_verdict_accent(crate::compat::games::Verdict::Unsupported),
+        ));
     }
 
     if !issue.anomalies.is_empty() {
         let mut list = Column::new().spacing(3).width(Length::Fill);
         for (code, count, example) in issue.anomalies.iter().take(8) {
-            list = list.push(fonts::caption_wrapped(format!("{code}: {count} (e.g. {example})")));
+            list = list.push(fonts::caption_wrapped(format!(
+                "{code}: {count} (e.g. {example})"
+            )));
         }
         body = body.push(Space::new().height(Length::Fixed(4.0)));
-        body = body.push(fonts::strong("Broken headers (fixable without re-encoding):"));
+        body = body.push(fonts::strong(
+            "Broken headers (fixable without re-encoding):",
+        ));
         body = body.push(list);
     }
     if issue.warnings > 0 {
@@ -2765,12 +3062,14 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
                 }
             })
             .unwrap_or_default();
-        lines = lines.push(column![
-            fonts::strong(check.file_name.clone())
-                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
-            fonts::caption_wrapped(format!("{} texture(s): {}", check.textures, detail)),
-        ]
-        .spacing(1));
+        lines = lines.push(
+            column![
+                fonts::strong(check.file_name.clone())
+                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+                fonts::caption_wrapped(format!("{} texture(s): {}", check.textures, detail)),
+            ]
+            .spacing(1),
+        );
     }
     if flagged.len() > 12 {
         lines = lines.push(fonts::caption(format!(
@@ -2951,22 +3250,20 @@ fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
     // The full-window opaque layer keeps the entry table inert while the
     // draft is being edited. The card itself has a capped width, so it stays
     // centered and never reflows into the file list like an inline panel.
-    Some(
-        opaque(
-            Container::new(card)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(24)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .style(|_| iced::widget::container::Style {
-                    background: Some(iced::Background::Color(Color::from_rgba(
-                        0.0, 0.0, 0.0, 0.42,
-                    ))),
-                    ..Default::default()
-                }),
-        ),
-    )
+    Some(opaque(
+        Container::new(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(24)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.0, 0.0, 0.0, 0.42,
+                ))),
+                ..Default::default()
+            }),
+    ))
 }
 
 /// Opaque black layer that fades in just before the window closes.
@@ -3055,9 +3352,12 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
     let archive = app.editor.archives().get(archive_index)?;
     // Explicit target first; the last run's target is only a fallback for
     // archives validated before the target became persistent.
-    let current_target = archive
-        .target_game
-        .or_else(|| archive.compat_report.as_ref().and_then(|report| report.target));
+    let current_target = archive.target_game.or_else(|| {
+        archive
+            .compat_report
+            .as_ref()
+            .and_then(|report| report.target)
+    });
     let highlight_enabled = app.compat_highlight_enabled;
 
     let design = app.design();
@@ -3078,7 +3378,10 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
         let mut cards = Column::new()
             .spacing(10)
             .width(Length::Fill)
-            .padding(iced::Padding { right: 16.0, ..Default::default() });
+            .padding(iced::Padding {
+                right: 16.0,
+                ..Default::default()
+            });
         for game in crate::compat::games::ALL_GAMES {
             let mut native_lines = Column::new().spacing(2).width(Length::Fill);
             let mut unknown_lines = Column::new().spacing(2).width(Length::Fill);
@@ -3173,51 +3476,54 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
 
         // Advisory content hint: a suggestion with its evidence, never
         // applied automatically.
-        let hint_row: Option<Element<'static, Message>> = archive.target_hint.as_ref().map(|hint| {
-            let display = crate::compat::games::profile_by_id(hint.game_id)
-                .map(|game| game.display)
-                .unwrap_or(hint.game_id);
-            let confidence = match hint.confidence {
-                crate::compat::hint::HintConfidence::High => "looks like",
-                crate::compat::hint::HintConfidence::Medium => "possibly",
-            };
-            let mut body = column![
-                fonts::body(format!("Content {confidence} {display}"))
-                    .color(compat_verdict_accent(crate::compat::games::Verdict::Supported)),
-                fonts::caption(hint.reasons.join(" · ")),
-            ]
-            .spacing(2);
-            if archive.target_game != Some(hint.game_id) {
-                if let Some(current) = archive.target_game {
-                    let current_display = crate::compat::games::profile_by_id(current)
-                        .map(|game| game.display)
-                        .unwrap_or(current);
-                    body = body.push(fonts::caption(format!("current target: {current_display}")));
+        let hint_row: Option<Element<'static, Message>> =
+            archive.target_hint.as_ref().map(|hint| {
+                let display = crate::compat::games::profile_by_id(hint.game_id)
+                    .map(|game| game.display)
+                    .unwrap_or(hint.game_id);
+                let confidence = match hint.confidence {
+                    crate::compat::hint::HintConfidence::High => "looks like",
+                    crate::compat::hint::HintConfidence::Medium => "possibly",
+                };
+                let mut body = column![
+                    fonts::body(format!("Content {confidence} {display}")).color(
+                        compat_verdict_accent(crate::compat::games::Verdict::Supported)
+                    ),
+                    fonts::caption(hint.reasons.join(" · ")),
+                ]
+                .spacing(2);
+                if archive.target_game != Some(hint.game_id) {
+                    if let Some(current) = archive.target_game {
+                        let current_display = crate::compat::games::profile_by_id(current)
+                            .map(|game| game.display)
+                            .unwrap_or(current);
+                        body =
+                            body.push(fonts::caption(format!("current target: {current_display}")));
+                    }
+                    body = body.push(
+                        button(fonts::body(format!("Use {display} as target")))
+                            .on_press(Message::ValidateArchiveFor(hint.game_id))
+                            .style(button::primary),
+                    );
+                } else {
+                    body = body.push(fonts::caption("(already the target)"));
                 }
-                body = body.push(
-                    button(fonts::body(format!("Use {display} as target")))
-                        .on_press(Message::ValidateArchiveFor(hint.game_id))
-                        .style(button::primary),
-                );
-            } else {
-                body = body.push(fonts::caption("(already the target)"));
-            }
-            Container::new(body)
-                .width(Length::Fill)
-                .padding(8)
-                .style(|_| iced::widget::container::Style {
-                    background: Some(iced::Background::Color(Color::from_rgba(
-                        0.30, 0.60, 0.95, 0.10,
-                    ))),
-                    border: Border {
-                        color: Color::from_rgba(0.30, 0.60, 0.95, 0.30),
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..Default::default()
-                })
-                .into()
-        });
+                Container::new(body)
+                    .width(Length::Fill)
+                    .padding(8)
+                    .style(|_| iced::widget::container::Style {
+                        background: Some(iced::Background::Color(Color::from_rgba(
+                            0.30, 0.60, 0.95, 0.10,
+                        ))),
+                        border: Border {
+                            color: Color::from_rgba(0.30, 0.60, 0.95, 0.30),
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..Default::default()
+                    })
+                    .into()
+            });
 
         let footer = column![
             compat_legend(size.width),
@@ -3234,14 +3540,10 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
         .spacing(8)
         .width(Length::Fill);
 
-        let mut content = column![
-            title_row,
-            w::hairline(divider),
-            introduction,
-        ]
-        .spacing(10)
-        .width(Length::Fill)
-        .align_x(Alignment::Start);
+        let mut content = column![title_row, w::hairline(divider), introduction,]
+            .spacing(10)
+            .width(Length::Fill)
+            .align_x(Alignment::Start);
         if let Some(hint_row) = hint_row {
             content = content.push(hint_row);
         }
@@ -3284,7 +3586,9 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .style(|_| iced::widget::container::Style {
-                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.42))),
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.0, 0.0, 0.0, 0.42,
+                ))),
                 ..Default::default()
             })
             .into()
@@ -3336,11 +3640,7 @@ fn entry_table_scrollbar_style(
 
     let rail = Rail {
         background: Some(palette.background.weak.color.scale_alpha(rail_alpha).into()),
-        border: border(
-            palette.background.strong.color.scale_alpha(0.42),
-            1.0,
-            8.0,
-        ),
+        border: border(palette.background.strong.color.scale_alpha(0.42), 1.0, 8.0),
         scroller: Scroller {
             background: scroller_color.scale_alpha(scroller_alpha).into(),
             border: border(
@@ -3383,14 +3683,7 @@ fn validator_scrollbar_style(
         radius: radius.into(),
     };
     style.vertical_rail = iced::widget::scrollable::Rail {
-        background: Some(
-            palette
-                .background
-                .base
-                .color
-                .scale_alpha(0.30)
-                .into(),
-        ),
+        background: Some(palette.background.base.color.scale_alpha(0.30).into()),
         border: rounded(6.0),
         scroller: iced::widget::scrollable::Scroller {
             background: scroller_color.into(),
@@ -3487,18 +3780,10 @@ fn compat_legend(max_width: f32) -> Element<'static, Message> {
 /// losslessly convertible, amber = unknown, red = incompatible. The
 /// low-alpha background plus a matching border reads as a subtle glow
 /// without disturbing the list layout (no shadow bleed between rows).
-fn compat_row_style(
-    verdict: crate::compat::games::Verdict,
-) -> iced::widget::container::Style {
+fn compat_row_style(verdict: crate::compat::games::Verdict) -> iced::widget::container::Style {
     let accent = compat_verdict_accent(verdict);
-    let background = Color {
-        a: 0.13,
-        ..accent
-    };
-    let border = Color {
-        a: 0.38,
-        ..accent
-    };
+    let background = Color { a: 0.13, ..accent };
+    let border = Color { a: 0.38, ..accent };
     iced::widget::container::Style {
         background: Some(iced::Background::Color(background)),
         border: Border {
@@ -3673,12 +3958,8 @@ fn context_menu_translation(bounds: Rectangle, viewport: Rectangle, row_y: f32) 
 
 /// A fixed text-color style closure; reused across widgets that must
 /// keep the same foreground inside and outside `Float` overlays.
-fn text_color_fn(
-    color: Color,
-) -> impl for<'a> Fn(&'a iced::Theme) -> iced::widget::text::Style {
-    move |_| iced::widget::text::Style {
-        color: Some(color),
-    }
+fn text_color_fn(color: Color) -> impl for<'a> Fn(&'a iced::Theme) -> iced::widget::text::Style {
+    move |_| iced::widget::text::Style { color: Some(color) }
 }
 
 fn with_alpha(color: Color, factor: f32) -> Color {
@@ -3721,47 +4002,49 @@ fn search_prediction_dropdown(
     surface: Color,
     divider: Color,
 ) -> Element<'_, Message> {
-    let prediction_button = |name: String, message: Message, active: bool, hint: Option<&'static str>| {
-        let label = if let Some(hint) = hint {
-            row![fonts::caption(hint), fonts::body(name)]
-                .spacing(6)
-                .align_y(Alignment::Center)
-        } else {
-            row![fonts::body(name)].align_y(Alignment::Center)
-        };
-        let hover_bg = with_alpha(accent, 0.16);
-        let active_bg = with_alpha(accent, 0.28);
-        button(
-            container(label)
-                .width(Length::Fill)
-                .align_x(Alignment::Start)
-                .padding([2, 8]),
-        )
-        .height(Length::Fixed(PREDICTION_ROW_HEIGHT))
-        .width(Length::Fill)
-        .style(move |theme, status| {
-            let highlighted = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let background = if highlighted {
-                Some(iced::Background::Color(hover_bg))
-            } else if active {
-                Some(iced::Background::Color(active_bg))
+    let prediction_button =
+        |name: String, message: Message, active: bool, hint: Option<&'static str>| {
+            let label = if let Some(hint) = hint {
+                row![fonts::caption(hint), fonts::body(name)]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
             } else {
-                None
+                row![fonts::body(name)].align_y(Alignment::Center)
             };
-            let palette = theme.extended_palette();
-            iced::widget::button::Style {
-                background,
-                text_color: w::readable_text_color(surface, palette.background.base.text),
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: 3.0.into(),
-                },
-                ..Default::default()
-            }
-        })
-        .on_press(message)
-    };
+            let hover_bg = with_alpha(accent, 0.16);
+            let active_bg = with_alpha(accent, 0.28);
+            button(
+                container(label)
+                    .width(Length::Fill)
+                    .align_x(Alignment::Start)
+                    .padding([2, 8]),
+            )
+            .height(Length::Fixed(PREDICTION_ROW_HEIGHT))
+            .width(Length::Fill)
+            .style(move |theme, status| {
+                let highlighted =
+                    matches!(status, button::Status::Hovered | button::Status::Pressed);
+                let background = if highlighted {
+                    Some(iced::Background::Color(hover_bg))
+                } else if active {
+                    Some(iced::Background::Color(active_bg))
+                } else {
+                    None
+                };
+                let palette = theme.extended_palette();
+                iced::widget::button::Style {
+                    background,
+                    text_color: w::readable_text_color(surface, palette.background.base.text),
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: 3.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .on_press(message)
+        };
 
     let mut list = Column::new().spacing(2);
     let match_count = app.search_predictions.len();
@@ -4021,7 +4304,10 @@ mod tests {
             "gta3 · games\\III",
             "two parent layers disambiguate models folders"
         );
-        assert_eq!(archive_tab_label(&archives[1], &archives), "gta3 · games\\SA");
+        assert_eq!(
+            archive_tab_label(&archives[1], &archives),
+            "gta3 · games\\SA"
+        );
         assert_eq!(
             archive_tab_label(&archives[2], &archives),
             "player",

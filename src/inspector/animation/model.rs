@@ -120,7 +120,11 @@ pub enum ModelError {
         count: usize,
     },
     #[error("mesh '{mesh}' skin joint {joint} maps to node {node} which does not exist")]
-    SkinJointNodeMissing { mesh: String, joint: usize, node: u32 },
+    SkinJointNodeMissing {
+        mesh: String,
+        joint: usize,
+        node: u32,
+    },
     #[error("mesh '{mesh}' skin has {bind} bind matrices for {joints} joints")]
     BindMatrixCountMismatch {
         mesh: String,
@@ -268,10 +272,7 @@ impl ModelAsset {
             }
         }
         if order.len() != count {
-            let stuck = indegree
-                .iter()
-                .position(|&degree| degree > 0)
-                .unwrap_or(0) as u32;
+            let stuck = indegree.iter().position(|&degree| degree > 0).unwrap_or(0) as u32;
             return Err(ModelError::CyclicHierarchy { node: stuck });
         }
         Ok(order)

@@ -368,7 +368,6 @@ impl Transport {
         if matches!(self.state, PlaybackState::Ended) {
             self.state = PlaybackState::Paused;
         }
-        let was_playing = was_playing;
         self.state = PlaybackState::Scrubbing { was_playing };
         self.anchor_host = None;
         self.last_advance = None;
@@ -419,14 +418,10 @@ impl Transport {
         match self.state {
             PlaybackState::Playing => {
                 self.rebase(now);
-                self.state = PlaybackState::Suspended {
-                    was_playing: true,
-                };
+                self.state = PlaybackState::Suspended { was_playing: true };
             }
             PlaybackState::Paused | PlaybackState::Ended => {
-                self.state = PlaybackState::Suspended {
-                    was_playing: false,
-                };
+                self.state = PlaybackState::Suspended { was_playing: false };
             }
             _ => {}
         }
@@ -492,10 +487,7 @@ impl Transport {
     /// point lands exactly on the range end so the final pose stays
     /// inspectable even when the duration is not an integer frame count.
     pub fn step(&mut self, now: Instant, direction: i32) {
-        if matches!(
-            self.state,
-            PlaybackState::Empty | PlaybackState::Failed(_)
-        ) {
+        if matches!(self.state, PlaybackState::Empty | PlaybackState::Failed(_)) {
             return;
         }
         self.pause(now);
@@ -509,11 +501,19 @@ impl Transport {
         let next = if direction >= 0 {
             let k = ((t - start) / grid).floor();
             let candidate = start + (k + 1.0) * grid;
-            if candidate > end - eps { end } else { candidate }
+            if candidate > end - eps {
+                end
+            } else {
+                candidate
+            }
         } else {
             let k = ((t - start) / grid).ceil();
             let candidate = start + (k - 1.0) * grid;
-            if candidate < start + eps { start } else { candidate }
+            if candidate < start + eps {
+                start
+            } else {
+                candidate
+            }
         };
         self.anchor_clip = next;
         self.shown_time = next;
@@ -681,7 +681,8 @@ mod tests {
         transport.play(start);
         let first = transport.advance(start + Duration::from_millis(100));
         assert!((first.time - 0.1).abs() < 1e-9);
-        let second = transport.advance(start + Duration::from_millis(100) + LONG_GAP + Duration::from_millis(1));
+        let second = transport
+            .advance(start + Duration::from_millis(100) + LONG_GAP + Duration::from_millis(1));
         assert!(second.paused_by_gap);
         assert!((second.time - 0.1).abs() < 1e-9);
         assert_eq!(*transport.state(), PlaybackState::Paused);

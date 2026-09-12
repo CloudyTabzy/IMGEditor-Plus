@@ -1,3 +1,4 @@
+pub mod animation_timeline;
 pub mod animator;
 pub mod app;
 pub mod design;
@@ -15,6 +16,7 @@ pub mod theme;
 pub mod tokens;
 pub mod view;
 pub mod viewer3d_widget;
+pub mod viewer_session;
 pub mod widgets;
 
 pub use app::run_app;

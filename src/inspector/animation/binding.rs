@@ -152,10 +152,7 @@ mod tests {
         };
         let binding = bind_clip(&model, &clip);
         assert_eq!(binding.bound_count(), 0);
-        assert_eq!(
-            binding.tracks[0].status,
-            TrackBindingStatus::Missing
-        );
+        assert_eq!(binding.tracks[0].status, TrackBindingStatus::Missing);
         assert_eq!(binding.diagnostics.len(), 1);
     }
 

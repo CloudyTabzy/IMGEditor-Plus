@@ -79,10 +79,7 @@ impl PoseBuffers {
                 .meshes
                 .iter()
                 .map(|mesh| {
-                    vec![
-                        Mat4::IDENTITY;
-                        mesh.skin.as_ref().map_or(0, |skin| skin.joints.len())
-                    ]
+                    vec![Mat4::IDENTITY; mesh.skin.as_ref().map_or(0, |skin| skin.joints.len())]
                 })
                 .collect(),
             out_vertices: model
@@ -205,7 +202,8 @@ pub fn evaluate_pose(
             Some(skin) => {
                 let palette = &mut buffers.palettes[mesh_index];
                 for (slot, &joint) in skin.joints.iter().enumerate() {
-                    palette[slot] = view * buffers.world[joint.0 as usize] * skin.inverse_bind[slot];
+                    palette[slot] =
+                        view * buffers.world[joint.0 as usize] * skin.inverse_bind[slot];
                 }
                 let palette = &buffers.palettes[mesh_index];
                 for (vertex_index, (source, out)) in
@@ -224,12 +222,7 @@ pub fn evaluate_pose(
             }
             None => {
                 for (source, out) in mesh.vertices.iter().zip(out.iter_mut()) {
-                    deform_rigid_vertex(
-                        source,
-                        rigid,
-                        &mut buffers.degenerate_normal_count,
-                        out,
-                    );
+                    deform_rigid_vertex(source, rigid, &mut buffers.degenerate_normal_count, out);
                 }
             }
         }
@@ -296,7 +289,9 @@ fn deform_rigid_vertex(
     degenerate_normals: &mut u32,
     out: &mut Vertex,
 ) {
-    out.position = rigid.transform_point3(Vec3::from(source.position)).to_array();
+    out.position = rigid
+        .transform_point3(Vec3::from(source.position))
+        .to_array();
     out.uv = source.uv;
     let linear = linear_part(rigid);
     out.normal = normal_through(linear, Vec3::from(source.normal), degenerate_normals).to_array();
@@ -409,10 +404,10 @@ pub fn clip_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inspector::animation::ClipId;
     use crate::inspector::animation::binding::bind_clip;
     use crate::inspector::animation::clip::{Interpolation, PropertyTrack, TrackChannel};
     use crate::inspector::animation::fixtures;
-    use crate::inspector::animation::{ClipId, NodeId};
 
     fn approx_vec3(a: Vec3, b: Vec3) -> bool {
         a.abs_diff_eq(b, 1e-4)
@@ -498,7 +493,10 @@ mod tests {
         // every scale stay at the authored defaults.
         let child = model.node_by_name("prop").unwrap().id;
         let local = buffers.locals[child.0 as usize];
-        assert_eq!(local.translation, model.nodes[child.0 as usize].local.translation);
+        assert_eq!(
+            local.translation,
+            model.nodes[child.0 as usize].local.translation
+        );
         assert_eq!(local.scale, Vec3::ONE);
     }
 

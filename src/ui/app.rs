@@ -1,9 +1,10 @@
+use quick_cache::sync::GuardResult;
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use quick_cache::sync::GuardResult;
+use std::time::Instant;
 
 use iced::advanced::widget::operation::scrollable::{AbsoluteOffset, scroll_to};
 use iced::keyboard::{Event as KeyboardEvent, Modifiers};
@@ -19,11 +20,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{Config, ThemeMode};
 use crate::editor::Editor;
+use crate::inspector::animation::transport::PlaybackState;
 use crate::inspector::scene3d::mesh::SceneTexture;
 use crate::inspector::viewer3d::{self, ViewerEvent};
-use crate::parser::{
-    DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached,
-};
+use crate::parser::{DecodedTexture, EntryInspection, ImgVersion, inspect_entry_cached};
 use crate::tasks::{
     ExportMode, ExportTask, FolderDuplicatePolicy, FolderImportOutcome, FolderImportPlan,
     FolderImportSummary, FolderImportTask, PackOutcome, PackTask, SaveTask, scan_import_folder,
@@ -227,10 +227,10 @@ impl AutoScrollMomentum {
             return false;
         }
 
-        let initial_speed = (live_velocity.abs() * Self::INITIAL_SPEED_FRACTION)
-            .min(Self::MAX_INITIAL_SPEED);
-        let remaining_distance = (initial_speed / Self::DAMPING_PER_SECOND)
-            .min(Self::MAX_TAIL_DISTANCE);
+        let initial_speed =
+            (live_velocity.abs() * Self::INITIAL_SPEED_FRACTION).min(Self::MAX_INITIAL_SPEED);
+        let remaining_distance =
+            (initial_speed / Self::DAMPING_PER_SECOND).min(Self::MAX_TAIL_DISTANCE);
         self.tail = Some(AutoScrollMomentumTail {
             velocity: live_velocity.signum() * initial_speed,
             remaining_distance,
@@ -320,7 +320,12 @@ pub enum Message {
     ImportPreflightCompleted {
         index: usize,
         paths: Vec<PathBuf>,
-        folder: Option<Box<(crate::tasks::FolderImportPlan, crate::tasks::FolderDuplicatePolicy)>>,
+        folder: Option<
+            Box<(
+                crate::tasks::FolderImportPlan,
+                crate::tasks::FolderDuplicatePolicy,
+            )>,
+        >,
         checks: Vec<crate::compat::scan::ImportFileCheck>,
     },
     /// User chose to import despite flagged formats.
@@ -395,6 +400,30 @@ pub enum Message {
     PointerMoved(Point),
     EntryTableHoverChanged(bool),
     AnimationTick(std::time::Instant),
+    /// One host frame while an animation session can advance. The
+    /// transport clock advances only here, never during drawing.
+    AnimationFrame(std::time::Instant),
+    /// Load the built-in synthetic animation demo (no game data).
+    AnimationDemoStart,
+    /// Leave the synthetic demo and clear the viewer.
+    AnimationDemoExit,
+    AnimationSelectClip(crate::inspector::animation::ClipId),
+    AnimationTogglePlay,
+    AnimationStop,
+    AnimationSeek(f64),
+    AnimationStep(i32),
+    AnimationJumpToStart,
+    AnimationJumpToEnd,
+    AnimationScrubStart(f64),
+    AnimationScrubTo(f64),
+    AnimationScrubEnd,
+    AnimationSetSpeed(f64),
+    AnimationSetLoop(crate::inspector::animation::transport::LoopMode),
+    AnimationSetRootPolicy(crate::inspector::animation::pose::RootMotionPolicy),
+    AnimationToggleFollowRoot(bool),
+    AnimationToggleSkeleton(bool),
+    AnimationRangeDragStart(f64),
+    AnimationRangeDragEnd(f64),
     AutoScrollStarted,
     AutoScrollEnded,
     /// Escape ends autoscroll and dismisses the search prediction dropdown.
@@ -773,7 +802,8 @@ pub enum Pane {
 /// An import paused at the pre-flight format-check dialog because at
 /// least one file carries a format the target engine cannot consume.
 #[derive(Debug, Clone)]
-pub struct PendingImport {    pub index: usize,
+pub struct PendingImport {
+    pub index: usize,
     pub paths: Vec<PathBuf>,
     /// Folder imports resume through their plan + chosen duplicate policy.
     pub folder: Option<(FolderImportPlan, FolderDuplicatePolicy)>,
@@ -1190,11 +1220,7 @@ type SceneCacheKey = (String, u64, usize);
 /// publishes the scene atomically with `guard.insert`. `Arc`-wrapped so a
 /// guard can be claimed inside an async load task.
 type SceneCache = std::sync::Arc<
-    quick_cache::sync::Cache<
-        SceneCacheKey,
-        Arc<crate::inspector::scene3d::Scene>,
-        SceneCpuWeight,
-    >,
+    quick_cache::sync::Cache<SceneCacheKey, Arc<crate::inspector::scene3d::Scene>, SceneCpuWeight>,
 >;
 
 /// Weighs a cached scene by its estimated CPU memory (mesh buffers + decoded
@@ -1425,7 +1451,11 @@ impl App {
             .enumerate()
             .filter(|(_, entry)| entry.imported)
             .filter_map(|(index, entry)| {
-                Some((index, entry.file_name.to_string(), entry.source_path.clone()?))
+                Some((
+                    index,
+                    entry.file_name.to_string(),
+                    entry.source_path.clone()?,
+                ))
             })
             .collect();
         let verdicts: Vec<crate::compat::scan::EntryVerdict> = imported
@@ -1448,9 +1478,11 @@ impl App {
             return;
         }
         if let Some(report) = archive.compat_report.as_mut() {
-            report
-                .entry_verdicts
-                .retain(|existing| !verdicts.iter().any(|new| new.entry_index == existing.entry_index));
+            report.entry_verdicts.retain(|existing| {
+                !verdicts
+                    .iter()
+                    .any(|new| new.entry_index == existing.entry_index)
+            });
             report.entry_verdicts.extend(verdicts);
         }
     }
@@ -1647,8 +1679,7 @@ impl App {
         if self.search_predictions.is_empty() {
             let mut best: Option<(f64, usize)> = None;
             for (index, entry) in archive.entries.iter().enumerate() {
-                let similarity =
-                    fuzzt::algorithms::jaro_winkler(&entry.file_name_lower, &query);
+                let similarity = fuzzt::algorithms::jaro_winkler(&entry.file_name_lower, &query);
                 if best.is_none_or(|(current, _)| similarity > current) {
                     best = Some((similarity, index));
                 }
@@ -1670,9 +1701,7 @@ impl App {
         let Some(archive_index) = self.editor.selected_archive() else {
             return Task::none();
         };
-        let name = self
-            .editor
-            .archives()[archive_index]
+        let name = self.editor.archives()[archive_index]
             .entries
             .get(entry_index)
             .map(|entry| entry.file_name.to_string());
@@ -1704,9 +1733,8 @@ impl App {
         let target_y = if self.config.search_selection_context {
             let requested_y = display_row as f32 * crate::ui::view::ROW_HEIGHT;
             if self.entry_table_viewport_known && self.entry_table_viewport_height > 0.0 {
-                let content_height = self.editor.archives()[archive_index]
-                    .selected_indices
-                    .len() as f32
+                let content_height = self.editor.archives()[archive_index].selected_indices.len()
+                    as f32
                     * crate::ui::view::ROW_HEIGHT;
                 let max_y = (content_height - self.entry_table_viewport_height).max(0.0);
                 requested_y.min(max_y)
@@ -1817,6 +1845,90 @@ impl App {
             || self.show_update_status.is_some()
             || self.show_sort_manager
             || self.validator_popup_open
+    }
+
+    pub(crate) fn animation_demo_active(&self) -> bool {
+        self.viewer3d_handle
+            .animation_session(|session| session.demo)
+            .unwrap_or(false)
+    }
+
+    /// The redraw-frame subscription only runs while the transport can
+    /// advance; the message→redraw loop keeps it alive during playback.
+    fn animation_frames_active(&self) -> bool {
+        self.viewer3d_handle
+            .animation_session(|session| {
+                session.is_playing()
+                    || matches!(
+                        session.state(),
+                        PlaybackState::Suspended { was_playing: true }
+                    )
+            })
+            .unwrap_or(false)
+    }
+
+    /// Playback keyboard shortcuts act only with viewport/timeline focus
+    /// (or while already playing), and never behind a modal or text field.
+    pub(crate) fn animation_keyboard_active(&self) -> bool {
+        if self.modal_open() || self.search_focused || self.rename_focused {
+            return false;
+        }
+        if self.selected_inspector_tab != InspectorTab::Model3D {
+            return false;
+        }
+        if !self.viewer3d_handle.has_animation_session() {
+            return false;
+        }
+        self.viewer3d_handle
+            .with(|inner| inner.pointer_over_viewport || inner.timeline_hover)
+            || self
+                .viewer3d_handle
+                .animation_session(|session| session.is_playing())
+                .unwrap_or(false)
+    }
+
+    /// One redraw frame while a session exists. Advancing the transport
+    /// here (never in `draw`/`prepare`) keeps the clock deterministic.
+    fn on_animation_frame(&mut self, now: Instant) -> Task<Message> {
+        if !self.viewer3d_handle.has_animation_session() {
+            return Task::none();
+        }
+        if self.modal_open() || self.selected_inspector_tab != InspectorTab::Model3D {
+            self.viewer3d_handle
+                .with_animation_session_mut(|session| session.suspend(now));
+            return Task::none();
+        }
+        self.viewer3d_handle.with_animation_session_mut(|session| {
+            if matches!(session.state(), PlaybackState::Suspended { .. }) {
+                session.resume(now);
+            }
+        });
+        if let Some(advance) = self.viewer3d_handle.advance_animation(now) {
+            if advance.paused_by_gap {
+                self.toast = Some("Playback paused after a long stall.".into());
+            }
+            if let Some(marker) = advance.markers.last().cloned() {
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.note_marker(&marker, now));
+            }
+        }
+        Task::none()
+    }
+
+    fn start_animation_demo(&mut self) -> Task<Message> {
+        let (model, library) = crate::inspector::animation::fixtures::demo();
+        let now = Instant::now();
+        self.viewer3d_handle.install_animation_session(
+            Arc::new(model),
+            Arc::new(library),
+            true,
+            now,
+        );
+        self.viewer_load = None;
+        self.selected_inspector_tab = InspectorTab::Model3D;
+        self.toast = Some("Synthetic animation demo loaded (no game data).".into());
+        dev_logger::breadcrumb("user: start synthetic animation demo");
+        Task::none()
     }
 
     /// Open the validator popup for the selected archive, probing its
@@ -2260,9 +2372,7 @@ impl App {
             || lower.ends_with(".dff")
             || lower.ends_with(".txd")
             || lower.ends_with(".nft");
-        self.set_active_texture_preview_target(
-            previewable.then_some((archive_index, entry_index)),
-        );
+        self.set_active_texture_preview_target(previewable.then_some((archive_index, entry_index)));
         self.selected_inspector_tab = InspectorTab::Texture;
         self.reset_texture_preview_state();
         if lower.ends_with(".nif") || lower.ends_with(".dff") {
@@ -2659,8 +2769,7 @@ impl App {
                             self.config.recent_files.touch(&path);
                             self.save_config();
                         } else {
-                            self.toast =
-                                Some(format!("Already open: {}", path.display()));
+                            self.toast = Some(format!("Already open: {}", path.display()));
                         }
                     }
                     OpenArchiveOutcome::Unsupported => {
@@ -2764,7 +2873,12 @@ impl App {
                         },
                     );
                 }
-                self.run_save(archive, pending.path, pending.version, pending.remove_existing)
+                self.run_save(
+                    archive,
+                    pending.path,
+                    pending.version,
+                    pending.remove_existing,
+                )
             }
             Message::SaveCheckFixToggled(fix) => {
                 if let Some(pending) = self.pending_save.as_mut() {
@@ -2792,9 +2906,7 @@ impl App {
                 if patched > 0 {
                     archive.dirty = true;
                     archive.invalidate_entry_caches_keeping_report();
-                    self.toast = Some(format!(
-                        "Repaired {patched} texture header(s); saving."
-                    ));
+                    self.toast = Some(format!("Repaired {patched} texture header(s); saving."));
                 }
                 let archive = archive.clone();
                 self.run_save(archive, path, version, remove_existing)
@@ -2802,8 +2914,7 @@ impl App {
             Message::TextureReplaceRequested => {
                 // Ignore a second request while one is already in flight.
                 if self.replace_request.is_some() || self.replace_plan_in_flight {
-                    self.toast =
-                        Some("A replacement is already being prepared.".into());
+                    self.toast = Some("A replacement is already being prepared.".into());
                     return Task::none();
                 }
                 let Some(archive_index) = self.editor.selected_archive() else {
@@ -2817,7 +2928,10 @@ impl App {
                 let Some(archive) = self.editor.archives().get(archive_index) else {
                     return Task::none();
                 };
-                if !archive.entries[entry_index].file_name_lower.ends_with(".txd") {
+                if !archive.entries[entry_index]
+                    .file_name_lower
+                    .ends_with(".txd")
+                {
                     self.toast =
                         Some("Replacement works on TXD entries; that entry is not one.".into());
                     return Task::none();
@@ -2909,7 +3023,11 @@ impl App {
                     .before
                     .as_ref()
                     .map(|(width, height, rgba)| {
-                        iced::widget::image::Handle::from_rgba(*width, *height, rgba.as_ref().clone())
+                        iced::widget::image::Handle::from_rgba(
+                            *width,
+                            *height,
+                            rgba.as_ref().clone(),
+                        )
                     })
                     .unwrap_or_else(|| {
                         iced::widget::image::Handle::from_rgba(1, 1, vec![0, 0, 0, 0])
@@ -3028,10 +3146,7 @@ impl App {
                     },
                 )
             }
-            Message::ReplacePlanRefreshed {
-                attempt,
-                result,
-            } => {
+            Message::ReplacePlanRefreshed { attempt, result } => {
                 if attempt != self.replace_attempt {
                     return Task::none();
                 }
@@ -3111,7 +3226,8 @@ impl App {
                         }
                         archive.dirty = true;
                         archive.invalidate_entry_caches_keeping_report();
-                        self.toast = Some("Texture replaced - save the archive to write it.".into());
+                        self.toast =
+                            Some("Texture replaced - save the archive to write it.".into());
                         return self.decode_texture_entry(entry_index);
                     }
                     Err(error) => {
@@ -3341,7 +3457,8 @@ impl App {
                 if !name.to_ascii_lowercase().ends_with(".txd") {
                     name.push_str(".txd");
                 }
-                let bytes = crate::compat::convert::build_new_txd(&state.plan.0, state.target, &name);
+                let bytes =
+                    crate::compat::convert::build_new_txd(&state.plan.0, state.target, &name);
                 let Some(archive) = self.editor.archives_mut().get_mut(state.archive_index) else {
                     self.toast = Some("The archive is no longer open.".into());
                     return Task::none();
@@ -3368,9 +3485,7 @@ impl App {
                 archive.dirty = true;
                 archive.invalidate_entry_caches_keeping_report();
                 let archive_index = state.archive_index;
-                self.toast = Some(format!(
-                    "Added '{name}' - save the archive to write it.",
-                ));
+                self.toast = Some(format!("Added '{name}' - save the archive to write it.",));
                 if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
                     for entry in archive.entries.iter_mut() {
                         entry.selected = false;
@@ -3402,7 +3517,8 @@ impl App {
                     return Task::none();
                 };
                 let Ok(target) = crate::compat::convert::writable_target(target_id) else {
-                    self.toast = Some("Bully (Gamebryo) texture writing is not supported yet.".into());
+                    self.toast =
+                        Some("Bully (Gamebryo) texture writing is not supported yet.".into());
                     return Task::none();
                 };
                 let selected: Vec<usize> = archive.selected_indices.iter().copied().collect();
@@ -3431,7 +3547,8 @@ impl App {
                     }
                 };
                 if ready.entries.is_empty() {
-                    self.toast = Some("Every selected texture is already native for the target.".into());
+                    self.toast =
+                        Some("Every selected texture is already native for the target.".into());
                     return Task::none();
                 }
                 self.pending_bulk = Some(BulkConvertState {
@@ -3798,7 +3915,8 @@ impl App {
                     Ok(archive) => {
                         self.editor.replace_archive(index, archive);
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
-                            archive.update_selected_list(&self.search, self.config.literal_file_types);
+                            archive
+                                .update_selected_list(&self.search, self.config.literal_file_types);
                         }
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
                             Self::adopt_target(&self.config, archive);
@@ -3883,7 +4001,12 @@ impl App {
                     self.toast = Some("An archive operation is already running.".into());
                     return Task::none();
                 }
-                self.begin_import(index, archive, plan.files.clone(), Some((plan, duplicate_policy)))
+                self.begin_import(
+                    index,
+                    archive,
+                    plan.files.clone(),
+                    Some((plan, duplicate_policy)),
+                )
             }
             Message::CancelFolderImport => {
                 self.pending_folder_import = None;
@@ -3906,7 +4029,8 @@ impl App {
                         let summary = outcome.summary;
                         self.editor.replace_archive(index, outcome.archive);
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
-                            archive.update_selected_list(&self.search, self.config.literal_file_types);
+                            archive
+                                .update_selected_list(&self.search, self.config.literal_file_types);
                         }
                         self.refresh_imported_verdicts(index);
                         self.toast = Some(format_folder_import_summary(&summary));
@@ -4155,18 +4279,14 @@ impl App {
                 self.prediction_index = None;
                 Task::none()
             }
-            Message::SearchPredictPick(index) => {
-                match self.search_predictions.get(index) {
-                    Some(&(entry_index, _)) => self.commit_search_prediction(entry_index),
-                    None => Task::none(),
-                }
-            }
-            Message::SearchPickDidYouMean => {
-                match self.did_you_mean.as_ref() {
-                    Some(&(entry_index, _)) => self.commit_search_prediction(entry_index),
-                    None => Task::none(),
-                }
-            }
+            Message::SearchPredictPick(index) => match self.search_predictions.get(index) {
+                Some(&(entry_index, _)) => self.commit_search_prediction(entry_index),
+                None => Task::none(),
+            },
+            Message::SearchPickDidYouMean => match self.did_you_mean.as_ref() {
+                Some(&(entry_index, _)) => self.commit_search_prediction(entry_index),
+                None => Task::none(),
+            },
             Message::UncapturedPress => {
                 if self.predictions_open() {
                     self.close_predictions();
@@ -4532,9 +4652,7 @@ impl App {
                 if let Some(archive_idx) = self.editor.selected_archive() {
                     let current_progress =
                         self.editor.archives()[archive_idx].progress.percentage();
-                    let visual = self
-                        .animator
-                        .get_or(ANIM_PROGRESS, current_progress);
+                    let visual = self.animator.get_or(ANIM_PROGRESS, current_progress);
                     if (visual - current_progress).abs() > 0.005 {
                         self.animator.animate_from_current(
                             ANIM_PROGRESS,
@@ -4624,8 +4742,7 @@ impl App {
                             (self.viewer_load_phase + dt.as_secs_f32() * 0.72).fract();
                     }
                     if self.has_active_progress() {
-                        self.shimmer_phase =
-                            (self.shimmer_phase + dt.as_secs_f32() * 0.9).fract();
+                        self.shimmer_phase = (self.shimmer_phase + dt.as_secs_f32() * 0.9).fract();
                     }
                     if self.editor.archives().is_empty() && self.config.motion_enabled {
                         // Slow idle clock for the empty-state hero (~6.7 s
@@ -4723,6 +4840,124 @@ impl App {
 
                 autoscroll_task
             }
+            Message::AnimationFrame(now) => self.on_animation_frame(now),
+            Message::AnimationDemoStart => self.start_animation_demo(),
+            Message::AnimationDemoExit => {
+                self.viewer3d_handle.clear();
+                self.selected_inspector_tab = InspectorTab::Model3D;
+                self.toast = Some("Animation demo closed.".into());
+                Task::none()
+            }
+            Message::AnimationSelectClip(id) => {
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.select_clip(id, Instant::now()));
+                Task::none()
+            }
+            Message::AnimationTogglePlay => {
+                let now = Instant::now();
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.toggle_play_pause(now));
+                Task::none()
+            }
+            Message::AnimationStop => {
+                let now = Instant::now();
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.stop(now));
+                Task::none()
+            }
+            Message::AnimationSeek(time) => {
+                let now = Instant::now();
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.seek(now, time));
+                Task::none()
+            }
+            Message::AnimationStep(direction) => {
+                let now = Instant::now();
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.step(now, direction));
+                Task::none()
+            }
+            Message::AnimationJumpToStart => {
+                let now = Instant::now();
+                self.viewer3d_handle.with_animation_session_mut(|session| {
+                    let start = session.transport.range().0;
+                    session.seek(now, start);
+                });
+                Task::none()
+            }
+            Message::AnimationJumpToEnd => {
+                let now = Instant::now();
+                self.viewer3d_handle.with_animation_session_mut(|session| {
+                    let end = session.transport.range().1;
+                    session.seek(now, end);
+                });
+                Task::none()
+            }
+            Message::AnimationScrubStart(time) => {
+                let now = Instant::now();
+                self.viewer3d_handle.with_animation_session_mut(|session| {
+                    session.begin_scrub(now);
+                    session.scrub_to(time);
+                });
+                Task::none()
+            }
+            Message::AnimationScrubTo(time) => {
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.scrub_to(time));
+                Task::none()
+            }
+            Message::AnimationScrubEnd => {
+                let now = Instant::now();
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.end_scrub(now));
+                Task::none()
+            }
+            Message::AnimationSetSpeed(speed) => {
+                let now = Instant::now();
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.set_speed(now, speed));
+                Task::none()
+            }
+            Message::AnimationSetLoop(mode) => {
+                let now = Instant::now();
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.set_loop_mode(now, mode));
+                Task::none()
+            }
+            Message::AnimationSetRootPolicy(policy) => {
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.set_root_policy(policy));
+                Task::none()
+            }
+            Message::AnimationToggleFollowRoot(value) => {
+                self.viewer3d_handle
+                    .with_animation_session_mut(|session| session.panel.follow_root = value);
+                Task::none()
+            }
+            Message::AnimationToggleSkeleton(value) => {
+                self.viewer3d_handle.with_animation_session_mut(|session| {
+                    session.panel.show_skeleton = value;
+                });
+                Task::none()
+            }
+            Message::AnimationRangeDragStart(time) => {
+                let now = Instant::now();
+                self.viewer3d_handle.with_animation_session_mut(|session| {
+                    let end = session.transport.range().1;
+                    let start = time.clamp(0.0, (end - 1e-3).max(0.0));
+                    session.set_range(now, start, end);
+                });
+                Task::none()
+            }
+            Message::AnimationRangeDragEnd(time) => {
+                let now = Instant::now();
+                self.viewer3d_handle.with_animation_session_mut(|session| {
+                    let start = session.transport.range().0;
+                    let end = time.max(start + 1e-3);
+                    session.set_range(now, start, end);
+                });
+                Task::none()
+            }
             Message::PaneResized(event) => {
                 self.panes.resize(event.split, event.ratio);
                 Task::none()
@@ -4812,8 +5047,9 @@ impl App {
             }
             Message::SortBy(column) => {
                 let updated_chain = if let Some(archive) = self.editor.selected_archive_mut() {
-                    let unique_types =
-                        archive.unique_file_types(self.config.literal_file_types).to_vec();
+                    let unique_types = archive
+                        .unique_file_types(self.config.literal_file_types)
+                        .to_vec();
                     match column {
                         SortColumn::Name => {
                             if archive.sort.column == SortColumn::Name {
@@ -4883,7 +5119,10 @@ impl App {
             }
 
             Message::OpenValidatorPopup => self.open_validator_popup(),
-            Message::TargetProbed { archive_index, hint } => {
+            Message::TargetProbed {
+                archive_index,
+                hint,
+            } => {
                 if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
                     archive.target_hint = hint;
                 }
@@ -4905,9 +5144,8 @@ impl App {
                 if let Some(last) = self.tab_resize_drag
                     && last.is_finite()
                 {
-                    self.archive_tab_width = crate::config::clamp_archive_tab_width(
-                        self.archive_tab_width + (x - last),
-                    );
+                    self.archive_tab_width =
+                        crate::config::clamp_archive_tab_width(self.archive_tab_width + (x - last));
                 }
                 self.tab_resize_drag = Some(x);
                 Task::none()
@@ -4966,10 +5204,14 @@ impl App {
                     },
                 )
             }
-            Message::CompatibilityValidated { archive_index, result } => {
+            Message::CompatibilityValidated {
+                archive_index,
+                result,
+            } => {
                 match result {
                     Ok(report) => {
-                        let Some(archive) = self.editor.archives_mut().get_mut(archive_index) else {
+                        let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
+                        else {
                             self.toast = Some("The validated archive was closed.".into());
                             return Task::none();
                         };
@@ -5022,15 +5264,15 @@ impl App {
                             if pending.index != archive_index || pending.issue.is_some() {
                                 self.pending_save = Some(pending);
                             } else {
-                                let issue = self
-                                    .editor
-                                    .archives()
-                                    .get(archive_index)
-                                    .and_then(|archive| {
-                                        archive.compat_report.as_ref().map(|report| {
-                                            crate::compat::save::evaluate_save(report, archive)
-                                        })
-                                    });
+                                let issue =
+                                    self.editor
+                                        .archives()
+                                        .get(archive_index)
+                                        .and_then(|archive| {
+                                            archive.compat_report.as_ref().map(|report| {
+                                                crate::compat::save::evaluate_save(report, archive)
+                                            })
+                                        });
                                 match issue {
                                     Some(issue) if issue.needs_review() => {
                                         let fix = issue.has_fixable();
@@ -5043,8 +5285,7 @@ impl App {
                                         return Task::none();
                                     }
                                     _ => {
-                                        let archive =
-                                            self.editor.archives()[archive_index].clone();
+                                        let archive = self.editor.archives()[archive_index].clone();
                                         return self.run_save(
                                             archive,
                                             pending.path,
@@ -6238,14 +6479,12 @@ impl App {
     /// the close action cannot race the visibility request.
     fn hide_window_then_close(&mut self, window: iced::window::Id) -> Task<Message> {
         self.quitting = Some(window);
-        iced::window::set_mode::<Message>(window, iced::window::Mode::Hidden).chain(
-            Task::perform(
-                async {
-                    tokio::time::sleep(QUIT_HIDE_SETTLE).await;
-                },
-                |_| Message::QuitWindowHidden,
-            ),
-        )
+        iced::window::set_mode::<Message>(window, iced::window::Mode::Hidden).chain(Task::perform(
+            async {
+                tokio::time::sleep(QUIT_HIDE_SETTLE).await;
+            },
+            |_| Message::QuitWindowHidden,
+        ))
     }
 }
 
@@ -6265,9 +6504,9 @@ impl App {
             // capture it and handle it themselves, so an uncaptured
             // press is a click on inert space — the right moment to
             // dismiss the floating search dropdown.
-            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
-                iced::mouse::Button::Left,
-            )) => Message::UncapturedPress,
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+                Message::UncapturedPress
+            }
             _ => Message::Noop,
         });
 
@@ -6285,25 +6524,23 @@ impl App {
         // Search-prediction keyboard navigation. These fire on every key
         // press regardless of focus; the update handlers no-op unless
         // the prediction dropdown is actually open.
-        let search_keys = iced::event::listen_with(|event, _status, _window| {
-            match event {
-                iced::Event::Keyboard(KeyboardEvent::KeyPressed { key, .. }) => match key {
-                    iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowUp) => {
-                        Some(Message::SearchPredictMove(-1))
-                    }
-                    iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowDown) => {
-                        Some(Message::SearchPredictMove(1))
-                    }
-                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter) => {
-                        Some(Message::SearchPredictCommit)
-                    }
-                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => {
-                        Some(Message::SearchPredictDismiss)
-                    }
-                    _ => None,
-                },
+        let search_keys = iced::event::listen_with(|event, _status, _window| match event {
+            iced::Event::Keyboard(KeyboardEvent::KeyPressed { key, .. }) => match key {
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowUp) => {
+                    Some(Message::SearchPredictMove(-1))
+                }
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowDown) => {
+                    Some(Message::SearchPredictMove(1))
+                }
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter) => {
+                    Some(Message::SearchPredictCommit)
+                }
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => {
+                    Some(Message::SearchPredictDismiss)
+                }
                 _ => None,
-            }
+            },
+            _ => None,
         });
 
         let tick = iced::time::every(Duration::from_millis(250)).map(|_| Message::TickProgress);
@@ -6341,9 +6578,9 @@ impl App {
             // The native Scrollable captures a valid MMB autoscroll request.
             // Only then mirror its state and show the notice; an MMB click on
             // another control must not claim that table autoscroll started.
-            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
-                iced::mouse::Button::Middle,
-            )) if matches!(status, iced::event::Status::Captured) => {
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Middle))
+                if matches!(status, iced::event::Status::Captured) =>
+            {
                 Some(Message::AutoScrollStarted)
             }
             _ => None,
@@ -6357,8 +6594,7 @@ impl App {
                     Some(Message::AutoScrollEnded)
                 }
                 iced::Event::Keyboard(KeyboardEvent::KeyPressed {
-                    key:
-                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                     ..
                 }) => Some(Message::AutoScrollEscape),
                 iced::Event::Mouse(iced::mouse::Event::WheelScrolled { .. })
@@ -6385,6 +6621,38 @@ impl App {
             Subscription::none()
         };
 
+        let animation_frames = if self.animation_frames_active() {
+            iced::window::frames().map(Message::AnimationFrame)
+        } else {
+            Subscription::none()
+        };
+
+        let animation_keys = if self.animation_keyboard_active() {
+            iced::keyboard::listen().map(|event| match event {
+                KeyboardEvent::KeyPressed { key, .. } => match key {
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Space) => {
+                        Message::AnimationTogglePlay
+                    }
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowLeft) => {
+                        Message::AnimationStep(-1)
+                    }
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowRight) => {
+                        Message::AnimationStep(1)
+                    }
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Home) => {
+                        Message::AnimationJumpToStart
+                    }
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::End) => {
+                        Message::AnimationJumpToEnd
+                    }
+                    _ => Message::Noop,
+                },
+                _ => Message::Noop,
+            })
+        } else {
+            Subscription::none()
+        };
+
         Subscription::batch([
             mod_tracker,
             key,
@@ -6396,6 +6664,8 @@ impl App {
             autoscroll_start,
             autoscroll_stop,
             tab_resize,
+            animation_frames,
+            animation_keys,
         ])
     }
 }
@@ -6542,10 +6812,7 @@ impl App {
                 Message::SetNavigationGizmoVisible(!self.config.show_navigation_gizmo),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Search bar",
-                    view_toggle(self.config.show_search_bar)
-                ),
+                format!("{}Search bar", view_toggle(self.config.show_search_bar)),
                 Message::ToggleSearchBar(!self.config.show_search_bar),
             )),
             Item::new(menu_button(
@@ -6584,10 +6851,7 @@ impl App {
                 Message::ToggleAutoscrollMomentum(!self.config.autoscroll_momentum_enabled),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Motion effects",
-                    view_toggle(self.config.motion_enabled)
-                ),
+                format!("{}Motion effects", view_toggle(self.config.motion_enabled)),
                 Message::ToggleMotionEffects(!self.config.motion_enabled),
             )),
             Item::new(menu_button(
@@ -6610,6 +6874,17 @@ impl App {
                     view_toggle(self.config.icon_micro_motion_enabled)
                 ),
                 Message::ToggleIconMicroMotion(!self.config.icon_micro_motion_enabled),
+            )),
+            Item::new(menu_button(
+                format!(
+                    "{}Animation demo (synthetic)",
+                    view_toggle(self.animation_demo_active())
+                ),
+                if self.animation_demo_active() {
+                    Message::AnimationDemoExit
+                } else {
+                    Message::AnimationDemoStart
+                },
             )),
         ])
         .max_width(220.0);
@@ -6859,8 +7134,8 @@ fn plan_replace(
     format: Option<crate::compat::encode::EncodeFormat>,
     options: crate::compat::encode::EncodeOptions,
 ) -> Result<ReplacePlanReady, String> {
-    let bytes = std::fs::read(&path)
-        .map_err(|error| format!("read {} failed: {error}", path.display()))?;
+    let bytes =
+        std::fs::read(&path).map_err(|error| format!("read {} failed: {error}", path.display()))?;
     let source_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -6875,8 +7150,7 @@ fn plan_replace(
         .get(texture_index)
         .ok_or_else(|| "this entry's texture list changed; reopen it".to_string())?;
     let before_rgba = old.decode_rgba().map_err(|error| error.to_string())?;
-    let plan =
-        crate::compat::convert::plan_import(&image, target, archive_name, format, options)?;
+    let plan = crate::compat::convert::plan_import(&image, target, archive_name, format, options)?;
     Ok(ReplacePlanReady {
         archive_index,
         entry_index,
@@ -6902,8 +7176,8 @@ fn plan_txd_import(
     format: Option<crate::compat::encode::EncodeFormat>,
     options: crate::compat::encode::EncodeOptions,
 ) -> Result<NewTxdPlanReady, String> {
-    let bytes = std::fs::read(&path)
-        .map_err(|error| format!("read {} failed: {error}", path.display()))?;
+    let bytes =
+        std::fs::read(&path).map_err(|error| format!("read {} failed: {error}", path.display()))?;
     let source_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -6915,8 +7189,7 @@ fn plan_txd_import(
         .and_then(|stem| stem.to_str())
         .unwrap_or("texture")
         .to_string();
-    let plan =
-        crate::compat::convert::plan_import(&image, target, archive_name, format, options)?;
+    let plan = crate::compat::convert::plan_import(&image, target, archive_name, format, options)?;
     Ok(NewTxdPlanReady {
         archive_index,
         source_path: path,
@@ -6935,7 +7208,7 @@ fn plan_bulk_convert(
     selected: &[usize],
     target: &'static crate::compat::games::GameProfile,
 ) -> Result<BulkPlanReady, String> {
-    use crate::compat::games::{classify, Verdict};
+    use crate::compat::games::{Verdict, classify};
     use crate::compat::raster::RasterProfile;
 
     let mut entries = Vec::new();
@@ -7239,7 +7512,9 @@ mod tests {
 
         assert_eq!(app.selected_inspector_tab, InspectorTab::Model3D);
         assert_eq!(
-            app.viewer_load.as_ref().map(|load| load.entry_name.as_str()),
+            app.viewer_load
+                .as_ref()
+                .map(|load| load.entry_name.as_str()),
             Some("collision.col")
         );
     }
@@ -7456,7 +7731,8 @@ mod tests {
         // explicitly so the late decode is discarded, not published.
         drop(guard);
         assert!(matches!(
-            app.scene_cache.get_value_or_guard(&key, Some(Duration::ZERO)),
+            app.scene_cache
+                .get_value_or_guard(&key, Some(Duration::ZERO)),
             GuardResult::Guard(_)
         ));
     }
@@ -7536,14 +7812,12 @@ mod tests {
         let messages = drain_task(task);
         assert!(matches!(
             messages.as_slice(),
-            [Message::Viewer3dLoadCompleted {
-                result: Err(_),
-                ..
-            }]
+            [Message::Viewer3dLoadCompleted { result: Err(_), .. }]
         ));
         assert!(app.scene_cache.get(&key).is_none());
         assert!(matches!(
-            app.scene_cache.get_value_or_guard(&key, Some(Duration::ZERO)),
+            app.scene_cache
+                .get_value_or_guard(&key, Some(Duration::ZERO)),
             GuardResult::Guard(_)
         ));
     }
@@ -7581,9 +7855,7 @@ mod tests {
         };
         report.txd_entries = 2;
         report.textures = 5;
-        report
-            .class_counts
-            .insert("DXT1".to_string(), 4);
+        report.class_counts.insert("DXT1".to_string(), 4);
         report
             .class_counts
             .insert("888 (32bpp storage)".to_string(), 1);
@@ -7592,19 +7864,13 @@ mod tests {
             .entry("gta3")
             .or_default()
             .insert("convertible (lossless)", 5);
-        report
-            .verdicts
-            .entry("sa")
-            .or_default()
-            .insert("native", 4);
+        report.verdicts.entry("sa").or_default().insert("native", 4);
         report
             .verdicts
             .entry("sa")
             .or_default()
             .insert("supported", 1);
-        report
-            .anomaly_counts
-            .insert("DIMS_NOT_POT", 2);
+        report.anomaly_counts.insert("DIMS_NOT_POT", 2);
         report
             .anomaly_severity
             .insert("DIMS_NOT_POT", Severity::Error);
@@ -7624,7 +7890,10 @@ mod tests {
             toast.contains("Validated 2 TXDs (5 textures)"),
             "toast should summarize: {toast}"
         );
-        assert!(toast.contains("2 errors"), "toast should count errors: {toast}");
+        assert!(
+            toast.contains("2 errors"),
+            "toast should count errors: {toast}"
+        );
         assert!(
             toast.contains("for GTA III"),
             "toast names the target: {toast}"
@@ -7720,10 +7989,7 @@ mod tests {
         );
         // Stray moves after release must not resize anything.
         let _ = app.update(Message::TabResizeMoved(0.0));
-        assert_eq!(
-            app.archive_tab_width,
-            crate::config::ARCHIVE_TAB_WIDTH_MAX
-        );
+        assert_eq!(app.archive_tab_width, crate::config::ARCHIVE_TAB_WIDTH_MAX);
     }
 
     /// A tiny planned conversion for dialog-state tests.
@@ -7795,8 +8061,7 @@ mod tests {
             app.editor.archives()[0]
                 .entries
                 .iter()
-                .any(|entry| entry.file_name == "MyTex.txd"
-                    && entry.override_bytes.is_some()),
+                .any(|entry| entry.file_name == "MyTex.txd" && entry.override_bytes.is_some()),
             "the new TXD entry must carry its bytes as an override"
         );
         let added = app.editor.archives()[0]
@@ -8084,7 +8349,11 @@ mod tests {
             let archive = &mut app.editor.archives_mut()[0];
             archive.target_game = Some("gta3");
             let mut report = ScanReport::default();
-            report.verdicts.entry("gta3").or_default().insert("unsupported", 3);
+            report
+                .verdicts
+                .entry("gta3")
+                .or_default()
+                .insert("unsupported", 3);
             report.textures = 3;
             archive.compat_report = Some(report);
         }
@@ -8198,7 +8467,10 @@ mod tests {
             remove_existing: true,
         });
         assert!(app.editor.archives()[0].entries[1].override_bytes.is_some());
-        assert!(app.editor.archives()[0].dirty, "a patch changes the archive");
+        assert!(
+            app.editor.archives()[0].dirty,
+            "a patch changes the archive"
+        );
         let messages = drain_task(task);
         assert!(
             messages
@@ -8217,7 +8489,11 @@ mod tests {
             let archive = &mut app.editor.archives_mut()[0];
             archive.target_game = Some("gta3");
             let mut report = ScanReport::default();
-            report.verdicts.entry("gta3").or_default().insert("native", 10);
+            report
+                .verdicts
+                .entry("gta3")
+                .or_default()
+                .insert("native", 10);
             report.textures = 10;
             archive.compat_report = Some(report);
         }
@@ -8256,10 +8532,7 @@ mod tests {
         // Dirty: guarded.
         app.editor.archives_mut()[0].dirty = true;
         let _ = app.update(Message::CloseArchiveTab(0));
-        assert!(matches!(
-            app.pending_close,
-            Some(PendingClose::Archive(0))
-        ));
+        assert!(matches!(app.pending_close, Some(PendingClose::Archive(0))));
         assert!(app.modal_open());
         assert_eq!(app.editor.archives().len(), 1, "still open while asking");
 
@@ -8293,10 +8566,7 @@ mod tests {
         // Dirty: guarded, and cancelling keeps the window.
         app.editor.archives_mut()[0].dirty = true;
         let _ = app.update(Message::WindowCloseRequested(window));
-        assert!(matches!(
-            app.pending_close,
-            Some(PendingClose::Window(_))
-        ));
+        assert!(matches!(app.pending_close, Some(PendingClose::Window(_))));
         let _ = app.update(Message::CloseGuardCancel);
         assert!(app.pending_close.is_none());
         assert_eq!(app.editor.archives().len(), 1);
@@ -8315,7 +8585,9 @@ mod tests {
         std::fs::write(&path, &img).unwrap();
 
         let mut app = test_app();
-        let _ = app.editor.add_opened_archive(ArchiveInfo::open(&path).unwrap());
+        let _ = app
+            .editor
+            .add_opened_archive(ArchiveInfo::open(&path).unwrap());
         {
             let archive = &mut app.editor.archives_mut()[0];
             archive.dirty = true;
@@ -8372,7 +8644,11 @@ mod tests {
         // The fade deadline only starts the native hide. The quit state must
         // remain active until that hide has had time to reach the window.
         let hide_task = app.update(Message::QuitFadeDone);
-        assert_eq!(app.quitting, Some(window), "fade remains active while hiding");
+        assert_eq!(
+            app.quitting,
+            Some(window),
+            "fade remains active while hiding"
+        );
         let hidden_messages = drain_task(hide_task);
         let hidden = hidden_messages
             .into_iter()
@@ -8457,30 +8733,27 @@ mod tests {
         let nft = dir.path().join("skin.nft");
         std::fs::write(
             &nft,
-            crate::inspector::nif::tests::build_nif(&[(
-                "NiPixelData",
-                &{
-                    let mut block = Vec::new();
-                    block.extend_from_slice(&4_u32.to_le_bytes());
-                    block.push(0);
-                    block.extend_from_slice(&(-1_i32).to_le_bytes());
-                    block.extend_from_slice(&0_u32.to_le_bytes());
-                    block.push(1);
-                    block.extend_from_slice(&0_u32.to_le_bytes());
-                    block.push(0);
-                    block.extend_from_slice(&[4, 0, 0, 0]);
-                    block.extend_from_slice(&(-1_i32).to_le_bytes());
-                    block.extend_from_slice(&1_u32.to_le_bytes());
-                    block.extend_from_slice(&0_u32.to_le_bytes());
-                    block.extend_from_slice(&8_u32.to_le_bytes());
-                    block.extend_from_slice(&8_u32.to_le_bytes());
-                    block.extend_from_slice(&0_u32.to_le_bytes());
-                    block.extend_from_slice(&32_u32.to_le_bytes());
-                    block.extend_from_slice(&1_u32.to_le_bytes());
-                    block.extend(std::iter::repeat_n(0x8A_u8, 32));
-                    block
-                },
-            )]),
+            crate::inspector::nif::tests::build_nif(&[("NiPixelData", &{
+                let mut block = Vec::new();
+                block.extend_from_slice(&4_u32.to_le_bytes());
+                block.push(0);
+                block.extend_from_slice(&(-1_i32).to_le_bytes());
+                block.extend_from_slice(&0_u32.to_le_bytes());
+                block.push(1);
+                block.extend_from_slice(&0_u32.to_le_bytes());
+                block.push(0);
+                block.extend_from_slice(&[4, 0, 0, 0]);
+                block.extend_from_slice(&(-1_i32).to_le_bytes());
+                block.extend_from_slice(&1_u32.to_le_bytes());
+                block.extend_from_slice(&0_u32.to_le_bytes());
+                block.extend_from_slice(&8_u32.to_le_bytes());
+                block.extend_from_slice(&8_u32.to_le_bytes());
+                block.extend_from_slice(&0_u32.to_le_bytes());
+                block.extend_from_slice(&32_u32.to_le_bytes());
+                block.extend_from_slice(&1_u32.to_le_bytes());
+                block.extend(std::iter::repeat_n(0x8A_u8, 32));
+                block
+            })]),
         )
         .unwrap();
 
@@ -8532,28 +8805,25 @@ mod tests {
         let nft = dir.path().join("skin.nft");
         std::fs::write(
             &nft,
-            crate::inspector::nif::tests::build_nif(&[(
-                "NiPixelData",
-                &{
-                    let mut block = Vec::new();
-                    block.extend_from_slice(&4_u32.to_le_bytes()); // DXT1
-                    block.push(0);
-                    block.extend_from_slice(&(-1_i32).to_le_bytes());
-                    block.extend_from_slice(&0_u32.to_le_bytes());
-                    block.push(1);
-                    block.extend_from_slice(&0_u32.to_le_bytes());
-                    block.push(0);
-                    block.extend_from_slice(&[4, 0, 0, 0]);
-                    block.extend_from_slice(&(-1_i32).to_le_bytes());
-                    block.extend_from_slice(&1_u32.to_le_bytes());
-                    block.extend_from_slice(&0_u32.to_le_bytes());
-                    for value in [8_u32, 8, 0, 32, 1] {
-                        block.extend_from_slice(&value.to_le_bytes());
-                    }
-                    block.extend(std::iter::repeat_n(0x8A_u8, 32));
-                    block
-                },
-            )]),
+            crate::inspector::nif::tests::build_nif(&[("NiPixelData", &{
+                let mut block = Vec::new();
+                block.extend_from_slice(&4_u32.to_le_bytes()); // DXT1
+                block.push(0);
+                block.extend_from_slice(&(-1_i32).to_le_bytes());
+                block.extend_from_slice(&0_u32.to_le_bytes());
+                block.push(1);
+                block.extend_from_slice(&0_u32.to_le_bytes());
+                block.push(0);
+                block.extend_from_slice(&[4, 0, 0, 0]);
+                block.extend_from_slice(&(-1_i32).to_le_bytes());
+                block.extend_from_slice(&1_u32.to_le_bytes());
+                block.extend_from_slice(&0_u32.to_le_bytes());
+                for value in [8_u32, 8, 0, 32, 1] {
+                    block.extend_from_slice(&value.to_le_bytes());
+                }
+                block.extend(std::iter::repeat_n(0x8A_u8, 32));
+                block
+            })]),
         )
         .unwrap();
 
@@ -8625,10 +8895,7 @@ mod tests {
         let messages = drain_task(app.decode_texture_entry(0));
         assert!(matches!(
             messages.as_slice(),
-            [Message::TextureDecoded {
-                result: Err(_),
-                ..
-            }]
+            [Message::TextureDecoded { result: Err(_), .. }]
         ));
         assert!(texture_cache.get(&0).is_none());
         assert!(matches!(
@@ -8664,10 +8931,7 @@ mod tests {
         let messages = drain_task(app.decode_texture_entry(entry_index));
         assert!(matches!(
             messages.as_slice(),
-            [Message::TextureDecoded {
-                result: Ok(_),
-                ..
-            }]
+            [Message::TextureDecoded { result: Ok(_), .. }]
         ));
 
         for message in messages {
@@ -8677,7 +8941,10 @@ mod tests {
         let previews = texture_cache
             .get(&entry_index)
             .expect("the oversized NFT preview set should remain cached");
-        assert!(previews.len() > 1, "ShopCars should contain multiple textures");
+        assert!(
+            previews.len() > 1,
+            "ShopCars should contain multiple textures"
+        );
         let toast = app.toast.as_deref().unwrap_or_default();
         assert!(toast.starts_with("Decoded "), "unexpected toast: {toast}");
         assert!(
@@ -8866,9 +9133,7 @@ mod tests {
         assert!(app.editor.file_type_literal);
         // The per-archive cache was invalidated: the next read sees
         // literal extensions, not the stale curated labels.
-        let types = app
-            .editor
-            .archives_mut()[0]
+        let types = app.editor.archives_mut()[0]
             .unique_file_types(true)
             .to_vec();
         assert_eq!(types, ["DFF", "TXD"].as_slice());
@@ -9008,10 +9273,7 @@ mod tests {
         let _ = app.update(Message::DebounceTick);
 
         assert!(app.predictions_open());
-        assert_eq!(
-            app.search_predictions,
-            vec![(0, "first.dff".to_string())]
-        );
+        assert_eq!(app.search_predictions, vec![(0, "first.dff".to_string())]);
         assert!(app.did_you_mean.is_none());
     }
 
@@ -9022,10 +9284,7 @@ mod tests {
         let _ = app.update(Message::DebounceTick);
 
         assert!(app.search_predictions.is_empty());
-        assert_eq!(
-            app.did_you_mean,
-            Some((0, "first.dff".to_string()))
-        );
+        assert_eq!(app.did_you_mean, Some((0, "first.dff".to_string())));
         assert!(app.predictions_open());
     }
 
@@ -9050,12 +9309,22 @@ mod tests {
 
         // Enter commits the highlighted prediction.
         let _ = app.update(Message::SearchPredictCommit);
-        assert!(app.search.is_empty(), "navigation picks clear the temporary filter");
+        assert!(
+            app.search.is_empty(),
+            "navigation picks clear the temporary filter"
+        );
         assert_eq!(app.editor.selected_entry(), Some(2));
         let archive = &app.editor.archives()[0];
-        assert_eq!(archive.selected_indices.len(), 3, "surrounding rows remain visible");
+        assert_eq!(
+            archive.selected_indices.len(),
+            3,
+            "surrounding rows remain visible"
+        );
         let display_row = archive.display_row_of(2).expect("picked entry is visible");
-        assert_eq!(app.scroll_y, display_row as f32 * crate::ui::view::ROW_HEIGHT);
+        assert_eq!(
+            app.scroll_y,
+            display_row as f32 * crate::ui::view::ROW_HEIGHT
+        );
         assert!(!app.predictions_open(), "dropdown closes after commit");
     }
 
@@ -9136,7 +9405,10 @@ mod tests {
         let mut app = test_app_with_entries();
 
         let _ = app.update(Message::AutoScrollStarted);
-        assert!(!app.autoscroll, "other panels must not enter table autoscroll");
+        assert!(
+            !app.autoscroll,
+            "other panels must not enter table autoscroll"
+        );
 
         let _ = app.update(Message::EntryTableHoverChanged(true));
         let _ = app.update(Message::AutoScrollStarted);
@@ -9225,7 +9497,10 @@ mod tests {
             max_y: 1_000.0,
             viewport_height: 500.0,
         });
-        assert!(app.autoscroll, "native scrolling must not hide its indicator");
+        assert!(
+            app.autoscroll,
+            "native scrolling must not hide its indicator"
+        );
         assert_eq!(app.scroll_y, 200.0);
     }
 

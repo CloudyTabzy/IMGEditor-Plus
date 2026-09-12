@@ -21,6 +21,9 @@
 //! state so continuous mouse drags work correctly across frames.
 
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use glam::Vec3;
 
 use iced::advanced::widget::tree::Tag;
 use iced::advanced::widget::{Tree, tree};
@@ -37,6 +40,9 @@ use iced::{
 
 use iced_widget::renderer::wgpu::primitive::{self, Pipeline as PrimitivePipeline};
 
+use crate::inspector::animation::clip::AnimationLibrary;
+use crate::inspector::animation::model::ModelAsset;
+use crate::inspector::animation::pose::rest_scene;
 use crate::inspector::scene3d::camera::OrbitCamera;
 use crate::inspector::scene3d::mesh::Aabb;
 use crate::inspector::scene3d::navigation::{NavigationAction, NavigationUniform};
@@ -46,6 +52,7 @@ use crate::inspector::scene3d::pipeline::{
     validate_scene_for_device,
 };
 use crate::inspector::scene3d::scene::Scene;
+use crate::ui::viewer_session::{AnimationSession, SessionAdvance};
 
 const ORBIT_SENSITIVITY: f32 = 0.010;
 const PAN_SENSITIVITY: f32 = 0.001;
@@ -103,6 +110,11 @@ pub struct SceneHandleInner {
     pub(crate) origin_mode: SceneOriginMode,
     pub dirty: bool,
     pub gpu_error: Option<String>,
+    pub session: Option<AnimationSession>,
+    /// Cursor is over the 3D viewport this frame (playback shortcut gate).
+    pub(crate) pointer_over_viewport: bool,
+    /// Cursor is over the timeline dock this frame (playback shortcut gate).
+    pub(crate) timeline_hover: bool,
 }
 
 impl Default for SceneHandleInner {
@@ -120,6 +132,9 @@ impl Default for SceneHandleInner {
             origin_mode: SceneOriginMode::default(),
             dirty: false,
             gpu_error: None,
+            session: None,
+            pointer_over_viewport: false,
+            timeline_hover: false,
         }
     }
 }
@@ -140,6 +155,7 @@ impl SceneHandle {
             .camera
             .reset_to_aabb(&translated_aabb(scene.aabb, offset));
         inner.scene = Some(scene);
+        inner.session = None;
         inner.gpu_error = None;
         inner.dirty = true;
     }
@@ -147,6 +163,7 @@ impl SceneHandle {
     pub fn clear(&self) {
         let mut inner = self.inner.lock().expect("scene handle mutex");
         inner.scene = None;
+        inner.session = None;
         inner.gpu_error = None;
         inner.dirty = true;
     }
@@ -175,8 +192,15 @@ impl SceneHandle {
         let display_aabb = inner.scene.as_ref().map(|scene| {
             translated_aabb(scene.aabb, scene_display_offset(scene, inner.origin_mode))
         });
+        let display_offset = inner
+            .scene
+            .as_ref()
+            .map(|scene| scene_display_offset(scene, inner.origin_mode));
         if let Some(aabb) = display_aabb {
             inner.camera.reset_to_aabb(&aabb);
+        }
+        if let (Some(offset), Some(session)) = (display_offset, inner.session.as_mut()) {
+            session.set_display_offset(Vec3::new(offset[0], offset[1], offset[2]));
         }
         inner.dirty = true;
     }
@@ -234,6 +258,79 @@ impl SceneHandle {
 
     pub(crate) fn clear_gpu_error(&self) {
         self.with_mut(|inner| inner.gpu_error = None);
+    }
+
+    /// Install an animated session: build the rest scene, frame the
+    /// camera on it, and select the first clip (paused at its start).
+    pub fn install_animation_session(
+        &self,
+        asset: Arc<ModelAsset>,
+        library: Arc<AnimationLibrary>,
+        demo: bool,
+        now: Instant,
+    ) {
+        let rest = rest_scene(&asset);
+        let mut inner = self.inner.lock().expect("scene handle mutex");
+        inner.camera.base_orientation = rest.base_orientation;
+        let offset = scene_display_offset(&rest, inner.origin_mode);
+        inner
+            .camera
+            .reset_to_aabb(&translated_aabb(rest.aabb, offset));
+        let session = AnimationSession::new(
+            asset,
+            library,
+            Vec3::new(offset[0], offset[1], offset[2]),
+            demo,
+            now,
+        );
+        inner.scene = Some(Arc::new(rest));
+        inner.session = Some(session);
+        inner.gpu_error = None;
+        inner.dirty = true;
+    }
+
+    pub fn clear_animation_session(&self) {
+        self.with_mut(|inner| {
+            inner.session = None;
+            inner.dirty = true;
+        });
+    }
+
+    pub fn has_animation_session(&self) -> bool {
+        self.with(|inner| inner.session.is_some())
+    }
+
+    pub fn animation_session<R>(&self, f: impl FnOnce(&AnimationSession) -> R) -> Option<R> {
+        self.with(|inner| inner.session.as_ref().map(f))
+    }
+
+    /// Advance the transport once per host redraw. Drawing never calls
+    /// this; only the redraw-driven app message does.
+    pub fn advance_animation(&self, now: Instant) -> Option<SessionAdvance> {
+        self.with_mut(|inner| {
+            let result = inner.session.as_mut().map(|session| session.advance(now));
+            if result.is_some() {
+                inner.dirty = true;
+            }
+            result
+        })
+    }
+
+    pub fn with_animation_session_mut<R>(
+        &self,
+        f: impl FnOnce(&mut AnimationSession) -> R,
+    ) -> Option<R> {
+        self.with_mut(|inner| {
+            let result = inner.session.as_mut().map(f);
+            if result.is_some() {
+                inner.dirty = true;
+            }
+            result
+        })
+    }
+
+    pub(crate) fn set_timeline_hover(&self, hover: bool) {
+        self.with_mut(|inner| inner.timeline_hover = hover);
     }
 }
 
@@ -452,6 +549,7 @@ where
         state.cursor_inside = cursor_inside;
         let mut dirty = false;
         self.handle.with_mut(|inner| {
+            inner.pointer_over_viewport = cursor_inside;
             let navigation_visible = inner.flags.contains(RenderFlags::SHOW_NAVIGATION);
             let hit = navigation_visible
                 .then(|| {
@@ -630,8 +728,34 @@ impl primitive::Primitive for ScenePrimitive {
         self.handle.clear_gpu_error();
         pipeline.ensure_size(device, width, height);
         pipeline.ensure_offscreen(device, width, height);
-        let (camera, flags) = self.handle.with(|i| (i.camera.clone(), i.flags));
-        pipeline.upload_if_changed(device, queue, &scene, &camera, flags, origin_offset);
+        let (camera, flags, dynamic) = self
+            .handle
+            .with(|i| (i.camera.clone(), i.flags, i.session.is_some()));
+        let rebuilt = pipeline.upload_if_changed(
+            device,
+            queue,
+            &scene,
+            &camera,
+            flags,
+            origin_offset,
+            dynamic,
+        );
+        if dynamic {
+            let uploaded = self.handle.with(|i| {
+                i.session.as_ref().map(|session| {
+                    if rebuilt || session.uploaded_revision != session.pose.revision {
+                        pipeline.upload_pose(&session.pose.out_vertices, queue);
+                        true
+                    } else {
+                        false
+                    }
+                })
+            });
+            if uploaded == Some(true) {
+                self.handle
+                    .with_mut(|i| i.session.as_mut().map(|s| s.mark_uploaded()));
+            }
+        }
         let _ = device.poll(wgpu::PollType::Poll);
         if let Some(error) = pipeline.gpu_error() {
             self.handle.set_gpu_error(error);
@@ -700,6 +824,7 @@ pub struct ScenePipeline {
     pub cached_signature: u64,
     pub cached_flags_bits: u32,
     pub cached_origin_offset: [f32; 3],
+    pub cached_dynamic: bool,
     pub mesh_cache: Vec<(GpuMesh, Option<GpuTexture>)>,
     pub prepared_this_frame: bool,
     gpu_error: Arc<Mutex<Option<String>>>,
@@ -735,6 +860,7 @@ impl ScenePipeline {
         self.widget_rect = [x, y, width.max(1.0), height.max(1.0)];
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn upload_if_changed(
         &mut self,
         device: &wgpu::Device,
@@ -743,7 +869,8 @@ impl ScenePipeline {
         camera: &OrbitCamera,
         flags: RenderFlags,
         origin_offset: [f32; 3],
-    ) {
+        dynamic: bool,
+    ) -> bool {
         let scene_ptr = scene as *const Scene as usize;
         let eff_flags = effective_texture_flag(scene, flags);
         let signature = if scene_ptr == self.cached_scene_ptr {
@@ -756,6 +883,7 @@ impl ScenePipeline {
             && signature == self.cached_signature
             && resource_flags == self.cached_flags_bits
             && origin_offset == self.cached_origin_offset
+            && dynamic == self.cached_dynamic
         {
             self.render_pipelines.update_camera(
                 queue,
@@ -764,15 +892,17 @@ impl ScenePipeline {
                 scene.ambient,
                 eff_flags,
             );
-            return;
+            return false;
         }
         self.cached_scene_ptr = scene_ptr;
         self.cached_signature = signature;
         self.cached_flags_bits = resource_flags;
         self.cached_origin_offset = origin_offset;
+        self.cached_dynamic = dynamic;
         self.mesh_cache.clear();
         for mesh in &scene.meshes {
-            let gpu = GpuMesh::from_scene_mesh_at_offset(device, queue, mesh, origin_offset);
+            let gpu =
+                GpuMesh::from_scene_mesh_at_offset(device, queue, mesh, origin_offset, dynamic);
             let tex = mesh.diffuse.as_ref().map(|t| {
                 GpuTexture::from_scene_texture(
                     device,
@@ -791,6 +921,19 @@ impl ScenePipeline {
             scene.ambient,
             eff_flags,
         );
+        true
+    }
+
+    /// Upload an already-evaluated pose into the dynamic vertex buffers.
+    /// `poses` is parallel to `mesh_cache` (and to the asset's meshes).
+    pub fn upload_pose(
+        &self,
+        poses: &[Vec<crate::inspector::scene3d::mesh::Vertex>],
+        queue: &wgpu::Queue,
+    ) {
+        for ((gpu, _), vertices) in self.mesh_cache.iter().zip(poses) {
+            gpu.write_vertices(queue, vertices);
+        }
     }
 
     fn release_scene_resources(&mut self) {
@@ -799,6 +942,7 @@ impl ScenePipeline {
         self.cached_scene_ptr = 0;
         self.cached_flags_bits = u32::MAX;
         self.cached_origin_offset = [0.0; 3];
+        self.cached_dynamic = false;
         self.depth_view = None;
         self.depth_tex = None;
         self.msaa_color_view = None;
@@ -1033,8 +1177,7 @@ impl ScenePipeline {
 
 impl PrimitivePipeline for ScenePipeline {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        let render_pipelines =
-            ScenePipelines::new(device, queue, format, SCENE_MSAA_SAMPLES);
+        let render_pipelines = ScenePipelines::new(device, queue, format, SCENE_MSAA_SAMPLES);
         Self {
             render_pipelines,
             depth_tex: None,
@@ -1049,6 +1192,7 @@ impl PrimitivePipeline for ScenePipeline {
             cached_signature: 0,
             cached_flags_bits: 0,
             cached_origin_offset: [0.0; 3],
+            cached_dynamic: false,
             mesh_cache: Vec::new(),
             prepared_this_frame: false,
             gpu_error: register_gpu_error_handlers(device),

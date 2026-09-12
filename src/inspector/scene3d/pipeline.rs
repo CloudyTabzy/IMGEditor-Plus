@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use bytemuck::{Pod, Zeroable};
 
 use crate::inspector::scene3d::camera::OrbitCamera;
-use crate::inspector::scene3d::mesh::{SceneMesh, SceneTexture, VERTEX_STRIDE};
+use crate::inspector::scene3d::mesh::{SceneMesh, SceneTexture, VERTEX_STRIDE, Vertex};
 use crate::inspector::scene3d::scene::{MAX_VIEWPORT_PIXELS, Scene, validate_scene_data};
 
 #[repr(C)]
@@ -208,6 +208,7 @@ pub fn create_msaa_color_texture(
 
 pub struct GpuMesh {
     pub vertex_buffer: wgpu::Buffer,
+    pub vertex_count: usize,
     pub index_buffer: wgpu::Buffer,
     pub index_count: u32,
     /// Explicit line-list indices for the mesh edges. This is deliberately
@@ -219,14 +220,18 @@ pub struct GpuMesh {
 
 impl GpuMesh {
     pub fn from_scene_mesh(device: &wgpu::Device, queue: &wgpu::Queue, mesh: &SceneMesh) -> Self {
-        Self::from_scene_mesh_at_offset(device, queue, mesh, [0.0; 3])
+        Self::from_scene_mesh_at_offset(device, queue, mesh, [0.0; 3], false)
     }
 
+    /// `dynamic` adds `COPY_DST` to the vertex buffer so an animation
+    /// session can rewrite the posed vertices in place each frame; the
+    /// index and wire-edge buffers never change and stay immutable.
     pub fn from_scene_mesh_at_offset(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         mesh: &SceneMesh,
         offset: [f32; 3],
+        dynamic: bool,
     ) -> Self {
         use wgpu::util::DeviceExt;
 
@@ -249,10 +254,15 @@ impl GpuMesh {
         let vertices = translated_vertices
             .as_deref()
             .unwrap_or(mesh.vertices.as_slice());
+        let vertex_usage = if dynamic {
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST
+        } else {
+            wgpu::BufferUsages::VERTEX
+        };
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("imgeditor-scene3d/vertex"),
             contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: vertex_usage,
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("imgeditor-scene3d/index"),
@@ -277,11 +287,21 @@ impl GpuMesh {
         let _ = queue;
         Self {
             vertex_buffer,
+            vertex_count: vertices.len(),
             index_buffer,
             index_count: mesh.indices.len() as u32,
             wire_index_buffer,
             wire_index_count,
         }
+    }
+
+    /// Overwrite the posed vertices in place. The buffer was created from
+    /// the rest mesh at the same vertex count, so topology and length are
+    /// guaranteed to match; the caller passes exactly one entry per bind
+    /// vertex.
+    pub fn write_vertices(&self, queue: &wgpu::Queue, vertices: &[Vertex]) {
+        debug_assert_eq!(self.vertex_count, vertices.len());
+        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(vertices));
     }
 }
 
@@ -962,8 +982,7 @@ impl ScenePipelines {
 fn max_mesh_buffer_bytes(scene: &Scene) -> Option<u64> {
     scene.meshes.iter().try_fold(0_u64, |largest, mesh| {
         let vertices = (mesh.vertices.len() as u64).checked_mul(VERTEX_STRIDE as u64)?;
-        let indices =
-            (mesh.indices.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64)?;
+        let indices = (mesh.indices.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64)?;
         let wire = indices.checked_mul(2)?;
         Some(largest.max(vertices).max(indices).max(wire))
     })
@@ -983,8 +1002,8 @@ pub fn validate_scene_for_device(
     // than the single-buffer limit on downlevel devices (256 MiB), so a
     // monolithic mesh could still trip a validation error at upload time.
     // Reject it here with a clear message instead.
-    let largest_buffer = max_mesh_buffer_bytes(scene)
-        .ok_or_else(|| "scene buffer size overflowed".to_string())?;
+    let largest_buffer =
+        max_mesh_buffer_bytes(scene).ok_or_else(|| "scene buffer size overflowed".to_string())?;
     if largest_buffer > limits.max_buffer_size {
         return Err(format!(
             "the largest mesh buffer needs about {:.1} MiB but this GPU supports at most {:.0} MiB per buffer",
@@ -1321,6 +1340,9 @@ mod tests {
         // mesh "a": vertex 320 B, index 12 B, wire 24 B -> 320
         // mesh "b": vertex 128 B, index 3600 B, wire 7200 B -> 7200
         assert_eq!(max_mesh_buffer_bytes(&scene), Some(7200));
-        assert_eq!(max_mesh_buffer_bytes(&Scene::empty(BaseOrientation::Yup)), Some(0));
+        assert_eq!(
+            max_mesh_buffer_bytes(&Scene::empty(BaseOrientation::Yup)),
+            Some(0)
+        );
     }
 }

@@ -226,8 +226,7 @@ impl AnimationClip {
                 }
             }
             match &track.channel {
-                TrackChannel::Translation { values, .. }
-                | TrackChannel::Scale { values, .. } => {
+                TrackChannel::Translation { values, .. } | TrackChannel::Scale { values, .. } => {
                     for (index, value) in values.iter().enumerate() {
                         if !value.is_finite() {
                             return Err(ClipError::NonFiniteValue {
@@ -354,7 +353,11 @@ fn sample_keys<T: Copy>(
     // Validated strictly ascending times guarantee t1 > t0 and, because
     // of the partition above, time < t1: no zero-interval division and
     // the factor always lies in (0, 1).
-    blend(values[current], values[current + 1], (time - t0) / (t1 - t0))
+    blend(
+        values[current],
+        values[current + 1],
+        (time - t0) / (t1 - t0),
+    )
 }
 
 /// A package of clips decoded from one source (or produced by a fixture).
@@ -416,7 +419,10 @@ mod tests {
     fn sample_linear_midpoint_blends() {
         let clip = linear_clip(vec![0.0, 2.0], vec![Vec3::ZERO, Vec3::new(4.0, 0.0, 0.0)]);
         let sampled = AnimationClip::sample_track(&clip.tracks[0], 1.0);
-        assert_eq!(sampled, SampledChannel::Translation(Vec3::new(2.0, 0.0, 0.0)));
+        assert_eq!(
+            sampled,
+            SampledChannel::Translation(Vec3::new(2.0, 0.0, 0.0))
+        );
     }
 
     #[test]

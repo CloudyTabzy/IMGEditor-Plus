@@ -33,7 +33,13 @@ fn trs(translation: Vec3) -> NodeTransform {
     }
 }
 
-fn node(id: u32, parent: Option<u32>, name: &str, local: NodeTransform, mesh: Option<usize>) -> SceneNode {
+fn node(
+    id: u32,
+    parent: Option<u32>,
+    name: &str,
+    local: NodeTransform,
+    mesh: Option<usize>,
+) -> SceneNode {
     SceneNode {
         id: NodeId(id),
         parent: parent.map(NodeId),
@@ -84,12 +90,45 @@ fn box_mesh(half: Vec3) -> (Vec<Vertex>, Vec<u32>) {
     let mut indices = Vec::with_capacity(36);
     let faces = [
         // (normal, corner offsets in winding order)
-        ([1.0, 0.0, 0.0], [[hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz], [hx, -hy, hz]]),
-        ([-1.0, 0.0, 0.0], [[-hx, -hy, hz], [-hx, hy, hz], [-hx, hy, -hz], [-hx, -hy, -hz]]),
-        ([0.0, 1.0, 0.0], [[-hx, hy, -hz], [-hx, hy, hz], [hx, hy, hz], [hx, hy, -hz]]),
-        ([0.0, -1.0, 0.0], [[-hx, -hy, hz], [-hx, -hy, -hz], [hx, -hy, -hz], [hx, -hy, hz]]),
-        ([0.0, 0.0, 1.0], [[-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz]]),
-        ([0.0, 0.0, -1.0], [[hx, -hy, -hz], [-hx, -hy, -hz], [-hx, hy, -hz], [hx, hy, -hz]]),
+        (
+            [1.0, 0.0, 0.0],
+            [[hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz], [hx, -hy, hz]],
+        ),
+        (
+            [-1.0, 0.0, 0.0],
+            [
+                [-hx, -hy, hz],
+                [-hx, hy, hz],
+                [-hx, hy, -hz],
+                [-hx, -hy, -hz],
+            ],
+        ),
+        (
+            [0.0, 1.0, 0.0],
+            [[-hx, hy, -hz], [-hx, hy, hz], [hx, hy, hz], [hx, hy, -hz]],
+        ),
+        (
+            [0.0, -1.0, 0.0],
+            [
+                [-hx, -hy, hz],
+                [-hx, -hy, -hz],
+                [hx, -hy, -hz],
+                [hx, -hy, hz],
+            ],
+        ),
+        (
+            [0.0, 0.0, 1.0],
+            [[-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz]],
+        ),
+        (
+            [0.0, 0.0, -1.0],
+            [
+                [hx, -hy, -hz],
+                [-hx, -hy, -hz],
+                [-hx, hy, -hz],
+                [hx, hy, -hz],
+            ],
+        ),
     ];
     for (normal, corners) in faces {
         let base = vertices.len() as u32;
@@ -178,7 +217,7 @@ fn checker_texture(size: u32, cells: u32) -> SceneTexture {
     let cell = (size / cells).max(1);
     for y in 0..size {
         for x in 0..size {
-            let on = ((x / cell) + (y / cell)) % 2 == 0;
+            let on = ((x / cell) + (y / cell)).is_multiple_of(2);
             let offset = ((y * size + x) * 4) as usize;
             let (r, g, b) = if on {
                 (232u8, 236u8, 240u8)
@@ -248,7 +287,13 @@ fn translation_track(target: &str, keys: &[(f32, Vec3)]) -> PropertyTrack {
 pub fn two_joint_strip() -> (ModelAsset, AnimationLibrary) {
     let nodes = vec![
         node(0, None, "root", NodeTransform::IDENTITY, None),
-        node(1, Some(0), "mesh_node", trs(Vec3::new(1.0, 0.0, 0.0)), Some(0)),
+        node(
+            1,
+            Some(0),
+            "mesh_node",
+            trs(Vec3::new(1.0, 0.0, 0.0)),
+            Some(0),
+        ),
         node(2, Some(0), "spine", NodeTransform::IDENTITY, None),
         node(3, Some(2), "spine_tip", trs(Vec3::new(0.0, 1.0, 0.0)), None),
     ];
@@ -257,7 +302,7 @@ pub fn two_joint_strip() -> (ModelAsset, AnimationLibrary) {
     let mut vertices = Vec::new();
     let mut weights = Vec::new();
     let levels = [
-        (0.0f32, 0.0f32),  // upper joint weight
+        (0.0f32, 0.0f32), // upper joint weight
         (0.5, 0.0),
         (1.0, 0.5),
         (1.5, 1.0),
@@ -508,8 +553,20 @@ pub fn demo() -> (ModelAsset, AnimationLibrary) {
         node(3, Some(2), "Spine", trs(Vec3::new(0.0, 0.25, 0.0)), None),
         node(4, Some(3), "Neck", trs(Vec3::new(0.0, 0.45, 0.0)), None),
         node(5, Some(4), "Head", trs(Vec3::new(0.0, 0.2, 0.0)), Some(2)),
-        node(6, Some(3), "ArmRight", trs(Vec3::new(-0.24, 0.35, 0.0)), None),
-        node(7, Some(6), "Wand", trs(Vec3::new(-0.14, -0.04, 0.0)), Some(3)),
+        node(
+            6,
+            Some(3),
+            "ArmRight",
+            trs(Vec3::new(-0.24, 0.35, 0.0)),
+            None,
+        ),
+        node(
+            7,
+            Some(6),
+            "Wand",
+            trs(Vec3::new(-0.14, -0.04, 0.0)),
+            Some(3),
+        ),
     ];
 
     let (base_vertices, base_indices) = disc_mesh(0.7, 20);
