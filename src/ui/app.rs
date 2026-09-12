@@ -112,7 +112,7 @@ pub const ABOUT_TEXT: &str = concat!(
 
 /// Short, session-stable tips shown in the empty workspace. These point to
 /// useful features that are easy to miss without opening an archive first.
-pub(crate) const EMPTY_STATE_PRO_TIPS: [&str; 8] = [
+pub(crate) const EMPTY_STATE_PRO_TIPS: [&str; 10] = [
     "Press Ctrl+F to focus Search, then use Up/Down and Enter to jump to a match.",
     "Search predictions reveal a match in its archive context; View → Search selection context enables isolated results.",
     "Right-click an entry for 3D view, textures, export, rename, and other actions.",
@@ -121,6 +121,8 @@ pub(crate) const EMPTY_STATE_PRO_TIPS: [&str; 8] = [
     "Middle-click an archive tab to close it quickly.",
     "Texture UV overlays are available when the selected model supplies matching geometry.",
     "In 3D view, Wire overlay exposes triangle edges and Grid floor helps judge scale.",
+    "Use Ctrl+S for a quick save and Ctrl+Shift+S to save an archive under a new name.",
+    "Exported textures use unique filenames automatically, so batch exports never overwrite one another.",
 ];
 
 /// Optional inertia layered after Iced's native autoscroll settles in its

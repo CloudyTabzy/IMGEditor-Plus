@@ -1804,11 +1804,13 @@ fn tab_resize_grip() -> Element<'static, Message> {
 
 pub fn build(app: &App) -> Element<'_, Message> {
     let design = app.design();
+    let active_theme = app.theme();
+    let active_palette = active_theme.extended_palette();
     let tab_surface = design.chrome();
     let page_bg = design.page();
-    let empty_state_accent = design.accent();
-    let empty_state_surface = design.surface_subtle();
-    let empty_state_text = design.text();
+    let empty_state_accent = active_palette.primary.base.color;
+    let empty_state_surface = active_palette.background.strong.color;
+    let empty_state_text = active_palette.background.base.text;
     let menubar = app.menubar();
     let toolbar = build_toolbar(design.accent(), design.chrome(), design.divider());
 
@@ -1940,7 +1942,9 @@ pub fn build(app: &App) -> Element<'_, Message> {
             .unwrap_or(crate::ui::app::EMPTY_STATE_PRO_TIPS[0]);
         let pro_tip = container(
             column![
-                fonts::strong("Pro tip:"),
+                iced::widget::text("Pro tip:")
+                    .size(16.0)
+                    .font(fonts::INTER_BOLD),
                 fonts::body_wrapped(pro_tip).align_x(iced::alignment::Horizontal::Center),
             ]
             .spacing(4)
@@ -1948,11 +1952,11 @@ pub fn build(app: &App) -> Element<'_, Message> {
             .align_x(Alignment::Center),
         )
         .width(Length::Fill)
-        .max_width(720.0)
+        .max_width(560.0)
         .padding([10, 16])
         .style(move |_| iced::widget::container::Style {
             background: Some(iced::Background::Color(
-                empty_state_surface.scale_alpha(0.72),
+                empty_state_surface.scale_alpha(0.20),
             )),
             text_color: Some(empty_state_text),
             border: Border {
