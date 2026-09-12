@@ -23,12 +23,232 @@ use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::mesh::{Aabb, SceneMesh, SceneTexture, Vertex};
 use crate::inspector::scene3d::scene::Scene;
 use crate::inspector::viewer3d::{MeshData, collect_meshes};
+use crate::parser::col::ColFile;
 use crate::parser::dff::DffMesh;
 
 #[derive(Debug, Error)]
 pub enum DecodeError {
     #[error("NIF has no renderable geometry")]
     NoGeometry,
+}
+
+const MAX_COLLISION_PREVIEW_VERTICES: usize = 2_000_000;
+const MAX_COLLISION_PREVIEW_TRIANGLES: usize = 4_000_000;
+const COLLISION_SPHERE_SEGMENTS: usize = 16;
+const COLLISION_SPHERE_RINGS: usize = 8;
+
+#[derive(Default)]
+struct CollisionMeshBuilder {
+    positions: Vec<[f32; 3]>,
+    indices: Vec<u32>,
+}
+
+impl CollisionMeshBuilder {
+    fn can_append(&self, vertex_count: usize, triangle_count: usize) -> bool {
+        self.positions
+            .len()
+            .checked_add(vertex_count)
+            .is_some_and(|count| count <= MAX_COLLISION_PREVIEW_VERTICES)
+            && self
+                .indices
+                .len()
+                .checked_add(triangle_count.saturating_mul(3))
+                .is_some_and(|count| count <= MAX_COLLISION_PREVIEW_TRIANGLES.saturating_mul(3))
+    }
+
+    fn append_triangle_mesh(&mut self, positions: &[[f32; 3]], indices: &[u32]) {
+        let triangle_count = indices.len() / 3;
+        if positions.is_empty()
+            || triangle_count == 0
+            || !positions.iter().all(|position| position.iter().all(|value| value.is_finite()))
+            || !self.can_append(positions.len(), triangle_count)
+        {
+            return;
+        }
+        let Ok(offset) = u32::try_from(self.positions.len()) else {
+            return;
+        };
+        let Ok(position_count) = u32::try_from(positions.len()) else {
+            return;
+        };
+        if offset.checked_add(position_count).is_none() {
+            return;
+        }
+        self.positions.extend_from_slice(positions);
+        for triangle in indices.chunks_exact(3) {
+            let [a, b, c] = [triangle[0], triangle[1], triangle[2]];
+            if a == b
+                || a == c
+                || b == c
+                || a as usize >= positions.len()
+                || b as usize >= positions.len()
+                || c as usize >= positions.len()
+            {
+                continue;
+            }
+            let Some(a) = offset.checked_add(a) else {
+                continue;
+            };
+            let Some(b) = offset.checked_add(b) else {
+                continue;
+            };
+            let Some(c) = offset.checked_add(c) else {
+                continue;
+            };
+            self.indices.extend_from_slice(&[a, b, c]);
+        }
+    }
+
+    fn append_box(&mut self, collision_box: &crate::parser::col::ColBox) {
+        if !collision_box
+            .min
+            .iter()
+            .chain(collision_box.max.iter())
+            .all(|value| value.is_finite())
+            || !self.can_append(8, 12)
+        {
+            return;
+        }
+        let min = [
+            collision_box.min[0].min(collision_box.max[0]),
+            collision_box.min[1].min(collision_box.max[1]),
+            collision_box.min[2].min(collision_box.max[2]),
+        ];
+        let max = [
+            collision_box.min[0].max(collision_box.max[0]),
+            collision_box.min[1].max(collision_box.max[1]),
+            collision_box.min[2].max(collision_box.max[2]),
+        ];
+        let Ok(base) = u32::try_from(self.positions.len()) else {
+            return;
+        };
+        self.positions.extend_from_slice(&[
+            [min[0], min[1], min[2]],
+            [max[0], min[1], min[2]],
+            [max[0], max[1], min[2]],
+            [min[0], max[1], min[2]],
+            [min[0], min[1], max[2]],
+            [max[0], min[1], max[2]],
+            [max[0], max[1], max[2]],
+            [min[0], max[1], max[2]],
+        ]);
+        const FACES: [[u32; 3]; 12] = [
+            [0, 1, 2],
+            [0, 2, 3],
+            [4, 6, 5],
+            [4, 7, 6],
+            [0, 4, 5],
+            [0, 5, 1],
+            [1, 5, 6],
+            [1, 6, 2],
+            [2, 6, 7],
+            [2, 7, 3],
+            [3, 7, 4],
+            [3, 4, 0],
+        ];
+        for [a, b, c] in FACES {
+            self.indices.extend_from_slice(&[
+                base + a,
+                base + b,
+                base + c,
+            ]);
+        }
+    }
+
+    fn append_sphere(&mut self, sphere: &crate::parser::col::ColSphere) {
+        let vertex_count = (COLLISION_SPHERE_RINGS + 1)
+            .saturating_mul(COLLISION_SPHERE_SEGMENTS + 1);
+        let triangle_count = COLLISION_SPHERE_RINGS.saturating_mul(COLLISION_SPHERE_SEGMENTS * 2);
+        if !sphere.radius.is_finite()
+            || sphere.radius <= 0.0
+            || !sphere
+                .center
+                .iter()
+                .all(|value| value.is_finite())
+            || !self.can_append(vertex_count, triangle_count)
+        {
+            return;
+        }
+        let Ok(base) = u32::try_from(self.positions.len()) else {
+            return;
+        };
+        let two_pi = std::f32::consts::TAU;
+        for ring in 0..=COLLISION_SPHERE_RINGS {
+            let v = ring as f32 / COLLISION_SPHERE_RINGS as f32;
+            let theta = v * std::f32::consts::PI;
+            let y = theta.cos();
+            let ring_radius = theta.sin();
+            for segment in 0..=COLLISION_SPHERE_SEGMENTS {
+                let u = segment as f32 / COLLISION_SPHERE_SEGMENTS as f32;
+                let phi = u * two_pi;
+                let normal = [ring_radius * phi.cos(), y, ring_radius * phi.sin()];
+                self.positions.push([
+                    sphere.center[0] + sphere.radius * normal[0],
+                    sphere.center[1] + sphere.radius * normal[1],
+                    sphere.center[2] + sphere.radius * normal[2],
+                ]);
+            }
+        }
+        let stride = COLLISION_SPHERE_SEGMENTS + 1;
+        for ring in 0..COLLISION_SPHERE_RINGS {
+            for segment in 0..COLLISION_SPHERE_SEGMENTS {
+                let a = base + (ring * stride + segment) as u32;
+                let b = a + 1;
+                let d = base + ((ring + 1) * stride + segment) as u32;
+                let c = d + 1;
+                self.indices.extend_from_slice(&[a, b, c, a, c, d]);
+            }
+        }
+    }
+
+    fn into_mesh_data(self, name: String) -> Option<MeshData> {
+        if self.positions.is_empty() || self.indices.is_empty() {
+            return None;
+        }
+        let mut normals = vec![[0.0; 3]; self.positions.len()];
+        for triangle in self.indices.chunks_exact(3) {
+            let [a, b, c] = [
+                self.positions[triangle[0] as usize],
+                self.positions[triangle[1] as usize],
+                self.positions[triangle[2] as usize],
+            ];
+            let edge_a = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let edge_b = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let normal = [
+                edge_a[1] * edge_b[2] - edge_a[2] * edge_b[1],
+                edge_a[2] * edge_b[0] - edge_a[0] * edge_b[2],
+                edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0],
+            ];
+            for &index in triangle {
+                let normal_out = &mut normals[index as usize];
+                normal_out[0] += normal[0];
+                normal_out[1] += normal[1];
+                normal_out[2] += normal[2];
+            }
+        }
+        for normal in &mut normals {
+            let length = (normal[0] * normal[0]
+                + normal[1] * normal[1]
+                + normal[2] * normal[2])
+                .sqrt();
+            if length > 1e-6 {
+                normal[0] /= length;
+                normal[1] /= length;
+                normal[2] /= length;
+            } else {
+                *normal = [0.0, 1.0, 0.0];
+            }
+        }
+        let vertex_count = self.positions.len();
+        Some(MeshData {
+            name,
+            texture_name: None,
+            positions: self.positions,
+            normals,
+            uvs: vec![[0.0, 0.0]; vertex_count],
+            indices: self.indices,
+        })
+    }
 }
 
 /// Build a [`Scene`] from an already-parsed NIF.
@@ -148,6 +368,97 @@ where
 {
     let meshes = crate::parser::dff::parse_dff(bytes).map_err(|_| DecodeError::NoGeometry)?;
     build_scene_from_dff(&meshes, base_orientation, texture_resolver)
+}
+
+/// Build a Scene from standalone GTA collision geometry.
+///
+/// COL files are Z-up RenderWare collision data rather than textured render
+/// assets. Triangle meshes are copied directly, while their collision boxes
+/// and spheres are tessellated into bounded preview geometry so files that
+/// contain only primitives remain visible in the generic GPU renderer.
+pub fn build_scene_from_col(
+    col: &ColFile,
+    base_orientation: BaseOrientation,
+) -> Result<Scene, DecodeError> {
+    let mut meshes = Vec::new();
+    let mut scene_aabb: Option<Aabb> = None;
+
+    for entry in &col.entries {
+        let mut builder = CollisionMeshBuilder::default();
+        builder.append_triangle_mesh(&entry.vertices, &entry.indices);
+        for collision_box in &entry.boxes {
+            builder.append_box(collision_box);
+        }
+        for sphere in &entry.spheres {
+            builder.append_sphere(sphere);
+        }
+        append_collision_mesh(
+            &mut meshes,
+            &mut scene_aabb,
+            builder,
+            format!("{} collision", display_collision_name(entry)),
+            base_orientation,
+        );
+
+        if !entry.shadow_indices.is_empty() {
+            let mut shadow = CollisionMeshBuilder::default();
+            shadow.append_triangle_mesh(&entry.shadow_vertices, &entry.shadow_indices);
+            append_collision_mesh(
+                &mut meshes,
+                &mut scene_aabb,
+                shadow,
+                format!("{} shadow", display_collision_name(entry)),
+                base_orientation,
+            );
+        }
+    }
+
+    if meshes.is_empty() {
+        return Err(DecodeError::NoGeometry);
+    }
+
+    Ok(Scene {
+        meshes,
+        aabb: scene_aabb.unwrap_or_default(),
+        ambient: [0.42, 0.44, 0.48],
+        key_light: [0.65, 0.85, 0.55],
+        base_orientation,
+    })
+}
+
+/// Convenience: parse COL bytes, then build the embedded viewer scene.
+pub fn parse_and_build_scene_from_col(
+    bytes: &[u8],
+    base_orientation: BaseOrientation,
+) -> Result<Scene, DecodeError> {
+    let col = crate::parser::col::parse_col(bytes).map_err(|_| DecodeError::NoGeometry)?;
+    build_scene_from_col(&col, base_orientation)
+}
+
+fn append_collision_mesh(
+    meshes: &mut Vec<SceneMesh>,
+    scene_aabb: &mut Option<Aabb>,
+    builder: CollisionMeshBuilder,
+    name: String,
+    base_orientation: BaseOrientation,
+) {
+    let Some(data) = builder.into_mesh_data(name) else {
+        return;
+    };
+    let mesh = mesh_from_data(&data, base_orientation, None);
+    *scene_aabb = Some(match *scene_aabb {
+        Some(aabb) => aabb.merged(mesh.aabb),
+        None => mesh.aabb,
+    });
+    meshes.push(mesh);
+}
+
+fn display_collision_name(entry: &crate::parser::col::ColEntry) -> &str {
+    if entry.model_name.is_empty() {
+        "unnamed"
+    } else {
+        &entry.model_name
+    }
 }
 
 fn mesh_from_data(
@@ -296,6 +607,59 @@ mod tests {
             requested.borrow().as_slice(),
             [String::from("body_d")].as_slice()
         );
+    }
+
+    #[test]
+    fn col_builder_renders_triangles_and_collision_primitives() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"COLL");
+        bytes.extend_from_slice(&[0; 4]);
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0; 24]);
+        for value in [
+            2.0f32, 0.0, 0.0, 0.0, -2.0, -2.0, -2.0, 2.0, 2.0, 2.0,
+        ] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        body.extend_from_slice(&1u32.to_le_bytes());
+        body.extend_from_slice(&1.0f32.to_le_bytes());
+        for value in [0.0f32, 1.0, 2.0] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        body.extend_from_slice(&[0, 0, 0, 0]);
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&1u32.to_le_bytes());
+        for value in [-1.0f32, -1.0, -1.0, 1.0, 1.0, 1.0] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        body.extend_from_slice(&[0, 0, 0, 0]);
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        let body_size = u32::try_from(body.len()).expect("COL fixture fits");
+        bytes[4..8].copy_from_slice(&body_size.to_le_bytes());
+        bytes.extend_from_slice(&body);
+
+        let scene = parse_and_build_scene_from_col(&bytes, BaseOrientation::Zup)
+            .expect("shape-only COL should build a scene");
+        assert!(scene.has_geometry());
+        assert!(scene.total_triangles() >= 12);
+        assert!(scene.aabb.bounding_radius() > 0.0);
+    }
+
+    #[test]
+    fn decoder_builds_real_vc_col_when_present() {
+        let Some(root) = crate::test_paths::corpus_root() else {
+            return;
+        };
+        let path = root.join("Grand Theft Auto Vice City/data/maps/airport/airport.col");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let scene = parse_and_build_scene_from_col(&bytes, BaseOrientation::Zup)
+            .expect("Vice City COL should decode");
+        assert!(scene.has_geometry());
+        assert!(scene.total_triangles() > 0);
+        assert!(scene.aabb.bounding_radius().is_finite());
     }
 
     #[test]

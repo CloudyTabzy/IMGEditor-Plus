@@ -989,6 +989,12 @@ mod tests {
         if let Some(root) = crate::test_paths::gta3_exports() {
             fixtures.push(("gta-tank", root.join("ci_watertank.dff")));
         }
+        if let Some(root) = crate::test_paths::corpus_root() {
+            fixtures.push((
+                "gta-vc-col",
+                root.join("Grand Theft Auto Vice City/data/maps/airport/airport.col"),
+            ));
+        }
         if let Some(root) = crate::test_paths::bully_nif() {
             fixtures.push(("bully-lamp", root.join("adm_lamp.nif")));
         }
@@ -1001,6 +1007,11 @@ mod tests {
                     &bytes,
                     BaseOrientation::Zup,
                     |_| None,
+                )
+            } else if path.extension().is_some_and(|ext| ext == "col") {
+                crate::inspector::scene3d::decode::parse_and_build_scene_from_col(
+                    &bytes,
+                    BaseOrientation::Zup,
                 )
             } else {
                 crate::inspector::scene3d::decode::parse_and_build_scene(

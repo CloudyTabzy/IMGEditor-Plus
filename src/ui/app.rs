@@ -45,9 +45,28 @@ const SEARCH_INPUT_ID: &str = "search_input";
 const MAX_SEARCH_PREDICTIONS: usize = 8;
 const RENAME_INPUT_ID: &str = "rename_input";
 
-fn is_renderable_model_name(name: &str) -> bool {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RenderableModelKind {
+    Nif,
+    Dff,
+    Col,
+}
+
+pub(crate) fn renderable_model_kind(name: &str) -> Option<RenderableModelKind> {
     let lower = name.to_ascii_lowercase();
-    lower.ends_with(".nif") || lower.ends_with(".dff")
+    if lower.ends_with(".nif") {
+        Some(RenderableModelKind::Nif)
+    } else if lower.ends_with(".dff") {
+        Some(RenderableModelKind::Dff)
+    } else if lower.ends_with(".col") {
+        Some(RenderableModelKind::Col)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn is_renderable_model_name(name: &str) -> bool {
+    renderable_model_kind(name).is_some()
 }
 
 pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
@@ -2116,7 +2135,7 @@ impl App {
                     })
                     .is_some_and(|entry| is_renderable_model_name(&entry.file_name));
                 if is_model {
-                    self.load_selected_nif(InspectorTab::Model3D)
+                    self.load_selected_model(InspectorTab::Model3D)
                 } else {
                     self.clear_viewer_load();
                     Task::none()
@@ -2152,7 +2171,7 @@ impl App {
             if self.viewer_scene_matches_selection() {
                 return Task::none();
             }
-            return self.load_selected_nif(InspectorTab::Texture);
+            return self.load_selected_model(InspectorTab::Texture);
         }
         if !lower.ends_with(".txd") && !lower.ends_with(".nft") {
             return Task::none();
@@ -2169,13 +2188,13 @@ impl App {
         }
     }
 
-    fn load_selected_nif(&mut self, target_tab: InspectorTab) -> Task<Message> {
+    fn load_selected_model(&mut self, target_tab: InspectorTab) -> Task<Message> {
         let Some(archive_index) = self.editor.selected_archive() else {
-            self.toast = Some("Select a NIF or DFF entry first.".into());
+            self.toast = Some("Select a NIF, DFF, or COL entry first.".into());
             return Task::none();
         };
         let Some(entry_index) = self.editor.selected_entry() else {
-            self.toast = Some("Select a NIF or DFF entry first.".into());
+            self.toast = Some("Select a NIF, DFF, or COL entry first.".into());
             return Task::none();
         };
         let Some(entry) = self
@@ -2189,7 +2208,7 @@ impl App {
         };
         if !is_renderable_model_name(&entry.file_name) {
             self.toast = Some(format!(
-                "In-app 3D viewer supports .nif and .dff ({}).",
+                "In-app 3D viewer supports .nif, .dff, and .col ({}).",
                 entry.file_name
             ));
             return Task::none();
@@ -4237,7 +4256,7 @@ impl App {
                     }
                     EntryAction::Render => {
                         dev_logger::breadcrumb("user: open in 3D viewer (in-app)");
-                        self.load_selected_nif(InspectorTab::Model3D)
+                        self.load_selected_model(InspectorTab::Model3D)
                     }
                     EntryAction::RenderExternal => {
                         dev_logger::breadcrumb("user: open in external viewer (PLY)");
@@ -5254,7 +5273,7 @@ impl App {
             }
             Message::Viewer3dLoadSelected => {
                 let target_tab = self.selected_inspector_tab;
-                self.load_selected_nif(target_tab)
+                self.load_selected_model(target_tab)
             }
             Message::Viewer3dRequestLoad {
                 archive_index,
@@ -5279,18 +5298,24 @@ impl App {
                     .and_then(|s| s.to_str())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| entry_clone.file_name.to_string());
-                let is_dff = entry_clone.file_name.to_ascii_lowercase().ends_with(".dff");
+                let model_kind = renderable_model_kind(&entry_clone.file_name);
                 // Reuse a memoized IdeMap for this game root when one has
                 // already been built; otherwise the background task builds
                 // one and hands it back for memoization.
                 let ide_map_hit: Option<BuiltIdeMap> = {
-                    let game_root = archive_path
-                        .as_deref()
-                        .and_then(|p| p.parent().and_then(|stream| stream.parent()))
-                        .map(|p| p.to_path_buf());
-                    match game_root {
-                        Some(root) => self.ide_maps.get(&root).map(|map| (root, Arc::clone(map))),
-                        None => None,
+                    if model_kind == Some(RenderableModelKind::Col) {
+                        None
+                    } else {
+                        let game_root = archive_path
+                            .as_deref()
+                            .and_then(|p| p.parent().and_then(|stream| stream.parent()))
+                            .map(|p| p.to_path_buf());
+                        match game_root {
+                            Some(root) => {
+                                self.ide_maps.get(&root).map(|map| (root, Arc::clone(map)))
+                            }
+                            None => None,
+                        }
                     }
                 };
                 let scene_cache = Arc::clone(&self.scene_cache);
@@ -5311,34 +5336,52 @@ impl App {
                                         let (ide_map, ide_map_new): (
                                             Option<Arc<crate::inspector::texture::IdeMap>>,
                                             Option<BuiltIdeMap>,
-                                        ) = match ide_map_hit {
-                                            Some((_, map)) => (Some(map), None),
-                                            None => match archive_path
-                                    .as_deref()
-                                    .and_then(|p| p.parent().and_then(|stream| stream.parent()))
-                                    .map(|p| p.to_path_buf())
-                                {
-                                    Some(root) => {
-                                        let map = Arc::new(
-                                            crate::inspector::texture::IdeMap::build(&root),
-                                        );
-                                        (Some(Arc::clone(&map)), Some((root, map)))
-                                    }
-                                    None => (None, None),
-                                },
-                            };
+                                        ) = if model_kind == Some(RenderableModelKind::Col) {
+                                            (None, None)
+                                        } else {
+                                            match ide_map_hit {
+                                                Some((_, map)) => (Some(map), None),
+                                                None => match archive_path
+                                                    .as_deref()
+                                                    .and_then(|p| {
+                                                        p.parent().and_then(|stream| stream.parent())
+                                                    })
+                                                    .map(|p| p.to_path_buf())
+                                                {
+                                                    Some(root) => {
+                                                        let map = Arc::new(
+                                                            crate::inspector::texture::IdeMap::build(
+                                                                &root,
+                                                            ),
+                                                        );
+                                                        (Some(Arc::clone(&map)), Some((root, map)))
+                                                    }
+                                                    None => (None, None),
+                                                },
+                                            }
+                                        };
                             let result = (|| -> Result<crate::inspector::scene3d::Scene, String> {
                                 let bytes = crate::parser::read_entry_data_from_source(
                                     &entry_clone,
                                     archive_path.as_deref(),
                                 )
                                 .map_err(|e| format!("I/O: {e}"))?;
+                                if model_kind == Some(RenderableModelKind::Col) {
+                                    let col = crate::parser::col::parse_col(&bytes)
+                                        .map_err(|e| format!("COL parse: {e}"))?;
+                                    let base =
+                                        crate::inspector::scene3d::camera::BaseOrientation::Zup;
+                                    return crate::inspector::scene3d::decode::build_scene_from_col(
+                                        &col, base,
+                                    )
+                                    .map_err(|e| format!("scene: {e:?}"));
+                                }
                                 let archive_texture_index =
                                     crate::inspector::texture::ArchiveTextureIndex::from_entries(
                                         &archive_entries,
                                         archive_path.as_deref(),
                                     );
-                                if is_dff {
+                                if model_kind == Some(RenderableModelKind::Dff) {
                                     let dff_meshes = crate::parser::dff::parse_dff(&bytes)
                                         .map_err(|e| format!("DFF parse: {e}"))?;
                                     let texture_names = dff_meshes
@@ -7064,6 +7107,25 @@ mod tests {
                 .as_ref()
                 .map(|load| load.entry_name.as_str()),
             Some("model.nif")
+        );
+    }
+
+    #[test]
+    fn open_col_action_selects_model_tab_and_starts_scene_load() {
+        let mut app = test_app();
+        app.editor.new_archive();
+        app.editor.archives_mut()[0]
+            .entries
+            .push(EntryInfo::new("collision.col"));
+        app.editor.archives_mut()[0].update_selected_list("", false);
+        app.editor.select_entry(0, false, false);
+
+        let _ = app.update(Message::EntryContextAction(EntryAction::Render));
+
+        assert_eq!(app.selected_inspector_tab, InspectorTab::Model3D);
+        assert_eq!(
+            app.viewer_load.as_ref().map(|load| load.entry_name.as_str()),
+            Some("collision.col")
         );
     }
 

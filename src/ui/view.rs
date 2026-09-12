@@ -11,7 +11,10 @@ use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::tasks::FolderDuplicatePolicy;
-use crate::ui::app::{ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget};
+use crate::ui::app::{
+    ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget,
+    renderable_model_kind,
+};
 use crate::ui::design::Design;
 use crate::ui::fonts;
 use crate::ui::icons;
@@ -760,7 +763,7 @@ impl App {
         };
         let Some(entry_index) = self.editor.selected_entry() else {
             return container(fonts::caption(
-                "Select a .nif or .dff entry to preview it in 3D.",
+                "Select a .nif, .dff, or .col entry to preview it in 3D.",
             ))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -777,7 +780,7 @@ impl App {
                 .into();
         };
         let entry_lower = entry.file_name.to_ascii_lowercase();
-        let is_model = entry_lower.ends_with(".nif") || entry_lower.ends_with(".dff");
+        let is_model = renderable_model_kind(&entry.file_name).is_some();
         let scene_matches = self.viewer_scene_matches_selection();
         let loading = self.viewer_load_matches_selection();
         let gpu_error = scene_matches
@@ -839,7 +842,7 @@ impl App {
                 .into()
         } else {
             container(fonts::caption(format!(
-                "The in-app viewer renders .nif and .dff entries. {} is not a supported model — use the right-click menu for another viewer.",
+                "The in-app viewer renders .nif, .dff, and .col entries. {} is not a supported model — use the right-click menu for another viewer.",
                 entry_lower
             )))
             .width(Length::Fill)
@@ -854,7 +857,9 @@ impl App {
         } else if !scene_matches && is_model {
             fonts::caption("Use ‘Load selected’ above to preview this model.").into()
         } else if !scene_matches {
-            fonts::caption("Select a .nif or .dff entry, then right-click → Open in 3D viewer.")
+            fonts::caption(
+                "Select a .nif, .dff, or .col entry, then right-click → Open in 3D viewer.",
+            )
                 .into()
         } else {
             Space::new().height(Length::Fixed(0.0)).into()
@@ -3401,7 +3406,7 @@ fn build_context_menu(
     let mut items: Vec<Element<'_, Message>> = vec![header.into(), w::hairline(divider)];
 
     let lower = entry.file_name.to_lowercase();
-    if lower.ends_with(".nif") || lower.ends_with(".dff") {
+    if renderable_model_kind(&entry.file_name).is_some() {
         items.push(
             context_button(
                 "Open in 3D viewer",
@@ -3409,14 +3414,6 @@ fn build_context_menu(
             )
             .into(),
         );
-        items.push(
-            context_button(
-                "Open in external viewer",
-                Message::EntryContextAction(EntryAction::RenderExternal),
-            )
-            .into(),
-        );
-    } else if lower.ends_with(".col") {
         items.push(
             context_button(
                 "Open in external viewer",

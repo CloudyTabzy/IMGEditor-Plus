@@ -223,21 +223,29 @@ parsed during the optional corpus test.
 The collision parser now recognizes the legacy `COLL` header and the later
 `COL2`, `COL3`, and `COL4` records. The hardening details are important:
 
-- each entry has a fixed 32-byte header; its body-size word counts bytes after
-  the first eight header bytes;
+- each entry starts with a fourcc and body-size word, followed by the 24-byte
+  name/id record and a 40-byte bounds record; the body-size word counts bytes
+  after the first eight header bytes;
 - COL2+ metadata supplies counts and relative offsets, and the offsets point
   four bytes before the payload in the RenderWare/librw layout;
 - compressed collision vertices are signed 16-bit coordinates divided by
   128.0, and triangle records use three 16-bit indices plus material/lighting
   bytes;
-- shape-only entries are consumed safely but are not represented as viewer
-  triangles yet, because the current scene model has no collision primitive
-  type for them.
+- sphere and box records, face-group bounds, and COL3/COL4 shadow faces are
+  retained alongside the triangle mesh rather than being discarded;
+- the embedded viewer converts the triangle mesh directly and tessellates
+  collision spheres and boxes into bounded, untextured preview meshes. Shadow
+  meshes are shown as a separate scene mesh when present. This reuses the
+  normal scene cache, Z-up conversion, camera framing, wire overlay, and wgpu
+  validation used by DFF/NIF previews.
 
 The optional San Andreas corpus test parses representative COL2/COL3 entries
 from the supplied `gta3.img` and `gta_int.img` archives, including renderable
-collision triangles. The parser uses checked counts, offsets, lengths, and
-allocations so malformed collision data returns an error instead of panicking.
+collision triangles. A real Vice City `airport.col` is also covered by the
+optional scene decoder and headless wgpu fixture. The parser and preview
+builder use checked counts, offsets, lengths, and bounded primitive
+tessellation so malformed or unusually large collision data cannot trigger an
+unchecked allocation or GPU upload.
 
 ## Implementation comparison
 

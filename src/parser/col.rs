@@ -12,6 +12,8 @@
 use thiserror::Error;
 
 const MAX_COLLISION_ITEMS: usize = 1_000_000;
+const COL_FLAG_FACE_GROUPS: u32 = 0x08;
+const COL_FLAG_SHADOW_MESH: u32 = 0x10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColVersion {
@@ -19,6 +21,49 @@ pub enum ColVersion {
     V2, // COL2
     V3, // COL3
     V4, // COL4
+}
+
+/// Surface metadata carried by a collision primitive or face.
+///
+/// The viewer currently uses collision geometry as an untextured preview,
+/// but retaining these values keeps the parser lossless enough for future
+/// material-aware collision rendering.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ColSurface {
+    pub material: u8,
+    pub flags: u8,
+    pub brightness: u8,
+    pub light: u8,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ColSphere {
+    pub center: [f32; 3],
+    pub radius: f32,
+    pub surface: ColSurface,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ColBox {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    pub surface: ColSurface,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ColFace {
+    pub a: u32,
+    pub b: u32,
+    pub c: u32,
+    pub surface: ColSurface,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ColFaceGroup {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    pub start_face: u16,
+    pub end_face: u16,
 }
 
 #[derive(Debug, Error)]
@@ -50,15 +95,21 @@ pub struct ColEntry {
     pub vertices: Vec<[f32; 3]>,
     pub num_faces: u32,
     pub indices: Vec<u32>,
+    pub faces: Vec<ColFace>,
+    pub spheres: Vec<ColSphere>,
+    pub boxes: Vec<ColBox>,
+    pub face_groups: Vec<ColFaceGroup>,
+    pub shadow_vertices: Vec<[f32; 3]>,
+    pub shadow_faces: Vec<ColFace>,
+    pub shadow_indices: Vec<u32>,
     pub num_spheres: u32,
     pub num_boxes: u32,
     pub has_shadow: bool,
 }
 
-/// Parse a complete `.col` file, returning all entries that contain a
-/// renderable collision mesh. Shape-only entries are structurally consumed
-/// but are not returned because the viewer scene currently has no primitive
-/// representation for their spheres and boxes.
+/// Parse a complete `.col` file, returning every entry that contains
+/// triangles, spheres, boxes, or a shadow mesh. The scene decoder can
+/// tessellate the primitive-only entries for the embedded viewer.
 pub fn parse_col(bytes: &[u8]) -> Result<ColFile, ColError> {
     if bytes.len() < 8 {
         return Err(ColError::TooShort);
@@ -163,11 +214,43 @@ fn parse_legacy_entry(
     // historical unknown-count field with no associated payload in the
     // published layout.
     let num_spheres = read_u32(bytes, &mut cursor, entry_end)?;
-    skip_counted_items(bytes, &mut cursor, entry_end, num_spheres, 20)?;
+    let sphere_count = checked_count(num_spheres, "spheres")?;
+    let mut spheres = Vec::with_capacity(sphere_count);
+    for _ in 0..sphere_count {
+        let radius = read_f32(bytes, &mut cursor, entry_end)?;
+        let center = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        spheres.push(ColSphere {
+            center,
+            radius,
+            surface: read_surface(bytes, &mut cursor, entry_end)?,
+        });
+    }
     let _unknown_count = read_u32(bytes, &mut cursor, entry_end)?;
 
     let num_boxes = read_u32(bytes, &mut cursor, entry_end)?;
-    skip_counted_items(bytes, &mut cursor, entry_end, num_boxes, 28)?;
+    let box_count = checked_count(num_boxes, "boxes")?;
+    let mut boxes = Vec::with_capacity(box_count);
+    for _ in 0..box_count {
+        let min = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        let max = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        boxes.push(ColBox {
+            min,
+            max,
+            surface: read_surface(bytes, &mut cursor, entry_end)?,
+        });
+    }
 
     let num_vertices = read_u32(bytes, &mut cursor, entry_end)?;
     let vertex_count = checked_count(num_vertices, "vertices")?;
@@ -184,13 +267,19 @@ fn parse_legacy_entry(
     let num_faces = read_u32(bytes, &mut cursor, entry_end)?;
     let face_count = checked_count(num_faces, "faces")?;
     let face_end = checked_items_end(cursor, face_count, 16, entry_end)?;
+    let mut faces = Vec::with_capacity(face_count);
     let mut indices = Vec::with_capacity(face_count.saturating_mul(3));
     while cursor < face_end {
         let a = read_u32(bytes, &mut cursor, entry_end)?;
         let b = read_u32(bytes, &mut cursor, entry_end)?;
         let c = read_u32(bytes, &mut cursor, entry_end)?;
-        // The final four bytes are the legacy surface descriptor.
-        read_bytes(bytes, &mut cursor, entry_end, 4)?;
+        let surface = read_surface(bytes, &mut cursor, entry_end)?;
+        faces.push(ColFace {
+            a,
+            b,
+            c,
+            surface,
+        });
         if valid_triangle([a, b, c], vertices.len()) {
             indices.extend_from_slice(&[a, b, c]);
         }
@@ -206,8 +295,14 @@ fn parse_legacy_entry(
             num_boxes,
             has_shadow: false,
         },
-        vertices,
-        indices,
+        ColGeometry {
+            vertices,
+            indices,
+            faces,
+            spheres,
+            boxes,
+            ..ColGeometry::default()
+        },
     ))
 }
 
@@ -265,6 +360,33 @@ fn parse_offset_entry(
         "boxes",
     )?;
 
+    let spheres = read_offset_spheres(
+        bytes,
+        entry_start,
+        entry_end,
+        sphere_offset,
+        sphere_count,
+    )?;
+    let boxes = read_offset_boxes(
+        bytes,
+        entry_start,
+        entry_end,
+        box_offset,
+        box_count,
+    )?;
+
+    let face_groups = if flags & COL_FLAG_FACE_GROUPS != 0 {
+        read_offset_face_groups(
+            bytes,
+            entry_start,
+            entry_end,
+            face_offset,
+            face_count,
+        )?
+    } else {
+        Vec::new()
+    };
+
     let raw_faces = read_offset_faces(
         bytes,
         entry_start,
@@ -274,7 +396,7 @@ fn parse_offset_entry(
     )?;
     let max_face_index = raw_faces
         .iter()
-        .flat_map(|face| face[..3].iter().copied())
+        .flat_map(|face| [face.a, face.b, face.c])
         .max();
     let required_vertices = max_face_index
         .map(|index| index as usize + 1)
@@ -288,25 +410,52 @@ fn parse_offset_entry(
     )?;
 
     let mut indices = Vec::with_capacity(raw_faces.len().saturating_mul(3));
-    for [a, b, c, _, _] in raw_faces {
+    for face in &raw_faces {
+        let [a, b, c] = [face.a, face.b, face.c];
         if valid_triangle([a, b, c], vertices.len()) {
             indices.extend_from_slice(&[a, b, c]);
         }
     }
 
-    let has_shadow = matches!(version, ColVersion::V3 | ColVersion::V4)
-        && shadow_face_count > 0
-        && flags & 16 != 0;
-    if has_shadow {
-        validate_shadow_blocks(
+    let (shadow_vertices, shadow_faces, shadow_indices) = if matches!(
+        version,
+        ColVersion::V3 | ColVersion::V4
+    ) && shadow_face_count > 0
+    {
+        let shadow_faces = read_offset_faces(
+            bytes,
+            entry_start,
+            entry_end,
+            shadow_face_offset,
+            shadow_face_count,
+        )?;
+        let max_shadow_index = shadow_faces
+            .iter()
+            .flat_map(|face| [face.a, face.b, face.c])
+            .max();
+        let required_shadow_vertices = max_shadow_index
+            .map(|index| index as usize + 1)
+            .unwrap_or(0);
+        let (shadow_vertices, _) = read_offset_vertices(
             bytes,
             entry_start,
             entry_end,
             shadow_vertex_offset,
-            shadow_face_offset,
-            shadow_face_count,
+            required_shadow_vertices,
         )?;
-    }
+        let mut shadow_indices = Vec::with_capacity(shadow_faces.len().saturating_mul(3));
+        for face in &shadow_faces {
+            let [a, b, c] = [face.a, face.b, face.c];
+            if valid_triangle([a, b, c], shadow_vertices.len()) {
+                shadow_indices.extend_from_slice(&[a, b, c]);
+            }
+        }
+        (shadow_vertices, shadow_faces, shadow_indices)
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
+
+    let has_shadow = !shadow_indices.is_empty() && flags & COL_FLAG_SHADOW_MESH != 0;
 
     Ok(make_entry(
         ColEntryMetadata {
@@ -318,8 +467,17 @@ fn parse_offset_entry(
             num_boxes: box_count,
             has_shadow,
         },
-        vertices,
-        indices,
+        ColGeometry {
+            vertices,
+            indices,
+            faces: raw_faces,
+            spheres,
+            boxes,
+            face_groups,
+            shadow_vertices,
+            shadow_faces,
+            shadow_indices,
+        },
     ))
 }
 
@@ -329,7 +487,7 @@ fn read_offset_faces(
     entry_end: usize,
     offset: u32,
     expected_count: u32,
-) -> Result<Vec<[u32; 5]>, ColError> {
+) -> Result<Vec<ColFace>, ColError> {
     if expected_count == 0 {
         return Ok(Vec::new());
     }
@@ -350,9 +508,160 @@ fn read_offset_faces(
         let c = read_u16(bytes, &mut cursor, entry_end)? as u32;
         let material = read_u8(bytes, &mut cursor, entry_end)?;
         let light = read_u8(bytes, &mut cursor, entry_end)?;
-        faces.push([a, b, c, u32::from(material), u32::from(light)]);
+        faces.push(ColFace {
+            a,
+            b,
+            c,
+            surface: ColSurface {
+                material,
+                light,
+                ..ColSurface::default()
+            },
+        });
     }
     Ok(faces)
+}
+
+fn read_surface(
+    bytes: &[u8],
+    cursor: &mut usize,
+    limit: usize,
+) -> Result<ColSurface, ColError> {
+    let values = read_bytes(bytes, cursor, limit, 4)?;
+    Ok(ColSurface {
+        material: values[0],
+        flags: values[1],
+        brightness: values[2],
+        light: values[3],
+    })
+}
+
+fn read_offset_spheres(
+    bytes: &[u8],
+    entry_start: usize,
+    entry_end: usize,
+    offset: u32,
+    expected_count: u32,
+) -> Result<Vec<ColSphere>, ColError> {
+    if expected_count == 0 {
+        return Ok(Vec::new());
+    }
+    let block_position = relative_position(entry_start, offset, entry_end)?;
+    let count = checked_count(expected_count, "spheres")?;
+    let data_start = block_position.checked_add(4).ok_or(ColError::Truncated)?;
+    let data_end = checked_items_end(data_start, count, 20, entry_end)?;
+    let mut cursor = data_start;
+    let mut spheres = Vec::with_capacity(count);
+    while cursor < data_end {
+        let center = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        let radius = read_f32(bytes, &mut cursor, entry_end)?;
+        spheres.push(ColSphere {
+            center,
+            radius,
+            surface: read_surface(bytes, &mut cursor, entry_end)?,
+        });
+    }
+    Ok(spheres)
+}
+
+fn read_offset_boxes(
+    bytes: &[u8],
+    entry_start: usize,
+    entry_end: usize,
+    offset: u32,
+    expected_count: u32,
+) -> Result<Vec<ColBox>, ColError> {
+    if expected_count == 0 {
+        return Ok(Vec::new());
+    }
+    let block_position = relative_position(entry_start, offset, entry_end)?;
+    let count = checked_count(expected_count, "boxes")?;
+    let data_start = block_position.checked_add(4).ok_or(ColError::Truncated)?;
+    let data_end = checked_items_end(data_start, count, 28, entry_end)?;
+    let mut cursor = data_start;
+    let mut boxes = Vec::with_capacity(count);
+    while cursor < data_end {
+        let min = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        let max = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        boxes.push(ColBox {
+            min,
+            max,
+            surface: read_surface(bytes, &mut cursor, entry_end)?,
+        });
+    }
+    Ok(boxes)
+}
+
+fn read_offset_face_groups(
+    bytes: &[u8],
+    entry_start: usize,
+    entry_end: usize,
+    face_offset: u32,
+    face_count: u32,
+) -> Result<Vec<ColFaceGroup>, ColError> {
+    if face_count == 0 {
+        return Ok(Vec::new());
+    }
+    if face_offset == 0 {
+        return Err(ColError::Invalid(
+            "face groups require a face block offset".to_string(),
+        ));
+    }
+    // The stored offset is four bytes before the face payload in this
+    // parser's entry-relative coordinate system. With face groups enabled,
+    // that location is the trailing group-count word.
+    let count_position = relative_position(entry_start, face_offset, entry_end)?;
+    let group_count = read_u32_at(bytes, count_position, entry_end)?;
+    let group_count = checked_count(group_count, "face groups")?;
+    let group_bytes = group_count
+        .checked_mul(28)
+        .ok_or(ColError::Truncated)?;
+    let group_start = count_position
+        .checked_sub(group_bytes)
+        .ok_or(ColError::Invalid(
+            "face groups begin before the collision entry".to_string(),
+        ))?;
+    if group_start < entry_start {
+        return Err(ColError::Invalid(
+            "face groups begin before the collision entry".to_string(),
+        ));
+    }
+    let group_end = checked_items_end(group_start, group_count, 28, entry_end)?;
+    let mut cursor = group_start;
+    let mut groups = Vec::with_capacity(group_count);
+    while cursor < group_end {
+        let min = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        let max = [
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+            read_f32(bytes, &mut cursor, entry_end)?,
+        ];
+        let start_face = read_u16(bytes, &mut cursor, entry_end)?;
+        let end_face = read_u16(bytes, &mut cursor, entry_end)?;
+        groups.push(ColFaceGroup {
+            min,
+            max,
+            start_face,
+            end_face,
+        });
+    }
+    Ok(groups)
 }
 
 fn read_offset_vertices(
@@ -385,52 +694,6 @@ fn read_offset_vertices(
     let num_vertices = u32::try_from(required_count)
         .map_err(|_| ColError::Invalid("vertex count overflows u32".to_string()))?;
     Ok((vertices, num_vertices))
-}
-
-fn validate_shadow_blocks(
-    bytes: &[u8],
-    entry_start: usize,
-    entry_end: usize,
-    vertex_offset: u32,
-    face_offset: u32,
-    face_count: u32,
-) -> Result<(), ColError> {
-    if face_offset == 0 || vertex_offset == 0 {
-        return Err(ColError::Invalid(
-            "shadow geometry is missing a face or vertex offset".to_string(),
-        ));
-    }
-    let face_block_position = relative_position(entry_start, face_offset, entry_end)?;
-    let face_count = checked_count(face_count, "shadow faces")?;
-    let face_start = face_block_position
-        .checked_add(4)
-        .ok_or(ColError::Truncated)?;
-    let face_end = checked_items_end(face_start, face_count, 8, entry_end)?;
-    let mut cursor = face_start;
-    let mut max_index = None;
-    while cursor < face_end {
-        let a = read_u16(bytes, &mut cursor, entry_end)? as usize;
-        let b = read_u16(bytes, &mut cursor, entry_end)? as usize;
-        let c = read_u16(bytes, &mut cursor, entry_end)? as usize;
-        read_bytes(bytes, &mut cursor, entry_end, 2)?;
-        max_index = Some(max_index.unwrap_or(0).max(a).max(b).max(c));
-    }
-
-    let required_vertices = max_index.map(|index| index + 1).unwrap_or(0);
-    if required_vertices == 0 {
-        return Ok(());
-    }
-    let vertex_block_position = relative_position(entry_start, vertex_offset, entry_end)?;
-    let vertex_start = vertex_block_position
-        .checked_add(4)
-        .ok_or(ColError::Truncated)?;
-    checked_items_end(
-        vertex_start,
-        required_vertices,
-        6,
-        entry_end,
-    )?;
-    Ok(())
 }
 
 fn validate_optional_block(
@@ -466,21 +729,44 @@ struct ColEntryMetadata {
     has_shadow: bool,
 }
 
-fn make_entry(
-    metadata: ColEntryMetadata,
+#[derive(Default)]
+struct ColGeometry {
     vertices: Vec<[f32; 3]>,
     indices: Vec<u32>,
+    faces: Vec<ColFace>,
+    spheres: Vec<ColSphere>,
+    boxes: Vec<ColBox>,
+    face_groups: Vec<ColFaceGroup>,
+    shadow_vertices: Vec<[f32; 3]>,
+    shadow_faces: Vec<ColFace>,
+    shadow_indices: Vec<u32>,
+}
+
+fn make_entry(
+    metadata: ColEntryMetadata,
+    geometry: ColGeometry,
 ) -> Option<ColEntry> {
-    if vertices.is_empty() || indices.is_empty() {
+    let has_geometry = !geometry.indices.is_empty()
+        || !geometry.spheres.is_empty()
+        || !geometry.boxes.is_empty()
+        || !geometry.shadow_indices.is_empty();
+    if !has_geometry {
         return None;
     }
     Some(ColEntry {
         version: metadata.version,
         model_name: metadata.model_name,
         num_vertices: metadata.num_vertices,
-        vertices,
+        vertices: geometry.vertices,
         num_faces: metadata.num_faces,
-        indices,
+        indices: geometry.indices,
+        faces: geometry.faces,
+        spheres: geometry.spheres,
+        boxes: geometry.boxes,
+        face_groups: geometry.face_groups,
+        shadow_vertices: geometry.shadow_vertices,
+        shadow_faces: geometry.shadow_faces,
+        shadow_indices: geometry.shadow_indices,
         num_spheres: metadata.num_spheres,
         num_boxes: metadata.num_boxes,
         has_shadow: metadata.has_shadow,
@@ -503,22 +789,6 @@ fn checked_count(raw: u32, label: &str) -> Result<usize, ColError> {
         )));
     }
     Ok(count)
-}
-
-fn skip_counted_items(
-    bytes: &[u8],
-    cursor: &mut usize,
-    entry_end: usize,
-    count: u32,
-    item_size: usize,
-) -> Result<(), ColError> {
-    let count = checked_count(count, "COL block")?;
-    let data_end = checked_items_end(*cursor, count, item_size, entry_end)?;
-    if data_end > bytes.len() {
-        return Err(ColError::Truncated);
-    }
-    *cursor = data_end;
-    Ok(())
 }
 
 fn checked_items_end(
@@ -679,6 +949,40 @@ mod tests {
         data
     }
 
+    fn col1_shape_fixture() -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"COLL");
+        data.extend_from_slice(&[0; 4]);
+        let mut body = Vec::new();
+        let mut name = [0u8; 22];
+        name[..5].copy_from_slice(b"shape");
+        body.extend_from_slice(&name);
+        body.extend_from_slice(&0i16.to_le_bytes());
+        for value in [
+            2.0f32, 0.0, 0.0, 0.0, -2.0, -2.0, -2.0, 2.0, 2.0, 2.0,
+        ] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        body.extend_from_slice(&1u32.to_le_bytes());
+        body.extend_from_slice(&1.0f32.to_le_bytes());
+        for value in [0.0f32, 1.0, 2.0] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        body.extend_from_slice(&[3, 4, 5, 6]);
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&1u32.to_le_bytes());
+        for value in [-1.0f32, -2.0, -3.0, 1.0, 2.0, 3.0] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        body.extend_from_slice(&[7, 8, 9, 10]);
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        let body_size = u32::try_from(body.len()).expect("shape fixture fits");
+        data[4..8].copy_from_slice(&body_size.to_le_bytes());
+        data.extend_from_slice(&body);
+        data
+    }
+
     #[test]
     fn parses_compressed_col2_triangle_and_scales_vertices() {
         let data = col2_triangle_fixture();
@@ -686,6 +990,45 @@ mod tests {
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].vertices[1], [1.0, 0.0, 0.0]);
         assert_eq!(parsed.entries[0].indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn reads_col2_face_groups_before_the_face_block() {
+        let mut data = col2_triangle_fixture();
+        let metadata = 72;
+        data[metadata + 8..metadata + 12].copy_from_slice(&10u32.to_le_bytes());
+        data[metadata + 28..metadata + 32].copy_from_slice(&160u32.to_le_bytes());
+
+        let mut group = Vec::new();
+        for value in [
+            -1.0f32, -1.0, -1.0, 1.0, 1.0, 1.0,
+        ] {
+            group.extend_from_slice(&value.to_le_bytes());
+        }
+        group.extend_from_slice(&0u16.to_le_bytes());
+        group.extend_from_slice(&1u16.to_le_bytes());
+        group.extend_from_slice(&1u32.to_le_bytes());
+        data.splice(132..132, group);
+        let body_size = u32::try_from(data.len() - 8).expect("fixture fits");
+        data[4..8].copy_from_slice(&body_size.to_le_bytes());
+
+        let parsed = parse_col(&data).expect("valid COL2 face-group fixture");
+        assert_eq!(parsed.entries[0].face_groups.len(), 1);
+        assert_eq!(parsed.entries[0].face_groups[0].start_face, 0);
+        assert_eq!(parsed.entries[0].face_groups[0].end_face, 1);
+        assert_eq!(parsed.entries[0].indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn preserves_col1_shapes_for_primitive_preview() {
+        let parsed = parse_col(&col1_shape_fixture()).expect("valid COL1 shape fixture");
+        let entry = &parsed.entries[0];
+        assert_eq!(entry.model_name, "shape");
+        assert_eq!(entry.spheres.len(), 1);
+        assert_eq!(entry.boxes.len(), 1);
+        assert!(entry.indices.is_empty());
+        assert_eq!(entry.spheres[0].surface.material, 3);
+        assert_eq!(entry.boxes[0].surface.light, 10);
     }
 
     #[test]
@@ -754,5 +1097,52 @@ mod tests {
             checked > 0,
             "IMGEDITOR_CORPUS_ROOT is set but no representative San Andreas COL entries were found"
         );
+    }
+
+    #[test]
+    fn parses_retail_vice_city_col_files_when_present() {
+        let Some(root) = crate::test_paths::corpus_root() else {
+            return;
+        };
+        let maps = root.join("Grand Theft Auto Vice City/data/maps");
+        if !maps.is_dir() {
+            return;
+        }
+
+        fn collect_col_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+            for item in std::fs::read_dir(dir).expect("read Vice City map directory") {
+                let path = item.expect("read Vice City map entry").path();
+                if path.is_dir() {
+                    collect_col_files(&path, files);
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("col"))
+                {
+                    files.push(path);
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        collect_col_files(&maps, &mut files);
+        let mut checked = 0;
+        for path in files {
+            let bytes = std::fs::read(&path)
+                .unwrap_or_else(|error| panic!("{} should be readable: {error}", path.display()));
+            match parse_col(&bytes) {
+                Ok(parsed) => assert!(
+                    !parsed.entries.is_empty(),
+                    "{} parsed without entries",
+                    path.display()
+                ),
+                Err(ColError::NoGeometry) => {
+                    // Empty collision model collections are valid in the
+                    // retail data; they simply have nothing to preview.
+                }
+                Err(error) => panic!("{} should parse: {error}", path.display()),
+            }
+            checked += 1;
+        }
+        assert!(checked > 0, "expected at least one retail Vice City COL fixture");
     }
 }

@@ -14,12 +14,11 @@
 //! 2. [`texture`] — IDE-based NIF→NFT mapping and embedded pixel-data
 //!    extraction from `.nft` (NIF) texture catalog files.
 //! 3. [`viewer3d`] — mesh export + texture resolution + system viewer
-//!    launch, all on a dedicated thread. Acts as the external-viewer
-//!    fallback behind the right-click menu in v3.4 and is removed
-//!    in v4.
-//! 4. [`scene3d`] — embedded viewer CPU side (v3.4). Interleaved
-//!    vertices, orbit camera math, `Scene` aggregation, NIF→Scene
-//!    decode. Phase 17.2 wires these into a wgpu render pipeline.
+//!    launch, all on a dedicated thread. It remains the external-viewer
+//!    fallback for DFF/COL and other supported formats.
+//! 4. [`scene3d`] — embedded viewer CPU side. Interleaved vertices, orbit
+//!    camera math, `Scene` aggregation, and NIF/DFF/COL scene decoders feed
+//!    the wgpu render pipeline.
 
 pub mod nif;
 pub mod scene3d;
