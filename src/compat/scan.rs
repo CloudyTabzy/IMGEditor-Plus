@@ -11,11 +11,9 @@ use anyhow::Context;
 use crate::archive::ArchiveInfo;
 use crate::inspector::nif::{self, Endian};
 use crate::parser::txd::parse_txd;
-use crate::parser::{canonical_img_path, detect_version, read_entry_data_from_source, ImgVersion};
-use crate::parser::pc_v1::PcV1Parser;
-use crate::parser::pc_v2::PcV2Parser;
-use crate::parser::xbox360::Xbox360Parser;
-use crate::parser::ImgParser;
+use crate::parser::{canonical_img_path, read_entry_data_from_source, ImgVersion};
+#[cfg(test)]
+use crate::parser::{iparser::ImgParser, pc_v2::PcV2Parser};
 
 use super::games::{classify, ALL_GAMES};
 use super::raster::{LogicalFormat, RasterProfile, Severity};
@@ -84,20 +82,18 @@ pub struct EntryVerdict {
 /// Open any supported archive headlessly and profile its textures.
 pub fn scan_archive(path: &Path, options: &ScanOptions) -> anyhow::Result<ScanReport> {
     let path = canonical_img_path(path);
-    let version = detect_version(&path);
     let mut archive = ArchiveInfo::new(
         path.file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default(),
         false,
-        version,
+        ImgVersion::Unknown,
     );
     archive.path = Some(path.clone());
-    match version {
-        ImgVersion::One => PcV1Parser.open(&mut archive)?,
-        ImgVersion::Two => PcV2Parser.open(&mut archive)?,
-        ImgVersion::Xbox360 => Xbox360Parser.open(&mut archive)?,
-        ImgVersion::Unknown => anyhow::bail!("unrecognized IMG archive format: {}", path.display()),
+    crate::parser::open_in_detect_order(&mut archive)?;
+    let version = archive.version;
+    if version == ImgVersion::Unknown {
+        anyhow::bail!("unrecognized IMG archive format: {}", path.display());
     }
 
     let mut report = ScanReport {

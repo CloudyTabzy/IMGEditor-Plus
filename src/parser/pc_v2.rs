@@ -1,4 +1,4 @@
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -201,9 +201,22 @@ impl ImgParser for PcV2Parser {
 }
 
 impl PcV2Parser {
+    /// Header-only probe: whether the file carries the IMG v2 magic. Lets
+    /// [`crate::parser::open_in_detect_order`] dispatch to the real parse
+    /// without a full directory validation pass first.
+    pub(crate) fn recognizes(path: &Path) -> bool {
+        let Ok(mut img) = std::fs::File::open(path) else {
+            return false;
+        };
+        let mut magic = [0_u8; 4];
+        img.read_exact(&mut magic).is_ok() && &magic == b"VER2"
+    }
+
     fn read_validated_entries(img: &mut std::fs::File, img_len: u64) -> Result<Vec<EntryInfo>> {
         img.seek(SeekFrom::Start(0))?;
-
+        // One sequential buffered pass over the directory instead of a
+        // syscall per 32-byte record.
+        let mut img = BufReader::with_capacity(1024 * 1024, &mut *img);
         let mut header = [0_u8; V2_HEADER_SIZE as usize];
         img.read_exact(&mut header)
             .context("failed to read IMG v2 header")?;

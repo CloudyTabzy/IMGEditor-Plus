@@ -9,7 +9,7 @@ use memmap2::Mmap;
 use smallvec::SmallVec;
 
 use crate::parser::{
-    DecodedTexture, EntryInspection, ImgParser, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE,
+    DecodedTexture, EntryInspection, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE,
     encode_entry_name, encode_entry_name_with_limit, entry_name_capacity, sector_rounded_size,
 };
 
@@ -507,7 +507,6 @@ impl ArchiveInfo {
 
     pub fn open(path: impl Into<PathBuf>) -> anyhow::Result<Self> {
         let path = crate::parser::canonical_img_path(&path.into());
-        let version = crate::parser::detect_version(&path);
         let texture_cache_active_entry =
             Arc::new(AtomicUsize::new(NO_ACTIVE_TEXTURE_PREVIEW));
 
@@ -525,7 +524,7 @@ impl ArchiveInfo {
             export_status: ExportStatus::Idle,
             last_export_count: 0,
             recent_exports: Vec::new(),
-            version,
+            version: ImgVersion::Unknown,
             open: true,
             create_new: false,
             update_search: false,
@@ -553,12 +552,9 @@ impl ArchiveInfo {
             generation: 0,
         };
 
-        match version {
-            ImgVersion::One => crate::parser::PcV1Parser.open(&mut archive)?,
-            ImgVersion::Two => crate::parser::PcV2Parser.open(&mut archive)?,
-            ImgVersion::Xbox360 => crate::parser::Xbox360Parser.open(&mut archive)?,
-            ImgVersion::Unknown => crate::parser::UnknownParser.open(&mut archive)?,
-        }
+        // Single-parse dispatch: probes formats cheaply and parses the
+        // winning directory exactly once (setting `version` on success).
+        crate::parser::open_in_detect_order(&mut archive)?;
 
         archive.update_selected_list("", false);
         Ok(archive)

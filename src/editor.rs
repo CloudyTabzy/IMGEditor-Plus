@@ -110,12 +110,11 @@ impl Editor {
             return Ok(());
         }
 
-        let version = crate::parser::detect_version(&path);
-        if version == ImgVersion::Unknown {
+        let mut archive = ArchiveInfo::open(path).map_err(OpenArchiveError::OpenFailed)?;
+        if archive.version == ImgVersion::Unknown {
             return Err(OpenArchiveError::UnsupportedFormat);
         }
 
-        let mut archive = ArchiveInfo::open(path).map_err(OpenArchiveError::OpenFailed)?;
         archive.sort_chain = self.default_sort_chain.clone();
         archive.sync_sort_state_from_chain();
         archive.update_selected_list("", self.file_type_literal);

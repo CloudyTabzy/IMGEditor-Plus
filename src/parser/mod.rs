@@ -87,6 +87,40 @@ pub fn detect_version(path: &Path) -> ImgVersion {
     }
 }
 
+/// Open `archive` by dispatching to the first parser that recognizes the
+/// file, parsing the directory exactly once. Detection order matches
+/// [`detect_version`]: IMG v2 (VER2 magic), IMG v1 (little-endian directory
+/// pair), Xbox 360 (big-endian directory pair), then [`UnknownParser`],
+/// which leaves the archive with zero entries and [`ImgVersion::Unknown`].
+///
+/// A file that is *recognized* but structurally invalid (e.g. a VER2 header
+/// with a truncated directory) surfaces the parser's specific error instead
+/// of silently degrading to an unknown-format archive.
+pub(crate) fn open_in_detect_order(archive: &mut ArchiveInfo) -> anyhow::Result<()> {
+    let Some(path) = archive.path.clone() else {
+        anyhow::bail!("new archives do not have a source path");
+    };
+
+    if PcV2Parser::recognizes(&path) {
+        PcV2Parser.open(archive)?;
+        archive.version = ImgVersion::Two;
+        return Ok(());
+    }
+
+    if PcV1Parser::has_directory_file(&path) {
+        if PcV1Parser.open(archive).is_ok() {
+            archive.version = ImgVersion::One;
+            return Ok(());
+        }
+        if Xbox360Parser.open(archive).is_ok() {
+            archive.version = ImgVersion::Xbox360;
+            return Ok(());
+        }
+    }
+
+    UnknownParser.open(archive)
+}
+
 pub fn sector_rounded_size(byte_len: u64) -> u64 {
     if byte_len == 0 {
         SECTOR_SIZE
@@ -288,7 +322,10 @@ pub fn read_entry_header_standalone(
     Ok(data)
 }
 
-fn read_entry_data_with_source(
+/// Read one entry's bytes from the archive source, preferring the mmap and
+/// honoring imported/override entries. Shared by the save, export, and
+/// conversion tasks that hold only a path + mmap snapshot.
+pub(crate) fn read_entry_data_with_source(
     entry: &EntryInfo,
     archive_source: Option<&Path>,
     source_mmap: Option<&Mmap>,

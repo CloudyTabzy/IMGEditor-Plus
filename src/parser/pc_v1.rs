@@ -98,6 +98,17 @@ impl PcV1Parser {
 
         validate_v1_directory(&dir_bytes, img_len, byte_order).is_ok()
     }
+
+    /// Whether a sibling `.dir` directory file exists. IMG v1
+    /// (little-endian) and Xbox 360 (big-endian) share this container
+    /// layout, so the metadata probe is the cheap format check used by the
+    /// open dispatch; full validation happens during the single parse in
+    /// [`Self::open_with_endian`].
+    pub(crate) fn has_directory_file(path: &Path) -> bool {
+        std::fs::metadata(Self::dir_path(path))
+            .map(|metadata| metadata.is_file())
+            .unwrap_or(false)
+    }
 }
 
 impl ImgParser for PcV1Parser {
