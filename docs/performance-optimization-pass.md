@@ -71,7 +71,10 @@ were cloning far more than the task actually reads:
   remains as a one-call wrapper for tests and headless use.
 - **Bulk conversion** plans and executes from a bounded snapshot of the
   selected entries (each `BulkEntryPlan` carries its own `EntryInfo`) plus the
-  archive path and mmap handle, so neither phase clones the archive.
+  archive path and mmap handle, so neither phase clones the archive. The plan
+  also carries the archive generation and source identity; planning,
+  confirmation, and completion all discard stale results if entries changed
+  or the tab at that index was replaced while either background task ran.
 
 ## 3. NIF pixel payload copy
 

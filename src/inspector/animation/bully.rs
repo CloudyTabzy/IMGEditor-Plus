@@ -1070,6 +1070,7 @@ pub fn model_from_nif(
 /// reference nodes outside the mesh's own subtree.
 struct PendingSkin {
     mesh_index: usize,
+    skeleton_root: i32,
     bones: Vec<i32>,
     inverse_bind: Vec<Mat4>,
     weights: Vec<VertexSkin>,
@@ -1084,6 +1085,144 @@ fn nif_transform_matrix(transform: &crate::inspector::nif::NiTransform) -> Mat4 
         transform.scale,
     )
     .matrix()
+}
+
+fn partition_skin_weights(
+    partition: &crate::inspector::nif::NiSkinPartitionPayload,
+    vertex_count: usize,
+    joint_count: usize,
+) -> Result<Vec<VertexSkin>, String> {
+    let mut decoded: Vec<Option<VertexSkin>> = vec![None; vertex_count];
+    for (partition_index, part) in partition.partitions.iter().enumerate() {
+        let rows = part.num_vertices as usize;
+        let width = part.num_weights_per_vertex as usize;
+        if part.bones.len() != part.num_bones as usize {
+            return Err(format!(
+                "partition {partition_index} declares {} palette bones but stores {}",
+                part.num_bones,
+                part.bones.len()
+            ));
+        }
+        if width == 0 || part.weights.len() != rows || part.bone_indices.len() != rows {
+            return Err(format!(
+                "partition {partition_index} has incomplete weight/index tables"
+            ));
+        }
+        if !part.vertex_map.is_empty() && part.vertex_map.len() != rows {
+            return Err(format!(
+                "partition {partition_index} has an incomplete vertex map"
+            ));
+        }
+
+        for local in 0..rows {
+            let weight_row = &part.weights[local];
+            let index_row = &part.bone_indices[local];
+            if weight_row.len() != width || index_row.len() != width {
+                return Err(format!(
+                    "partition {partition_index} vertex {local} has a truncated influence row"
+                ));
+            }
+            let target = part
+                .vertex_map
+                .get(local)
+                .map_or(local, |&mapped| mapped as usize);
+            if target >= vertex_count {
+                return Err(format!(
+                    "partition {partition_index} maps vertex {local} to {target}, outside {vertex_count} vertices"
+                ));
+            }
+
+            let mut influences = VertexSkin::new();
+            for (&weight, &palette_index) in weight_row.iter().zip(index_row) {
+                if !weight.is_finite() || weight < 0.0 {
+                    return Err(format!(
+                        "partition {partition_index} vertex {local} has an invalid weight"
+                    ));
+                }
+                if weight == 0.0 {
+                    continue;
+                }
+                let Some(&joint) = part.bones.get(palette_index as usize) else {
+                    return Err(format!(
+                        "partition {partition_index} vertex {local} references palette slot {palette_index} outside {} bones",
+                        part.bones.len()
+                    ));
+                };
+                if joint as usize >= joint_count {
+                    return Err(format!(
+                        "partition {partition_index} vertex {local} references skin joint {joint} outside {joint_count} joints"
+                    ));
+                }
+                if let Some(existing) = influences
+                    .iter_mut()
+                    .find(|(slot, _)| *slot == joint as u32)
+                {
+                    existing.1 += weight;
+                } else {
+                    influences.push((joint as u32, weight));
+                }
+            }
+            influences.sort_unstable_by_key(|(slot, _)| *slot);
+
+            if let Some(previous) = &decoded[target] {
+                let same = previous.len() == influences.len()
+                    && previous
+                        .iter()
+                        .zip(&influences)
+                        .all(|(left, right)| left.0 == right.0 && (left.1 - right.1).abs() <= 1e-5);
+                if !same {
+                    return Err(format!(
+                        "partition {partition_index} disagrees with an earlier partition for vertex {target}"
+                    ));
+                }
+            } else {
+                decoded[target] = Some(influences);
+            }
+        }
+    }
+    let weights: Vec<VertexSkin> = decoded.into_iter().map(Option::unwrap_or_default).collect();
+    if !weights.iter().any(|row| !row.is_empty()) {
+        return Err("partition produced no positive influences".to_string());
+    }
+    Ok(weights)
+}
+
+fn direct_skin_weights(
+    skin_data: &crate::inspector::nif::NiSkinDataPayload,
+    vertex_count: usize,
+) -> Result<Vec<VertexSkin>, String> {
+    if !skin_data.has_vertex_weights {
+        return Err("skin data does not contain vertex weights".to_string());
+    }
+    let mut weights = vec![VertexSkin::new(); vertex_count];
+    for (slot, bone) in skin_data.bones.iter().enumerate() {
+        for influence in &bone.vertex_weights {
+            if !influence.weight.is_finite() || influence.weight < 0.0 {
+                return Err(format!("skin joint {slot} has an invalid weight"));
+            }
+            if influence.weight == 0.0 {
+                continue;
+            }
+            let target = influence.index as usize;
+            if target >= vertex_count {
+                return Err(format!(
+                    "skin joint {slot} references vertex {target} outside {vertex_count} vertices"
+                ));
+            }
+            if let Some(existing) = weights[target]
+                .iter_mut()
+                .find(|(joint, _)| *joint == slot as u32)
+            {
+                existing.1 += influence.weight;
+            } else {
+                weights[target].push((slot as u32, influence.weight));
+            }
+        }
+    }
+    if !weights.iter().any(|row| !row.is_empty()) {
+        return Err("skin data vertex weights are empty".to_string());
+    }
+    Ok(weights)
 }
 
 /// Decode the skin chain for one shape into a pending, node-unresolved skin.
@@ -1126,27 +1265,65 @@ fn build_pending_skin(
         diagnostics.push("skin data block is missing or unsupported".to_string());
         return None;
     };
-    let joint_count = instance.bones.len().min(skin_data.bones.len());
     if instance.bones.len() != skin_data.bones.len() {
         diagnostics.push(format!(
-            "skin has {} bones but {} bind transforms; using {}",
+            "skin skipped: {} bones but {} bind transforms",
             instance.bones.len(),
-            skin_data.bones.len(),
-            joint_count
+            skin_data.bones.len()
         ));
-    }
-    if joint_count == 0 {
         return None;
+    }
+    let joint_count = instance.bones.len();
+    if joint_count == 0 {
+        diagnostics.push("skin skipped: no joints".to_string());
+        return None;
+    }
+    if instance.skeleton_root_ref < 0
+        || !matches!(
+            nif.payloads
+                .get(instance.skeleton_root_ref as usize)
+                .and_then(|payload| payload.as_ref()),
+            Some(BlockPayload::NiNode(_))
+        )
+    {
+        diagnostics.push("skin skipped: skeleton root is missing or is not a NiNode".to_string());
+        return None;
+    }
+    let mut unique_bones = std::collections::HashSet::with_capacity(joint_count);
+    for &bone in &instance.bones {
+        if bone < 0
+            || !matches!(
+                nif.payloads
+                    .get(bone as usize)
+                    .and_then(|payload| payload.as_ref()),
+                Some(BlockPayload::NiNode(_))
+            )
+        {
+            diagnostics.push(format!(
+                "skin skipped: joint reference {bone} is missing or is not a NiNode"
+            ));
+            return None;
+        }
+        if !unique_bones.insert(bone) {
+            diagnostics.push(format!("skin skipped: duplicate joint reference {bone}"));
+            return None;
+        }
     }
     let inverse_bind: Vec<Mat4> = skin_data
         .bones
         .iter()
-        .take(joint_count)
         .map(|bone| nif_transform_matrix(&bone.skin_transform))
         .collect();
+    if inverse_bind.iter().any(|matrix| {
+        matrix
+            .to_cols_array()
+            .iter()
+            .any(|value| !value.is_finite())
+    }) {
+        diagnostics.push("skin skipped: inverse-bind transform is non-finite".to_string());
+        return None;
+    }
 
-    let mut weights: Vec<VertexSkin> = vec![VertexSkin::new(); vertex_count];
-    let mut influenced = 0usize;
     let partition = if instance.skin_partition_ref >= 0 {
         nif.payloads
             .get(instance.skin_partition_ref as usize)
@@ -1158,73 +1335,46 @@ fn build_pending_skin(
     } else {
         None
     };
-    if let Some(partition) = partition {
-        for part in &partition.partitions {
-            for (local, row) in part.weights.iter().enumerate() {
-                let target = part
-                    .vertex_map
-                    .get(local)
-                    .map(|&mapped| mapped as usize)
-                    .unwrap_or(local);
-                if target >= vertex_count {
-                    continue;
-                }
-                // Partitions overlap on boundary vertices; the duplicate
-                // rows carry identical influences (corpus-verified), so the
-                // first partition that owns a shape vertex wins.
-                if !weights[target].is_empty() {
-                    continue;
-                }
-                let index_row = part.bone_indices.get(local);
-                for (slot_index, &weight) in row.iter().enumerate() {
-                    if weight == 0.0 {
-                        continue;
-                    }
-                    // Bone index -> palette -> skin-instance bone -> NiNode.
-                    let palette_index = index_row
-                        .and_then(|indices| indices.get(slot_index))
-                        .map(|&index| index as usize)
-                        .unwrap_or(slot_index);
-                    let Some(&bone) = part.bones.get(palette_index) else {
-                        continue;
-                    };
-                    if (bone as usize) < joint_count {
-                        weights[target].push((bone as u32, weight));
+    let weights = match partition.filter(|partition| !partition.partitions.is_empty()) {
+        Some(partition) => match partition_skin_weights(partition, vertex_count, joint_count) {
+            Ok(weights) => weights,
+            Err(partition_error) => {
+                diagnostics.push(format!(
+                    "skin partition rejected ({partition_error}); trying direct weights"
+                ));
+                match direct_skin_weights(skin_data, vertex_count) {
+                    Ok(weights) => weights,
+                    Err(direct_error) => {
+                        diagnostics.push(format!("skin skipped: {direct_error}"));
+                        return None;
                     }
                 }
-                if !weights[target].is_empty() {
-                    influenced += 1;
+            }
+        },
+        None => {
+            if instance.skin_partition_ref >= 0 {
+                diagnostics.push(
+                    "skin partition is missing, unsupported, or empty; trying direct weights"
+                        .to_string(),
+                );
+            }
+            match direct_skin_weights(skin_data, vertex_count) {
+                Ok(weights) => weights,
+                Err(error) => {
+                    diagnostics.push(format!("skin skipped: {error}"));
+                    return None;
                 }
             }
         }
-        if influenced == 0 {
-            diagnostics.push("skin partition produced no usable influences".to_string());
-            return None;
-        }
-    } else if skin_data.has_vertex_weights {
-        for (slot, bone) in skin_data.bones.iter().enumerate().take(joint_count) {
-            for weight in &bone.vertex_weights {
-                let target = weight.index as usize;
-                if target < vertex_count {
-                    weights[target].push((slot as u32, weight.weight));
-                    influenced += 1;
-                }
-            }
-        }
-        if influenced == 0 {
-            diagnostics.push("skin data vertex weights were empty".to_string());
-            return None;
-        }
-    } else {
-        diagnostics.push("skin has neither a partition nor vertex weights".to_string());
-        return None;
-    }
+    };
+    let influenced = weights.iter().filter(|row| !row.is_empty()).count();
     diagnostics.push(format!(
         "skin: {} joints, {} influenced vertices",
         joint_count, influenced
     ));
     Some(PendingSkin {
         mesh_index,
+        skeleton_root: instance.skeleton_root_ref,
         bones: instance.bones.clone(),
         inverse_bind,
         weights,
@@ -1268,6 +1418,16 @@ pub fn model_from_nif_with_mapping(
     // Resolve pending skins now that every visited block has a node id.
     let mut skinned_meshes = 0usize;
     for pending in pending_skins {
+        let Some(&skeleton_root) = node_ids.get(&pending.skeleton_root) else {
+            diagnostics.push(format!(
+                "skin for '{}' skipped: skeleton root is outside the scene hierarchy",
+                meshes
+                    .get(pending.mesh_index)
+                    .map(|mesh| mesh.name.as_str())
+                    .unwrap_or("?")
+            ));
+            continue;
+        };
         let mut joints = Vec::with_capacity(pending.bones.len());
         let mut unresolved = 0usize;
         for &bone in &pending.bones {
@@ -1279,6 +1439,29 @@ pub fn model_from_nif_with_mapping(
         if unresolved > 0 || joints.len() != pending.inverse_bind.len() {
             diagnostics.push(format!(
                 "skin for '{}' skipped: {unresolved} unresolved bone(s)",
+                meshes
+                    .get(pending.mesh_index)
+                    .map(|mesh| mesh.name.as_str())
+                    .unwrap_or("?")
+            ));
+            continue;
+        }
+        let outside_root = joints
+            .iter()
+            .filter(|&&joint| {
+                let mut cursor = Some(joint);
+                while let Some(node) = cursor {
+                    if node == skeleton_root {
+                        return false;
+                    }
+                    cursor = nodes.get(node.0 as usize).and_then(|node| node.parent);
+                }
+                true
+            })
+            .count();
+        if outside_root > 0 {
+            diagnostics.push(format!(
+                "skin for '{}' skipped: {outside_root} joint(s) are outside the declared skeleton root",
                 meshes
                     .get(pending.mesh_index)
                     .map(|mesh| mesh.name.as_str())
@@ -2114,6 +2297,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn partition_weights_follow_both_palette_indirections() {
+        let partition = crate::inspector::nif::NiSkinPartitionPayload {
+            partitions: vec![crate::inspector::nif::SkinPartition {
+                num_vertices: 2,
+                num_bones: 3,
+                num_weights_per_vertex: 2,
+                bones: vec![4, 1, 3],
+                vertex_map: vec![2, 0],
+                weights: vec![vec![0.75, 0.25], vec![1.0, 0.0]],
+                bone_indices: vec![vec![1, 2], vec![0, 1]],
+                ..Default::default()
+            }],
+        };
+        let weights = partition_skin_weights(&partition, 3, 5).expect("valid weights");
+        assert_eq!(weights[0].as_slice(), &[(4, 1.0)]);
+        assert!(weights[1].is_empty());
+        assert_eq!(weights[2].as_slice(), &[(1, 0.75), (3, 0.25)]);
+    }
+
+    #[test]
+    fn conflicting_partition_overlap_is_rejected() {
+        let make = |weight| crate::inspector::nif::SkinPartition {
+            num_vertices: 1,
+            num_bones: 2,
+            num_weights_per_vertex: 1,
+            bones: vec![0, 1],
+            vertex_map: vec![0],
+            weights: vec![vec![weight]],
+            bone_indices: vec![vec![u8::from(weight < 0.75)]],
+            ..Default::default()
+        };
+        let partition = crate::inspector::nif::NiSkinPartitionPayload {
+            partitions: vec![make(1.0), make(0.5)],
+        };
+        let error = partition_skin_weights(&partition, 1, 2).unwrap_err();
+        assert!(error.contains("disagrees with an earlier partition"));
+    }
+
+    #[test]
+    fn malformed_partition_tables_fail_closed() {
+        let partition = crate::inspector::nif::NiSkinPartitionPayload {
+            partitions: vec![crate::inspector::nif::SkinPartition {
+                num_vertices: 1,
+                num_bones: 1,
+                num_weights_per_vertex: 1,
+                bones: vec![0],
+                vertex_map: vec![0],
+                weights: vec![vec![1.0]],
+                bone_indices: Vec::new(),
+                ..Default::default()
+            }],
+        };
+        assert!(partition_skin_weights(&partition, 1, 1).is_err());
+    }
+
     /// Extract one named entry from the retail World.img using its .dir
     /// sidecar (no full-archive read).
     fn world_entry(stream: &std::path::Path, name: &str) -> Option<Vec<u8>> {
@@ -2365,5 +2604,115 @@ mod tests {
             clip.tracks.len(),
             "all packed rotation curves bind"
         );
+    }
+
+    #[test]
+    fn direct_weight_skin_model_builds_when_available() {
+        let Some(root) = crate::test_paths::bully_nif_tools() else {
+            return;
+        };
+        let path = root.join("CS_PLAY.nif");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let mut nif = NifFile::parse(&bytes).expect("parse direct-weight NIF");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "CS_PLAY", "test:direct-weights").expect("model builds");
+        let skinned: Vec<_> = model
+            .meshes
+            .iter()
+            .filter_map(|mesh| mesh.skin.as_ref())
+            .collect();
+        assert_eq!(skinned.len(), 1);
+        assert!(
+            skinned[0].weights.iter().any(|weights| !weights.is_empty()),
+            "NiSkinData weights must remain a functional partition fallback"
+        );
+    }
+
+    #[test]
+    #[ignore = "walks the full extracted Bully NIF corpus"]
+    fn all_extracted_skin_bindings_validate_when_requested() {
+        let Some(root) = crate::test_paths::bully_nif_tools() else {
+            return;
+        };
+        let mut pending = vec![root];
+        let mut files = 0usize;
+        let mut skins = 0usize;
+        while let Some(directory) = pending.pop() {
+            let entries = std::fs::read_dir(&directory)
+                .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()));
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if !path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("nif"))
+                {
+                    continue;
+                }
+                let bytes = std::fs::read(&path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+                let header = NifFile::parse_header(&bytes)
+                    .unwrap_or_else(|error| panic!("header {}: {error}", path.display()));
+                if !header
+                    .blocks
+                    .iter()
+                    .any(|block| block.type_name == "NiSkinInstance")
+                {
+                    continue;
+                }
+                let nif = NifFile::parse(&bytes)
+                    .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+                let skinned_shapes: Vec<(i32, i32)> = nif
+                    .payloads
+                    .iter()
+                    .flatten()
+                    .filter_map(|payload| match payload {
+                        BlockPayload::NiTriShape(shape) if shape.skin_instance_ref >= 0 => {
+                            Some((shape.skin_instance_ref, shape.data_ref))
+                        }
+                        BlockPayload::NiTriStrips(shape) if shape.base.skin_instance_ref >= 0 => {
+                            Some((shape.base.skin_instance_ref, shape.base.data_ref))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if skinned_shapes.is_empty() {
+                    continue;
+                }
+                for (skin_instance_ref, data_ref) in skinned_shapes {
+                    let vertex_count = match nif
+                        .payloads
+                        .get(data_ref as usize)
+                        .and_then(|payload| payload.as_ref())
+                    {
+                        Some(BlockPayload::NiTriShapeData(data)) => data.vertices.len(),
+                        Some(BlockPayload::NiTriStripsData(data)) => data.base.vertices.len(),
+                        _ => panic!("skinned geometry data is missing in {}", path.display()),
+                    };
+                    let mut diagnostics = Vec::new();
+                    assert!(
+                        build_pending_skin(
+                            &nif,
+                            skin_instance_ref,
+                            vertex_count,
+                            0,
+                            &mut diagnostics
+                        )
+                        .is_some(),
+                        "skin in {} failed validation: {diagnostics:?}",
+                        path.display()
+                    );
+                    skins += 1;
+                }
+                files += 1;
+            }
+        }
+        assert_eq!(skins, 2_613);
+        assert!(files > 1_000, "expected the extracted retail skin corpus");
     }
 }

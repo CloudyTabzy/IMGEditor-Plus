@@ -125,6 +125,10 @@ pub enum ModelError {
         joint: usize,
         node: u32,
     },
+    #[error("mesh '{mesh}' skin maps node {node} to more than one joint slot")]
+    DuplicateSkinJoint { mesh: String, node: u32 },
+    #[error("mesh '{mesh}' skin joint {joint} has a non-finite inverse-bind matrix")]
+    NonFiniteBindMatrix { mesh: String, joint: usize },
     #[error("mesh '{mesh}' skin has {bind} bind matrices for {joints} joints")]
     BindMatrixCountMismatch {
         mesh: String,
@@ -139,6 +143,12 @@ pub enum ModelError {
     },
     #[error("mesh '{mesh}' vertex {vertex} has a negative or non-finite weight")]
     InvalidWeight { mesh: String, vertex: usize },
+    #[error("mesh '{mesh}' vertex {vertex} repeats skin joint slot {slot}")]
+    DuplicateSkinInfluence {
+        mesh: String,
+        vertex: usize,
+        slot: u32,
+    },
     #[error("mesh '{mesh}' has an index {index} outside its {vertices} vertices")]
     IndexOutOfRange {
         mesh: String,
@@ -369,12 +379,29 @@ impl ModelAsset {
                         joints: skin.joints.len(),
                     });
                 }
+                let mut joint_nodes = std::collections::HashSet::with_capacity(skin.joints.len());
                 for (joint, &node) in skin.joints.iter().enumerate() {
                     if node.0 as usize >= node_count {
                         return Err(ModelError::SkinJointNodeMissing {
                             mesh: mesh.name.clone(),
                             joint,
                             node: node.0,
+                        });
+                    }
+                    if !joint_nodes.insert(node) {
+                        return Err(ModelError::DuplicateSkinJoint {
+                            mesh: mesh.name.clone(),
+                            node: node.0,
+                        });
+                    }
+                    if skin.inverse_bind[joint]
+                        .to_cols_array()
+                        .iter()
+                        .any(|value| !value.is_finite())
+                    {
+                        return Err(ModelError::NonFiniteBindMatrix {
+                            mesh: mesh.name.clone(),
+                            joint,
                         });
                     }
                 }
@@ -386,12 +413,21 @@ impl ModelAsset {
                     });
                 }
                 for (vertex, influences) in skin.weights.iter_mut().enumerate() {
+                    let mut joint_slots =
+                        std::collections::HashSet::with_capacity(influences.len());
                     for &(slot, weight) in influences.iter() {
                         if slot as usize >= skin.joints.len() {
                             return Err(ModelError::SkinJointOutOfRange {
                                 mesh: mesh.name.clone(),
                                 slot: slot as usize,
                                 count: skin.joints.len(),
+                            });
+                        }
+                        if !joint_slots.insert(slot) {
+                            return Err(ModelError::DuplicateSkinInfluence {
+                                mesh: mesh.name.clone(),
+                                vertex,
+                                slot,
                             });
                         }
                         if !weight.is_finite() || weight < 0.0 {
@@ -552,6 +588,35 @@ mod tests {
         ]
     }
 
+    fn model_with_skin(skin: SkinBinding) -> Result<ModelAsset, ModelError> {
+        ModelAsset::new(
+            "m".into(),
+            "test".into(),
+            vec![SceneNode {
+                id: NodeId(0),
+                parent: None,
+                name: "root".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: Some(0),
+            }],
+            vec![MeshAsset {
+                name: "mesh".into(),
+                texture_name: None,
+                vertices: vec![Vertex {
+                    position: [0.0; 3],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0; 2],
+                }],
+                indices: vec![0, 0, 0],
+                diffuse: None,
+                skin: Some(skin),
+            }],
+            Mat4::IDENTITY,
+            BaseOrientation::Yup,
+            None,
+        )
+    }
+
     #[test]
     fn non_finite_or_degenerate_node_transforms_are_rejected() {
         let build = |local: NodeTransform| {
@@ -613,6 +678,47 @@ mod tests {
             None,
         );
         assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn malformed_skin_bindings_are_rejected_at_admission() {
+        let mut one_weight = VertexSkin::new();
+        one_weight.push((0, 1.0));
+        let non_finite = model_with_skin(SkinBinding {
+            joints: vec![NodeId(0)],
+            inverse_bind: vec![Mat4::from_cols_array(&[f32::NAN; 16])],
+            weights: vec![one_weight.clone()],
+        });
+        assert!(matches!(
+            non_finite,
+            Err(ModelError::NonFiniteBindMatrix { joint: 0, .. })
+        ));
+
+        let duplicate_joint = model_with_skin(SkinBinding {
+            joints: vec![NodeId(0), NodeId(0)],
+            inverse_bind: vec![Mat4::IDENTITY; 2],
+            weights: vec![one_weight],
+        });
+        assert!(matches!(
+            duplicate_joint,
+            Err(ModelError::DuplicateSkinJoint { node: 0, .. })
+        ));
+
+        let mut duplicate_influence = VertexSkin::new();
+        duplicate_influence.extend([(0, 0.5), (0, 0.5)]);
+        let duplicate_influence = model_with_skin(SkinBinding {
+            joints: vec![NodeId(0)],
+            inverse_bind: vec![Mat4::IDENTITY],
+            weights: vec![duplicate_influence],
+        });
+        assert!(matches!(
+            duplicate_influence,
+            Err(ModelError::DuplicateSkinInfluence {
+                vertex: 0,
+                slot: 0,
+                ..
+            })
+        ));
     }
 
     #[test]

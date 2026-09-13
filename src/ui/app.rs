@@ -609,6 +609,9 @@ pub enum Message {
     /// Background bulk conversion finished.
     BulkConvertApplied {
         archive_index: usize,
+        archive_generation: u64,
+        source_label: String,
+        source_path: Option<PathBuf>,
         result: Result<SavePatches, String>,
     },
     /// Dismiss the bulk-convert dialog.
@@ -1102,7 +1105,9 @@ impl std::fmt::Debug for BulkEntryPlan {
 #[derive(Clone)]
 pub struct BulkPlanReady {
     pub archive_index: usize,
+    pub archive_generation: u64,
     pub source_label: String,
+    pub source_path: Option<PathBuf>,
     pub entries: Vec<BulkEntryPlan>,
 }
 
@@ -1120,7 +1125,9 @@ impl std::fmt::Debug for BulkPlanReady {
 /// Open bulk-convert dialog state.
 pub struct BulkConvertState {
     pub archive_index: usize,
+    pub archive_generation: u64,
     pub source_label: String,
+    pub source_path: Option<PathBuf>,
     pub entries: Vec<BulkEntryPlan>,
 }
 
@@ -3770,12 +3777,14 @@ impl App {
                 let archive_path = archive.path.clone();
                 let source_mmap = archive.source_mmap.clone();
                 let source_label = archive.file_name.clone();
+                let archive_generation = archive.generation();
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
                             plan_bulk_convert(
                                 archive_index,
-                                archive_path.as_deref(),
+                                archive_generation,
+                                archive_path,
                                 source_mmap.as_deref(),
                                 source_label,
                                 &selected_entries,
@@ -3796,6 +3805,18 @@ impl App {
                         return Task::none();
                     }
                 };
+                let current = self.editor.archives().get(ready.archive_index);
+                if !current.is_some_and(|archive| {
+                    archive.generation() == ready.archive_generation
+                        && archive.file_name == ready.source_label
+                        && archive.path == ready.source_path
+                }) {
+                    self.toast = Some(
+                        "The archive changed while conversion was being planned; please retry."
+                            .into(),
+                    );
+                    return Task::none();
+                }
                 if ready.entries.is_empty() {
                     self.toast =
                         Some("Every selected texture is already native for the target.".into());
@@ -3803,7 +3824,9 @@ impl App {
                 }
                 self.pending_bulk = Some(BulkConvertState {
                     archive_index: ready.archive_index,
+                    archive_generation: ready.archive_generation,
                     source_label: ready.source_label,
+                    source_path: ready.source_path,
                     entries: ready.entries,
                 });
                 self.toast = None;
@@ -3818,8 +3841,21 @@ impl App {
                     self.toast = Some("The archive is no longer open.".into());
                     return Task::none();
                 };
+                if archive.generation() != state.archive_generation
+                    || archive.file_name != state.source_label
+                    || archive.path != state.source_path
+                {
+                    self.toast = Some(
+                        "The archive changed after this conversion was planned; please retry."
+                            .into(),
+                    );
+                    return Task::none();
+                }
                 let archive_path = archive.path.clone();
                 let source_mmap = archive.source_mmap.clone();
+                let archive_generation = state.archive_generation;
+                let source_label = state.source_label;
+                let source_path = state.source_path;
                 let entries = state.entries;
                 Task::perform(
                     async move {
@@ -3835,12 +3871,18 @@ impl App {
                     },
                     move |result| Message::BulkConvertApplied {
                         archive_index,
+                        archive_generation,
+                        source_label,
+                        source_path,
                         result: result.map(SavePatches),
                     },
                 )
             }
             Message::BulkConvertApplied {
                 archive_index,
+                archive_generation,
+                source_label,
+                source_path,
                 result,
             } => {
                 match result {
@@ -3851,6 +3893,16 @@ impl App {
                             self.toast = Some("The archive is no longer open.".into());
                             return Task::none();
                         };
+                        if archive.generation() != archive_generation
+                            || archive.file_name != source_label
+                            || archive.path != source_path
+                        {
+                            self.toast = Some(
+                                "The archive changed during conversion; stale results were discarded."
+                                    .into(),
+                            );
+                            return Task::none();
+                        }
                         for (entry_index, bytes) in patches {
                             if let Some(entry) = archive.entries.get_mut(entry_index) {
                                 entry.override_bytes = Some(bytes);
@@ -7654,7 +7706,8 @@ fn plan_txd_import(
 /// accessors, so the task never needs a full archive clone.
 fn plan_bulk_convert(
     archive_index: usize,
-    archive_path: Option<&std::path::Path>,
+    archive_generation: u64,
+    archive_path: Option<PathBuf>,
     source_mmap: Option<&memmap2::Mmap>,
     source_label: String,
     selected: &[(usize, EntryInfo)],
@@ -7669,7 +7722,7 @@ fn plan_bulk_convert(
             continue;
         }
         let Ok(bytes) =
-            crate::parser::read_entry_data_with_source(entry, archive_path, source_mmap)
+            crate::parser::read_entry_data_with_source(entry, archive_path.as_deref(), source_mmap)
         else {
             continue;
         };
@@ -7714,7 +7767,9 @@ fn plan_bulk_convert(
     }
     Ok(BulkPlanReady {
         archive_index,
+        archive_generation,
         source_label,
+        source_path: archive_path,
         entries,
     })
 }
@@ -8772,9 +8827,12 @@ mod tests {
     #[test]
     fn bulk_planned_opens_the_dialog_and_cancel_clears_it() {
         let mut app = test_app_with_entries();
+        let archive = &app.editor.archives()[0];
         let ready = BulkPlanReady {
             archive_index: 0,
-            source_label: "gta3.img".to_string(),
+            archive_generation: archive.generation(),
+            source_label: archive.file_name.clone(),
+            source_path: archive.path.clone(),
             entries: vec![BulkEntryPlan {
                 entry_index: 1,
                 file_name: "second.txd".to_string(),
@@ -8791,10 +8849,40 @@ mod tests {
     }
 
     #[test]
+    fn stale_bulk_plan_never_opens_the_dialog() {
+        let mut app = test_app_with_entries();
+        let archive = &app.editor.archives()[0];
+        let ready = BulkPlanReady {
+            archive_index: 0,
+            archive_generation: archive.generation(),
+            source_label: archive.file_name.clone(),
+            source_path: archive.path.clone(),
+            entries: Vec::new(),
+        };
+        app.editor.archives_mut()[0].invalidate_entry_caches();
+
+        let _ = app.update(Message::BulkConvertPlanned(Box::new(Ok(ready))));
+
+        assert!(app.pending_bulk.is_none());
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("archive changed"))
+        );
+    }
+
+    #[test]
     fn bulk_convert_applied_sets_overrides_and_dirties() {
         let mut app = test_app_with_entries();
+        let archive = &app.editor.archives()[0];
+        let archive_generation = archive.generation();
+        let source_label = archive.file_name.clone();
+        let source_path = archive.path.clone();
         let _ = app.update(Message::BulkConvertApplied {
             archive_index: 0,
+            archive_generation,
+            source_label,
+            source_path,
             result: Ok(SavePatches(vec![(1, Arc::new(vec![7, 7, 7]))])),
         });
         assert!(app.editor.archives()[0].entries[1].override_bytes.is_some());
@@ -8805,6 +8893,31 @@ mod tests {
                 .is_some_and(|toast| toast.contains("Converted 1 entries")),
             "{:?}",
             app.toast
+        );
+    }
+
+    #[test]
+    fn bulk_convert_discards_results_after_archive_mutation() {
+        let mut app = test_app_with_entries();
+        let archive = &app.editor.archives()[0];
+        let archive_generation = archive.generation();
+        let source_label = archive.file_name.clone();
+        let source_path = archive.path.clone();
+        app.editor.archives_mut()[0].invalidate_entry_caches();
+
+        let _ = app.update(Message::BulkConvertApplied {
+            archive_index: 0,
+            archive_generation,
+            source_label,
+            source_path,
+            result: Ok(SavePatches(vec![(1, Arc::new(vec![7, 7, 7]))])),
+        });
+
+        assert!(app.editor.archives()[0].entries[1].override_bytes.is_none());
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("stale results were discarded"))
         );
     }
 

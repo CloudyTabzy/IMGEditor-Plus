@@ -471,8 +471,8 @@ pub struct NiSkinInstanceData {
 }
 
 /// One `NiSkinData::BoneData` entry: the mesh-local inverse bind transform
-/// plus optional per-bone vertex weights (unused by Bully's partition-based
-/// storage, parsed for completeness).
+/// plus optional per-bone vertex weights. Bully normally uses partition
+/// storage, but a verified subset of assets relies on these direct weights.
 #[derive(Debug, Clone, Default)]
 pub struct NiSkinBoneData {
     pub skin_transform: NiTransform,
@@ -683,6 +683,10 @@ impl<'a> Reader<'a> {
     /// Read an array of `i32` references. Indices are signed; -1
     /// means "no reference" in the niftools spec.
     pub(crate) fn read_i32_array(&mut self, len: usize, what: &'static str) -> NifResult<Vec<i32>> {
+        let bytes = len
+            .checked_mul(4)
+            .ok_or_else(|| NifError::InvalidField(what, format!("array length {len} overflows")))?;
+        self.require(bytes, what)?;
         let mut out = Vec::with_capacity(len);
         for _ in 0..len {
             out.push(self.read_i32(what)?);
@@ -693,6 +697,10 @@ impl<'a> Reader<'a> {
     /// Read an array of `u16` values. Used by `NiTriStripsData` for the
     /// `strip_lengths[]` and `points[]` arrays.
     pub(crate) fn read_u16_array(&mut self, len: usize, what: &'static str) -> NifResult<Vec<u16>> {
+        let bytes = len
+            .checked_mul(2)
+            .ok_or_else(|| NifError::InvalidField(what, format!("array length {len} overflows")))?;
+        self.require(bytes, what)?;
         let mut out = Vec::with_capacity(len);
         for _ in 0..len {
             out.push(self.read_u16(what)?);
@@ -762,6 +770,12 @@ impl NifFile {
         let mut r2 = Reader::new(bytes, endian);
         r2.set_position(footer_start);
         let num_roots = r2.read_u32("num_roots")? as usize;
+        if num_roots > r2.remaining() / 4 {
+            return Err(NifError::InvalidField(
+                "num_roots",
+                format!("{num_roots} roots exceed the footer size"),
+            ));
+        }
         let mut roots = Vec::with_capacity(num_roots);
         for _ in 0..num_roots {
             roots.push(r2.read_i32("root")?);
@@ -887,6 +901,12 @@ fn read_header_and_blocks(bytes: &[u8]) -> NifResult<NifHeader> {
 
     let num_strings = r.read_u32("num_strings")? as usize;
     let max_string_length = r.read_u32("max_string_length")?;
+    if num_strings > r.remaining() / 4 {
+        return Err(NifError::InvalidField(
+            "num_strings",
+            format!("{num_strings} strings exceed the header size"),
+        ));
+    }
     let mut strings = Vec::with_capacity(num_strings);
     for _ in 0..num_strings {
         strings.push(r.read_sized_string("string")?);
@@ -1067,6 +1087,12 @@ fn read_ni_node(r: &mut Reader<'_>) -> NifResult<NiNodeData> {
 
 fn read_material_data(r: &mut Reader<'_>) -> NifResult<MaterialData> {
     let num_materials = r.read_u32("num_materials")? as usize;
+    if num_materials > r.remaining() / 8 {
+        return Err(NifError::InvalidField(
+            "num_materials",
+            format!("{num_materials} material pairs exceed the block size"),
+        ));
+    }
     let mut names = Vec::with_capacity(num_materials);
     for _ in 0..num_materials {
         names.push(r.read_u32("material_name")?);
@@ -1494,9 +1520,9 @@ fn read_ni_skin_instance(r: &mut Reader<'_>) -> NifResult<NiSkinInstanceData> {
 fn read_ni_skin_data(r: &mut Reader<'_>) -> NifResult<NiSkinDataPayload> {
     let skin_transform = read_ni_transform(r)?;
     let num_bones = r.read_u32("num_bones")? as usize;
-    // Each bone carries at least a 52-byte transform + 16-byte bound + 2
-    // count bytes, so the count cannot meaningfully exceed the block.
-    if num_bones > r.remaining() / 70 {
+    // Each bone always carries a 52-byte transform and 16-byte bound. The
+    // weighted-vertex count exists only when the file-wide flag is set.
+    if num_bones > r.remaining() / 68 {
         return Err(NifError::InvalidField(
             "num_bones",
             format!("{num_bones} bone entries exceed the block size"),
@@ -1507,9 +1533,9 @@ fn read_ni_skin_data(r: &mut Reader<'_>) -> NifResult<NiSkinDataPayload> {
     for _ in 0..num_bones {
         let bone_transform = read_ni_transform(r)?;
         let _bound = r.read_ni_bound("bone_bound")?;
-        let num_weighted = r.read_u16("num_weighted_vertices")? as usize;
         let mut vertex_weights = Vec::new();
         if has_vertex_weights {
+            let num_weighted = r.read_u16("num_weighted_vertices")? as usize;
             if num_weighted > r.remaining() / 6 {
                 return Err(NifError::InvalidField(
                     "vertex_weights",
@@ -1868,6 +1894,14 @@ pub(crate) mod tests {
         }
     }
 
+    fn push_identity_skin_transform(bytes: &mut Vec<u8>) {
+        for value in [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] {
+            push_f32(bytes, value);
+        }
+        push_vec3(bytes, [0.0, 0.0, 0.0]);
+        push_f32(bytes, 1.0);
+    }
+
     fn push_tex_desc(bytes: &mut Vec<u8>, source_ref: i32) {
         push_i32(bytes, source_ref);
         push_u16(bytes, 0);
@@ -1915,6 +1949,85 @@ pub(crate) mod tests {
         assert_eq!(data.strip_lengths, vec![3]);
         assert!(data.has_points);
         assert_eq!(data.points, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn skin_data_omits_per_bone_counts_when_vertex_weights_are_absent() {
+        let mut bytes = Vec::new();
+        push_identity_skin_transform(&mut bytes);
+        push_u32(&mut bytes, 2);
+        bytes.push(0); // has vertex weights
+        for center in [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]] {
+            push_identity_skin_transform(&mut bytes);
+            push_vec3(&mut bytes, center);
+            push_f32(&mut bytes, 2.0);
+        }
+
+        let mut reader = Reader::new(&bytes, Endian::Little);
+        let skin = read_ni_skin_data(&mut reader).expect("skin data parses");
+        assert!(!skin.has_vertex_weights);
+        assert_eq!(skin.bones.len(), 2);
+        assert!(skin.bones.iter().all(|bone| bone.vertex_weights.is_empty()));
+        assert_eq!(reader.remaining(), 0);
+    }
+
+    #[test]
+    fn skin_partition_consumes_bully_face_and_bone_flags_as_bytes() {
+        let mut bytes = Vec::new();
+        push_u16(&mut bytes, 2); // vertices
+        push_u16(&mut bytes, 1); // triangles
+        push_u16(&mut bytes, 2); // palette bones
+        push_u16(&mut bytes, 0); // strips
+        push_u16(&mut bytes, 2); // weights per vertex
+        push_u16(&mut bytes, 4);
+        push_u16(&mut bytes, 7);
+        bytes.push(1); // has vertex map
+        push_u16(&mut bytes, 5);
+        push_u16(&mut bytes, 9);
+        bytes.push(1); // has vertex weights
+        for weight in [0.75, 0.25, 1.0, 0.0] {
+            push_f32(&mut bytes, weight);
+        }
+        bytes.push(1); // has faces
+        for index in [0, 1, 0] {
+            push_u16(&mut bytes, index);
+        }
+        bytes.push(1); // has bone indices
+        bytes.extend_from_slice(&[1, 0, 0, 1]);
+
+        let mut reader = Reader::new(&bytes, Endian::Little);
+        let partition = read_skin_partition_entry(&mut reader).expect("partition parses");
+        assert_eq!(partition.bones, vec![4, 7]);
+        assert_eq!(partition.vertex_map, vec![5, 9]);
+        assert_eq!(partition.weights, vec![vec![0.75, 0.25], vec![1.0, 0.0]]);
+        assert_eq!(
+            partition.triangles,
+            vec![Triangle {
+                v0: 0,
+                v1: 1,
+                v2: 0
+            }]
+        );
+        assert_eq!(partition.bone_indices, vec![vec![1, 0], vec![0, 1]]);
+        assert_eq!(reader.remaining(), 0);
+    }
+
+    #[test]
+    fn counted_arrays_validate_bytes_before_allocating() {
+        let mut reader = Reader::new(&[0; 4], Endian::Little);
+        assert!(matches!(
+            reader.read_i32_array(usize::MAX, "references"),
+            Err(NifError::InvalidField("references", _))
+        ));
+
+        let mut malformed_extra = Vec::new();
+        push_u32(&mut malformed_extra, u32::MAX); // no name
+        push_u32(&mut malformed_extra, u32::MAX); // impossible extra-data count
+        let mut reader = Reader::new(&malformed_extra, Endian::Little);
+        assert!(matches!(
+            read_ni_string_extra_data(&mut reader),
+            Err(NifError::UnexpectedEof("extra_data"))
+        ));
     }
 
     #[test]
