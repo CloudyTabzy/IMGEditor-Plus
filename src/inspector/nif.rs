@@ -171,6 +171,9 @@ pub enum BlockPayload {
     NiTriStrips(NiTriStripsData),
     NiTriShapeData(NiTriShapeDataPayload),
     NiTriStripsData(NiTriStripsDataPayload),
+    NiSkinInstance(NiSkinInstanceData),
+    NiSkinData(NiSkinDataPayload),
+    NiSkinPartition(NiSkinPartitionPayload),
     NiStringExtraData(NiStringExtraDataData),
     NiSourceTexture(NiSourceTextureData),
     NiMaterialProperty(NiMaterialPropertyData),
@@ -452,6 +455,75 @@ pub struct NiTriStripsDataPayload {
     pub strip_lengths: Vec<u16>,
     pub has_points: bool,
     pub points: Vec<u16>,
+}
+
+/// `NiSkinInstance` (a plain `NiObject`): skin data/partition references,
+/// the skeleton root and the ordered bone list. Bone entries are plain
+/// `Ptr`s (no string-table indirection); `data_ref` and
+/// `skin_partition_ref` are `Ref`s.
+#[derive(Debug, Clone, Default)]
+pub struct NiSkinInstanceData {
+    pub data_ref: i32,
+    pub skin_partition_ref: i32,
+    pub skeleton_root_ref: i32,
+    /// NIF block indices of the bones, in skin-slot order.
+    pub bones: Vec<i32>,
+}
+
+/// One `NiSkinData::BoneData` entry: the mesh-local inverse bind transform
+/// plus optional per-bone vertex weights (unused by Bully's partition-based
+/// storage, parsed for completeness).
+#[derive(Debug, Clone, Default)]
+pub struct NiSkinBoneData {
+    pub skin_transform: NiTransform,
+    pub vertex_weights: Vec<SkinVertexWeight>,
+}
+
+/// `(shape vertex index, weight)` pair from `NiSkinData::BoneData`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct SkinVertexWeight {
+    pub index: u16,
+    pub weight: f32,
+}
+
+/// `NiSkinData` (`NiObject`): the skin-wide bind transform and per-bone
+/// inverse binds.
+#[derive(Debug, Clone, Default)]
+pub struct NiSkinDataPayload {
+    pub skin_transform: NiTransform,
+    pub has_vertex_weights: bool,
+    pub bones: Vec<NiSkinBoneData>,
+}
+
+/// One `SkinPartition` entry inside `NiSkinPartition`.
+///
+/// Bully stores a fixed `Num Weights Per Vertex` influence count per vertex:
+/// a flat `f32` weight row, and a parallel bone-index row that arrives later
+/// in the stream (after the triangle table). The bone index selects an entry
+/// in `bones` (the palette); that palette entry indexes
+/// `NiSkinInstance::bones`.
+#[derive(Debug, Clone, Default)]
+pub struct SkinPartition {
+    pub num_vertices: u16,
+    pub num_triangles: u16,
+    pub num_bones: u16,
+    pub num_strips: u16,
+    pub num_weights_per_vertex: u16,
+    /// Palette: partition-local bone indices into `NiSkinInstance::bones`.
+    pub bones: Vec<u16>,
+    /// Partition vertex index -> shape vertex index (may be empty).
+    pub vertex_map: Vec<u16>,
+    /// Per partition vertex: `num_weights_per_vertex` weights.
+    pub weights: Vec<Vec<f32>>,
+    /// Per partition vertex: palette indices parallel to `weights`.
+    pub bone_indices: Vec<Vec<u8>>,
+    pub triangles: Vec<Triangle>,
+}
+
+/// `NiSkinPartition` (`NiObject`): the hardware-skinning partition table.
+#[derive(Debug, Clone, Default)]
+pub struct NiSkinPartitionPayload {
+    pub partitions: Vec<SkinPartition>,
 }
 
 // ---- Cursor-based reader -------------------------------------------------
@@ -901,6 +973,9 @@ fn parse_block(type_name: &str, raw: &[u8], endian: Endian) -> NifResult<BlockPa
         | "NiSpecularProperty"
         | "NiStencilProperty"
         | "NiVertexColorProperty"
+        | "NiSkinInstance"
+        | "NiSkinData"
+        | "NiSkinPartition"
         | "NiPixelData") => match t {
             "NiStringExtraData" => {
                 read_ni_string_extra_data(&mut r).map(BlockPayload::NiStringExtraData)
@@ -925,6 +1000,9 @@ fn parse_block(type_name: &str, raw: &[u8], endian: Endian) -> NifResult<BlockPa
             "NiVertexColorProperty" => {
                 read_ni_vertex_color_property(&mut r).map(BlockPayload::NiVertexColorProperty)
             }
+            "NiSkinInstance" => read_ni_skin_instance(&mut r).map(BlockPayload::NiSkinInstance),
+            "NiSkinData" => read_ni_skin_data(&mut r).map(BlockPayload::NiSkinData),
+            "NiSkinPartition" => read_ni_skin_partition(&mut r).map(BlockPayload::NiSkinPartition),
             "NiPixelData" => read_ni_pixel_data(&mut r).map(BlockPayload::NiPixelData),
             _ => unreachable!(),
         }
@@ -1380,6 +1458,219 @@ fn read_ni_tri_shape_data(r: &mut Reader<'_>) -> NifResult<NiTriShapeDataPayload
         }
     }
     Ok(out)
+}
+
+// ---- Skin readers --------------------------------------------------------
+
+fn read_ni_transform(r: &mut Reader<'_>) -> NifResult<NiTransform> {
+    Ok(NiTransform {
+        rotation: r.read_matrix33("skin_rotation")?,
+        translation: r.read_vector3("skin_translation")?,
+        scale: r.read_f32("skin_scale")?,
+    })
+}
+
+fn read_ni_skin_instance(r: &mut Reader<'_>) -> NifResult<NiSkinInstanceData> {
+    let data_ref = r.read_i32("skin_data")?;
+    let skin_partition_ref = r.read_i32("skin_partition")?;
+    let skeleton_root_ref = r.read_i32("skeleton_root")?;
+    let num_bones = r.read_u32("num_bones")? as usize;
+    if num_bones > r.remaining() / 4 {
+        return Err(NifError::InvalidField(
+            "num_bones",
+            format!("{num_bones} bones exceed the block size"),
+        ));
+    }
+    Ok(NiSkinInstanceData {
+        data_ref,
+        skin_partition_ref,
+        skeleton_root_ref,
+        bones: r.read_i32_array(num_bones, "bone")?,
+    })
+}
+
+fn read_ni_skin_data(r: &mut Reader<'_>) -> NifResult<NiSkinDataPayload> {
+    let skin_transform = read_ni_transform(r)?;
+    let num_bones = r.read_u32("num_bones")? as usize;
+    // Each bone carries at least a 52-byte transform + 16-byte bound + 2
+    // count bytes, so the count cannot meaningfully exceed the block.
+    if num_bones > r.remaining() / 70 {
+        return Err(NifError::InvalidField(
+            "num_bones",
+            format!("{num_bones} bone entries exceed the block size"),
+        ));
+    }
+    let has_vertex_weights = r.read_u8("has_vertex_weights")? != 0;
+    let mut bones = Vec::with_capacity(num_bones);
+    for _ in 0..num_bones {
+        let bone_transform = read_ni_transform(r)?;
+        let _bound = r.read_ni_bound("bone_bound")?;
+        let num_weighted = r.read_u16("num_weighted_vertices")? as usize;
+        let mut vertex_weights = Vec::new();
+        if has_vertex_weights {
+            if num_weighted > r.remaining() / 6 {
+                return Err(NifError::InvalidField(
+                    "vertex_weights",
+                    format!("{num_weighted} weight entries exceed the block size"),
+                ));
+            }
+            vertex_weights.reserve(num_weighted);
+            for _ in 0..num_weighted {
+                let index = r.read_u16("weight_vertex")?;
+                let weight = r.read_f32("weight_value")?;
+                vertex_weights.push(SkinVertexWeight { index, weight });
+            }
+        }
+        bones.push(NiSkinBoneData {
+            skin_transform: bone_transform,
+            vertex_weights,
+        });
+    }
+    Ok(NiSkinDataPayload {
+        skin_transform,
+        has_vertex_weights,
+        bones,
+    })
+}
+
+fn read_ni_skin_partition(r: &mut Reader<'_>) -> NifResult<NiSkinPartitionPayload> {
+    let num_partitions = r.read_u32("num_partitions")? as usize;
+    // A partition header alone is 10 bytes; reject implausible counts
+    // before allocating.
+    if num_partitions > r.remaining() / 10 {
+        return Err(NifError::InvalidField(
+            "num_partitions",
+            format!("{num_partitions} partitions exceed the block size"),
+        ));
+    }
+    let mut partitions = Vec::with_capacity(num_partitions);
+    for _ in 0..num_partitions {
+        partitions.push(read_skin_partition_entry(r)?);
+    }
+    Ok(NiSkinPartitionPayload { partitions })
+}
+
+fn read_skin_partition_entry(r: &mut Reader<'_>) -> NifResult<SkinPartition> {
+    let num_vertices = r.read_u16("partition_vertices")? as usize;
+    let num_triangles = r.read_u16("partition_triangles")?;
+    let num_bones = r.read_u16("partition_bones")? as usize;
+    let num_strips = r.read_u16("partition_strips")? as usize;
+    let num_weights_per_vertex = r.read_u16("partition_weights_per_vertex")?;
+
+    if num_bones > r.remaining() / 2 {
+        return Err(NifError::InvalidField(
+            "partition_bones",
+            format!("{num_bones} palette entries exceed the block size"),
+        ));
+    }
+    let bones = r.read_u16_array(num_bones, "partition_palette")?;
+
+    let mut vertex_map = Vec::new();
+    let has_vertex_map = r.read_bool("partition_has_vertex_map")?;
+    if has_vertex_map {
+        if num_vertices > r.remaining() / 2 {
+            return Err(NifError::InvalidField(
+                "partition_vertex_map",
+                format!("{num_vertices} vertex-map entries exceed the block size"),
+            ));
+        }
+        vertex_map = r.read_u16_array(num_vertices, "partition_vertex_map")?;
+    }
+
+    let has_vertex_weights = r.read_bool("partition_has_vertex_weights")?;
+    let mut weights = Vec::new();
+    if has_vertex_weights {
+        let width = num_weights_per_vertex as usize;
+        if num_vertices.saturating_mul(width) > r.remaining() / 4 {
+            return Err(NifError::InvalidField(
+                "partition_weights",
+                format!("{num_vertices} x {width} weights exceed the block size"),
+            ));
+        }
+        weights.reserve(num_vertices);
+        for _ in 0..num_vertices {
+            let mut row = Vec::with_capacity(width);
+            for _ in 0..width {
+                row.push(r.read_f32("partition_weight")?);
+            }
+            weights.push(row);
+        }
+    }
+
+    let mut triangles = Vec::new();
+    if num_strips > 0 {
+        if num_strips > r.remaining() / 2 {
+            return Err(NifError::InvalidField(
+                "partition_strips",
+                format!("{num_strips} strip lengths exceed the block size"),
+            ));
+        }
+        let strip_lengths = r.read_u16_array(num_strips, "partition_strip_length")?;
+        let has_faces = r.read_bool("partition_has_faces")?;
+        if has_faces {
+            let total: usize = strip_lengths.iter().map(|&length| length as usize).sum();
+            if total > r.remaining() / 2 {
+                return Err(NifError::InvalidField(
+                    "partition_strip_points",
+                    format!("{total} strip points exceed the block size"),
+                ));
+            }
+            let _points = r.read_u16_array(total, "partition_strip_point")?;
+        }
+    } else {
+        let has_faces = r.read_bool("partition_has_faces")?;
+        if has_faces {
+            let count = num_triangles as usize;
+            if count > r.remaining() / 6 {
+                return Err(NifError::InvalidField(
+                    "partition_triangles",
+                    format!("{count} triangles exceed the block size"),
+                ));
+            }
+            triangles.reserve(count);
+            for _ in 0..count {
+                triangles.push(Triangle {
+                    v0: r.read_u16("triangle_v0")?,
+                    v1: r.read_u16("triangle_v1")?,
+                    v2: r.read_u16("triangle_v2")?,
+                });
+            }
+        }
+    }
+
+    // Parallel palette-index table: `Num Weights Per Vertex` bytes per
+    // vertex, read after the faces.
+    let mut bone_indices = Vec::new();
+    let has_bone_indices = r.read_bool("partition_has_bone_indices")?;
+    if has_bone_indices {
+        let width = num_weights_per_vertex as usize;
+        if num_vertices.saturating_mul(width) > r.remaining() {
+            return Err(NifError::InvalidField(
+                "partition_bone_indices",
+                format!("{num_vertices} x {width} bone indices exceed the block size"),
+            ));
+        }
+        bone_indices.reserve(num_vertices);
+        for _ in 0..num_vertices {
+            let mut row = Vec::with_capacity(width);
+            for _ in 0..width {
+                row.push(r.read_u8("partition_bone_index")?);
+            }
+            bone_indices.push(row);
+        }
+    }
+    Ok(SkinPartition {
+        num_vertices: num_vertices as u16,
+        num_triangles,
+        num_bones: num_bones as u16,
+        num_strips: num_strips as u16,
+        num_weights_per_vertex,
+        bones,
+        vertex_map,
+        weights,
+        bone_indices,
+        triangles,
+    })
 }
 
 // ---- Post-parse name resolution ------------------------------------------

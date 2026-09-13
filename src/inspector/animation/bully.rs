@@ -44,14 +44,16 @@
 
 use std::ops::RangeInclusive;
 
-use glam::{Mat3, Quat, Vec3};
+use glam::{Mat3, Mat4, Quat, Vec3};
 
 use crate::inspector::animation::ClipId;
 use crate::inspector::animation::NodeId;
 use crate::inspector::animation::clip::{
     AnimationClip, AnimationLibrary, Interpolation, PropertyTrack, SourceRate, TrackChannel,
 };
-use crate::inspector::animation::model::{MeshAsset, ModelAsset, NodeTransform, SceneNode};
+use crate::inspector::animation::model::{
+    MeshAsset, ModelAsset, NodeTransform, SceneNode, SkinBinding, VertexSkin,
+};
 use crate::inspector::nif::{BlockPayload, NifFile};
 use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::mesh::Vertex;
@@ -1047,17 +1049,186 @@ pub enum NifMapping {
 
 /// Build a runtime [`ModelAsset`] from a parsed Bully NIF.
 ///
-/// First-pass rig: the node hierarchy and bind-local geometry come from the
-/// NIF; skin instances are not decoded yet, so shapes follow their owning
-/// node rigidly (segmented-puppet animation). Nodes are named `track_{id}`
-/// in scene-graph DFS order so AGR tracks bind by index — the mapping is a
-/// trial assumption that the viewer makes visible immediately.
+/// The node hierarchy and bind-local geometry come from the NIF. Mesh skin
+/// instances are decoded through the Gamebryo chain
+/// `NiSkinInstance -> NiSkinData -> NiSkinPartition`: partition vertices
+/// reference a per-partition bone palette, the palette indexes the skin
+/// instance's bone list, and each bone carries the mesh-local inverse bind
+/// transform. Nodes are named `track_{id}` in scene-graph DFS order so AGR
+/// tracks bind by index — the mapping is a trial assumption that the viewer
+/// makes visible immediately.
 pub fn model_from_nif(
     nif: &NifFile,
     name: impl Into<String>,
     source_identity: impl Into<String>,
 ) -> Result<ModelAsset, String> {
     model_from_nif_with_mapping(nif, name, source_identity, NifMapping::default())
+}
+
+/// One mesh's decoded-but-unresolved skin. Bone NIF blocks become [`NodeId`]s
+/// only after the whole hierarchy is visited, because a skin instance may
+/// reference nodes outside the mesh's own subtree.
+struct PendingSkin {
+    mesh_index: usize,
+    bones: Vec<i32>,
+    inverse_bind: Vec<Mat4>,
+    weights: Vec<VertexSkin>,
+}
+
+/// Convert a NIF `NiTransform` into the model's node-space matrix using the
+/// same row-major-to-column-major convention as [`nif_local`].
+fn nif_transform_matrix(transform: &crate::inspector::nif::NiTransform) -> Mat4 {
+    nif_local(
+        &transform.translation,
+        &transform.rotation.m,
+        transform.scale,
+    )
+    .matrix()
+}
+
+/// Decode the skin chain for one shape into a pending, node-unresolved skin.
+///
+/// Weights come from `NiSkinPartition` (the retail storage): each partition
+/// vertex lists `(palette index, weight)` pairs, its vertex map points at the
+/// shape vertex, and the palette holds indices into the skin instance's bone
+/// list. `NiSkinData`'s per-bone vertex weights are used as a fallback when
+/// no partition is present.
+fn build_pending_skin(
+    nif: &NifFile,
+    skin_instance_ref: i32,
+    vertex_count: usize,
+    mesh_index: usize,
+    diagnostics: &mut Vec<String>,
+) -> Option<PendingSkin> {
+    if skin_instance_ref < 0 {
+        return None;
+    }
+    let Some(BlockPayload::NiSkinInstance(instance)) = nif
+        .payloads
+        .get(skin_instance_ref as usize)
+        .and_then(|p| p.as_ref())
+    else {
+        diagnostics.push("skin instance block is missing or unsupported".to_string());
+        return None;
+    };
+    let skin_data = if instance.data_ref >= 0 {
+        nif.payloads
+            .get(instance.data_ref as usize)
+            .and_then(|p| p.as_ref())
+            .and_then(|payload| match payload {
+                BlockPayload::NiSkinData(data) => Some(data),
+                _ => None,
+            })
+    } else {
+        None
+    };
+    let Some(skin_data) = skin_data else {
+        diagnostics.push("skin data block is missing or unsupported".to_string());
+        return None;
+    };
+    let joint_count = instance.bones.len().min(skin_data.bones.len());
+    if instance.bones.len() != skin_data.bones.len() {
+        diagnostics.push(format!(
+            "skin has {} bones but {} bind transforms; using {}",
+            instance.bones.len(),
+            skin_data.bones.len(),
+            joint_count
+        ));
+    }
+    if joint_count == 0 {
+        return None;
+    }
+    let inverse_bind: Vec<Mat4> = skin_data
+        .bones
+        .iter()
+        .take(joint_count)
+        .map(|bone| nif_transform_matrix(&bone.skin_transform))
+        .collect();
+
+    let mut weights: Vec<VertexSkin> = vec![VertexSkin::new(); vertex_count];
+    let mut influenced = 0usize;
+    let partition = if instance.skin_partition_ref >= 0 {
+        nif.payloads
+            .get(instance.skin_partition_ref as usize)
+            .and_then(|p| p.as_ref())
+            .and_then(|payload| match payload {
+                BlockPayload::NiSkinPartition(partition) => Some(partition),
+                _ => None,
+            })
+    } else {
+        None
+    };
+    if let Some(partition) = partition {
+        for part in &partition.partitions {
+            for (local, row) in part.weights.iter().enumerate() {
+                let target = part
+                    .vertex_map
+                    .get(local)
+                    .map(|&mapped| mapped as usize)
+                    .unwrap_or(local);
+                if target >= vertex_count {
+                    continue;
+                }
+                // Partitions overlap on boundary vertices; the duplicate
+                // rows carry identical influences (corpus-verified), so the
+                // first partition that owns a shape vertex wins.
+                if !weights[target].is_empty() {
+                    continue;
+                }
+                let index_row = part.bone_indices.get(local);
+                for (slot_index, &weight) in row.iter().enumerate() {
+                    if weight == 0.0 {
+                        continue;
+                    }
+                    // Bone index -> palette -> skin-instance bone -> NiNode.
+                    let palette_index = index_row
+                        .and_then(|indices| indices.get(slot_index))
+                        .map(|&index| index as usize)
+                        .unwrap_or(slot_index);
+                    let Some(&bone) = part.bones.get(palette_index) else {
+                        continue;
+                    };
+                    if (bone as usize) < joint_count {
+                        weights[target].push((bone as u32, weight));
+                    }
+                }
+                if !weights[target].is_empty() {
+                    influenced += 1;
+                }
+            }
+        }
+        if influenced == 0 {
+            diagnostics.push("skin partition produced no usable influences".to_string());
+            return None;
+        }
+    } else if skin_data.has_vertex_weights {
+        for (slot, bone) in skin_data.bones.iter().enumerate().take(joint_count) {
+            for weight in &bone.vertex_weights {
+                let target = weight.index as usize;
+                if target < vertex_count {
+                    weights[target].push((slot as u32, weight.weight));
+                    influenced += 1;
+                }
+            }
+        }
+        if influenced == 0 {
+            diagnostics.push("skin data vertex weights were empty".to_string());
+            return None;
+        }
+    } else {
+        diagnostics.push("skin has neither a partition nor vertex weights".to_string());
+        return None;
+    }
+    diagnostics.push(format!(
+        "skin: {} joints, {} influenced vertices",
+        joint_count, influenced
+    ));
+    Some(PendingSkin {
+        mesh_index,
+        bones: instance.bones.clone(),
+        inverse_bind,
+        weights,
+    })
 }
 
 /// [`model_from_nif`] with an explicit node-naming strategy.
@@ -1072,6 +1243,8 @@ pub fn model_from_nif_with_mapping(
     let mut diagnostics: Vec<String> = Vec::new();
     let mut visited = std::collections::HashSet::new();
     let mut track_counter = 0u32;
+    let mut node_ids: std::collections::HashMap<i32, NodeId> = std::collections::HashMap::new();
+    let mut pending_skins: Vec<PendingSkin> = Vec::new();
 
     for &root in &nif.footer.roots {
         visit_nif_block(
@@ -1084,10 +1257,46 @@ pub fn model_from_nif_with_mapping(
             &mut visited,
             mapping,
             &mut track_counter,
+            &mut node_ids,
+            &mut pending_skins,
         );
     }
     if nodes.is_empty() {
         return Err("the NIF has no scene-graph nodes".to_string());
+    }
+
+    // Resolve pending skins now that every visited block has a node id.
+    let mut skinned_meshes = 0usize;
+    for pending in pending_skins {
+        let mut joints = Vec::with_capacity(pending.bones.len());
+        let mut unresolved = 0usize;
+        for &bone in &pending.bones {
+            match node_ids.get(&bone) {
+                Some(&id) => joints.push(id),
+                None => unresolved += 1,
+            }
+        }
+        if unresolved > 0 || joints.len() != pending.inverse_bind.len() {
+            diagnostics.push(format!(
+                "skin for '{}' skipped: {unresolved} unresolved bone(s)",
+                meshes
+                    .get(pending.mesh_index)
+                    .map(|mesh| mesh.name.as_str())
+                    .unwrap_or("?")
+            ));
+            continue;
+        }
+        if let Some(mesh) = meshes.get_mut(pending.mesh_index) {
+            mesh.skin = Some(SkinBinding {
+                joints,
+                inverse_bind: pending.inverse_bind,
+                weights: pending.weights,
+            });
+            skinned_meshes += 1;
+        }
+    }
+    if skinned_meshes > 0 {
+        diagnostics.push(format!("{skinned_meshes} skinned mesh(es)"));
     }
     diagnostics.push(format!("{} nodes, {} meshes", nodes.len(), meshes.len()));
 
@@ -1116,6 +1325,8 @@ fn visit_nif_block(
     visited: &mut std::collections::HashSet<i32>,
     mapping: NifMapping,
     track_counter: &mut u32,
+    node_ids: &mut std::collections::HashMap<i32, NodeId>,
+    pending_skins: &mut Vec<PendingSkin>,
 ) -> Option<NodeId> {
     if block_index < 0 || !visited.insert(block_index) {
         return None;
@@ -1133,9 +1344,11 @@ fn visit_nif_block(
             let mesh_index = build_mesh_from_shape(
                 nif,
                 data.data_ref,
+                data.skin_instance_ref,
                 data.name.as_deref().unwrap_or(&block.type_name),
                 meshes,
                 diagnostics,
+                pending_skins,
             );
             (
                 nif_local(&data.translation, &data.rotation.m, data.scale),
@@ -1147,9 +1360,11 @@ fn visit_nif_block(
             let mesh_index = build_mesh_from_shape(
                 nif,
                 data.base.data_ref,
+                data.base.skin_instance_ref,
                 data.base.name.as_deref().unwrap_or(&block.type_name),
                 meshes,
                 diagnostics,
+                pending_skins,
             );
             (
                 nif_local(
@@ -1172,6 +1387,14 @@ fn visit_nif_block(
     };
     let track_name = if mapping == NifMapping::BonesOnly && mesh.is_some() {
         format!("shape_{:03}", id.0)
+    } else if original_name
+        .as_deref()
+        .is_some_and(|name| name.eq_ignore_ascii_case("Scene Root"))
+    {
+        // `Scene Root` is the NIF scene-graph root, not an animation target:
+        // the exported animation skeleton starts one level below it. AGR
+        // track indices must skip it or every track binds its parent bone.
+        "Scene Root".to_string()
     } else {
         let name = format!("track_{:03}", *track_counter);
         *track_counter += 1;
@@ -1194,6 +1417,7 @@ fn visit_nif_block(
         local,
         mesh,
     });
+    node_ids.insert(block_index, id);
     for child in children {
         visit_nif_block(
             nif,
@@ -1205,6 +1429,8 @@ fn visit_nif_block(
             visited,
             mapping,
             track_counter,
+            node_ids,
+            pending_skins,
         );
     }
     Some(id)
@@ -1238,9 +1464,11 @@ fn nif_local(
 fn build_mesh_from_shape(
     nif: &NifFile,
     data_ref: i32,
+    skin_instance_ref: i32,
     name: &str,
     meshes: &mut Vec<MeshAsset>,
     diagnostics: &mut Vec<String>,
+    pending_skins: &mut Vec<PendingSkin>,
 ) -> Option<usize> {
     if data_ref < 0 {
         return None;
@@ -1286,6 +1514,15 @@ fn build_mesh_from_shape(
         diffuse: None,
         skin: None,
     });
+    if let Some(pending) = build_pending_skin(
+        nif,
+        skin_instance_ref,
+        meshes[index].vertices.len(),
+        index,
+        diagnostics,
+    ) {
+        pending_skins.push(pending);
+    }
     Some(index)
 }
 
@@ -1510,6 +1747,37 @@ mod tests {
             println!("  name: {line}");
         }
         let file = parse_agr(&agr_bytes).expect("parse AGR");
+        // Optional HXD catalog naming: point IMGEDITOR_BULLY_ANIM at the
+        // game's Anim folder to print the resolved clip names.
+        if let Ok(anim) = std::env::var("IMGEDITOR_BULLY_ANIM") {
+            let stem = std::path::Path::new(&agr_path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default();
+            if let Some(record) =
+                crate::inspector::animation::hxd::find_for_agr(std::path::Path::new(&anim), stem)
+            {
+                let signatures: Vec<_> = file
+                    .clips
+                    .iter()
+                    .map(|clip| crate::inspector::animation::hxd::HxdClipSignature {
+                        source_size: clip.source_size,
+                        duration_s: clip.duration_s,
+                    })
+                    .collect();
+                let names = record.sequence_names_for_agr(stem, &signatures);
+                println!(
+                    "  -- HXD names resolved: {} of {} clips --",
+                    names.len(),
+                    file.clips.len()
+                );
+                for (index, name) in names.iter().enumerate().take(30) {
+                    println!("     clip {index:02} = {name}");
+                }
+            } else {
+                println!("  -- no HXD record for stem '{stem}' --");
+            }
+        }
         // Rotation convention check: compare each bound node's NIF rest
         // quaternion against the clip's first rotation key. Near-identity
         // first keys mean the data is a delta over rest; keys matching rest
@@ -2018,5 +2286,84 @@ mod tests {
                 assert!((q.length() - 1.0).abs() < 1e-3, "unit quat");
             }
         }
+    }
+
+    #[test]
+    fn skinned_ped_model_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let Some(bytes) = world_entry(stream, "PLAYER.nif") else {
+            return;
+        };
+        let mut nif = crate::inspector::nif::NifFile::parse(&bytes).expect("PLAYER.nif parses");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "PLAYER.nif", "PLAYER.nif").expect("model builds");
+
+        // Four meshes are skinned in the retail ped, with partition weight
+        // counts matching the corpus-verified unique shape-vertex totals.
+        let skinned: Vec<&MeshAsset> = model.meshes.iter().filter(|m| m.skin.is_some()).collect();
+        assert_eq!(skinned.len(), 4, "skinned mesh count");
+        let influenced: usize = skinned
+            .iter()
+            .map(|mesh| {
+                let skin = mesh.skin.as_ref().unwrap();
+                assert_eq!(
+                    skin.weights.len(),
+                    mesh.vertices.len(),
+                    "weights per vertex"
+                );
+                assert_eq!(skin.inverse_bind.len(), skin.joints.len(), "bind per joint");
+                skin.weights
+                    .iter()
+                    .filter(|weights| !weights.is_empty())
+                    .count()
+            })
+            .sum();
+        assert_eq!(influenced, 2587, "influenced vertices on the ped");
+
+        // `Scene Root` is not an animation target; track numbering starts at
+        // the first skeleton node so all C_Player rotation curves bind.
+        assert!(model.node_by_name("Scene Root").is_some());
+        assert!(
+            model
+                .node_by_name("track_000")
+                .is_some_and(|node| node.name != "Scene Root"),
+            "track_000 must not be the scene root"
+        );
+        assert!(model.node_by_name("track_034").is_some());
+
+        // Loose character AGR + compound HXD naming: C_Player clips get real
+        // names and the ped model covers every rotation curve.
+        let anim = stream.parent().expect("game root").join("Anim");
+        let Ok(agr_bytes) = std::fs::read(anim.join("C_Player.agr")) else {
+            return;
+        };
+        let file = parse_agr(&agr_bytes).expect("C_Player.agr parses");
+        let signatures: Vec<_> = file
+            .clips
+            .iter()
+            .map(|clip| crate::inspector::animation::hxd::HxdClipSignature {
+                source_size: clip.source_size,
+                duration_s: clip.duration_s,
+            })
+            .collect();
+        let record =
+            crate::inspector::animation::hxd::find_for_agr(&anim, "C_Player").expect("MAINPED");
+        let names = record.sequence_names_for_agr("C_Player", &signatures);
+        assert_eq!(names.len(), 439, "all C_Player clips named");
+        assert_eq!(names[0], "RUN");
+        assert_eq!(names[13], "IDLE");
+
+        // Every animated rotation curve of a dense clip binds to a bone node.
+        let clip = &file.clips[0];
+        let library = to_library(&file, "C_Player");
+        let binding = crate::inspector::animation::binding::bind_clip(&model, &library.clips[0]);
+        assert_eq!(
+            binding.bound_count(),
+            clip.tracks.len(),
+            "all packed rotation curves bind"
+        );
     }
 }
