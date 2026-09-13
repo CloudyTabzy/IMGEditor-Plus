@@ -1,10 +1,9 @@
 //! Bully (PC) AGR reader — experimental, evidence-based.
 //!
 //! Reverse-engineered from the retail PC corpus by the local probe suite
-//! (`bully-probe/`, outside the repository). The container and record
-//! structure is corpus-validated (554 files, 3,261 clips, zero structural
-//! errors); the time encoding is still under trial-and-error and is
-//! implemented with explicit, documented heuristics.
+//! (`bully-probe/`, outside the repository). The container and all four
+//! record variants are corpus-validated (554 files, 3,261 clips, zero
+//! structural errors).
 //!
 //! Validated layout:
 //!
@@ -12,20 +11,31 @@
 //! file    = chunk*
 //! chunk   = { u32 magic=0x100, u32 variant ∈ 999..=1004,
 //!             u32 record_count, u32 0, f32 duration_s }
-//!           + preamble: P records   (P = data_bytes/8 - record_count)
-//!           + changes : record_count records
+//!           + preamble: P records   (1002 only; P = data_bytes/8 - count)
+//!           + records
 //!           + optional 4-byte trailer when data_bytes % 8 == 4
-//! record  = { u8 time_lo, u8 header, 3 × i16 }
-//! header  = (track_id << 3) | channel   (channel 0/1/2 observed)
 //! ```
 //!
-//! Rotation channels store Gamebryo compact quaternions: `(x, y, z)` at
-//! scale 1/32767 with `w = sqrt(1 - |v|²)` reconstructed. Time is a u8
-//! that wraps; within one track's records it is mostly ascending, with
-//! occasional out-of-order records still under investigation. The parser
-//! treats a decrease larger than half the range as a wrap and drops smaller
-//! reversals as diagnostics, keeping key times strictly ascending for the
-//! runtime's pose sampler.
+//! Record layouts:
+//!
+//! - **1002** (character change stream, 8 B):
+//!   `{ u8 time_cs, u8 track<<3|channel, 3 × i16 }`. Rotation channels store
+//!   Gamebryo compact quaternions `(x, y, z)` at 1/32767 with
+//!   `w = sqrt(1 - |v|²)`; translation channels are 1/32767 m. Time is a
+//!   wrapping u8 centisecond counter resolved with a wrap heuristic.
+//! - **999** (object float records, 32 B):
+//!   `{ u16 ordinal, u16 time_norm, f32 w, x, y, z, f32 tx, ty, tz }`.
+//!   `time_norm / 65535 * duration` lands on exact 30 fps frames (verified
+//!   against ANIBALL). Ordinal-zero records are chunk defaults.
+//! - **1003** (object compact records, 20 B):
+//!   `{ u16 ordinal, u16 time_norm, i16 x, y, z, w, i16 tx, ty, tz, u16 }`.
+//!   Same time rule; values at 1/32767.
+//! - **1004** (object change stream, 12 B):
+//!   `{ u8 frame, u8 track<<3|channel, 3 × i16, u32 tail }`. Dense 30 fps
+//!   frame index; the tail is serialized runtime data and is ignored.
+//!
+//! The runtime-facing key space is normalized: rotation keys are unit-quat
+//! `(x, y, z)` components, translation keys are metres.
 
 use std::ops::RangeInclusive;
 
@@ -90,18 +100,23 @@ pub enum AgrError {
 }
 
 /// One decoded key: value components plus resolved clip time.
+///
+/// `values` are channel-space components: for rotation channels the `(x, y, z)`
+/// part of a unit quaternion (w is derived); for translation channels metres.
+/// Every decoder normalizes into this space so the library conversion and the
+/// runtime never see raw record units.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AgrKey {
     pub time_s: f32,
-    pub values: [i16; 3],
+    pub values: [f32; 3],
 }
 
 impl AgrKey {
     /// Interpret the key as a compact Gamebryo rotation.
     pub fn rotation(&self) -> Quat {
-        let x = self.values[0] as f32 / COMPACT_QUAT_SCALE;
-        let y = self.values[1] as f32 / COMPACT_QUAT_SCALE;
-        let z = self.values[2] as f32 / COMPACT_QUAT_SCALE;
+        let x = self.values[0];
+        let y = self.values[1];
+        let z = self.values[2];
         let w = (1.0 - x * x - y * y - z * z).max(0.0).sqrt();
         Quat::from_xyzw(x, y, z, w).normalize()
     }
@@ -304,31 +319,36 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
         });
     }
     let preamble_records = slots - count;
-    if variant != 1002 {
-        // Record sizes are known but field semantics for the object variants
-        // (position/scale/u16 lanes) are still being reduced.
-        return Ok(AgrClip {
-            index,
-            variant,
-            record_size,
-            duration_s: duration,
-            preamble_records,
-            tracks: Vec::new(),
-            diagnostics: vec![format!(
-                "variant {variant} chunk ({count} records of {record_size} B): \
-                 field layout not yet decoded"
-            )],
-        });
-    }
     let body = &bytes[start + CHUNK_HEADER_BYTES..start + CHUNK_HEADER_BYTES + data_bytes];
-    let tracks = decode_change_records(
-        body,
-        slots,
-        count,
-        preamble_records,
-        duration,
-        &mut diagnostics,
-    );
+    let tracks = match variant {
+        1002 => decode_change_records(
+            body,
+            slots,
+            count,
+            preamble_records,
+            duration,
+            &mut diagnostics,
+        ),
+        999 => decode_object_float_records(body, count, duration, &mut diagnostics),
+        1003 => decode_object_compact_records(body, count, duration, &mut diagnostics),
+        1004 => decode_object_1004_records(body, count, duration, &mut diagnostics),
+        _ => {
+            // Record sizes are known but field semantics for the object
+            // variants are still being reduced.
+            return Ok(AgrClip {
+                index,
+                variant,
+                record_size,
+                duration_s: duration,
+                preamble_records,
+                tracks: Vec::new(),
+                diagnostics: vec![format!(
+                    "variant {variant} chunk ({count} records of {record_size} B): \
+                     field layout not yet decoded"
+                )],
+            });
+        }
+    };
     Ok(AgrClip {
         index,
         variant,
@@ -360,9 +380,9 @@ fn decode_change_records(
         let track = header >> 3;
         let channel = header & 7;
         let values = [
-            i16::from_le_bytes([record[2], record[3]]),
-            i16::from_le_bytes([record[4], record[5]]),
-            i16::from_le_bytes([record[6], record[7]]),
+            i16::from_le_bytes([record[2], record[3]]) as f32 / COMPACT_QUAT_SCALE,
+            i16::from_le_bytes([record[4], record[5]]) as f32 / COMPACT_QUAT_SCALE,
+            i16::from_le_bytes([record[6], record[7]]) as f32 / COMPACT_QUAT_SCALE,
         ];
         let entry = match grouped
             .iter_mut()
@@ -427,6 +447,152 @@ fn decode_change_records(
     grouped
 }
 
+/// Pushes one key, creating the track on first use.
+fn push_key(tracks: &mut Vec<AgrTrack>, track: u8, channel: u8, time_s: f32, values: [f32; 3]) {
+    if let Some(existing) = tracks
+        .iter_mut()
+        .find(|t| t.track == track && t.channel == channel)
+    {
+        existing.keys.push(AgrKey { time_s, values });
+    } else {
+        tracks.push(AgrTrack {
+            track,
+            channel,
+            keys: vec![AgrKey { time_s, values }],
+        });
+    }
+}
+
+/// Sorts each track's keys by time and drops same-time duplicates, then
+/// removes empty tracks and sorts the track list canonically.
+fn finish_tracks(mut tracks: Vec<AgrTrack>) -> Vec<AgrTrack> {
+    for track in &mut tracks {
+        track.keys.sort_by(|a, b| a.time_s.total_cmp(&b.time_s));
+        track
+            .keys
+            .dedup_by(|a, b| (a.time_s - b.time_s).abs() < 1e-6);
+    }
+    tracks.retain(|track| !track.keys.is_empty());
+    tracks.sort_by_key(|track| (track.track, track.channel));
+    tracks
+}
+
+/// Decodes a variant-999 chunk: 32-byte float object records.
+///
+/// Layout (corpus-validated on SK8Board PICKUP and ANIBALL):
+/// `{ u16 ordinal, u16 time_norm, f32 w, x, y, z, tx, ty, tz }`.
+/// `time_norm / 65535 * duration` lands on exact 30 fps frames (verified:
+/// ANIBALL STAND_DRIBBLE keys at frames 1..24 of a 0.8 s clip). The
+/// quaternion is Gamebryo order `(w, x, y, z)`; records with ordinal zero are
+/// the chunk's default preamble and are skipped. Translations are metres.
+fn decode_object_float_records(
+    body: &[u8],
+    count: usize,
+    duration: f32,
+    diagnostics: &mut Vec<String>,
+) -> Vec<AgrTrack> {
+    let mut tracks = Vec::new();
+    let mut defaults = 0usize;
+    for i in 0..count {
+        let record = &body[i * 32..(i + 1) * 32];
+        let ordinal = u16::from_le_bytes([record[0], record[1]]);
+        if ordinal == 0 {
+            defaults += 1;
+            continue;
+        }
+        let time_norm = u16::from_le_bytes([record[2], record[3]]) as f32 / 65535.0;
+        let time_s = time_norm * duration;
+        let x = read_f32(record, 8);
+        let y = read_f32(record, 12);
+        let z = read_f32(record, 16);
+        let tx = read_f32(record, 20);
+        let ty = read_f32(record, 24);
+        let tz = read_f32(record, 28);
+        push_key(&mut tracks, 0, 0, time_s, [x, y, z]);
+        push_key(&mut tracks, 0, 1, time_s, [tx, ty, tz]);
+    }
+    if defaults > 0 {
+        diagnostics.push(format!("skipped {defaults} default record(s)"));
+    }
+    finish_tracks(tracks)
+}
+
+/// Decodes a variant-1003 chunk: 20-byte compact object records.
+///
+/// Layout (corpus-validated on AniBroom, unit quaternions to 1e-4):
+/// `{ u16 ordinal, u16 time_norm, i16 x, y, z, w, i16 tx, ty, tz, u16 pad }`.
+/// Values are 1/32767-scale; the quaternion here is `(x, y, z, w)` (stored w;
+/// the reader derives w from xyz like the other object variants so the
+/// downstream representation stays uniform).
+fn decode_object_compact_records(
+    body: &[u8],
+    count: usize,
+    duration: f32,
+    diagnostics: &mut Vec<String>,
+) -> Vec<AgrTrack> {
+    let mut tracks = Vec::new();
+    let mut defaults = 0usize;
+    for i in 0..count {
+        let record = &body[i * 20..(i + 1) * 20];
+        let ordinal = u16::from_le_bytes([record[0], record[1]]);
+        if ordinal == 0 {
+            defaults += 1;
+            continue;
+        }
+        let time_norm = u16::from_le_bytes([record[2], record[3]]) as f32 / 65535.0;
+        let time_s = time_norm * duration;
+        let x = i16::from_le_bytes([record[4], record[5]]) as f32 / COMPACT_QUAT_SCALE;
+        let y = i16::from_le_bytes([record[6], record[7]]) as f32 / COMPACT_QUAT_SCALE;
+        let z = i16::from_le_bytes([record[8], record[9]]) as f32 / COMPACT_QUAT_SCALE;
+        let tx = i16::from_le_bytes([record[12], record[13]]) as f32 / COMPACT_QUAT_SCALE;
+        let ty = i16::from_le_bytes([record[14], record[15]]) as f32 / COMPACT_QUAT_SCALE;
+        let tz = i16::from_le_bytes([record[16], record[17]]) as f32 / COMPACT_QUAT_SCALE;
+        push_key(&mut tracks, 0, 0, time_s, [x, y, z]);
+        push_key(&mut tracks, 0, 1, time_s, [tx, ty, tz]);
+    }
+    if defaults > 0 {
+        diagnostics.push(format!("skipped {defaults} default record(s)"));
+    }
+    finish_tracks(tracks)
+}
+
+/// Decodes a variant-1004 chunk: 12-byte compact change records.
+///
+/// Layout (corpus-validated on SK8Board GIV/EXAMINE): `{ u8 frame,
+/// u8 track<<3|channel, i16 x, y, z, u32 tail }`. The frame byte is a dense
+/// 30 fps frame index (records advance 1,3,4,...); the tail is serialized
+/// runtime data and is ignored. Values are compact-quat / translation
+/// components at 1/32767 scale.
+fn decode_object_1004_records(
+    body: &[u8],
+    count: usize,
+    duration: f32,
+    diagnostics: &mut Vec<String>,
+) -> Vec<AgrTrack> {
+    let mut tracks = Vec::new();
+    let mut defaults = 0usize;
+    for i in 0..count {
+        let record = &body[i * 12..(i + 1) * 12];
+        let frame = record[0];
+        if frame == 0 {
+            defaults += 1;
+            continue;
+        }
+        let header = record[1];
+        let track = header >> 3;
+        let channel = header & 7;
+        let time_s = (frame as f32 / 30.0).min(duration);
+        let x = i16::from_le_bytes([record[2], record[3]]) as f32 / COMPACT_QUAT_SCALE;
+        let y = i16::from_le_bytes([record[4], record[5]]) as f32 / COMPACT_QUAT_SCALE;
+        let z = i16::from_le_bytes([record[6], record[7]]) as f32 / COMPACT_QUAT_SCALE;
+        push_key(&mut tracks, track, channel, time_s, [x, y, z]);
+    }
+    if defaults > 0 {
+        diagnostics.push(format!("skipped {defaults} default record(s)"));
+    }
+    finish_tracks(tracks)
+}
+
 /// Convert a parsed file into a runtime [`AnimationLibrary`].
 ///
 /// Rotation channels (0) become compact-quat tracks; translation channels
@@ -456,13 +622,7 @@ pub fn to_library(file: &AgrFile, name: impl Into<String>) -> AnimationLibrary {
                         let values: Vec<glam::Vec3> = track
                             .keys
                             .iter()
-                            .map(|key| {
-                                glam::Vec3::new(
-                                    key.values[0] as f32,
-                                    key.values[1] as f32,
-                                    key.values[2] as f32,
-                                ) / COMPACT_QUAT_SCALE
-                            })
+                            .map(|key| glam::Vec3::new(key.values[0], key.values[1], key.values[2]))
                             .collect();
                         tracks.push(PropertyTrack {
                             target: format!("track_{:03}", track.track),
@@ -1036,7 +1196,7 @@ mod tests {
             file.variant,
             file.clip_count()
         );
-        for clip in file.clips.iter().take(6) {
+        for clip in file.clips.iter().take(24) {
             println!(
                 "  clip {:02}: variant={} dur={:.3} tracks={} preamble={} diag={:?}",
                 clip.index,
@@ -1089,6 +1249,222 @@ mod tests {
             for clip in &library.clips {
                 clip.validate()
                     .unwrap_or_else(|error| panic!("{name} clip must validate: {error}"));
+            }
+        }
+    }
+
+    /// Synthetic 999/1003/1004 chunks (invented data, never game payloads).
+    fn object_fixture() -> Vec<u8> {
+        let mut out = Vec::new();
+        // 999 clip: 3 defaults + 2 keys; w-first quat, metres translation.
+        push_u32(&mut out, AGR_MAGIC);
+        push_u32(&mut out, 999);
+        push_u32(&mut out, 5);
+        push_u32(&mut out, 0);
+        push_f32(&mut out, 0.5);
+        for ordinal in [0u16, 0, 0] {
+            out.extend_from_slice(&ordinal.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            for value in [1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] {
+                push_f32(&mut out, value);
+            }
+        }
+        for (ordinal, time_norm, w, x) in
+            [(1u16, 32768u16, 0.7071f32, 0.7071f32), (2, 65535, 1.0, 0.0)]
+        {
+            out.extend_from_slice(&ordinal.to_le_bytes());
+            out.extend_from_slice(&time_norm.to_le_bytes());
+            for value in [w, x, 0.0, 0.0, 0.1, 0.2, 0.3] {
+                push_f32(&mut out, value);
+            }
+        }
+        // 1003 clip: 3 defaults + 1 key (compact i16 quat + translation).
+        push_u32(&mut out, AGR_MAGIC);
+        push_u32(&mut out, 1003);
+        push_u32(&mut out, 4);
+        push_u32(&mut out, 0);
+        push_f32(&mut out, 1.0);
+        for _ in 0..3 {
+            for _ in 0..10 {
+                out.extend_from_slice(&0u16.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&65535u16.to_le_bytes());
+        for value in [0i16, 16384, 0, 28361, 0, 0, 100] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out.extend_from_slice(&0u16.to_le_bytes());
+        // 1004 clip: 1 default + 2 changes on tracks 0 and 1.
+        push_u32(&mut out, AGR_MAGIC);
+        push_u32(&mut out, 1004);
+        push_u32(&mut out, 3);
+        push_u32(&mut out, 0);
+        push_f32(&mut out, 0.2);
+        out.extend_from_slice(&[0, 0x00]);
+        for value in [0i16, 0, -64] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        push_u32(&mut out, 0);
+        out.extend_from_slice(&[3, 0x00]);
+        for value in [0i16, 0, -64] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        push_u32(&mut out, 0);
+        out.extend_from_slice(&[6, 0x09]); // track 1, channel 1
+        for value in [100i16, 0, 1] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        push_u32(&mut out, 7);
+        out
+    }
+
+    #[test]
+    fn object_variants_decode_into_tracks() {
+        let file = parse_agr(&object_fixture()).expect("fixture parses");
+        assert_eq!(file.clip_count(), 3);
+
+        // 999: defaults skipped, two rotation + two translation keys.
+        let clip0 = &file.clips[0];
+        assert_eq!(clip0.variant, 999);
+        let rotation = clip0
+            .tracks
+            .iter()
+            .find(|t| t.channel == 0)
+            .expect("999 rotation track");
+        assert_eq!(rotation.keys.len(), 2);
+        assert!((rotation.keys[0].time_s - 0.25).abs() < 1e-3);
+        assert!((rotation.keys[1].time_s - 0.5).abs() < 1e-3);
+        let q = rotation.keys[0].rotation();
+        assert!((q.x - 0.7071).abs() < 1e-3);
+        assert!((q.y - 0.0).abs() < 1e-3);
+        let translation = clip0
+            .tracks
+            .iter()
+            .find(|t| t.channel == 1)
+            .expect("999 translation track");
+        assert!((translation.keys[0].values[1] - 0.2).abs() < 1e-5);
+
+        // 1003: one key, i16 quat 16384/32767 -> x = 0.5.
+        let clip1 = &file.clips[1];
+        assert_eq!(clip1.variant, 1003);
+        let rotation = clip1
+            .tracks
+            .iter()
+            .find(|t| t.channel == 0)
+            .expect("1003 rotation track");
+        assert_eq!(rotation.keys.len(), 1);
+        assert!((rotation.keys[0].time_s - 1.0).abs() < 1e-4);
+        assert!((rotation.keys[0].values[1] - 0.5).abs() < 1e-3);
+
+        // 1004: change stream keeps its track ids and channels.
+        let clip2 = &file.clips[2];
+        assert_eq!(clip2.variant, 1004);
+        let rot0 = clip2
+            .tracks
+            .iter()
+            .find(|t| t.track == 0 && t.channel == 0)
+            .expect("1004 track 0 rotation");
+        assert!((rot0.keys[0].time_s - 0.1).abs() < 1e-4);
+        let trans1 = clip2
+            .tracks
+            .iter()
+            .find(|t| t.track == 1 && t.channel == 1)
+            .expect("1004 track 1 translation");
+        assert!((trans1.keys[0].time_s - 0.2).abs() < 1e-4);
+    }
+
+    /// Extract one named entry from the retail World.img using its .dir
+    /// sidecar (no full-archive read).
+    fn world_entry(stream: &std::path::Path, name: &str) -> Option<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let dir = std::fs::read(stream.join("World.dir")).ok()?;
+        for record in dir.chunks_exact(32) {
+            let end = record[8..].iter().position(|b| *b == 0).unwrap_or(24);
+            let entry = String::from_utf8_lossy(&record[8..8 + end]);
+            if !entry.eq_ignore_ascii_case(name) {
+                continue;
+            }
+            let offset = u32::from_le_bytes(record[0..4].try_into().ok()?) as u64 * 2048;
+            let size = u32::from_le_bytes(record[4..8].try_into().ok()?) as usize * 2048;
+            let mut file = std::fs::File::open(stream.join("World.img")).ok()?;
+            file.seek(SeekFrom::Start(offset)).ok()?;
+            let mut bytes = vec![0u8; size];
+            file.read_exact(&mut bytes).ok()?;
+            return Some(bytes);
+        }
+        None
+    }
+
+    #[test]
+    fn object_variant_corpus_decodes_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+
+        // SK8Board catalog: 17 clips; the OLLIE clip is 999, GIV/EXAMINE 1004.
+        if let Some(bytes) = world_entry(stream, "SK8Board.agr") {
+            let file = parse_agr(&bytes).expect("SK8Board.agr parses");
+            assert_eq!(file.clip_count(), 17);
+            for clip in &file.clips {
+                assert!(
+                    !clip.tracks.is_empty(),
+                    "clip {:02} (variant {}) must decode tracks",
+                    clip.index,
+                    clip.variant
+                );
+                assert!(
+                    !clip
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.contains("not yet decoded")),
+                    "clip {:02} diagnostics: {:?}",
+                    clip.index,
+                    clip.diagnostics
+                );
+            }
+            let pickup = file
+                .clips
+                .iter()
+                .find(|c| c.variant == 999 && c.duration_s > 2.0)
+                .expect("PICKUP clip");
+            let rotation = pickup
+                .tracks
+                .iter()
+                .find(|t| t.channel == 0)
+                .expect("rotation track");
+            assert!(rotation.keys.len() > 40, "PICKUP key count");
+            assert!(
+                (rotation.keys.last().unwrap().time_s - 2.3333).abs() < 0.01,
+                "PICKUP spans its duration"
+            );
+            // Keys stay strictly ascending (the clip legitimately holds its
+            // start pose for ~0.7 s, so gaps are expected) and quats stay
+            // unit even after decoding.
+            for pair in rotation.keys.windows(2) {
+                assert!(pair[1].time_s > pair[0].time_s, "keys ascend");
+                let q = pair[0].rotation();
+                assert!((q.length() - 1.0).abs() < 1e-3, "unit quat");
+            }
+        }
+
+        // AniBroom: three 1003 clips; the two sweeps have four keys each.
+        if let Some(bytes) = world_entry(stream, "AniBroom.agr") {
+            let file = parse_agr(&bytes).expect("AniBroom.agr parses");
+            assert_eq!(file.clip_count(), 3);
+            assert!(file.clips.iter().all(|c| c.variant == 1003));
+            let sweep = &file.clips[1];
+            let rotation = sweep
+                .tracks
+                .iter()
+                .find(|t| t.channel == 0)
+                .expect("rotation track");
+            assert_eq!(rotation.keys.len(), 4);
+            assert!((rotation.keys.last().unwrap().time_s - 0.667).abs() < 0.01);
+            for key in &rotation.keys {
+                let q = key.rotation();
+                assert!((q.length() - 1.0).abs() < 1e-3, "unit quat");
             }
         }
     }
