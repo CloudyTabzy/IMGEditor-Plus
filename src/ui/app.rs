@@ -70,6 +70,44 @@ pub(crate) fn is_renderable_model_name(name: &str) -> bool {
     renderable_model_kind(name).is_some()
 }
 
+/// Bully animation group entries. Loading one auto-resolves the matching
+/// model in the same archive and installs an animated viewer session.
+pub(crate) fn is_animation_group_name(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".agr")
+}
+
+/// Name heuristic pairing an AGR with its model inside one archive: exact
+/// stem first (`PLAYER.agr` -> `PLAYER.nif`), then the stem suffix after the
+/// last underscore (`C_Player.agr` -> `Player.nif`).
+fn find_agr_model_entry(entries: &[crate::archive::EntryInfo], agr_name: &str) -> Option<usize> {
+    let stem = agr_name
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(agr_name)
+        .to_ascii_lowercase();
+    let is_nif =
+        |entry: &crate::archive::EntryInfo| entry.file_name.to_ascii_lowercase().ends_with(".nif");
+    let nif_stem = |entry: &crate::archive::EntryInfo| {
+        entry
+            .file_name
+            .rsplit_once('.')
+            .map(|(stem, _)| stem.to_ascii_lowercase())
+            .unwrap_or_default()
+    };
+    entries
+        .iter()
+        .position(|entry| is_nif(entry) && nif_stem(entry) == stem)
+        .or_else(|| {
+            let suffix = stem.rsplit('_').next().unwrap_or(stem.as_str());
+            if suffix.is_empty() || suffix == stem {
+                return None;
+            }
+            entries
+                .iter()
+                .position(|entry| is_nif(entry) && nif_stem(entry) == suffix)
+        })
+}
+
 pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
 pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
 pub const ANIM_ENTRY_FEEDBACK: crate::ui::animator::AnimationId = 3;
@@ -630,6 +668,23 @@ pub enum Message {
         entry_index: usize,
     },
     Viewer3dLoadSelected,
+    /// Load an animation group (AGR) together with its associated model
+    /// and install it as an animated viewer session.
+    ViewerAgrLoadRequest {
+        archive_index: usize,
+        agr_entry: usize,
+        model_entry: usize,
+    },
+    ViewerAgrLoadCompleted {
+        result: Result<
+            (
+                Arc<crate::inspector::animation::ModelAsset>,
+                Arc<crate::inspector::animation::AnimationLibrary>,
+                String,
+            ),
+            String,
+        >,
+    },
     Viewer3dLoadCompleted {
         archive_index: usize,
         entry_index: usize,
@@ -2346,7 +2401,10 @@ impl App {
                             .selected_entry()
                             .and_then(|entry_index| archive.entries.get(entry_index))
                     })
-                    .is_some_and(|entry| is_renderable_model_name(&entry.file_name));
+                    .is_some_and(|entry| {
+                        is_renderable_model_name(&entry.file_name)
+                            || is_animation_group_name(&entry.file_name)
+                    });
                 if is_model {
                     self.load_selected_model(InspectorTab::Model3D)
                 } else {
@@ -2424,6 +2482,9 @@ impl App {
             self.toast = Some("The selected entry is no longer available.".into());
             return Task::none();
         };
+        if is_animation_group_name(&entry.file_name) {
+            return self.load_selected_agr(archive_index, entry_index, target_tab);
+        }
         if !is_renderable_model_name(&entry.file_name) {
             self.set_active_texture_preview_target(None);
             self.toast = Some(format!(
@@ -2477,6 +2538,41 @@ impl App {
         Task::done(Message::Viewer3dRequestLoad {
             archive_index,
             entry_index,
+        })
+    }
+
+    /// Resolve the model paired with an animation group and start the
+    /// combined load. The AGR has no model reference, so the pairing is a
+    /// name heuristic: exact stem first (`PLAYER.agr` -> `PLAYER.nif`),
+    /// then the stem suffix after the last underscore (`C_Player.agr` ->
+    /// `Player.nif`).
+    fn load_selected_agr(
+        &mut self,
+        archive_index: usize,
+        entry_index: usize,
+        target_tab: InspectorTab,
+    ) -> Task<Message> {
+        self.set_active_texture_preview_target(None);
+        self.selected_inspector_tab = target_tab;
+        let Some(archive) = self.editor.archives().get(archive_index) else {
+            return Task::none();
+        };
+        let Some(entry) = archive.entries.get(entry_index) else {
+            return Task::none();
+        };
+        let agr_name = entry.file_name.clone();
+        let Some(model_entry) = find_agr_model_entry(&archive.entries, &agr_name) else {
+            self.toast = Some(format!(
+                "No matching .nif model found for {agr_name} in this archive."
+            ));
+            return Task::none();
+        };
+        let model_name = archive.entries[model_entry].file_name.clone();
+        self.toast = Some(format!("Loading {agr_name} on {model_name}…"));
+        Task::done(Message::ViewerAgrLoadRequest {
+            archive_index,
+            agr_entry: entry_index,
+            model_entry,
         })
     }
 
@@ -5678,6 +5774,91 @@ impl App {
             Message::Viewer3dLoadSelected => {
                 let target_tab = self.selected_inspector_tab;
                 self.load_selected_model(target_tab)
+            }
+            Message::ViewerAgrLoadRequest {
+                archive_index,
+                agr_entry,
+                model_entry,
+            } => {
+                let (agr_entry_data, model_entry_data, archive_path) = {
+                    let Some(archive) = self.editor.archives().get(archive_index) else {
+                        return Task::none();
+                    };
+                    let (Some(agr), Some(model)) = (
+                        archive.entries.get(agr_entry),
+                        archive.entries.get(model_entry),
+                    ) else {
+                        return Task::none();
+                    };
+                    (agr.clone(), model.clone(), archive.path.clone())
+                };
+                let agr_display = agr_entry_data.file_name.clone();
+                let model_display = model_entry_data.file_name.clone();
+                Task::perform(
+                    async move {
+                        let joined = tokio::task::spawn_blocking(move || {
+                            let agr_bytes = crate::parser::read_entry_data_from_source(
+                                &agr_entry_data,
+                                archive_path.as_deref(),
+                            )
+                            .map_err(|e| format!("I/O: {e}"))?;
+                            let model_bytes = crate::parser::read_entry_data_from_source(
+                                &model_entry_data,
+                                archive_path.as_deref(),
+                            )
+                            .map_err(|e| format!("I/O: {e}"))?;
+                            let mut nif = crate::inspector::nif::NifFile::parse(&model_bytes)
+                                .map_err(|e| format!("NIF parse: {e:?}"))?;
+                            nif.resolve_string_indices();
+                            let model = crate::inspector::animation::bully::model_from_nif(
+                                &nif,
+                                model_display.as_str(),
+                                model_display.as_str(),
+                            )
+                            .map_err(|e| format!("model: {e}"))?;
+                            let file = crate::inspector::animation::bully::parse_agr(&agr_bytes)
+                                .map_err(|e| format!("AGR: {e}"))?;
+                            let library = crate::inspector::animation::bully::to_library(
+                                &file,
+                                agr_display.as_str(),
+                            );
+                            let summary = format!(
+                                "{agr_display} on {model_display} ({} clips)",
+                                library.clips.len()
+                            );
+                            Ok((Arc::new(model), Arc::new(library), summary))
+                        })
+                        .await;
+                        match joined {
+                            Ok(result) => Message::ViewerAgrLoadCompleted { result },
+                            Err(error) => Message::ViewerAgrLoadCompleted {
+                                result: Err(format!("task: {error}")),
+                            },
+                        }
+                    },
+                    |message| message,
+                )
+            }
+            Message::ViewerAgrLoadCompleted { result } => {
+                match result {
+                    Ok((model, library, summary)) => {
+                        self.viewer3d_handle.install_animation_session(
+                            model,
+                            library,
+                            false,
+                            Instant::now(),
+                        );
+                        self.selected_inspector_tab = InspectorTab::Model3D;
+                        self.active_viewer_entry = None;
+                        self.toast = Some(format!("Animation ready: {summary}"));
+                        dev_logger::breadcrumb(&format!("AGR load ok: {summary}"));
+                    }
+                    Err(error) => {
+                        dev_logger::breadcrumb(&format!("AGR load failed: {error}"));
+                        self.toast = Some(format!("Animation load failed: {error}"));
+                    }
+                }
+                Task::none()
             }
             Message::Viewer3dRequestLoad {
                 archive_index,

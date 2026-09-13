@@ -13,7 +13,8 @@ use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::tasks::FolderDuplicatePolicy;
 use crate::ui::app::{
-    ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget, renderable_model_kind,
+    ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget,
+    is_animation_group_name, renderable_model_kind,
 };
 use crate::ui::design::Design;
 use crate::ui::fonts;
@@ -859,7 +860,8 @@ impl App {
                 .into();
         };
         let entry_lower = entry.file_name.to_ascii_lowercase();
-        let is_model = renderable_model_kind(&entry.file_name).is_some();
+        let is_model = renderable_model_kind(&entry.file_name).is_some()
+            || is_animation_group_name(&entry.file_name);
         let scene_matches = self.viewer_scene_matches_selection();
         let loading = self.viewer_load_matches_selection();
         let gpu_error = scene_matches
@@ -1022,7 +1024,9 @@ impl App {
                 .width(Length::Fixed(28.0))
                 .height(Length::Fixed(28.0))
                 .padding(0.0)
-                .style(move |theme, status| animation_toggle_style(theme, status, data.loop_repeat)),
+                .style(move |theme, status| {
+                    animation_toggle_style(theme, status, data.loop_repeat)
+                }),
             fonts::caption("Loop playback"),
             tooltip::Position::Top,
         );
@@ -1046,7 +1050,9 @@ impl App {
             "Animation"
         }));
         if demo {
-            header = header.push(muted_caption("synthetic fixtures — no game data".to_string()));
+            header = header.push(muted_caption(
+                "synthetic fixtures — no game data".to_string(),
+            ));
         }
         header = header.push(Space::new().width(Length::Fill));
         header = header.push(loop_toggle);
@@ -1229,9 +1235,7 @@ impl App {
                 .on_press_maybe(press(message))
                 .height(Length::Fixed(24.0))
                 .padding([0.0, 10.0])
-                .style(move |theme, status| {
-                    animation_icon_button_style(theme, status, enabled)
-                }),
+                .style(move |theme, status| animation_icon_button_style(theme, status, enabled)),
                 fonts::caption(tip),
                 tooltip::Position::Top,
             )
@@ -1240,7 +1244,11 @@ impl App {
             row![
                 fonts::caption("Frame"),
                 frame_button("Rest", Message::AnimationFrameRest, "Frame the rest pose"),
-                frame_button("Pose", Message::AnimationFramePose, "Frame the current pose"),
+                frame_button(
+                    "Pose",
+                    Message::AnimationFramePose,
+                    "Frame the current pose"
+                ),
                 frame_button(
                     "Motion",
                     Message::AnimationFrameMotion,
@@ -1253,22 +1261,21 @@ impl App {
         .padding(3)
         .style(animation_group_surface);
 
-        let overlay_toggle =
-            |icon: fn() -> iced::widget::Text<'static>,
-             active: bool,
-             tip: &'static str,
-             message: Message| {
-                w::styled_tooltip(
-                    button(centered(icon().size(14)))
-                        .on_press_maybe(press(message))
-                        .width(Length::Fixed(28.0))
-                        .height(Length::Fixed(28.0))
-                        .padding(0.0)
-                        .style(move |theme, status| animation_toggle_style(theme, status, active)),
-                    fonts::caption(tip),
-                    tooltip::Position::Top,
-                )
-            };
+        let overlay_toggle = |icon: fn() -> iced::widget::Text<'static>,
+                              active: bool,
+                              tip: &'static str,
+                              message: Message| {
+            w::styled_tooltip(
+                button(centered(icon().size(14)))
+                    .on_press_maybe(press(message))
+                    .width(Length::Fixed(28.0))
+                    .height(Length::Fixed(28.0))
+                    .padding(0.0)
+                    .style(move |theme, status| animation_toggle_style(theme, status, active)),
+                fonts::caption(tip),
+                tooltip::Position::Top,
+            )
+        };
         let toggles = row![
             overlay_toggle(
                 icons::person,
@@ -3982,7 +3989,9 @@ fn build_context_menu(
     let mut items: Vec<Element<'_, Message>> = vec![header.into(), w::hairline(divider)];
 
     let lower = entry.file_name.to_lowercase();
-    if renderable_model_kind(&entry.file_name).is_some() {
+    if renderable_model_kind(&entry.file_name).is_some()
+        || is_animation_group_name(&entry.file_name)
+    {
         items.push(
             context_button(
                 "Open in 3D viewer",
@@ -4501,7 +4510,11 @@ fn animation_toggle_style(
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     if active {
         let background = if hovered {
-            iced::theme::palette::mix(palette.primary.weak.color, palette.primary.strong.color, 0.3)
+            iced::theme::palette::mix(
+                palette.primary.weak.color,
+                palette.primary.strong.color,
+                0.3,
+            )
         } else {
             palette.primary.weak.color
         };
@@ -4555,15 +4568,18 @@ fn animation_subtle_button_style(theme: &iced::Theme, status: button::Status) ->
 
 /// Thin vertical separator between the overlay toggles and shortcut hints.
 fn animation_vdivider() -> Container<'static, Message> {
-    container(Space::new().width(Length::Fixed(1.0)).height(Length::Fixed(18.0))).style(
-        |theme: &iced::Theme| {
-            let design = crate::ui::design::design_for_theme(theme);
-            container::Style {
-                background: Some(design.divider().into()),
-                ..Default::default()
-            }
-        },
+    container(
+        Space::new()
+            .width(Length::Fixed(1.0))
+            .height(Length::Fixed(18.0)),
     )
+    .style(|theme: &iced::Theme| {
+        let design = crate::ui::design::design_for_theme(theme);
+        container::Style {
+            background: Some(design.divider().into()),
+            ..Default::default()
+        }
+    })
 }
 
 pub fn menu_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {

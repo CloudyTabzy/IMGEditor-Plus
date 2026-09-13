@@ -29,12 +29,17 @@
 
 use std::ops::RangeInclusive;
 
-use glam::Quat;
+use glam::{Mat3, Quat, Vec3};
 
 use crate::inspector::animation::ClipId;
+use crate::inspector::animation::NodeId;
 use crate::inspector::animation::clip::{
     AnimationClip, AnimationLibrary, Interpolation, PropertyTrack, SourceRate, TrackChannel,
 };
+use crate::inspector::animation::model::{MeshAsset, ModelAsset, NodeTransform, SceneNode};
+use crate::inspector::nif::{BlockPayload, NifFile};
+use crate::inspector::scene3d::camera::BaseOrientation;
+use crate::inspector::scene3d::mesh::Vertex;
 
 /// First u32 of every chunk.
 pub const AGR_MAGIC: u32 = 0x0100;
@@ -370,6 +375,219 @@ pub fn to_library(file: &AgrFile, name: impl Into<String>) -> AnimationLibrary {
     }
 }
 
+/// Build a runtime [`ModelAsset`] from a parsed Bully NIF.
+///
+/// First-pass rig: the node hierarchy and bind-local geometry come from the
+/// NIF; skin instances are not decoded yet, so shapes follow their owning
+/// node rigidly (segmented-puppet animation). Nodes are named `track_{id}`
+/// in scene-graph DFS order so AGR tracks bind by index — the mapping is a
+/// trial assumption that the viewer makes visible immediately.
+pub fn model_from_nif(
+    nif: &NifFile,
+    name: impl Into<String>,
+    source_identity: impl Into<String>,
+) -> Result<ModelAsset, String> {
+    let mut nodes: Vec<SceneNode> = Vec::new();
+    let mut meshes: Vec<MeshAsset> = Vec::new();
+    let mut diagnostics: Vec<String> = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+
+    for &root in &nif.footer.roots {
+        visit_nif_block(
+            nif,
+            root,
+            None,
+            &mut nodes,
+            &mut meshes,
+            &mut diagnostics,
+            &mut visited,
+        );
+    }
+    if nodes.is_empty() {
+        return Err("the NIF has no scene-graph nodes".to_string());
+    }
+    diagnostics.push(format!("{} nodes, {} meshes", nodes.len(), meshes.len()));
+
+    let mut asset = ModelAsset::new(
+        name.into(),
+        source_identity.into(),
+        nodes,
+        meshes,
+        BaseOrientation::Zup.to_yup_matrix(),
+        BaseOrientation::Zup,
+        Some(NodeId(0)),
+    )
+    .map_err(|error| format!("model admission: {error}"))?;
+    asset.diagnostics.extend(diagnostics);
+    Ok(asset)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visit_nif_block(
+    nif: &NifFile,
+    block_index: i32,
+    parent: Option<NodeId>,
+    nodes: &mut Vec<SceneNode>,
+    meshes: &mut Vec<MeshAsset>,
+    diagnostics: &mut Vec<String>,
+    visited: &mut std::collections::HashSet<i32>,
+) -> Option<NodeId> {
+    if block_index < 0 || !visited.insert(block_index) {
+        return None;
+    }
+    let block = nif.blocks.get(block_index as usize)?;
+    let payload = nif.payloads.get(block_index as usize)?.as_ref()?;
+    let id = NodeId(nodes.len() as u32);
+    let (local, mesh, children): (NodeTransform, Option<usize>, Vec<i32>) = match payload {
+        BlockPayload::NiNode(data) => (
+            nif_local(&data.translation, &data.rotation.m, data.scale),
+            None,
+            data.children.clone(),
+        ),
+        BlockPayload::NiTriShape(data) => {
+            let mesh_index = build_mesh_from_shape(
+                nif,
+                data.data_ref,
+                data.name.as_deref().unwrap_or(&block.type_name),
+                meshes,
+                diagnostics,
+            );
+            (
+                nif_local(&data.translation, &data.rotation.m, data.scale),
+                mesh_index,
+                Vec::new(),
+            )
+        }
+        BlockPayload::NiTriStrips(data) => {
+            let mesh_index = build_mesh_from_shape(
+                nif,
+                data.base.data_ref,
+                data.base.name.as_deref().unwrap_or(&block.type_name),
+                meshes,
+                diagnostics,
+            );
+            (
+                nif_local(
+                    &data.base.translation,
+                    &data.base.rotation.m,
+                    data.base.scale,
+                ),
+                mesh_index,
+                Vec::new(),
+            )
+        }
+        _ => return None,
+    };
+
+    let original_name = match payload {
+        BlockPayload::NiNode(data) => data.name.clone(),
+        BlockPayload::NiTriShape(data) => data.name.clone(),
+        BlockPayload::NiTriStrips(data) => data.base.name.clone(),
+        _ => None,
+    };
+    let track_name = format!("track_{:03}", id.0);
+    if let Some(original) = &original_name
+        && *original != track_name
+    {
+        // Keep the original identity visible for diagnostics; the binding
+        // identity stays the index-based track name.
+        if diagnostics.len() < 64 {
+            diagnostics.push(format!("{track_name} = {original}"));
+        }
+    }
+
+    nodes.push(SceneNode {
+        id,
+        parent,
+        name: track_name,
+        local,
+        mesh,
+    });
+    for child in children {
+        visit_nif_block(nif, child, Some(id), nodes, meshes, diagnostics, visited);
+    }
+    Some(id)
+}
+
+fn nif_local(
+    translation: &crate::inspector::nif::Vector3,
+    rotation: &[[f32; 3]; 3],
+    scale: f32,
+) -> NodeTransform {
+    // `rotation` is stored row-major for column-vector products; glam wants
+    // column arrays, so transpose while copying. Scale is uniform in NIF.
+    let matrix = Mat3::from_cols_array(&[
+        rotation[0][0],
+        rotation[1][0],
+        rotation[2][0],
+        rotation[0][1],
+        rotation[1][1],
+        rotation[2][1],
+        rotation[0][2],
+        rotation[1][2],
+        rotation[2][2],
+    ]);
+    NodeTransform {
+        translation: Vec3::new(translation.x, translation.y, translation.z),
+        rotation: Quat::from_mat3(&matrix).normalize(),
+        scale: Vec3::splat(scale),
+    }
+}
+
+fn build_mesh_from_shape(
+    nif: &NifFile,
+    data_ref: i32,
+    name: &str,
+    meshes: &mut Vec<MeshAsset>,
+    diagnostics: &mut Vec<String>,
+) -> Option<usize> {
+    if data_ref < 0 {
+        return None;
+    }
+    let data = match nif.payloads.get(data_ref as usize)?.as_ref()? {
+        BlockPayload::NiTriShapeData(data) => data,
+        BlockPayload::NiTriStripsData(_) => {
+            diagnostics.push(format!(
+                "mesh '{name}': triangle strips are not yet triangulated"
+            ));
+            return None;
+        }
+        _ => return None,
+    };
+    let mut vertices = Vec::with_capacity(data.vertices.len());
+    for (index, position) in data.vertices.iter().enumerate() {
+        let normal = data.normals.get(index).copied().unwrap_or_default();
+        let uv = data
+            .uvs
+            .get(index)
+            .map(|uv| [uv.u, uv.v])
+            .unwrap_or([0.0, 0.0]);
+        vertices.push(Vertex {
+            position: [position.x, position.y, position.z],
+            normal: [normal.x, normal.y, normal.z],
+            uv,
+        });
+    }
+    let indices: Vec<u32> = data
+        .triangles
+        .iter()
+        .flat_map(|triangle| [triangle.v0 as u32, triangle.v1 as u32, triangle.v2 as u32])
+        .collect();
+    if vertices.is_empty() || indices.is_empty() {
+        return None;
+    }
+    let index = meshes.len();
+    meshes.push(MeshAsset {
+        name: name.to_string(),
+        texture_name: None,
+        vertices,
+        indices,
+        diffuse: None,
+        skin: None,
+    });
+    Some(index)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,6 +725,40 @@ mod tests {
                 .last()
                 .is_some_and(|c| c.diagnostics.iter().any(|d| d.contains("trailer")))
         );
+    }
+
+    #[test]
+    fn nif_model_builds_when_available() {
+        let Some(root) = crate::test_paths::bully_nif_tools() else {
+            return;
+        };
+        // Prefer a character model; fall back to any parseable NIF.
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("nif"))
+                    && path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .is_some_and(|stem| stem.eq_ignore_ascii_case("player"))
+                {
+                    candidates.push(path);
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return;
+        }
+        let bytes = std::fs::read(&candidates[0]).expect("read player NIF");
+        let mut nif = NifFile::parse(&bytes).expect("parse player NIF");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "PLAYER", "test:player").expect("model builds");
+        assert!(model.nodes.len() > 1, "player NIF has a skeleton");
+        assert!(!model.meshes.is_empty(), "player NIF has geometry");
+        assert!(model.node_by_name("track_000").is_some());
     }
 
     #[test]
