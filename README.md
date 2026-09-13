@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v4.5.0
+# 🎮 IMG Editor Plus v4.6.0
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -62,6 +62,13 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
 - ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
 - ✅ **Automated regression tests** — cover parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, six-axis navigation, alpha rendering, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
+
+**v4.6.0 release highlights:**
+- 🧰 **Bully animation player** - select a model in a Bully archive and play its animations: a transport bar plays, pauses, seeks and loops clips in the 3D viewer
+- 🧰 **Named clips via HXD catalogs** - `Anim/*.HXD` and `hxds.dat` are parsed so clips get real names (all 439 `C_Player` clips: RUN, GROUND_ONBACK, ...), with compound `MAINPED.HXD` records resolved to their owning AGR
+- 🧰 **Packed AGR decoders** - variant 1002/1004 packed rotation curves (bitfields recovered from the retail executable) plus 999/1003 object transforms with translation; loose `Anim/*.agr` files load through the View menu against the open model
+- 🧰 **NIF skinning** - `NiSkinInstance`/`NiSkinData`/`NiSkinPartition` are parsed and skinned meshes deform through linear blend skinning, so the player character animates instead of holding a T-pose
+- 🧰 **Known limitation** - character clips are authored rotation-only by design (the game grounds actors at runtime), so knockdown-style clips pivot about the root rather than lying on the floor
 
 **v4.5.0 release highlights:**
 - 🛡 **Asset compatibility engine** — retail-verified profiles for GTA III, Vice City, San Andreas and Bully. Pick the game an archive is for (or accept an advisory content hint): every texture is checked against that target's dialect, entry rows are tinted by verdict with an icon legend, and the choice is remembered per archive path. Imports get a pre-flight format check before touching the archive

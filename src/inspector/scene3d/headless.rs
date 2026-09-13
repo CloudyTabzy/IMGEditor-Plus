@@ -628,6 +628,23 @@ mod tests {
                 "frame {i} t={t:.3}s scene aabb min={:?} max={:?}",
                 scene.aabb.min, scene.aabb.max
             );
+            if std::env::var("IMGEDITOR_AGR_DEBUG_NODES").is_ok() {
+                for name in [
+                    "track_000", "track_001", "track_002", "track_003", "track_004",
+                    "track_009", "track_013", "track_019", "track_027", "track_029",
+                    "track_034",
+                ] {
+                    if let Some((id, _)) = model
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .find(|(_, n)| n.name == *name)
+                        && let Some(p) = buffers.node_positions_view.get(id)
+                    {
+                        println!("   node {name} -> {p:?}");
+                    }
+                }
+            }
             for mesh in &scene.meshes {
                 println!(
                     "   mesh {:<16} min={:?} max={:?}",
