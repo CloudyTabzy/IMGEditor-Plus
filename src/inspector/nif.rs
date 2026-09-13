@@ -305,8 +305,6 @@ pub struct NiStringExtraDataData {
     pub string_index: u32,
     pub string: Option<String>,
     pub name: Option<String>,
-    pub extra_data: Vec<i32>,
-    pub controller: i32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1144,20 +1142,12 @@ fn read_geometry_block(r: &mut Reader<'_>) -> NifResult<NiTriShapeData> {
 }
 
 fn read_ni_string_extra_data(r: &mut Reader<'_>) -> NifResult<NiStringExtraDataData> {
-    let mut data = NiStringExtraDataData::default();
     let name_idx = r.read_ni_fixed_string_index("name")?;
-    data.name = if name_idx == 0xFFFFFFFF {
-        None
-    } else {
-        Some(format!("__string_idx_{name_idx}"))
-    };
-    data.extra_data = {
-        let n = r.read_u32("num_extra_data")? as usize;
-        r.read_i32_array(n, "extra_data")?
-    };
-    data.controller = r.read_i32("controller")?;
-    data.string_index = r.read_u32("string_data")?;
-    Ok(data)
+    Ok(NiStringExtraDataData {
+        name: (name_idx != u32::MAX).then(|| format!("__string_idx_{name_idx}")),
+        string_index: r.read_ni_fixed_string_index("string_data")?,
+        string: None,
+    })
 }
 
 fn read_ni_source_texture(r: &mut Reader<'_>) -> NifResult<NiSourceTextureData> {
@@ -2020,14 +2010,18 @@ pub(crate) mod tests {
             Err(NifError::InvalidField("references", _))
         ));
 
-        let mut malformed_extra = Vec::new();
-        push_u32(&mut malformed_extra, u32::MAX); // no name
-        push_u32(&mut malformed_extra, u32::MAX); // impossible extra-data count
-        let mut reader = Reader::new(&malformed_extra, Endian::Little);
-        assert!(matches!(
-            read_ni_string_extra_data(&mut reader),
-            Err(NifError::UnexpectedEof("extra_data"))
-        ));
+    }
+
+    #[test]
+    fn string_extra_data_is_two_fixed_string_indices() {
+        let mut bytes = Vec::new();
+        push_u32(&mut bytes, 3);
+        push_u32(&mut bytes, 7);
+        let mut reader = Reader::new(&bytes, Endian::Little);
+        let extra = read_ni_string_extra_data(&mut reader).expect("extra data parses");
+        assert_eq!(extra.name.as_deref(), Some("__string_idx_3"));
+        assert_eq!(extra.string_index, 7);
+        assert_eq!(reader.remaining(), 0);
     }
 
     #[test]
