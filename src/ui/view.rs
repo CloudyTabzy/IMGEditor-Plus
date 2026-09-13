@@ -1005,9 +1005,15 @@ impl App {
         let demo = self.animation_demo_active();
         let enabled = data.playable;
         let press = move |message: Message| enabled.then_some(message);
+        // iced's Button parks content at the top-left padding origin; an
+        // opt-in Fill + center alignment is what actually centers a glyph
+        // inside a fixed-size square button.
+        let centered = |icon: iced::widget::Text<'static>| -> iced::widget::Text<'static> {
+            icon.width(Length::Fill).height(Length::Fill).center()
+        };
 
         let loop_toggle = w::styled_tooltip(
-            button(icons::repeat().size(14))
+            button(centered(icons::repeat().size(14)))
                 .on_press_maybe(press(Message::AnimationSetLoop(if data.loop_repeat {
                     LoopMode::Once
                 } else {
@@ -1015,6 +1021,7 @@ impl App {
                 })))
                 .width(Length::Fixed(28.0))
                 .height(Length::Fixed(28.0))
+                .padding(0.0)
                 .style(move |theme, status| animation_toggle_style(theme, status, data.loop_repeat)),
             fonts::caption("Loop playback"),
             tooltip::Position::Top,
@@ -1046,11 +1053,14 @@ impl App {
         header = header.push(speed_row);
         if demo {
             header = header.push(
-                button(w::icon_label(icons::close().size(13), fonts::caption("Exit demo")))
-                    .on_press(Message::AnimationDemoExit)
-                    .height(Length::Fixed(28.0))
-                    .padding([2.0, 10.0])
-                    .style(animation_subtle_button_style),
+                button(
+                    w::icon_label(icons::close().size(13), fonts::caption("Exit demo"))
+                        .height(Length::Fill),
+                )
+                .on_press(Message::AnimationDemoExit)
+                .height(Length::Fixed(28.0))
+                .padding([0.0, 10.0])
+                .style(animation_subtle_button_style),
             );
         }
 
@@ -1118,10 +1128,11 @@ impl App {
         let transport_button =
             |icon: iced::widget::Text<'static>, message: Message, tip: &'static str| {
                 w::styled_tooltip(
-                    button(icon.size(14))
+                    button(centered(icon.size(14)))
                         .on_press_maybe(press(message))
                         .width(Length::Fixed(28.0))
                         .height(Length::Fixed(28.0))
+                        .padding(0.0)
                         .style(move |theme, status| {
                             animation_icon_button_style(theme, status, enabled)
                         }),
@@ -1135,10 +1146,11 @@ impl App {
             (icons::play(), "Play (Space)")
         };
         let play_button = w::styled_tooltip(
-            button(play_icon.size(14))
+            button(centered(play_icon.size(14)))
                 .on_press_maybe(press(Message::AnimationTogglePlay))
                 .width(Length::Fixed(28.0))
                 .height(Length::Fixed(28.0))
+                .padding(0.0)
                 .style(move |theme, status| {
                     if enabled {
                         animation_primary_button_style(theme, status)
@@ -1208,13 +1220,18 @@ impl App {
 
         let frame_button = |label: &'static str, message: Message, tip: &'static str| {
             w::styled_tooltip(
-                button(fonts::caption(label))
-                    .on_press_maybe(press(message))
-                    .height(Length::Fixed(24.0))
-                    .padding([2.0, 10.0])
-                    .style(move |theme, status| {
-                        animation_icon_button_style(theme, status, enabled)
-                    }),
+                button(
+                    fonts::caption(label)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .center(),
+                )
+                .on_press_maybe(press(message))
+                .height(Length::Fixed(24.0))
+                .padding([0.0, 10.0])
+                .style(move |theme, status| {
+                    animation_icon_button_style(theme, status, enabled)
+                }),
                 fonts::caption(tip),
                 tooltip::Position::Top,
             )
@@ -1242,10 +1259,11 @@ impl App {
              tip: &'static str,
              message: Message| {
                 w::styled_tooltip(
-                    button(icon().size(14))
+                    button(centered(icon().size(14)))
                         .on_press_maybe(press(message))
                         .width(Length::Fixed(28.0))
                         .height(Length::Fixed(28.0))
+                        .padding(0.0)
                         .style(move |theme, status| animation_toggle_style(theme, status, active)),
                     fonts::caption(tip),
                     tooltip::Position::Top,
@@ -4449,17 +4467,18 @@ fn animation_icon_button_style(
     }
 }
 
-/// Accent-filled primary button for the dock's play control.
+/// Accent-filled primary button for the dock's play control, driven by the
+/// active theme's primary palette so it stays legible in every theme.
 fn animation_primary_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
-    let design = crate::ui::design::design_for_theme(theme);
-    let background = match status {
-        button::Status::Hovered => design.accent_hover(),
-        button::Status::Pressed => design.accent_pressed(),
-        _ => design.accent(),
+    let palette = theme.extended_palette();
+    let pair = match status {
+        button::Status::Hovered => palette.primary.strong,
+        button::Status::Pressed => palette.primary.weak,
+        _ => palette.primary.base,
     };
     button::Style {
-        background: Some(background.into()),
-        text_color: design.accent_text(),
+        background: Some(pair.color.into()),
+        text_color: pair.text,
         border: Border {
             color: Color::TRANSPARENT,
             width: 0.0,
@@ -4470,28 +4489,27 @@ fn animation_primary_button_style(theme: &iced::Theme, status: button::Status) -
 }
 
 /// Icon toggle: accent-tinted while active, muted and transparent while off.
+/// Colors come from the active theme's palette (not the static design
+/// tokens) so the accent keeps contrast against its weak tint in both
+/// light and dark themes.
 fn animation_toggle_style(
     theme: &iced::Theme,
     status: button::Status,
     active: bool,
 ) -> button::Style {
-    let design = crate::ui::design::design_for_theme(theme);
+    let palette = theme.extended_palette();
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     if active {
         let background = if hovered {
-            iced::theme::palette::mix(design.accent_weak(), design.accent(), 0.18)
+            iced::theme::palette::mix(palette.primary.weak.color, palette.primary.strong.color, 0.3)
         } else {
-            design.accent_weak()
-        };
-        let border = Color {
-            a: design.accent().a * 0.45,
-            ..design.accent()
+            palette.primary.weak.color
         };
         button::Style {
             background: Some(background.into()),
-            text_color: design.accent(),
+            text_color: w::readable_text_color(background, palette.primary.strong.text),
             border: Border {
-                color: border,
+                color: palette.primary.strong.color.scale_alpha(0.45),
                 width: 1.0,
                 radius: 5.0.into(),
             },
@@ -4500,11 +4518,11 @@ fn animation_toggle_style(
     } else {
         button::Style {
             background: if hovered {
-                Some(design.hover_overlay().into())
+                Some(palette.background.strong.color.into())
             } else {
                 None
             },
-            text_color: design.text_muted(),
+            text_color: palette.background.base.text.scale_alpha(0.7),
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
