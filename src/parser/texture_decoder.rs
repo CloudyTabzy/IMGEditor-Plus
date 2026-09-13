@@ -185,6 +185,48 @@ fn dxt5_block(block: &[u8]) -> [[u8; 4]; 16] {
 
 // ---- DXT surface decoders ---------------------------------------------
 
+/// Fixed-point reciprocals used to build [`UNPREMUL_TABLE`] at compile time.
+const PREMUL_RECIPROCAL: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut alpha = 1usize;
+    while alpha < 256 {
+        table[alpha] = ((1u32 << 24) + alpha as u32 - 1) / alpha as u32;
+        alpha += 1;
+    }
+    table
+};
+
+/// 64 KiB table of `min(255, (channel * 255) / alpha)` for every
+/// channel/alpha pair, indexed `(channel << 8) | alpha`. The cell-reciprocal
+/// identity stays exact because the numerator never exceeds 65 025, which
+/// keeps the rounding error below the last unit. A direct lookup avoids both
+/// a runtime division and a 64-bit fixed-point multiply per channel; a block
+/// touches at most a few cache lines.
+static UNPREMUL_TABLE: [u8; 65536] = {
+    let mut table = [0u8; 65536];
+    let mut channel = 0usize;
+    while channel < 256 {
+        let numerator = channel as u64 * 255;
+        let mut alpha = 1usize;
+        while alpha < 256 {
+            let reciprocal = PREMUL_RECIPROCAL[alpha] as u64;
+            let scaled = (numerator * reciprocal) >> 24;
+            let restored = if scaled > 255 { 255 } else { scaled } as u8;
+            table[(channel << 8) | alpha] = restored;
+            alpha += 1;
+        }
+        channel += 1;
+    }
+    table
+};
+
+/// Exact `min(255, (channel * 255) / alpha)` without a division. The caller
+/// guarantees `alpha != 0`.
+#[inline]
+fn unpremultiply(channel: u8, alpha: u8) -> u8 {
+    UNPREMUL_TABLE[(usize::from(channel) << 8) | usize::from(alpha)]
+}
+
 fn decode_dxt_surface(data: &[u8], w: u32, h: u32, dxt: DxtType) -> Result<Vec<u8>, DecodeError> {
     let pixel_count = checked_pixel_count(w, h)?;
     let bw = w.div_ceil(4).max(1) as usize;
@@ -217,32 +259,56 @@ fn decode_dxt_surface(data: &[u8], w: u32, h: u32, dxt: DxtType) -> Result<Vec<u
             })?
     ];
 
+    // DXT2/DXT4 store premultiplied color; the RGBA surface is straight
+    // alpha, so restore the color channels once per block before writing.
+    let premultiplied = matches!(dxt, DxtType::Dxt2 | DxtType::Dxt4);
+    let w = w as usize;
+    let h = h as usize;
+    let stride = w * 4;
+
     for by in 0..bh {
+        let img_y = by * 4;
         for bx in 0..bw {
             let src_offset = (by * bw + bx) * block_bytes;
-            let block_px = match dxt {
+            let mut block_px = match dxt {
                 DxtType::Dxt1 => dxt1_block(&data[src_offset..src_offset + 8]),
                 DxtType::Dxt2 | DxtType::Dxt3 => dxt3_block(&data[src_offset..src_offset + 16]),
                 DxtType::Dxt4 | DxtType::Dxt5 => dxt5_block(&data[src_offset..src_offset + 16]),
             };
-            for row in 0..4 {
-                for col in 0..4 {
-                    let img_y = by * 4 + row;
-                    let img_x = bx * 4 + col;
-                    if img_y >= h as usize || img_x >= w as usize {
-                        continue;
+            if premultiplied {
+                for px in block_px.iter_mut() {
+                    let alpha = px[3];
+                    if alpha != 0 {
+                        px[0] = unpremultiply(px[0], alpha);
+                        px[1] = unpremultiply(px[1], alpha);
+                        px[2] = unpremultiply(px[2], alpha);
                     }
-                    let mut px = block_px[row * 4 + col];
-                    if matches!(dxt, DxtType::Dxt2 | DxtType::Dxt4) && px[3] != 0 {
-                        // DXT2/DXT4 store premultiplied color. The viewer's
-                        // RGBA surface is straight-alpha, so restore the
-                        // color channels for correct previews.
-                        px[0] = ((u16::from(px[0]) * 255) / u16::from(px[3])).min(255) as u8;
-                        px[1] = ((u16::from(px[1]) * 255) / u16::from(px[3])).min(255) as u8;
-                        px[2] = ((u16::from(px[2]) * 255) / u16::from(px[3])).min(255) as u8;
+                }
+            }
+
+            let img_x = bx * 4;
+            if img_x + 4 <= w && img_y + 4 <= h {
+                // Whole block inside the surface: write four contiguous
+                // 4-pixel rows with no per-pixel bounds checks.
+                let rows = block_px.as_flattened();
+                for (row, pixels) in rows.chunks_exact(16).enumerate() {
+                    let dst = (img_y + row) * stride + img_x * 4;
+                    rgba[dst..dst + 16].copy_from_slice(pixels);
+                }
+            } else {
+                for row in 0..4 {
+                    let y = img_y + row;
+                    if y >= h {
+                        break;
                     }
-                    let dst = (img_y * w as usize + img_x) * 4;
-                    rgba[dst..dst + 4].copy_from_slice(&px);
+                    for col in 0..4 {
+                        let x = img_x + col;
+                        if x >= w {
+                            break;
+                        }
+                        let dst = (y * w + x) * 4;
+                        rgba[dst..dst + 4].copy_from_slice(&block_px[row * 4 + col]);
+                    }
                 }
             }
         }
@@ -972,9 +1038,77 @@ fn raster_type_code(raster_format: u32) -> u32 {
     }
 }
 
+/// Feature-gated access to the internal decoders for the decode benchmark
+/// example (`cargo run --release --example benchmark_texture_decode
+/// --features bench`).
+#[cfg(feature = "bench")]
+pub mod bench {
+    pub use super::DxtType;
+
+    pub fn decode_1555(
+        data: &[u8],
+        w: u32,
+        h: u32,
+    ) -> Result<Vec<u8>, super::DecodeError> {
+        super::decode_1555(data, w, h)
+    }
+
+    pub fn decode_4444(
+        data: &[u8],
+        w: u32,
+        h: u32,
+    ) -> Result<Vec<u8>, super::DecodeError> {
+        super::decode_4444(data, w, h)
+    }
+
+    pub fn decode_565(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, super::DecodeError> {
+        super::decode_565(data, w, h)
+    }
+
+    pub fn decode_8888(
+        data: &[u8],
+        w: u32,
+        h: u32,
+    ) -> Result<Vec<u8>, super::DecodeError> {
+        super::decode_8888(data, w, h)
+    }
+
+    pub fn decode_pal8(
+        data: &[u8],
+        palette: &[u8],
+        w: u32,
+        h: u32,
+    ) -> Result<Vec<u8>, super::DecodeError> {
+        super::decode_pal8(data, palette, w, h)
+    }
+
+    pub fn decode_dxt_surface(
+        data: &[u8],
+        w: u32,
+        h: u32,
+        dxt: DxtType,
+    ) -> Result<Vec<u8>, super::DecodeError> {
+        super::decode_dxt_surface(data, w, h, dxt)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unpremultiply_matches_integer_division() {
+        for alpha in 1..=255u8 {
+            for channel in 0..=255u8 {
+                let expected = ((u16::from(channel) * 255) / u16::from(alpha)).min(255) as u8;
+                assert_eq!(
+                    unpremultiply(channel, alpha),
+                    expected,
+                    "channel {channel}, alpha {alpha}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn decode_1555_works() {

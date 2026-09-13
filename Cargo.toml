@@ -22,6 +22,10 @@ name = "benchmark_export"
 required-features = ["bench"]
 
 [[example]]
+name = "benchmark_texture_decode"
+required-features = ["bench"]
+
+[[example]]
 name = "benchmark_stress"
 required-features = ["bench"]
 
