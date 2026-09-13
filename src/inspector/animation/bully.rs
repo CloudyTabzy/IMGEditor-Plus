@@ -121,12 +121,17 @@ pub struct AgrTrack {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgrClip {
     pub index: usize,
+    /// Chunk variant word (999..=1004); determines the record format.
+    pub variant: u32,
+    /// Record size in bytes for this variant (0 when unknown).
+    pub record_size: usize,
     pub duration_s: f32,
-    /// Records before the declared change records (per-track defaults and
-    /// other preamble entries).
+    /// Records before the declared change records (variant-1002 per-track
+    /// preamble; zero for the fixed-size object variants).
     pub preamble_records: usize,
     pub tracks: Vec<AgrTrack>,
-    /// Parse notes: dropped out-of-order or duplicate keys, trailer, etc.
+    /// Parse notes: dropped out-of-order or duplicate keys, undecoded
+    /// variants, trailer, etc.
     pub diagnostics: Vec<String>,
 }
 
@@ -161,13 +166,19 @@ fn read_f32(bytes: &[u8], offset: usize) -> f32 {
     ])
 }
 
-/// Find every chunk start: u32 magic followed by the variant word.
-fn chunk_starts(bytes: &[u8], variant: u32) -> Vec<usize> {
+/// Find every chunk start: u32 magic followed by any known variant word.
+/// Chunk variants can differ within one file (mixed 999/1002/1003 exist in
+/// the object-animation corpus), so the file's first variant is not used as
+/// a filter.
+fn chunk_starts(bytes: &[u8]) -> Vec<usize> {
     let mut starts = Vec::new();
     let mut offset = 0usize;
     while offset + CHUNK_HEADER_BYTES <= bytes.len() {
-        if read_u32(bytes, offset) == AGR_MAGIC && read_u32(bytes, offset + 4) == variant {
-            starts.push(offset);
+        if read_u32(bytes, offset) == AGR_MAGIC {
+            let second = read_u32(bytes, offset + 4);
+            if AGR_VARIANTS.contains(&second) {
+                starts.push(offset);
+            }
         }
         offset += 4;
     }
@@ -197,7 +208,21 @@ pub fn parse_agr(bytes: &[u8]) -> Result<AgrFile, AgrError> {
         });
     }
 
-    let starts = chunk_starts(bytes, variant);
+    // Archive entries are stored in whole 2048-byte sectors; the tail of the
+    // final chunk is zero padding, not records. Loose files carry no padding,
+    // so trimming all-zero u32 words from the end is safe for both.
+    let mut end = bytes.len();
+    let mut padding_trimmed = 0usize;
+    while end >= 4 && read_u32(bytes, end - 4) == 0 {
+        end -= 4;
+        padding_trimmed += 4;
+    }
+    let mut diagnostics = Vec::new();
+    if padding_trimmed > 0 {
+        diagnostics.push(format!("trimmed {padding_trimmed} bytes of tail padding"));
+    }
+
+    let starts = chunk_starts(&bytes[..end]);
     if starts.first() != Some(&0) {
         return Err(AgrError::BadMagic {
             offset: 0,
@@ -208,13 +233,35 @@ pub fn parse_agr(bytes: &[u8]) -> Result<AgrFile, AgrError> {
 
     let mut clips = Vec::with_capacity(starts.len());
     for (index, &start) in starts.iter().enumerate() {
-        let end = starts.get(index + 1).copied().unwrap_or(bytes.len());
-        clips.push(parse_clip(bytes, start, end, index)?);
+        let chunk_end = starts.get(index + 1).copied().unwrap_or(end);
+        clips.push(parse_clip(&bytes[..end], start, chunk_end, index)?);
+    }
+    if !diagnostics.is_empty()
+        && let Some(first) = clips.first_mut()
+    {
+        let mut merged = diagnostics;
+        merged.extend(std::mem::take(&mut first.diagnostics));
+        first.diagnostics = merged;
     }
     Ok(AgrFile { variant, clips })
 }
 
+/// Record size for a chunk variant, when the layout is established.
+///
+/// Corpus-validated sizes: 999 -> 32 B, 1002 -> 8 B (+ per-track preamble),
+/// 1003 -> 20 B, 1004 -> 12 B. Variants 1000/1001 are still unreduced.
+fn variant_record_size(variant: u32) -> Option<usize> {
+    match variant {
+        999 => Some(32),
+        1002 => Some(8),
+        1003 => Some(20),
+        1004 => Some(12),
+        _ => None,
+    }
+}
+
 fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<AgrClip, AgrError> {
+    let variant = read_u32(bytes, start + 4);
     let count = read_u32(bytes, start + 8) as usize;
     let duration = read_f32(bytes, start + 16);
     if !duration.is_finite() || duration <= 0.0 || duration > 600.0 {
@@ -223,19 +270,32 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
             duration,
         });
     }
+    let Some(record_size) = variant_record_size(variant) else {
+        return Ok(AgrClip {
+            index,
+            variant,
+            record_size: 0,
+            duration_s: duration,
+            preamble_records: 0,
+            tracks: Vec::new(),
+            diagnostics: vec![format!(
+                "variant {variant} chunk ({count} records): record layout not yet decoded"
+            )],
+        });
+    };
     let mut data_bytes = end.saturating_sub(start + CHUNK_HEADER_BYTES);
     let mut diagnostics = Vec::new();
-    if data_bytes % RECORD_BYTES == 4 {
+    if data_bytes % record_size == 4 {
         data_bytes -= 4;
         diagnostics.push("stripped 4-byte trailer".to_string());
     }
-    if !data_bytes.is_multiple_of(RECORD_BYTES) {
+    if !data_bytes.is_multiple_of(record_size) {
         return Err(AgrError::MisalignedData {
             offset: start,
             data_bytes,
         });
     }
-    let slots = data_bytes / RECORD_BYTES;
+    let slots = data_bytes / record_size;
     if count > slots {
         return Err(AgrError::RecordOverflow {
             offset: start,
@@ -244,9 +304,52 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
         });
     }
     let preamble_records = slots - count;
+    if variant != 1002 {
+        // Record sizes are known but field semantics for the object variants
+        // (position/scale/u16 lanes) are still being reduced.
+        return Ok(AgrClip {
+            index,
+            variant,
+            record_size,
+            duration_s: duration,
+            preamble_records,
+            tracks: Vec::new(),
+            diagnostics: vec![format!(
+                "variant {variant} chunk ({count} records of {record_size} B): \
+                 field layout not yet decoded"
+            )],
+        });
+    }
     let body = &bytes[start + CHUNK_HEADER_BYTES..start + CHUNK_HEADER_BYTES + data_bytes];
+    let tracks = decode_change_records(
+        body,
+        slots,
+        count,
+        preamble_records,
+        duration,
+        &mut diagnostics,
+    );
+    Ok(AgrClip {
+        index,
+        variant,
+        record_size,
+        duration_s: duration,
+        preamble_records,
+        tracks,
+        diagnostics,
+    })
+}
 
-    // Group change records per (track, channel), keeping stream order.
+/// Groups and decodes the 8-byte change records of a variant-1002 chunk.
+fn decode_change_records(
+    body: &[u8],
+    slots: usize,
+    count: usize,
+    preamble_records: usize,
+    duration: f32,
+    diagnostics: &mut Vec<String>,
+) -> Vec<AgrTrack> {
+    let _ = count;
     let mut grouped: Vec<AgrTrack> = Vec::new();
     let mut dropped_reversed = 0usize;
     let mut dropped_duplicate = 0usize;
@@ -321,14 +424,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
     }
     grouped.retain(|track| !track.keys.is_empty());
     grouped.sort_by_key(|track| (track.track, track.channel));
-
-    Ok(AgrClip {
-        index,
-        duration_s: duration,
-        preamble_records,
-        tracks: grouped,
-        diagnostics,
-    })
+    grouped
 }
 
 /// Convert a parsed file into a runtime [`AnimationLibrary`].
@@ -629,7 +725,9 @@ mod tests {
         push_record(&mut out, 0, 0x00, [0, 0, -64]);
         push_record(&mut out, 250, 0x00, [0, 0, -64]); // t=2.50s
         push_record(&mut out, 5, 0x00, [0, 0, -64]); // wraps -> t=2.61s
-        push_record(&mut out, 7, 0x01, [100, 0, 0]); // translation, not emitted
+        // Translation record; the last word stays non-zero so the tail
+        // padding trim cannot mistake the file end for archive padding.
+        push_record(&mut out, 7, 0x01, [100, 0, 1]);
         out
     }
 

@@ -106,6 +106,21 @@ fn find_agr_model_entry(entries: &[crate::archive::EntryInfo], agr_name: &str) -
                 .iter()
                 .position(|entry| is_nif(entry) && nif_stem(entry) == suffix)
         })
+        .or_else(|| {
+            // Last resort: substring overlap (`LE_Orderly.agr` ->
+            // `Orderly.nif`, `NPC_Mascot.agr` -> `Player_Mascot.nif`).
+            let needle = stem.rsplit('_').next().unwrap_or(stem.as_str());
+            if needle.len() < 4 {
+                return None;
+            }
+            entries.iter().position(|entry| {
+                is_nif(entry) && {
+                    let candidate = nif_stem(entry);
+                    !candidate.is_empty()
+                        && (candidate.contains(needle) || needle.contains(&candidate))
+                }
+            })
+        })
 }
 
 pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
@@ -5842,12 +5857,24 @@ impl App {
             Message::ViewerAgrLoadCompleted { result } => {
                 match result {
                     Ok((model, library, summary)) => {
+                        // Open on the most substantial clip: object groups
+                        // often lead with a one-frame reference pose.
+                        let best = library
+                            .clips
+                            .iter()
+                            .max_by(|a, b| a.duration.total_cmp(&b.duration))
+                            .map(|clip| clip.id);
                         self.viewer3d_handle.install_animation_session(
                             model,
                             library,
                             false,
                             Instant::now(),
                         );
+                        if let Some(best) = best {
+                            self.viewer3d_handle.with_animation_session_mut(|session| {
+                                session.select_clip(best, Instant::now());
+                            });
+                        }
                         self.selected_inspector_tab = InspectorTab::Model3D;
                         self.active_viewer_entry = None;
                         self.toast = Some(format!("Animation ready: {summary}"));
