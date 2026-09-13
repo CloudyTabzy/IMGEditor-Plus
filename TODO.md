@@ -159,8 +159,13 @@ remain pending.
   - [ ] Character skinning (`NiSkinInstance`/`NiSkinPartition`) so ped
     animations deform meshes instead of rigid per-bone segments.
   - [ ] Bully CAT/IFP adapters; GTA adapters.
-  - [ ] Character clip naming via `MAINPED.HXD` (namespace-aware matching);
-    1004 time-semantics probe. See `bully-probe/CHECKPOINT.md` §9.
+  - [x] Character and mission clip naming via `MAINPED.HXD`: sequence owner
+    indices and duplicated AGR chunk sizes provide guarded one-to-one mapping,
+    including `C_Player.agr`'s 439 clips without namespace guessing.
+  - [ ] Reverse-engineer the 1004 packed-key layout. The expanded 458-chunk
+    corpus disproves the provisional change-stream/time interpretation; use
+    binary or independent-tool evidence before replacing it. See
+    `bully-probe/CHECKPOINT.md` §9.
 
 AV0–AV7 establish the shared player; AV8 is not a prerequisite for real-file
 work. Bully E0–E4 may proceed alongside it; E5 consumes the verified runtime.

@@ -136,6 +136,10 @@ pub struct AgrTrack {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgrClip {
     pub index: usize,
+    /// Bytes occupied by this source chunk after archive-sector padding is
+    /// removed. HXD catalogs store the corresponding value plus a 4-byte
+    /// runtime trailer, which provides an exact naming key.
+    pub source_size: usize,
     /// Chunk variant word (999..=1004); determines the record format.
     pub variant: u32,
     /// Record size in bytes for this variant (0 when unknown).
@@ -288,6 +292,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
     let Some(record_size) = variant_record_size(variant) else {
         return Ok(AgrClip {
             index,
+            source_size: end.saturating_sub(start),
             variant,
             record_size: 0,
             duration_s: duration,
@@ -337,6 +342,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
             // variants are still being reduced.
             return Ok(AgrClip {
                 index,
+                source_size: end.saturating_sub(start),
                 variant,
                 record_size,
                 duration_s: duration,
@@ -351,6 +357,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
     };
     Ok(AgrClip {
         index,
+        source_size: end.saturating_sub(start),
         variant,
         record_size,
         duration_s: duration,

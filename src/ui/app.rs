@@ -696,9 +696,11 @@ pub enum Message {
         agr_entry: Option<usize>,
         agr_path: Option<std::path::PathBuf>,
         model_entry: usize,
-        /// Sequence leaf names from the model's HXD catalog, when one was
-        /// resolved. Applied to the clips when the counts agree.
-        clip_names: Vec<String>,
+        /// HXD naming catalog and the AGR stem used to select compound-catalog
+        /// rows. Names are resolved after AGR parsing so chunk sizes can reject
+        /// stale catalog entries safely.
+        hxd_record: Option<crate::inspector::animation::hxd::HxdRecord>,
+        hxd_source: String,
     },
     ViewerAgrLoadCompleted {
         result: Result<
@@ -2594,15 +2596,21 @@ impl App {
             .map(|(stem, _)| stem)
             .unwrap_or(&agr_name);
         let hxd = crate::inspector::animation::hxd::anim_dir_for_archive(archive.path.as_deref())
-            .and_then(|anim| crate::inspector::animation::hxd::find_for_stem(&anim, stem));
-        let clip_names = hxd
-            .as_ref()
-            .map(|record| record.sequence_names())
-            .unwrap_or_default();
+            .and_then(|anim| crate::inspector::animation::hxd::find_for_agr(&anim, stem));
         let model_entry = hxd
             .as_ref()
             .and_then(|record| {
-                crate::inspector::animation::hxd::find_model_entry(&archive.entries, &record.model)
+                record
+                    .model_for_source(stem)
+                    .and_then(|model| {
+                        crate::inspector::animation::hxd::find_model_entry(&archive.entries, model)
+                    })
+                    .or_else(|| {
+                        crate::inspector::animation::hxd::find_model_entry(
+                            &archive.entries,
+                            &record.model,
+                        )
+                    })
             })
             .or_else(|| find_agr_model_entry(&archive.entries, &agr_name));
         let Some(model_entry) = model_entry else {
@@ -2612,10 +2620,10 @@ impl App {
             return Task::none();
         };
         let model_name = archive.entries[model_entry].file_name.clone();
-        let named = if clip_names.is_empty() {
+        let named = if hxd.is_none() {
             String::new()
         } else {
-            format!(" ({} HXD-named clips)", clip_names.len())
+            " (HXD catalog found)".to_string()
         };
         self.toast = Some(format!("Loading {agr_name} on {model_name}…{named}"));
         Task::done(Message::ViewerAgrLoadRequest {
@@ -2623,7 +2631,8 @@ impl App {
             agr_entry: Some(entry_index),
             agr_path: None,
             model_entry,
-            clip_names,
+            hxd_record: hxd,
+            hxd_source: stem.to_string(),
         })
     }
 
@@ -2648,22 +2657,28 @@ impl App {
             .rsplit_once('.')
             .map(|(stem, _)| stem)
             .unwrap_or(&agr_name);
-        let clip_names = path
+        let hxd = path
             .parent()
-            .and_then(|anim| crate::inspector::animation::hxd::find_for_stem(anim, stem))
-            .map(|record| record.sequence_names())
-            .unwrap_or_default();
-        let Some(model_entry) = find_agr_model_entry(&archive.entries, &agr_name) else {
+            .and_then(|anim| crate::inspector::animation::hxd::find_for_agr(anim, stem));
+        let model_entry = hxd
+            .as_ref()
+            .and_then(|record| {
+                record.model_for_source(stem).and_then(|model| {
+                    crate::inspector::animation::hxd::find_model_entry(&archive.entries, model)
+                })
+            })
+            .or_else(|| find_agr_model_entry(&archive.entries, &agr_name));
+        let Some(model_entry) = model_entry else {
             self.toast = Some(format!(
                 "No matching .nif model found for {agr_name} in the open archive."
             ));
             return Task::none();
         };
         let model_name = archive.entries[model_entry].file_name.clone();
-        let named = if clip_names.is_empty() {
+        let named = if hxd.is_none() {
             String::new()
         } else {
-            format!(" ({} catalog-named clips)", clip_names.len())
+            " (HXD catalog found)".to_string()
         };
         self.toast = Some(format!("Loading {agr_name} on {model_name}…{named}"));
         Task::done(Message::ViewerAgrLoadRequest {
@@ -2671,7 +2686,8 @@ impl App {
             agr_entry: None,
             agr_path: Some(path),
             model_entry,
-            clip_names,
+            hxd_record: hxd,
+            hxd_source: stem.to_string(),
         })
     }
 
@@ -5882,7 +5898,8 @@ impl App {
                 agr_entry,
                 agr_path,
                 model_entry,
-                clip_names,
+                hxd_record,
+                hxd_source,
             } => {
                 let (agr_entry_data, model_entry_data, archive_path) = {
                     let Some(archive) = self.editor.archives().get(archive_index) else {
@@ -5939,6 +5956,22 @@ impl App {
                             .map_err(|e| format!("model: {e}"))?;
                             let file = crate::inspector::animation::bully::parse_agr(&agr_bytes)
                                 .map_err(|e| format!("AGR: {e}"))?;
+                            let clip_names = hxd_record
+                                .as_ref()
+                                .map(|record| {
+                                    let signatures: Vec<_> = file
+                                        .clips
+                                        .iter()
+                                        .map(|clip| {
+                                            crate::inspector::animation::hxd::HxdClipSignature {
+                                                source_size: clip.source_size,
+                                                duration_s: clip.duration_s,
+                                            }
+                                        })
+                                        .collect();
+                                    record.sequence_names_for_agr(&hxd_source, &signatures)
+                                })
+                                .unwrap_or_default();
                             let mut library = crate::inspector::animation::bully::to_library(
                                 &file,
                                 agr_display.as_str(),

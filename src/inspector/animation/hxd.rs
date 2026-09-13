@@ -17,6 +17,9 @@
 //!   prefixed by `{ f32 duration, f32 weight }`. A name may be fused with a
 //!   stray `>`/`*>` byte from the preceding float, so the reader searches
 //!   inside each string for the `NS\NAME` pattern.
+//! - `MAINPED.HXD`'s external AGR table and the duplicated source/size
+//!   descriptor carried by each sequence. This identifies the owning AGR
+//!   without relying on namespace names (one AGR can use many namespaces).
 //!
 //! Everything else in a record (joints, pose data, serialized pointers) is
 //! intentionally ignored.
@@ -32,6 +35,12 @@ pub struct HxdSequence {
     pub duration_s: f32,
     /// Authored blend weight (0..=1).
     pub weight: f32,
+    /// AGR chunk size recorded by the catalog, including its 4-byte runtime
+    /// trailer. Present when the duplicated sequence descriptors validate.
+    pub encoded_size: Option<u32>,
+    /// Index into [`HxdRecord::resources`]. Present when the duplicated
+    /// sequence descriptors validate.
+    pub source_index: Option<u32>,
 }
 
 impl HxdSequence {
@@ -41,6 +50,26 @@ impl HxdSequence {
     }
 }
 
+/// One external AGR referenced by a loose hierarchy catalog.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HxdResource {
+    /// AGR stem (`C_Player`, `Grap`, `NPC_Cher`, ...).
+    pub name: String,
+    /// Total size recorded by the compiler catalog. This can differ slightly
+    /// from the retail loose file and is not used for admission.
+    pub encoded_size: u32,
+    /// Associated model resource, usually an MXD name (`player.mxd`).
+    pub model: String,
+}
+
+/// AGR-side data needed to pair parsed chunks with HXD sequence rows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HxdClipSignature {
+    /// Parsed AGR chunk bytes, excluding archive-sector padding.
+    pub source_size: usize,
+    pub duration_s: f32,
+}
+
 /// One parsed hierarchy record.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HxdRecord {
@@ -48,8 +77,12 @@ pub struct HxdRecord {
     pub model: String,
     /// Joint names (`joint0`..., or semantic names for peds).
     pub joints: Vec<String>,
-    /// Ordered animation sequences; the index matches the AGR chunk index.
+    /// Ordered animation sequences. Ordinary HXD records map directly onto
+    /// AGR chunks; compound catalogs require source/size alignment.
     pub sequences: Vec<HxdSequence>,
+    /// External AGR resources. Populated by `MAINPED.HXD`; ordinary loose HXD
+    /// files and `hxds.dat` records do not carry this table.
+    pub resources: Vec<HxdResource>,
 }
 
 impl HxdRecord {
@@ -60,6 +93,116 @@ impl HxdRecord {
             .map(|sequence| sequence.leaf_name().to_string())
             .collect()
     }
+
+    /// Resolve ordered sequence names for an AGR source.
+    ///
+    /// Ordinary HXD records use the historical exact-count mapping. Compound
+    /// catalogs such as `MAINPED.HXD` first select rows by their resource
+    /// index, then align them to AGR chunks by the duplicated encoded size.
+    /// The latter intentionally tolerates stale catalog-only rows but returns
+    /// no names unless every AGR chunk has an ordered match.
+    pub fn sequence_names_for_agr(&self, source: &str, clips: &[HxdClipSignature]) -> Vec<String> {
+        let source_index = self
+            .resources
+            .iter()
+            .position(|resource| resource.name.eq_ignore_ascii_case(source));
+        let Some(source_index) = source_index else {
+            return if self.sequences.len() == clips.len() {
+                self.sequence_names()
+            } else {
+                Vec::new()
+            };
+        };
+
+        let candidates: Vec<&HxdSequence> = self
+            .sequences
+            .iter()
+            .filter(|sequence| sequence.source_index == Some(source_index as u32))
+            .collect();
+        if clips.len() > candidates.len() {
+            return Vec::new();
+        }
+
+        // Minimum-cost ordered subsequence alignment. Encoded size is the
+        // admission key; duration only breaks ties when repeated chunk sizes
+        // make more than one mapping possible.
+        const MAX_FINAL_PADDING: u32 = 64;
+        const MAX_ALIGNMENT_CELLS: usize = 4_000_000;
+        let rows = clips.len() + 1;
+        let columns = candidates.len() + 1;
+        let Some(cells) = rows
+            .checked_mul(columns)
+            .filter(|cells| *cells <= MAX_ALIGNMENT_CELLS)
+        else {
+            return Vec::new();
+        };
+        let mut costs = vec![f64::INFINITY; cells];
+        let mut take = vec![false; cells];
+        for column in 0..columns {
+            costs[clips.len() * columns + column] = 0.0;
+        }
+        for row in (0..clips.len()).rev() {
+            for column in (0..candidates.len()).rev() {
+                let cell = row * columns + column;
+                costs[cell] = costs[cell + 1];
+                let expected_size = clips[row]
+                    .source_size
+                    .checked_add(4)
+                    .and_then(|size| u32::try_from(size).ok());
+                let size_delta = candidates[column].encoded_size.zip(expected_size).and_then(
+                    |(catalog_size, parsed_size)| {
+                        let delta = catalog_size.checked_sub(parsed_size)?;
+                        (delta == 0
+                            || (row + 1 == clips.len()
+                                && delta <= MAX_FINAL_PADDING
+                                && delta.is_multiple_of(4)))
+                        .then_some(delta)
+                    },
+                );
+                if let Some(size_delta) = size_delta {
+                    let remainder = costs[(row + 1) * columns + column + 1];
+                    if remainder.is_finite() {
+                        let duration_delta = f64::from(
+                            (candidates[column].duration_s - clips[row].duration_s).abs(),
+                        );
+                        // Exact sizes always beat a final-padding fallback;
+                        // duration then disambiguates equal-size rows.
+                        let matched = remainder + f64::from(size_delta) * 1_000.0 + duration_delta;
+                        if matched <= costs[cell] {
+                            costs[cell] = matched;
+                            take[cell] = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !costs[0].is_finite() {
+            return Vec::new();
+        }
+
+        let mut names = Vec::with_capacity(clips.len());
+        let (mut row, mut column) = (0usize, 0usize);
+        while row < clips.len() && column < candidates.len() {
+            if take[row * columns + column] {
+                names.push(candidates[column].leaf_name().to_string());
+                row += 1;
+            }
+            column += 1;
+        }
+        if row != clips.len() {
+            return Vec::new();
+        }
+        names
+    }
+
+    /// Model resource associated with one external AGR, if catalogued.
+    pub fn model_for_source(&self, source: &str) -> Option<&str> {
+        self.resources
+            .iter()
+            .find(|resource| resource.name.eq_ignore_ascii_case(source))
+            .map(|resource| resource.model.as_str())
+            .filter(|model| !model.is_empty())
+    }
 }
 
 fn is_printable(byte: u8) -> bool {
@@ -68,6 +211,7 @@ fn is_printable(byte: u8) -> bool {
 
 /// Iterates NUL-terminated printable strings, returning `(start, text)`.
 fn nul_strings(bytes: &[u8]) -> Vec<(usize, String)> {
+    const MAX_STRING_BYTES: usize = 63;
     let mut out = Vec::new();
     let mut start = None;
     for (index, &byte) in bytes.iter().enumerate() {
@@ -79,15 +223,20 @@ fn nul_strings(bytes: &[u8]) -> Vec<(usize, String)> {
             }
             Some(begin) => {
                 if byte == 0 {
-                    if index - begin <= 63 {
-                        out.push((
-                            begin,
-                            String::from_utf8_lossy(&bytes[begin..index]).into_owned(),
-                        ));
-                    }
+                    out.push((
+                        begin,
+                        String::from_utf8_lossy(&bytes[begin..index]).into_owned(),
+                    ));
                     start = None;
-                } else if !is_printable(byte) || index - begin > 63 {
+                } else if !is_printable(byte) {
                     start = None;
+                } else if index - begin + 1 > MAX_STRING_BYTES {
+                    // HXD compiler dumps can fuse printable pointer/fill
+                    // bytes onto a real sequence name. Keep a sliding
+                    // suffix instead of dropping the entire NUL-terminated
+                    // run; this mirrors `[printable]{1,63}\0` recovery and
+                    // preserves the actual `NAMESPACE\NAME` tail.
+                    start = Some(index + 1 - MAX_STRING_BYTES);
                 }
             }
         }
@@ -109,25 +258,26 @@ fn is_identifier(text: &str) -> bool {
 fn sequence_in_string(text: &str) -> Option<(usize, String)> {
     let bytes = text.as_bytes();
     for start in 0..bytes.len() {
-        if !(bytes[start].is_ascii_uppercase() || bytes[start].is_ascii_digit()) {
+        if !bytes[start].is_ascii_alphanumeric() {
             continue;
         }
         let Some(backslash) = text[start..].find('\\').map(|offset| start + offset) else {
             continue;
         };
         let namespace = &text[start..backslash];
-        let name = &text[backslash + 1..];
+        let name_start = backslash + 1;
+        let name_end = bytes[name_start..]
+            .iter()
+            .position(|byte| !(byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b' '))
+            .map_or(bytes.len(), |offset| name_start + offset);
+        let name = &text[name_start..name_end];
         if namespace.len() >= 2
             && namespace
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
             && !name.is_empty()
-            && name.len() <= 40
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b' ')
         {
-            return Some((start, text[start..].to_string()));
+            return Some((start, text[start..name_end].to_string()));
         }
     }
     None
@@ -138,12 +288,90 @@ fn read_f32(bytes: &[u8], offset: usize) -> Option<f32> {
     Some(f32::from_le_bytes(slice.try_into().ok()?))
 }
 
+fn read_u32_checked(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        bytes.get(offset..offset + 4)?.try_into().ok()?,
+    ))
+}
+
+fn fixed_string(bytes: &[u8]) -> Option<String> {
+    let end = bytes.iter().position(|byte| *byte == 0)?;
+    let text = bytes.get(..end)?;
+    (!text.is_empty() && text.iter().all(|byte| is_printable(*byte)))
+        .then(|| String::from_utf8_lossy(text).into_owned())
+}
+
+/// Parse the fixed external-resource table at the tail of `MAINPED.HXD`.
+/// Its first row is `C_Player`; the preceding u32 is the row count and every
+/// row is `{ char name[32], u32 size, char model[32], f32 weight }`.
+fn parse_external_resources(body: &[u8]) -> Vec<HxdResource> {
+    const ROW_BYTES: usize = 72;
+    const FIELD_BYTES: usize = 32;
+
+    for (start, marker) in body.windows(b"C_Player\0".len()).enumerate().skip(4) {
+        if !marker.eq_ignore_ascii_case(b"C_Player\0") {
+            continue;
+        }
+        let Some(count) = read_u32_checked(body, start - 4).map(|value| value as usize) else {
+            continue;
+        };
+        if !(2..=4096).contains(&count) {
+            continue;
+        }
+        let Some(table_bytes) = count.checked_mul(ROW_BYTES) else {
+            continue;
+        };
+        let Some(table) = body.get(start..start.saturating_add(table_bytes)) else {
+            continue;
+        };
+
+        let mut resources = Vec::with_capacity(count);
+        for row in table.chunks_exact(ROW_BYTES) {
+            let Some(name) = fixed_string(&row[..FIELD_BYTES]) else {
+                resources.clear();
+                break;
+            };
+            let encoded_size = u32::from_le_bytes(row[32..36].try_into().unwrap_or([0; 4]));
+            let model = if row[36] == 0 {
+                String::new()
+            } else if let Some(model) = fixed_string(&row[36..68]) {
+                model
+            } else {
+                resources.clear();
+                break;
+            };
+            resources.push(HxdResource {
+                name,
+                encoded_size,
+                model,
+            });
+        }
+        if resources.len() == count {
+            return resources;
+        }
+    }
+    Vec::new()
+}
+
+/// Read the duplicated sequence descriptor following a 32-byte name field.
+fn sequence_source(body: &[u8], name_start: usize) -> Option<(u32, u32)> {
+    let first = body.get(name_start + 32..name_start + 48)?;
+    let second = body.get(name_start + 64..name_start + 80)?;
+    if first != second {
+        return None;
+    }
+    let encoded_size = u32::from_le_bytes(first[8..12].try_into().ok()?);
+    let source_index = u32::from_le_bytes(first[12..16].try_into().ok()?);
+    (encoded_size >= 4).then_some((encoded_size, source_index))
+}
+
 /// Parses one record body (loose `.HXD` file, or a body inside `hxds.dat`).
 ///
 /// `fallback_model` is used when the record carries no readable name marker
 /// (seen on the 451 KiB `MAINPED.HXD`); callers pass the file stem.
 pub fn parse_record(body: &[u8], fallback_model: &str) -> HxdRecord {
     let strings = nul_strings(body);
+    let resources = parse_external_resources(body);
 
     // Model name: identifier after the last `01 00 00 00` marker.
     let mut model: Option<String> = None;
@@ -181,10 +409,13 @@ pub fn parse_record(body: &[u8], fallback_model: &str) -> HxdRecord {
         if !weight.is_finite() || !(0.0..=1.0).contains(&weight) {
             continue;
         }
+        let source = sequence_source(body, name_start);
         sequences.push(HxdSequence {
             name,
             duration_s: duration,
             weight,
+            encoded_size: source.map(|(size, _)| size),
+            source_index: source.map(|(_, index)| index),
         });
     }
 
@@ -215,6 +446,7 @@ pub fn parse_record(body: &[u8], fallback_model: &str) -> HxdRecord {
         model: model.unwrap_or_else(|| fallback_model.to_string()),
         joints,
         sequences,
+        resources,
     }
 }
 
@@ -269,6 +501,22 @@ pub fn find_for_stem(anim_dir: &Path, stem: &str) -> Option<HxdRecord> {
         .find(|record| record.model.to_ascii_lowercase() == wanted)
 }
 
+/// Resolve naming metadata for an AGR. Direct HXD/hxds records take
+/// precedence; character and mission AGRs fall back to `MAINPED.HXD` only
+/// when its resource table explicitly contains the requested stem.
+pub fn find_for_agr(anim_dir: &Path, stem: &str) -> Option<HxdRecord> {
+    if let Some(record) = find_for_stem(anim_dir, stem) {
+        return Some(record);
+    }
+    let bytes = std::fs::read(anim_dir.join("MAINPED.HXD")).ok()?;
+    let record = parse_record(&bytes, "MAINPED");
+    record
+        .resources
+        .iter()
+        .any(|resource| resource.name.eq_ignore_ascii_case(stem))
+        .then_some(record)
+}
+
 /// Derives the game root from an archive path, if it looks like the retail
 /// layout (`<root>/Stream/<archive>.img`).
 pub fn anim_dir_for_archive(archive_path: Option<&Path>) -> Option<PathBuf> {
@@ -281,7 +529,11 @@ pub fn anim_dir_for_archive(archive_path: Option<&Path>) -> Option<PathBuf> {
 
 /// Case-insensitive NIF entry lookup by model name.
 pub fn find_model_entry(entries: &[crate::archive::EntryInfo], model: &str) -> Option<usize> {
-    let wanted = model.to_ascii_lowercase();
+    let wanted = Path::new(model)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(model)
+        .to_ascii_lowercase();
     let wanted_nif = format!("{wanted}.nif");
     entries.iter().position(|entry| {
         let file = entry.file_name.to_ascii_lowercase();
@@ -337,6 +589,81 @@ mod tests {
     }
 
     #[test]
+    fn long_printable_prefix_keeps_the_sequence_suffix() {
+        let mut body = vec![b'X'; 72];
+        let sequence_start = body.len();
+        body.extend_from_slice(b"C_PLAYER\\RUN\0");
+        body[sequence_start - 8..sequence_start - 4].copy_from_slice(&0.75_f32.to_le_bytes());
+        body[sequence_start - 4..sequence_start].copy_from_slice(&0.3_f32.to_le_bytes());
+
+        let record = parse_record(&body, "MAINPED");
+        assert_eq!(record.sequences.len(), 1);
+        assert_eq!(record.sequences[0].name, "C_PLAYER\\RUN");
+        assert!((record.sequences[0].duration_s - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn printable_suffix_after_sequence_name_is_ignored() {
+        let mut body = vec![0u8; 8];
+        body[..4].copy_from_slice(&0.5_f32.to_le_bytes());
+        body[4..8].copy_from_slice(&0.3_f32.to_le_bytes());
+        body.extend_from_slice(b"C_PLAYER\\RUN>junk\0");
+
+        let record = parse_record(&body, "MAINPED");
+        assert_eq!(record.sequences.len(), 1);
+        assert_eq!(record.sequences[0].name, "C_PLAYER\\RUN");
+    }
+
+    #[test]
+    fn compound_catalog_skips_stale_rows_by_chunk_size() {
+        let sequence = |name: &str, encoded_size, source_index| HxdSequence {
+            name: name.to_string(),
+            duration_s: 1.0,
+            weight: 0.3,
+            encoded_size: Some(encoded_size),
+            source_index: Some(source_index),
+        };
+        let record = HxdRecord {
+            model: "MAINPED".into(),
+            joints: Vec::new(),
+            sequences: vec![
+                sequence("C_PLAYER\\RUN", 104, 0),
+                sequence("DISHONERABLE\\VAULT_BAR", 97, 0),
+                sequence("C_PLAYER\\IDLE", 204, 0),
+                sequence("NPC_GENERIC\\WARNING", 84, 1),
+            ],
+            resources: vec![
+                HxdResource {
+                    name: "C_Player".into(),
+                    encoded_size: 0,
+                    model: "player.mxd".into(),
+                },
+                HxdResource {
+                    name: "NPC_Cher".into(),
+                    encoded_size: 0,
+                    model: "player.mxd".into(),
+                },
+            ],
+        };
+        let clips = [
+            HxdClipSignature {
+                source_size: 100,
+                duration_s: 1.0,
+            },
+            HxdClipSignature {
+                source_size: 200,
+                duration_s: 1.0,
+            },
+        ];
+
+        assert_eq!(
+            record.sequence_names_for_agr("c_player", &clips),
+            ["RUN", "IDLE"]
+        );
+        assert!(record.sequence_names_for_agr("missing", &clips).is_empty());
+    }
+
+    #[test]
     fn find_model_entry_is_case_insensitive() {
         let mut entry = crate::archive::EntryInfo::new("SK8Board.nif");
         let entries = vec![entry.clone()];
@@ -385,6 +712,54 @@ mod tests {
         assert_eq!(broom.model, "AniBroom");
         assert_eq!(broom.sequences.len(), 3);
         assert_eq!(find_for_stem(&anim, "1_07_Sk8Board"), None);
+
+        if let (Ok(hxd_bytes), Ok(agr_bytes)) = (
+            std::fs::read(anim.join("MAINPED.HXD")),
+            std::fs::read(anim.join("C_Player.agr")),
+        ) {
+            let record = parse_record(&hxd_bytes, "MAINPED");
+            assert_eq!(record.sequences.len(), 3_358);
+            assert_eq!(record.resources.len(), 425);
+            assert_eq!(record.resources[0].name, "C_Player");
+            assert_eq!(record.model_for_source("c_player"), Some("player.mxd"));
+
+            let agr = crate::inspector::animation::bully::parse_agr(&agr_bytes)
+                .expect("C_Player.agr parses");
+            assert_eq!(agr.clip_count(), 439);
+            let signatures: Vec<_> = agr
+                .clips
+                .iter()
+                .map(|clip| HxdClipSignature {
+                    source_size: clip.source_size,
+                    duration_s: clip.duration_s,
+                })
+                .collect();
+            let names = record.sequence_names_for_agr("C_Player", &signatures);
+            assert_eq!(names.len(), 439);
+            assert_eq!(names.first().map(String::as_str), Some("RUN"));
+            assert!(!names.iter().any(|name| name == "VAULT_BAR"));
+
+            for (source, expected_count) in [("Grap", 59), ("NPC_Cher", 12)] {
+                let Ok(agr_bytes) = std::fs::read(anim.join(format!("{source}.agr"))) else {
+                    continue;
+                };
+                let agr = crate::inspector::animation::bully::parse_agr(&agr_bytes)
+                    .unwrap_or_else(|error| panic!("{source}.agr: {error}"));
+                assert_eq!(agr.clip_count(), expected_count);
+                let signatures: Vec<_> = agr
+                    .clips
+                    .iter()
+                    .map(|clip| HxdClipSignature {
+                        source_size: clip.source_size,
+                        duration_s: clip.duration_s,
+                    })
+                    .collect();
+                assert_eq!(
+                    record.sequence_names_for_agr(source, &signatures).len(),
+                    expected_count
+                );
+            }
+        }
         // Archive path -> Anim dir derivation with the retail layout.
         let stream = Path::new(&stream);
         let anim_from_archive =
