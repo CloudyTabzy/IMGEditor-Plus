@@ -56,10 +56,6 @@ impl SaveTask {
         self
     }
 
-    pub async fn run(self) -> anyhow::Result<ArchiveInfo> {
-        self.run_blocking()
-    }
-
     pub fn run_blocking(self) -> anyhow::Result<ArchiveInfo> {
         let progress = self.archive.progress.clone();
         progress.start();
@@ -225,10 +221,6 @@ impl PackTask {
         }
     }
 
-    pub async fn run(self) -> anyhow::Result<PackOutcome> {
-        self.run_blocking()
-    }
-
     pub fn run_blocking(self) -> anyhow::Result<PackOutcome> {
         let estimate = self.archive.pack_stats()?;
         let entry_count = estimate.entry_count;
@@ -267,10 +259,6 @@ impl FolderImportTask {
             plan,
             duplicate_policy,
         }
-    }
-
-    pub async fn run(self) -> anyhow::Result<FolderImportOutcome> {
-        self.run_blocking()
     }
 
     pub fn run_blocking(self) -> anyhow::Result<FolderImportOutcome> {
@@ -392,10 +380,6 @@ impl ExportTask {
         self
     }
 
-    pub async fn run(self) -> anyhow::Result<(usize, Vec<String>)> {
-        self.run_blocking()
-    }
-
     pub fn run_blocking(self) -> anyhow::Result<(usize, Vec<String>)> {
         let ExportTask {
             archive,
@@ -407,14 +391,12 @@ impl ExportTask {
 
         progress.start();
 
-        let entries: Vec<EntryInfo> = match mode {
-            ExportMode::All => archive.entries.clone(),
-            ExportMode::Selected => archive
-                .entries
-                .iter()
-                .filter(|e| e.selected)
-                .cloned()
-                .collect(),
+        // Pointer-sized handles instead of cloning every entry: the task
+        // already owns the archive, so a full `Vec<EntryInfo>` clone would
+        // only copy ~byte-sized metadata for large catalogs.
+        let entries: Vec<&EntryInfo> = match mode {
+            ExportMode::All => archive.entries.iter().collect(),
+            ExportMode::Selected => archive.entries.iter().filter(|e| e.selected).collect(),
         };
 
         let total = entries.len();
@@ -445,7 +427,7 @@ impl ExportTask {
 }
 
 fn export_entries_sequential(
-    entries: &[EntryInfo],
+    entries: &[&EntryInfo],
     archive: &ArchiveInfo,
     folder: &std::path::Path,
     progress: &ProgressInfo,
@@ -477,7 +459,7 @@ fn export_entries_sequential(
 }
 
 fn export_entries_batched(
-    entries: &[EntryInfo],
+    entries: &[&EntryInfo],
     archive: &ArchiveInfo,
     folder: &std::path::Path,
     progress: &ProgressInfo,
@@ -486,21 +468,24 @@ fn export_entries_batched(
 ) -> Vec<(CompactString, anyhow::Result<()>)> {
     let workers = rayon::current_num_threads().clamp(1, 8);
     let chunk_size = (entries.len() / workers).max(1);
-    let chunks: Vec<Vec<EntryInfo>> = entries.chunks(chunk_size).map(|c| c.to_vec()).collect();
 
     let source_path = archive.path.clone();
 
-    chunks
-        .into_par_iter()
+    entries
+        .par_chunks(chunk_size)
         .flat_map(|chunk| {
             let chunk_len = chunk.len();
+            // A worker whose shared reader fails to open falls back to
+            // per-entry opens inside `export_entry_buffered` instead of
+            // panicking the whole export.
             let mut reader = source_path
                 .as_ref()
-                .map(|path| BufReader::with_capacity(4 * 1024 * 1024, File::open(path).unwrap()));
+                .and_then(|path| File::open(path).ok())
+                .map(|file| BufReader::with_capacity(4 * 1024 * 1024, file));
 
             let mut local_completed: usize = 0;
             chunk
-                .into_iter()
+                .iter()
                 .enumerate()
                 .map(|(idx, entry)| {
                     if progress.is_cancelled() {
@@ -512,7 +497,7 @@ fn export_entries_batched(
 
                     let result = export_entry_buffered(
                         archive.version,
-                        &entry,
+                        entry,
                         source_path.as_deref(),
                         reader.as_mut(),
                         folder,
@@ -565,31 +550,38 @@ fn export_entry_buffered(
     let offset = u64::from(entry.offset) * SECTOR_SIZE;
 
     if let Some(r) = reader {
-        let mut buf = vec![0u8; size as usize];
         r.seek(SeekFrom::Start(offset))?;
-        r.read_exact(&mut buf)?;
-        write_output_buffered(&output_path, &buf)?;
+        write_entry_streaming(&output_path, r.take(size), size)?;
     } else {
         let mut file = File::open(path)?;
         file.seek(SeekFrom::Start(offset))?;
-        let mut buf = vec![0u8; size as usize];
-        file.read_exact(&mut buf)?;
-        write_output_buffered(&output_path, &buf)?;
+        write_entry_streaming(&output_path, file.take(size), size)?;
     }
 
     Ok(())
 }
 
-fn write_output_buffered(path: &Path, data: &[u8]) -> anyhow::Result<()> {
+/// Streams one entry straight from the archive reader into a buffered
+/// output file instead of materializing the whole entry (up to 128 MiB for
+/// a maximum-size IMG v2 entry) in memory, verifying that the full sector
+/// range was written.
+fn write_entry_streaming(
+    path: &Path,
+    mut reader: impl Read,
+    expected_size: u64,
+) -> anyhow::Result<()> {
     let file = File::create(path)?;
     let mut writer = BufWriter::with_capacity(OUTPUT_BUF_SIZE, file);
-    writer.write_all(data)?;
+    let written = std::io::copy(&mut reader, &mut writer)?;
     writer.flush()?;
+    if written != expected_size {
+        anyhow::bail!("entry data truncated during export");
+    }
     Ok(())
 }
 
 fn export_entries_zero_copy(
-    entries: &[EntryInfo],
+    entries: &[&EntryInfo],
     archive: &ArchiveInfo,
     folder: &std::path::Path,
     progress: &ProgressInfo,
@@ -659,7 +651,7 @@ fn export_entry_zero_copy(
 /// numbering is resolved in memory without any `exists()` syscalls; otherwise
 /// falls back to the disk-checking `unique_output_path` per entry.
 fn precompute_output_paths(
-    entries: &[EntryInfo],
+    entries: &[&EntryInfo],
     folder: &std::path::Path,
 ) -> Vec<Result<PathBuf, String>> {
     let dir_empty = std::fs::read_dir(folder)

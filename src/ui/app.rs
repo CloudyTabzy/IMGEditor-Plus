@@ -13,7 +13,7 @@ use iced::{Element, Point, Subscription, Task, Theme};
 use iced_aw::menu::{Item, Menu, MenuBar};
 use iced_fonts::LUCIDE_FONT_BYTES;
 
-use crate::archive::{ArchiveInfo, ExportStatus, SortColumn};
+use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn};
 use crate::dev_logger;
 use crate::sort::{SortChain, SortDirection, SortKey, SortPriority};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1077,6 +1077,9 @@ pub struct NewTxdState {
 pub struct BulkEntryPlan {
     pub entry_index: usize,
     pub file_name: String,
+    /// Snapshot of the planned entry so the conversion task reads entry
+    /// data without cloning the whole archive into the task.
+    pub entry: EntryInfo,
     /// (texture index, texture name, plan) for textures needing work.
     pub textures: Vec<(usize, String, CompactPlan)>,
     pub skipped_native: usize,
@@ -1583,11 +1586,10 @@ impl App {
         Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || {
-                    if crate::parser::detect_version(&path) == ImgVersion::Unknown {
-                        return OpenArchiveOutcome::Unsupported;
-                    }
-
                     match ArchiveInfo::open(path) {
+                        Ok(archive) if archive.version == ImgVersion::Unknown => {
+                            OpenArchiveOutcome::Unsupported
+                        }
                         Ok(archive) => OpenArchiveOutcome::Opened(Box::new(archive)),
                         Err(error) => OpenArchiveOutcome::Failed(error.to_string()),
                     }
@@ -2035,14 +2037,25 @@ impl App {
             return Task::none();
         }
         self.validator_popup_open = true;
-        // Probe the content once so the picker can suggest a game.
+        // Probe the content once so the picker can suggest a game. Only the
+        // (bounded) name scan runs here; the sampled entries move into the
+        // blocking probe so the whole archive is never cloned.
         if self.editor.archives()[archive_index].target_hint.is_none() {
-            let snapshot = self.editor.archives()[archive_index].clone();
+            let scan = crate::compat::hint::scan_probe_sample(
+                &self.editor.archives()[archive_index],
+                crate::compat::hint::PROBE_SAMPLE_LIMIT,
+            );
+            let version = self.editor.archives()[archive_index].version;
+            let archive_path = self.editor.archives()[archive_index].path.clone();
+            let source_mmap = self.editor.archives()[archive_index].source_mmap.clone();
             return Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
-                        crate::compat::hint::probe_target(
-                            &snapshot,
+                        crate::compat::hint::probe_from_scan(
+                            scan,
+                            version,
+                            archive_path.as_deref(),
+                            source_mmap.as_deref(),
                             crate::compat::hint::PROBE_SAMPLE_LIMIT,
                         )
                     })
@@ -3745,11 +3758,29 @@ impl App {
                     self.toast = Some("Select the entries to convert first.".into());
                     return Task::none();
                 }
-                let archive = archive.clone();
+                let selected_entries: Vec<(usize, EntryInfo)> = selected
+                    .iter()
+                    .filter_map(|&index| {
+                        archive
+                            .entries
+                            .get(index)
+                            .map(|entry| (index, entry.clone()))
+                    })
+                    .collect();
+                let archive_path = archive.path.clone();
+                let source_mmap = archive.source_mmap.clone();
+                let source_label = archive.file_name.clone();
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            plan_bulk_convert(archive_index, &archive, &selected, target)
+                            plan_bulk_convert(
+                                archive_index,
+                                archive_path.as_deref(),
+                                source_mmap.as_deref(),
+                                source_label,
+                                &selected_entries,
+                                target,
+                            )
                         })
                         .await
                         .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
@@ -3783,15 +3814,21 @@ impl App {
                     return Task::none();
                 };
                 let archive_index = state.archive_index;
-                let Some(archive) = self.editor.archives().get(archive_index).cloned() else {
+                let Some(archive) = self.editor.archives().get(archive_index) else {
                     self.toast = Some("The archive is no longer open.".into());
                     return Task::none();
                 };
+                let archive_path = archive.path.clone();
+                let source_mmap = archive.source_mmap.clone();
                 let entries = state.entries;
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            convert_bulk_entries(&archive, &entries)
+                            convert_bulk_entries(
+                                &entries,
+                                archive_path.as_deref(),
+                                source_mmap.as_deref(),
+                            )
                         })
                         .await
                         .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
@@ -6714,10 +6751,23 @@ impl App {
             let Some(entry) = archive.entries.get(entry_index) else {
                 return Task::none();
             };
+            let extension = std::path::Path::new(entry.file_name.as_str())
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            // Only NFT catalogs need random access to sibling entries;
+            // TXD previews decode from the entry's own bytes, so the
+            // (potentially huge) entry list is not cloned for them.
+            let archive_entries = if extension == "nft" {
+                archive.entries.clone()
+            } else {
+                Vec::new()
+            };
             (
                 entry.clone(),
                 archive.path.clone(),
-                archive.entries.clone(),
+                archive_entries,
                 Arc::clone(&archive.texture_cache),
             )
         };
@@ -6778,8 +6828,8 @@ impl App {
                                     }
                                     "nft" => {
                                         let archive_texture_index =
-                                            crate::inspector::texture::ArchiveTextureIndex::from_entries(
-                                                &archive_entries,
+                                            crate::inspector::texture::ArchiveTextureIndex::from_entries_owned(
+                                                archive_entries,
                                                 archive_path.as_deref(),
                                             );
                                         crate::inspector::texture::decode_nft_textures_with_resolver(
@@ -7599,24 +7649,28 @@ fn plan_txd_import(
 
 /// Plan converting every texture of the selected entries to the target
 /// dialect, off the UI thread. Textures already native are skipped.
+///
+/// Receives only the selected entries (with their indices) plus the source
+/// accessors, so the task never needs a full archive clone.
 fn plan_bulk_convert(
     archive_index: usize,
-    archive: &crate::archive::ArchiveInfo,
-    selected: &[usize],
+    archive_path: Option<&std::path::Path>,
+    source_mmap: Option<&memmap2::Mmap>,
+    source_label: String,
+    selected: &[(usize, EntryInfo)],
     target: &'static crate::compat::games::GameProfile,
 ) -> Result<BulkPlanReady, String> {
     use crate::compat::games::{Verdict, classify};
     use crate::compat::raster::RasterProfile;
 
     let mut entries = Vec::new();
-    for &index in selected {
-        let Some(entry) = archive.entries.get(index) else {
-            continue;
-        };
+    for (index, entry) in selected {
         if !entry.file_name_lower.ends_with(".txd") {
             continue;
         }
-        let Ok(bytes) = crate::parser::read_entry_data(archive, entry) else {
+        let Ok(bytes) =
+            crate::parser::read_entry_data_with_source(entry, archive_path, source_mmap)
+        else {
             continue;
         };
         let Ok(txd) = crate::parser::txd::parse_txd(&bytes) else {
@@ -7635,7 +7689,7 @@ fn plan_bulk_convert(
                 &bytes,
                 texture_index,
                 target,
-                &archive.file_name,
+                &source_label,
                 None,
                 crate::compat::encode::EncodeOptions::default(),
             ) {
@@ -7649,8 +7703,9 @@ fn plan_bulk_convert(
         }
         if !textures.is_empty() {
             entries.push(BulkEntryPlan {
-                entry_index: index,
+                entry_index: *index,
                 file_name: entry.file_name.to_string(),
+                entry: entry.clone(),
                 textures,
                 skipped_native,
                 failed,
@@ -7659,7 +7714,7 @@ fn plan_bulk_convert(
     }
     Ok(BulkPlanReady {
         archive_index,
-        source_label: archive.file_name.clone(),
+        source_label,
         entries,
     })
 }
@@ -7667,19 +7722,21 @@ fn plan_bulk_convert(
 /// Converted entry bytes, keyed by entry index.
 type BulkPatches = Vec<(usize, Arc<Vec<u8>>)>;
 
-/// Execute a bulk-conversion plan off the UI thread.
+/// Execute a bulk-conversion plan off the UI thread, reading each planned
+/// entry from its snapshot instead of the live archive.
 fn convert_bulk_entries(
-    archive: &crate::archive::ArchiveInfo,
     entries: &[BulkEntryPlan],
+    archive_path: Option<&std::path::Path>,
+    source_mmap: Option<&memmap2::Mmap>,
 ) -> Result<BulkPatches, String> {
     let mut patches = Vec::new();
     for entry_plan in entries {
-        let entry = archive
-            .entries
-            .get(entry_plan.entry_index)
-            .ok_or_else(|| "entry disappeared during conversion".to_string())?;
-        let mut bytes =
-            crate::parser::read_entry_data(archive, entry).map_err(|error| error.to_string())?;
+        let mut bytes = crate::parser::read_entry_data_with_source(
+            &entry_plan.entry,
+            archive_path,
+            source_mmap,
+        )
+        .map_err(|error| error.to_string())?;
         for (texture_index, _, plan) in &entry_plan.textures {
             bytes = crate::compat::convert::apply_replace(&bytes, *texture_index, &plan.0)?;
         }
@@ -8721,6 +8778,7 @@ mod tests {
             entries: vec![BulkEntryPlan {
                 entry_index: 1,
                 file_name: "second.txd".to_string(),
+                entry: EntryInfo::new("second.txd"),
                 textures: vec![(0, "tex".to_string(), tiny_plan(&crate::compat::games::GTA3))],
                 skipped_native: 2,
                 failed: 0,

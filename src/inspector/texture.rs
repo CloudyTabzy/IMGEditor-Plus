@@ -165,11 +165,17 @@ pub struct ArchiveTextureIndex {
 
 impl ArchiveTextureIndex {
     pub fn from_entries(entries: &[EntryInfo], archive_path: Option<&Path>) -> Self {
+        Self::from_entries_owned(entries.to_vec(), archive_path)
+    }
+
+    /// Consuming variant for callers that already own the entry list:
+    /// entries are moved into the index instead of cloned a second time.
+    pub fn from_entries_owned(entries: Vec<EntryInfo>, archive_path: Option<&Path>) -> Self {
         let mut indexed = HashMap::with_capacity(entries.len());
         for entry in entries {
             indexed
                 .entry(texture_key(entry.file_name.as_str()))
-                .or_insert_with(|| entry.clone());
+                .or_insert(entry);
         }
         Self {
             entries: indexed,

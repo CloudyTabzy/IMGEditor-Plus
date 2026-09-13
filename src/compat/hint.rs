@@ -81,32 +81,69 @@ impl ProbeStats {
     }
 }
 
-/// Probe a sample of the archive's textures and the entry extensions to
-/// suggest a game. `None` when the sample is too ambiguous to guess.
-pub fn probe_target(archive: &ArchiveInfo, sample_limit: usize) -> Option<TargetHint> {
-    let stats = collect_stats(archive, sample_limit);
-    classify(&stats, archive.version)
+/// Metadata-only first phase of [`probe_target`], safe to run on the UI
+/// thread: entry-name counts plus a bounded clone of the TXD entries whose
+/// content the probe may read. The blocking second phase
+/// ([`probe_from_scan`]) does all the content I/O.
+///
+/// Unlike the interleaved scan it replaces, at most `sample_limit` TXDs are
+/// ever visited; TXDs that yield no readable textures no longer extend the
+/// sample. For healthy archives the visited set is identical.
+pub struct ProbeScan {
+    pub nft_entries: usize,
+    pub nif_entries: usize,
+    pub txd_entries: usize,
+    pub sampled: Vec<crate::archive::EntryInfo>,
 }
 
-pub fn collect_stats(archive: &ArchiveInfo, sample_limit: usize) -> ProbeStats {
-    let mut stats = ProbeStats::default();
+pub fn scan_probe_sample(archive: &ArchiveInfo, sample_limit: usize) -> ProbeScan {
+    let mut scan = ProbeScan {
+        nft_entries: 0,
+        nif_entries: 0,
+        txd_entries: 0,
+        sampled: Vec::new(),
+    };
     for entry in &archive.entries {
         if entry.file_name_lower.ends_with(".nft") {
-            stats.nft_entries += 1;
+            scan.nft_entries += 1;
             continue;
         }
         if entry.file_name_lower.ends_with(".nif") {
-            stats.nif_entries += 1;
+            scan.nif_entries += 1;
             continue;
         }
         if !entry.file_name_lower.ends_with(".txd") {
             continue;
         }
-        stats.txd_entries += 1;
-        if stats.sampled_txds >= sample_limit || stats.textures >= PROBE_TEXTURES_ENOUGH {
-            continue;
+        scan.txd_entries += 1;
+        if scan.sampled.len() < sample_limit {
+            scan.sampled.push(entry.clone());
         }
-        let textures = peek_entry_textures(archive, entry);
+    }
+    scan
+}
+
+/// Blocking second phase of the probe: read the sampled TXD headers and
+/// classify the archive. `archive_path`/`source_mmap` provide the same
+/// content access the full archive would.
+pub fn probe_from_scan(
+    scan: ProbeScan,
+    version: ImgVersion,
+    archive_path: Option<&std::path::Path>,
+    source_mmap: Option<&memmap2::Mmap>,
+    sample_limit: usize,
+) -> Option<TargetHint> {
+    let mut stats = ProbeStats {
+        nft_entries: scan.nft_entries,
+        nif_entries: scan.nif_entries,
+        txd_entries: scan.txd_entries,
+        ..ProbeStats::default()
+    };
+    for entry in &scan.sampled {
+        if stats.sampled_txds >= sample_limit || stats.textures >= PROBE_TEXTURES_ENOUGH {
+            break;
+        }
+        let textures = peek_entry_textures(entry, archive_path, source_mmap);
         if textures.is_empty() {
             continue;
         }
@@ -117,16 +154,30 @@ pub fn collect_stats(archive: &ArchiveInfo, sample_limit: usize) -> ProbeStats {
             stats.textures += 1;
         }
     }
-    stats
+    classify(&stats, version)
+}
+
+/// Probe a sample of the archive's textures and the entry extensions to
+/// suggest a game. `None` when the sample is too ambiguous to guess.
+pub fn probe_target(archive: &ArchiveInfo, sample_limit: usize) -> Option<TargetHint> {
+    let scan = scan_probe_sample(archive, sample_limit);
+    probe_from_scan(
+        scan,
+        archive.version,
+        archive.path.as_deref(),
+        archive.source_mmap.as_deref(),
+        sample_limit,
+    )
 }
 
 /// Header-only read of one TXD entry: a bounded prefix (no copy from the
 /// mmap) walked tolerantly instead of a full parse.
 fn peek_entry_textures(
-    archive: &ArchiveInfo,
     entry: &crate::archive::EntryInfo,
+    archive_path: Option<&std::path::Path>,
+    source_mmap: Option<&memmap2::Mmap>,
 ) -> Vec<(u32, LogicalFormat)> {
-    if let Some(mmap) = &archive.source_mmap {
+    if let Some(mmap) = source_mmap {
         let start = entry.offset as usize * crate::parser::SECTOR_SIZE as usize;
         let end = start + entry.sector as usize * crate::parser::SECTOR_SIZE as usize;
         if let Some(slice) = mmap.get(start..end) {
@@ -135,7 +186,7 @@ fn peek_entry_textures(
         }
         return Vec::new();
     }
-    match read_entry_data_from_source(entry, archive.path.as_deref()) {
+    match read_entry_data_from_source(entry, archive_path) {
         Ok(bytes) => {
             let limit = bytes.len().min(PROBE_READ_LIMIT);
             peek_textures(&bytes[..limit])
