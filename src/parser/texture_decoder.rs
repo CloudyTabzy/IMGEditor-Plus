@@ -168,7 +168,7 @@ const PREMUL_RECIPROCAL: [u32; 256] = {
     let mut table = [0u32; 256];
     let mut alpha = 1usize;
     while alpha < 256 {
-        table[alpha] = ((1u32 << 24) + alpha as u32 - 1) / alpha as u32;
+        table[alpha] = (1u32 << 24).div_ceil(alpha as u32);
         alpha += 1;
     }
     table
