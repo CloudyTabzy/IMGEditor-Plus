@@ -654,6 +654,29 @@ pub fn to_library(file: &AgrFile, name: impl Into<String>) -> AnimationLibrary {
     }
 }
 
+/// Renames clips from an HXD record's ordered sequence list.
+///
+/// The AGR chunk index maps onto the HXD sequence index (verified on
+/// SK8Board: 17 chunks = 17 sequences, durations matching). Renaming only
+/// applies when the counts agree; returns how many clips were renamed.
+pub fn apply_hxd_names(
+    library: &mut AnimationLibrary,
+    record: &crate::inspector::animation::hxd::HxdRecord,
+) -> usize {
+    apply_clip_names(library, &record.sequence_names())
+}
+
+/// [`apply_hxd_names`] for a pre-extracted name list.
+pub fn apply_clip_names(library: &mut AnimationLibrary, names: &[String]) -> usize {
+    if library.clips.len() != names.len() {
+        return 0;
+    }
+    for (clip, name) in library.clips.iter_mut().zip(names) {
+        clip.name = name.clone();
+    }
+    library.clips.len()
+}
+
 /// How NIF scene nodes are named for AGR track binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum NifMapping {
@@ -1446,6 +1469,20 @@ mod tests {
                 assert!(pair[1].time_s > pair[0].time_s, "keys ascend");
                 let q = pair[0].rotation();
                 assert!((q.length() - 1.0).abs() < 1e-3, "unit quat");
+            }
+
+            // End-to-end naming: the HXD catalog renames every clip in order.
+            let anim = stream.parent().expect("game root").join("Anim");
+            if let Some(record) = crate::inspector::animation::hxd::find_for_stem(&anim, "SK8Board")
+            {
+                assert_eq!(record.sequences.len(), file.clip_count());
+                let mut library = to_library(&file, "SK8Board.agr");
+                let named = apply_hxd_names(&mut library, &record);
+                assert_eq!(named, 17);
+                assert_eq!(library.clips[0].name, "IDLE_SK8BOARD");
+                assert_eq!(library.clips[14].name, "SK8_GIV_O");
+                assert_eq!(library.clips[15].name, "1_07_PICKUP");
+                assert_eq!(library.clips[16].name, "SK8_EXAMINE_O");
             }
         }
 

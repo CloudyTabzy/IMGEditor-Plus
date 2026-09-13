@@ -689,6 +689,9 @@ pub enum Message {
         archive_index: usize,
         agr_entry: usize,
         model_entry: usize,
+        /// Sequence leaf names from the model's HXD catalog, when one was
+        /// resolved. Applied to the clips when the counts agree.
+        clip_names: Vec<String>,
     },
     ViewerAgrLoadCompleted {
         result: Result<
@@ -2576,18 +2579,43 @@ impl App {
             return Task::none();
         };
         let agr_name = entry.file_name.clone();
-        let Some(model_entry) = find_agr_model_entry(&archive.entries, &agr_name) else {
+        // The Anim/ HXD catalog names the model and its sequence list. That
+        // gives an exact model pairing (and real clip names) before falling
+        // back to the historical stem heuristic.
+        let stem = agr_name
+            .rsplit_once('.')
+            .map(|(stem, _)| stem)
+            .unwrap_or(&agr_name);
+        let hxd = crate::inspector::animation::hxd::anim_dir_for_archive(archive.path.as_deref())
+            .and_then(|anim| crate::inspector::animation::hxd::find_for_stem(&anim, stem));
+        let clip_names = hxd
+            .as_ref()
+            .map(|record| record.sequence_names())
+            .unwrap_or_default();
+        let model_entry = hxd
+            .as_ref()
+            .and_then(|record| {
+                crate::inspector::animation::hxd::find_model_entry(&archive.entries, &record.model)
+            })
+            .or_else(|| find_agr_model_entry(&archive.entries, &agr_name));
+        let Some(model_entry) = model_entry else {
             self.toast = Some(format!(
                 "No matching .nif model found for {agr_name} in this archive."
             ));
             return Task::none();
         };
         let model_name = archive.entries[model_entry].file_name.clone();
-        self.toast = Some(format!("Loading {agr_name} on {model_name}…"));
+        let named = if clip_names.is_empty() {
+            String::new()
+        } else {
+            format!(" ({} HXD-named clips)", clip_names.len())
+        };
+        self.toast = Some(format!("Loading {agr_name} on {model_name}…{named}"));
         Task::done(Message::ViewerAgrLoadRequest {
             archive_index,
             agr_entry: entry_index,
             model_entry,
+            clip_names,
         })
     }
 
@@ -5794,6 +5822,7 @@ impl App {
                 archive_index,
                 agr_entry,
                 model_entry,
+                clip_names,
             } => {
                 let (agr_entry_data, model_entry_data, archive_path) = {
                     let Some(archive) = self.editor.archives().get(archive_index) else {
@@ -5833,14 +5862,25 @@ impl App {
                             .map_err(|e| format!("model: {e}"))?;
                             let file = crate::inspector::animation::bully::parse_agr(&agr_bytes)
                                 .map_err(|e| format!("AGR: {e}"))?;
-                            let library = crate::inspector::animation::bully::to_library(
+                            let mut library = crate::inspector::animation::bully::to_library(
                                 &file,
                                 agr_display.as_str(),
                             );
-                            let summary = format!(
-                                "{agr_display} on {model_display} ({} clips)",
-                                library.clips.len()
+                            let named = crate::inspector::animation::bully::apply_clip_names(
+                                &mut library,
+                                &clip_names,
                             );
+                            let summary = if named > 0 {
+                                format!(
+                                    "{agr_display} on {model_display} ({} clips, HXD-named)",
+                                    library.clips.len()
+                                )
+                            } else {
+                                format!(
+                                    "{agr_display} on {model_display} ({} clips)",
+                                    library.clips.len()
+                                )
+                            };
                             Ok((Arc::new(model), Arc::new(library), summary))
                         })
                         .await;
