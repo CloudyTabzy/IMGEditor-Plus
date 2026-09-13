@@ -429,9 +429,11 @@ fn decode_change_records(
 
 /// Convert a parsed file into a runtime [`AnimationLibrary`].
 ///
-/// Only rotation channels (0) become tracks today; channels 1/2 are read
-/// but not emitted until their units are established. Track targets are
-/// `track_{id}` so a future NIF adapter can map ids to bone names.
+/// Rotation channels (0) become compact-quat tracks; translation channels
+/// (1) become position tracks at a trial scale of 1/32767 (meters-scale
+/// model space — the same normalization as the rotation components).
+/// Channel 2 (scale) is still withheld. Track targets are `track_{id}` so
+/// the NIF adapter can map ids to nodes.
 pub fn to_library(file: &AgrFile, name: impl Into<String>) -> AnimationLibrary {
     let clips = file
         .clips
@@ -439,16 +441,37 @@ pub fn to_library(file: &AgrFile, name: impl Into<String>) -> AnimationLibrary {
         .map(|clip| {
             let mut tracks = Vec::new();
             for track in &clip.tracks {
-                if track.channel != 0 {
-                    continue;
-                }
                 let times: Vec<f32> = track.keys.iter().map(|key| key.time_s).collect();
-                let values: Vec<Quat> = track.keys.iter().map(|key| key.rotation()).collect();
-                tracks.push(PropertyTrack {
-                    target: format!("track_{:03}", track.track),
-                    channel: TrackChannel::Rotation { times, values },
-                    interpolation: Interpolation::Linear,
-                });
+                match track.channel {
+                    0 => {
+                        let values: Vec<Quat> =
+                            track.keys.iter().map(|key| key.rotation()).collect();
+                        tracks.push(PropertyTrack {
+                            target: format!("track_{:03}", track.track),
+                            channel: TrackChannel::Rotation { times, values },
+                            interpolation: Interpolation::Linear,
+                        });
+                    }
+                    1 => {
+                        let values: Vec<glam::Vec3> = track
+                            .keys
+                            .iter()
+                            .map(|key| {
+                                glam::Vec3::new(
+                                    key.values[0] as f32,
+                                    key.values[1] as f32,
+                                    key.values[2] as f32,
+                                ) / COMPACT_QUAT_SCALE
+                            })
+                            .collect();
+                        tracks.push(PropertyTrack {
+                            target: format!("track_{:03}", track.track),
+                            channel: TrackChannel::Translation { times, values },
+                            interpolation: Interpolation::Linear,
+                        });
+                    }
+                    _ => {}
+                }
             }
             AnimationClip {
                 id: ClipId(clip.index as u32),
@@ -814,18 +837,21 @@ mod tests {
     }
 
     #[test]
-    fn translation_channels_are_read_but_not_emitted() {
+    fn translation_channels_are_emitted_as_positions() {
         let file = parse_agr(&fixture()).expect("fixture parses");
         let clip1 = &file.clips[1];
         assert!(clip1.tracks.iter().any(|t| t.channel == 1));
         let library = to_library(&file, "test");
-        assert!(
-            library
-                .clips
-                .iter()
-                .flat_map(|c| &c.tracks)
-                .all(|t| matches!(t.channel, TrackChannel::Rotation { .. }))
-        );
+        let clip = library.clips.iter().find(|c| c.name == "clip_01").unwrap();
+        let translation = clip
+            .tracks
+            .iter()
+            .find(|t| matches!(t.channel, TrackChannel::Translation { .. }))
+            .expect("translation emitted");
+        if let TrackChannel::Translation { values, .. } = &translation.channel {
+            // [100, 0, 1] / 32767.
+            assert!((values[0].x - 100.0 / 32767.0).abs() < 1e-6);
+        }
     }
 
     #[test]
@@ -950,6 +976,61 @@ mod tests {
             println!("  name: {line}");
         }
         let file = parse_agr(&agr_bytes).expect("parse AGR");
+        // Rotation convention check: compare each bound node's NIF rest
+        // quaternion against the clip's first rotation key. Near-identity
+        // first keys mean the data is a delta over rest; keys matching rest
+        // mean absolute local rotations.
+        for clip in file.clips.iter().take(3) {
+            println!(
+                "  -- clip_{:02} convention check ({} tracks) --",
+                clip.index,
+                clip.tracks.len()
+            );
+            for track in clip.tracks.iter().filter(|t| t.channel == 0) {
+                let target = format!("track_{:03}", track.track);
+                let Some(node) = model.node_by_name(&target) else {
+                    continue;
+                };
+                let Some(first) = track.keys.first() else {
+                    continue;
+                };
+                let key = first.rotation();
+                let rest = node.local.rotation;
+                let dot = rest.dot(key).abs().clamp(0.0, 1.0);
+                let delta_deg = 2.0 * dot.acos().to_degrees();
+                println!(
+                    "     {target}: rest={:.1}deg key={:.1}deg delta={:.1}deg t={:.3}",
+                    rest.to_axis_angle().1.to_degrees(),
+                    key.to_axis_angle().1.to_degrees(),
+                    delta_deg,
+                    first.time_s,
+                );
+            }
+            for track in clip.tracks.iter().filter(|t| t.channel == 1) {
+                let target = format!("track_{:03}", track.track);
+                let Some(node) = model.node_by_name(&target) else {
+                    continue;
+                };
+                let samples: Vec<String> = track
+                    .keys
+                    .iter()
+                    .take(4)
+                    .map(|key| {
+                        format!(
+                            "t={:.2} ({},{},{})",
+                            key.time_s, key.values[0], key.values[1], key.values[2]
+                        )
+                    })
+                    .collect();
+                println!(
+                    "     {target} ch1: rest_translation=({:.3},{:.3},{:.3}) {}",
+                    node.local.translation.x,
+                    node.local.translation.y,
+                    node.local.translation.z,
+                    samples.join(" | ")
+                );
+            }
+        }
         println!(
             "== AGR variant {} clips {} ==",
             file.variant,

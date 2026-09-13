@@ -542,11 +542,22 @@ mod tests {
             bully::model_from_nif_with_mapping(&nif, "render", "render", mapping).expect("model");
         let file = bully::parse_agr(&agr_bytes).expect("parse AGR");
         let library = bully::to_library(&file, "render");
-        let clip = library
-            .clips
-            .iter()
-            .max_by(|a, b| a.duration.total_cmp(&b.duration))
-            .expect("has clips");
+        let clip_index: Option<usize> = std::env::var("IMGEDITOR_AGR_CLIP")
+            .ok()
+            .and_then(|value| value.parse().ok());
+        let clip = match clip_index {
+            Some(index) => library
+                .clips
+                .iter()
+                .find(|clip| clip.name == format!("clip_{index:02}"))
+                .or_else(|| library.clips.get(index))
+                .expect("requested clip"),
+            None => library
+                .clips
+                .iter()
+                .max_by(|a, b| a.duration.total_cmp(&b.duration))
+                .expect("has clips"),
+        };
         let binding = bind_clip(&model, clip);
         println!(
             "clip {} dur {:.3}s tracks {} bound {}/{}",
@@ -573,6 +584,36 @@ mod tests {
             height: 512,
         });
         camera.reset_to_aabb(&envelope);
+        // Reference render: the known-good static decoder path, plus the
+        // model's rest pose, for rest-bridge comparison with the animated
+        // frames.
+        if std::env::var("IMGEDITOR_AGR_MAPPING").as_deref() == Ok("static") {
+            let static_scene = crate::inspector::scene3d::decode::parse_and_build_scene(
+                &nif_bytes,
+                crate::inspector::scene3d::camera::BaseOrientation::Zup,
+                |_| None,
+            )
+            .expect("static scene");
+            let rest = rest_scene(&model);
+            for (label, scene) in [("static", &static_scene), ("rest", &rest)] {
+                let mut cam = OrbitCamera::new(Viewport {
+                    width: 512,
+                    height: 512,
+                });
+                cam.reset_to_aabb(&scene.aabb);
+                println!(
+                    "{label}: aabb min={:?} max={:?} meshes={}",
+                    scene.aabb.min,
+                    scene.aabb.max,
+                    scene.meshes.len()
+                );
+                let frame = render_frame(&renderer, scene, &cam, 512, 512, RenderFlags::empty())
+                    .expect("render");
+                let path = std::path::Path::new("target").join(format!("agr-{label}.png"));
+                write_png(&frame, &path).expect("png");
+            }
+            return;
+        }
         for (i, frac) in [0.0f32, 0.25, 0.5, 0.75].into_iter().enumerate() {
             let t = clip.duration * frac;
             sample_locals(clip, &binding, &model, t, &mut buffers.locals);
