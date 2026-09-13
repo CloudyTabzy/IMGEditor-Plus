@@ -30,9 +30,12 @@
 //! - **1003** (object compact records, 20 B):
 //!   `{ u16 ordinal, u16 time_norm, i16 x, y, z, w, i16 tx, ty, tz, u16 }`.
 //!   Same time rule; values at 1/32767.
-//! - **1004** (object change stream, 12 B):
-//!   `{ u8 frame, u8 track<<3|channel, 3 × i16, u32 tail }`. Dense 30 fps
-//!   frame index; the tail is serialized runtime data and is ignored.
+//! - **1004** (object transform stream, 12 B): three packed little-endian
+//!   words. The first word contains an 11-bit predecessor index and a 9-bit
+//!   normalized time code. The next two words contain signed-magnitude
+//!   quaternion and translation components. Records form one linked curve per
+//!   animated transform; the first root is the default pose and the final
+//!   identity curve is a runtime sentinel.
 //!
 //! The runtime-facing key space is normalized: rotation keys are unit-quat
 //! `(x, y, z)` components, translation keys are metres.
@@ -60,6 +63,10 @@ pub const AGR_VARIANTS: RangeInclusive<u32> = 999..=1004;
 const CHUNK_HEADER_BYTES: usize = 20;
 const RECORD_BYTES: usize = 8;
 const COMPACT_QUAT_SCALE: f32 = 32767.0;
+const PACKED_1004_QUAT_SCALE: f32 = 1.0 / 1023.0;
+const PACKED_1004_TRANSLATION_SCALE: f32 = 0.01;
+const PACKED_1004_TIME_SCALE: f32 = 1.0 / 511.0;
+const PACKED_1004_LINK_MASK: u32 = 0x7ff;
 /// Time unit: `time_lo` is centiseconds. Unverified in detail; the reader
 /// records the uncertainty in the clip diagnostics.
 const TIME_UNITS_PER_SECOND: f32 = 100.0;
@@ -86,7 +93,7 @@ pub enum AgrError {
         max: u32,
     },
     #[error(
-        "chunk at offset {offset} has {data_bytes} data bytes, not a multiple of 8 (after trailer)"
+        "chunk at offset {offset} has {data_bytes} data bytes, not a multiple of its record size"
     )]
     MisalignedData { offset: usize, data_bytes: usize },
     #[error("chunk at offset {offset} declares {count} records but only {slots} fit")]
@@ -125,9 +132,11 @@ impl AgrKey {
 /// Keys of one track channel within a clip.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgrTrack {
-    /// `header >> 3`.
+    /// Runtime-facing transform track id. For variant 1004 this is the
+    /// predecessor-linked curve root minus one; the named-rig mapping remains
+    /// an adapter concern.
     pub track: u8,
-    /// `header & 7`. 0 = rotation; 1/2 are not yet rendered (units unknown).
+    /// 0 = rotation; 1 = translation; 2 is not yet rendered (units unknown).
     pub channel: u8,
     pub keys: Vec<AgrKey>,
 }
@@ -227,21 +236,14 @@ pub fn parse_agr(bytes: &[u8]) -> Result<AgrFile, AgrError> {
         });
     }
 
-    // Archive entries are stored in whole 2048-byte sectors; the tail of the
-    // final chunk is zero padding, not records. Loose files carry no padding,
-    // so trimming all-zero u32 words from the end is safe for both.
-    let mut end = bytes.len();
-    let mut padding_trimmed = 0usize;
-    while end >= 4 && read_u32(bytes, end - 4) == 0 {
-        end -= 4;
-        padding_trimmed += 4;
-    }
-    let mut diagnostics = Vec::new();
-    if padding_trimmed > 0 {
-        diagnostics.push(format!("trimmed {padding_trimmed} bytes of tail padding"));
-    }
-
-    let starts = chunk_starts(&bytes[..end]);
+    // Do not globally trim zero words here. A packed fixed-size record can
+    // legitimately end in zero bytes (especially a 1004 identity key), and
+    // trimming before variant-aware admission can silently remove that record.
+    // Each fixed-size variant is sized from its declared count below. The
+    // variable 1002 stream retains its legacy trailer/padding handling in its
+    // own parsing branch.
+    let end = bytes.len();
+    let starts = chunk_starts(bytes);
     if starts.first() != Some(&0) {
         return Err(AgrError::BadMagic {
             offset: 0,
@@ -253,14 +255,7 @@ pub fn parse_agr(bytes: &[u8]) -> Result<AgrFile, AgrError> {
     let mut clips = Vec::with_capacity(starts.len());
     for (index, &start) in starts.iter().enumerate() {
         let chunk_end = starts.get(index + 1).copied().unwrap_or(end);
-        clips.push(parse_clip(&bytes[..end], start, chunk_end, index)?);
-    }
-    if !diagnostics.is_empty()
-        && let Some(first) = clips.first_mut()
-    {
-        let mut merged = diagnostics;
-        merged.extend(std::mem::take(&mut first.diagnostics));
-        first.diagnostics = merged;
+        clips.push(parse_clip(bytes, start, chunk_end, index)?);
     }
     Ok(AgrFile { variant, clips })
 }
@@ -303,28 +298,96 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
             )],
         });
     };
-    let mut data_bytes = end.saturating_sub(start + CHUNK_HEADER_BYTES);
     let mut diagnostics = Vec::new();
-    if data_bytes % record_size == 4 {
-        data_bytes -= 4;
-        diagnostics.push("stripped 4-byte trailer".to_string());
-    }
-    if !data_bytes.is_multiple_of(record_size) {
-        return Err(AgrError::MisalignedData {
-            offset: start,
-            data_bytes,
-        });
-    }
-    let slots = data_bytes / record_size;
-    if count > slots {
-        return Err(AgrError::RecordOverflow {
-            offset: start,
+    let data_start = start + CHUNK_HEADER_BYTES;
+
+    // Fixed object variants have no implicit preamble: their declared count
+    // is the exact number of records. This is important for archive entries,
+    // whose sector padding can contain any number of zero words, including a
+    // valid record-shaped suffix. The bounded slice also tolerates an
+    // optional runtime trailer without treating it as a record.
+    let (_data_bytes, slots, preamble_records, body_end, logical_source_size) = if variant != 1002 {
+        let available = end.saturating_sub(data_start);
+        let required = count
+            .checked_mul(record_size)
+            .ok_or(AgrError::RecordOverflow {
+                offset: start,
+                count,
+                slots: available / record_size,
+            })?;
+        if required > available {
+            return Err(AgrError::RecordOverflow {
+                offset: start,
+                count,
+                slots: available / record_size,
+            });
+        }
+        let trailing = available - required;
+        if trailing > 0
+            && bytes[data_start + required..end]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
+            diagnostics.push(format!(
+                "ignored {trailing} trailing byte(s) after the declared records"
+            ));
+        }
+        (
+            required,
             count,
+            0,
+            data_start + required,
+            CHUNK_HEADER_BYTES + required,
+        )
+    } else {
+        // Variant 1002 stores an unknown number of per-track preamble records.
+        // Only a sector-aligned archive entry is known to carry zero padding;
+        // do not apply that heuristic to an intermediate chunk or a loose AGR
+        // file. A four-byte non-record trailer is handled by the alignment
+        // rule below for compatibility with existing HXD/runtime extracts.
+        let mut data_end = end;
+        if end == bytes.len() && bytes.len().is_multiple_of(2048) {
+            let mut padding_trimmed = 0usize;
+            while data_end >= data_start + 4 && read_u32(bytes, data_end - 4) == 0 {
+                data_end -= 4;
+                padding_trimmed += 4;
+            }
+            if padding_trimmed > 0 {
+                diagnostics.push(format!(
+                    "trimmed {padding_trimmed} bytes of archive tail padding"
+                ));
+            }
+        }
+        let mut data_bytes = data_end.saturating_sub(data_start);
+        if data_bytes % record_size == 4 {
+            data_bytes -= 4;
+            data_end -= 4;
+            diagnostics.push("stripped 4-byte trailer".to_string());
+        }
+        if !data_bytes.is_multiple_of(record_size) {
+            return Err(AgrError::MisalignedData {
+                offset: start,
+                data_bytes,
+            });
+        }
+        let slots = data_bytes / record_size;
+        if count > slots {
+            return Err(AgrError::RecordOverflow {
+                offset: start,
+                count,
+                slots,
+            });
+        }
+        let preamble_records = slots - count;
+        (
+            data_bytes,
             slots,
-        });
-    }
-    let preamble_records = slots - count;
-    let body = &bytes[start + CHUNK_HEADER_BYTES..start + CHUNK_HEADER_BYTES + data_bytes];
+            preamble_records,
+            data_start + data_bytes,
+            data_end.saturating_sub(start),
+        )
+    };
+    let body = &bytes[data_start..body_end];
     let tracks = match variant {
         1002 => decode_change_records(
             body,
@@ -342,7 +405,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
             // variants are still being reduced.
             return Ok(AgrClip {
                 index,
-                source_size: end.saturating_sub(start),
+                source_size: logical_source_size,
                 variant,
                 record_size,
                 duration_s: duration,
@@ -357,7 +420,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
     };
     Ok(AgrClip {
         index,
-        source_size: end.saturating_sub(start),
+        source_size: logical_source_size,
         variant,
         record_size,
         duration_s: duration,
@@ -563,39 +626,257 @@ fn decode_object_compact_records(
     finish_tracks(tracks)
 }
 
-/// Decodes a variant-1004 chunk: 12-byte compact change records.
+/// One decoded record from the retail variant-1004 evaluator.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PackedObjectKey1004 {
+    previous: usize,
+    time_code: u16,
+    /// Quaternion order is `(x, y, z, w)`, with signed-magnitude components.
+    rotation: [f32; 4],
+    translation: [f32; 3],
+}
+
+fn signed_magnitude(value: u32, negative: bool, scale: f32) -> f32 {
+    let magnitude = value as f32 * scale;
+    if negative { -magnitude } else { magnitude }
+}
+
+/// Decode one 12-byte object key using the bit masks recovered from the
+/// retail Bully executable (`sub_6bb6e0`, `sub_6b19d0`, `sub_6bc240`).
+fn decode_packed_object_key_1004(record: &[u8]) -> PackedObjectKey1004 {
+    debug_assert!(record.len() >= 12);
+    let word0 = read_u32(record, 0);
+    let word1 = read_u32(record, 4);
+    let word2 = read_u32(record, 8);
+
+    let qx = signed_magnitude(
+        (word0 >> 21) & 0x3ff,
+        word0 & (1 << 20) != 0,
+        PACKED_1004_QUAT_SCALE,
+    );
+    let qy = signed_magnitude(
+        word1 & 0x3ff,
+        word0 & (1 << 31) != 0,
+        PACKED_1004_QUAT_SCALE,
+    );
+    let qz = signed_magnitude(
+        (word1 >> 11) & 0x3ff,
+        word1 & (1 << 10) != 0,
+        PACKED_1004_QUAT_SCALE,
+    );
+    let qw = signed_magnitude(word1 >> 22, word1 & (1 << 21) != 0, PACKED_1004_QUAT_SCALE);
+
+    let tx = signed_magnitude(
+        word2 & 0x3ff,
+        word2 & (1 << 10) != 0,
+        PACKED_1004_TRANSLATION_SCALE,
+    );
+    let ty = signed_magnitude(
+        (word2 >> 11) & 0x3ff,
+        word2 & (1 << 21) != 0,
+        PACKED_1004_TRANSLATION_SCALE,
+    );
+    let tz = signed_magnitude(
+        (word2 >> 22) & 0x1ff,
+        word2 & (1 << 31) != 0,
+        PACKED_1004_TRANSLATION_SCALE,
+    );
+
+    PackedObjectKey1004 {
+        previous: (word0 & PACKED_1004_LINK_MASK) as usize,
+        time_code: ((word0 >> 11) & 0x1ff) as u16,
+        rotation: [qx, qy, qz, qw],
+        translation: [tx, ty, tz],
+    }
+}
+
+fn packed_key_is_identity(key: PackedObjectKey1004) -> bool {
+    const EPSILON: f32 = 0.002;
+    key.rotation[0].abs() <= EPSILON
+        && key.rotation[1].abs() <= EPSILON
+        && key.rotation[2].abs() <= EPSILON
+        && (key.rotation[3].abs() - 1.0).abs() <= EPSILON
+        && key
+            .translation
+            .iter()
+            .all(|component| component.abs() <= EPSILON)
+}
+
+/// Follow one predecessor-linked curve. A valid retail stream is a forest of
+/// chains: each non-root record points to an earlier key, and each key has at
+/// most one successor. Malformed records are bounded and reported rather than
+/// being allowed to loop or index outside the chunk.
+fn packed_curve_indices(
+    root: usize,
+    keys: &[PackedObjectKey1004],
+    children: &[Option<usize>],
+    diagnostics: &mut Vec<String>,
+) -> Vec<usize> {
+    let mut curve = Vec::new();
+    let mut current = root;
+    while curve.len() <= keys.len() {
+        curve.push(current);
+        let Some(next) = children[current] else {
+            return curve;
+        };
+        if next >= keys.len() || curve.contains(&next) {
+            diagnostics.push(format!(
+                "1004 curve rooted at {root} has a successor cycle or out-of-range link"
+            ));
+            return curve;
+        }
+        current = next;
+    }
+    diagnostics.push(format!(
+        "1004 curve rooted at {root} exceeded the record-count safety bound"
+    ));
+    curve
+}
+
+/// Decode a variant-1004 linked transform stream.
 ///
-/// Layout (corpus-validated on SK8Board GIV/EXAMINE): `{ u8 frame,
-/// u8 track<<3|channel, i16 x, y, z, u32 tail }`. The frame byte is a dense
-/// 30 fps frame index (records advance 1,3,4,...); the tail is serialized
-/// runtime data and is ignored. Values are compact-quat / translation
-/// components at 1/32767 scale.
+/// The retail evaluator treats the first word as `{ previous:11,
+/// time_code:9, qx_sign:1, qx_magnitude:10, qy_sign:1 }`. The second word is
+/// `{ qy_magnitude:10, qz_sign:1, qz_magnitude:10, qw_sign:1,
+/// qw_magnitude:10 }`; the third is `{ tx: magnitude:10 + sign, ty:
+/// magnitude:10 + sign, tz: magnitude:9 + sign }`. Time is
+/// `time_code / 511 * duration`, quaternion magnitudes are divided by 1023,
+/// and translations are divided by 100. The predecessor links are the track
+/// structure; low-link zero means a curve root, not a default frame.
 fn decode_object_1004_records(
     body: &[u8],
     count: usize,
     duration: f32,
     diagnostics: &mut Vec<String>,
 ) -> Vec<AgrTrack> {
-    let mut tracks = Vec::new();
-    let mut defaults = 0usize;
-    for i in 0..count {
-        let record = &body[i * 12..(i + 1) * 12];
-        let frame = record[0];
-        if frame == 0 {
-            defaults += 1;
+    let Some(required) = count.checked_mul(12) else {
+        diagnostics.push("1004 record count overflows the byte size".to_string());
+        return Vec::new();
+    };
+    if body.len() < required {
+        diagnostics.push(format!(
+            "1004 body has {} bytes for {count} declared records",
+            body.len()
+        ));
+        return Vec::new();
+    }
+
+    let keys: Vec<PackedObjectKey1004> = (0..count)
+        .map(|index| decode_packed_object_key_1004(&body[index * 12..(index + 1) * 12]))
+        .collect();
+    let mut children = vec![None; count];
+    let mut roots = Vec::new();
+    let mut invalid_links = 0usize;
+    let mut branch_links = 0usize;
+    for (index, key) in keys.iter().enumerate() {
+        if key.previous == 0 {
+            roots.push(index);
             continue;
         }
-        let header = record[1];
-        let track = header >> 3;
-        let channel = header & 7;
-        let time_s = (frame as f32 / 30.0).min(duration);
-        let x = i16::from_le_bytes([record[2], record[3]]) as f32 / COMPACT_QUAT_SCALE;
-        let y = i16::from_le_bytes([record[4], record[5]]) as f32 / COMPACT_QUAT_SCALE;
-        let z = i16::from_le_bytes([record[6], record[7]]) as f32 / COMPACT_QUAT_SCALE;
-        push_key(&mut tracks, track, channel, time_s, [x, y, z]);
+        if key.previous >= index || key.previous >= count {
+            invalid_links += 1;
+            continue;
+        }
+        if children[key.previous].is_some() {
+            branch_links += 1;
+        } else {
+            children[key.previous] = Some(index);
+        }
     }
-    if defaults > 0 {
-        diagnostics.push(format!("skipped {defaults} default record(s)"));
+    if invalid_links > 0 {
+        diagnostics.push(format!(
+            "ignored {invalid_links} invalid 1004 predecessor link(s)"
+        ));
+    }
+    if branch_links > 0 {
+        diagnostics.push(format!(
+            "ignored {branch_links} additional 1004 successor link(s) on branched curves"
+        ));
+    }
+    if roots.is_empty() {
+        diagnostics.push("1004 stream has no curve root".to_string());
+        return Vec::new();
+    }
+    if roots[0] != 0 {
+        diagnostics.push(format!(
+            "1004 default root starts at record {}, expected record 0",
+            roots[0]
+        ));
+    }
+
+    // Record zero is the stream-wide default pose. Retail chunks also end in
+    // an identity curve that terminates the linked data. Detect the latter by
+    // content, rather than blindly dropping the last root, so a shortened or
+    // hand-authored stream with no sentinel still remains useful.
+    let default_root = roots[0];
+    let mut curve_roots: Vec<usize> = roots.iter().copied().skip(1).collect();
+    let mut skipped_sentinel = false;
+    if let Some(&candidate) = curve_roots.last() {
+        let curve = packed_curve_indices(candidate, &keys, &children, diagnostics);
+        if curve
+            .last()
+            .and_then(|index| keys.get(*index))
+            .is_some_and(|key| key.time_code == 511)
+            && curve.iter().all(|index| {
+                keys.get(*index)
+                    .is_some_and(|key| packed_key_is_identity(*key))
+            })
+        {
+            curve_roots.pop();
+            skipped_sentinel = true;
+        }
+    }
+    diagnostics.push(format!(
+        "decoded {} linked 1004 transform curve(s); skipped default root {}{}",
+        curve_roots.len(),
+        default_root,
+        if skipped_sentinel {
+            " and terminal identity sentinel"
+        } else {
+            ""
+        }
+    ));
+
+    let mut tracks = Vec::new();
+    for root in curve_roots {
+        let Some(track_id) = root.checked_sub(1).and_then(|id| u8::try_from(id).ok()) else {
+            diagnostics.push(format!(
+                "1004 curve root {root} cannot map to the u8 track id space"
+            ));
+            continue;
+        };
+        let curve = packed_curve_indices(root, &keys, &children, diagnostics);
+        let mut previous_time = None;
+        for index in curve {
+            let key = keys[index];
+            if let Some(previous_time) = previous_time
+                && key.time_code < previous_time
+            {
+                diagnostics.push(format!(
+                    "1004 curve rooted at {root} contains a decreasing time code"
+                ));
+            }
+            previous_time = Some(key.time_code);
+            let time_s = (key.time_code as f32 * PACKED_1004_TIME_SCALE * duration).min(duration);
+
+            // AgrKey derives the positive quaternion hemisphere. If the
+            // packed runtime quaternion has negative w, negate all four
+            // components before storing xyz so the represented orientation is
+            // preserved by that normalized downstream form.
+            let hemisphere = if key.rotation[3] < 0.0 { -1.0 } else { 1.0 };
+            push_key(
+                &mut tracks,
+                track_id,
+                0,
+                time_s,
+                [
+                    key.rotation[0] * hemisphere,
+                    key.rotation[1] * hemisphere,
+                    key.rotation[2] * hemisphere,
+                ],
+            );
+            push_key(&mut tracks, track_id, 1, time_s, key.translation);
+        }
     }
     finish_tracks(tracks)
 }
@@ -603,10 +884,9 @@ fn decode_object_1004_records(
 /// Convert a parsed file into a runtime [`AnimationLibrary`].
 ///
 /// Rotation channels (0) become compact-quat tracks; translation channels
-/// (1) become position tracks at a trial scale of 1/32767 (meters-scale
-/// model space — the same normalization as the rotation components).
-/// Channel 2 (scale) is still withheld. Track targets are `track_{id}` so
-/// the NIF adapter can map ids to nodes.
+/// (1) become position tracks. The source decoder applies the variant-specific
+/// quantization before this conversion. Channel 2 (scale) is still withheld.
+/// Track targets are `track_{id}` so the NIF adapter can map ids to nodes.
 pub fn to_library(file: &AgrFile, name: impl Into<String>) -> AnimationLibrary {
     let clips = file
         .clips
@@ -1283,6 +1563,12 @@ mod tests {
         }
     }
 
+    fn push_packed_1004_words(out: &mut Vec<u8>, word0: u32, word1: u32, word2: u32) {
+        push_u32(out, word0);
+        push_u32(out, word1);
+        push_u32(out, word2);
+    }
+
     /// Synthetic 999/1003/1004 chunks (invented data, never game payloads).
     fn object_fixture() -> Vec<u8> {
         let mut out = Vec::new();
@@ -1325,27 +1611,20 @@ mod tests {
             out.extend_from_slice(&value.to_le_bytes());
         }
         out.extend_from_slice(&0u16.to_le_bytes());
-        // 1004 clip: 1 default + 2 changes on tracks 0 and 1.
+        // 1004 clip: default root, one linked transform curve, and a
+        // two-record identity sentinel. The final word is deliberately zero:
+        // it is valid record data, not archive padding.
         push_u32(&mut out, AGR_MAGIC);
         push_u32(&mut out, 1004);
-        push_u32(&mut out, 3);
+        push_u32(&mut out, 5);
         push_u32(&mut out, 0);
         push_f32(&mut out, 0.2);
-        out.extend_from_slice(&[0, 0x00]);
-        for value in [0i16, 0, -64] {
-            out.extend_from_slice(&value.to_le_bytes());
-        }
-        push_u32(&mut out, 0);
-        out.extend_from_slice(&[3, 0x00]);
-        for value in [0i16, 0, -64] {
-            out.extend_from_slice(&value.to_le_bytes());
-        }
-        push_u32(&mut out, 0);
-        out.extend_from_slice(&[6, 0x09]); // track 1, channel 1
-        for value in [100i16, 0, 1] {
-            out.extend_from_slice(&value.to_le_bytes());
-        }
-        push_u32(&mut out, 7);
+        let identity = 1023u32 << 22;
+        push_packed_1004_words(&mut out, 0, identity, 0); // default root
+        push_packed_1004_words(&mut out, 0, identity, 100); // curve root, t=0, x=1m
+        push_packed_1004_words(&mut out, 1 | (511 << 11), identity, 200); // x=2m
+        push_packed_1004_words(&mut out, 0, identity, 0); // sentinel root
+        push_packed_1004_words(&mut out, 3 | (511 << 11), identity, 0); // sentinel end
         out
     }
 
@@ -1387,7 +1666,8 @@ mod tests {
         assert!((rotation.keys[0].time_s - 1.0).abs() < 1e-4);
         assert!((rotation.keys[0].values[1] - 0.5).abs() < 1e-3);
 
-        // 1004: change stream keeps its track ids and channels.
+        // 1004: predecessor links form one transform curve. The default root
+        // and terminal identity sentinel are not exposed as animated tracks.
         let clip2 = &file.clips[2];
         assert_eq!(clip2.variant, 1004);
         let rot0 = clip2
@@ -1395,13 +1675,59 @@ mod tests {
             .iter()
             .find(|t| t.track == 0 && t.channel == 0)
             .expect("1004 track 0 rotation");
-        assert!((rot0.keys[0].time_s - 0.1).abs() < 1e-4);
+        assert_eq!(rot0.keys.len(), 2);
+        assert!((rot0.keys[0].time_s - 0.0).abs() < 1e-4);
+        assert!((rot0.keys[1].time_s - 0.2).abs() < 1e-4);
         let trans1 = clip2
             .tracks
             .iter()
-            .find(|t| t.track == 1 && t.channel == 1)
-            .expect("1004 track 1 translation");
-        assert!((trans1.keys[0].time_s - 0.2).abs() < 1e-4);
+            .find(|t| t.track == 0 && t.channel == 1)
+            .expect("1004 track 0 translation");
+        assert_eq!(trans1.keys.len(), 2);
+        assert!((trans1.keys[0].values[0] - 1.0).abs() < 1e-4);
+        assert!((trans1.keys[1].values[0] - 2.0).abs() < 1e-4);
+        assert!(clip2.diagnostics.iter().any(|d| d.contains("sentinel")));
+    }
+
+    #[test]
+    fn packed_1004_matches_retail_bitfields() {
+        // SK8Board.agr GIV record 1, captured from the retail corpus.
+        let record = [
+            0x00, 0x00, 0x30, 0x09, 0xc0, 0xca, 0xb6, 0x1b, 0x0f, 0xe4, 0x82, 0x06,
+        ];
+        let key = decode_packed_object_key_1004(&record);
+        assert_eq!(key.previous, 0);
+        assert_eq!(key.time_code, 0);
+        assert!((key.rotation[0] - (-0.0713587)).abs() < 1e-4);
+        assert!((key.rotation[1] - 0.688172).abs() < 1e-4);
+        assert!((key.rotation[2] - 0.71261).abs() < 1e-4);
+        assert!((key.rotation[3] - (-0.107527)).abs() < 1e-4);
+        assert!((key.translation[0] - (-0.15)).abs() < 1e-6);
+        assert!((key.translation[1] - 0.92).abs() < 1e-6);
+        assert!((key.translation[2] - 0.26).abs() < 1e-6);
+    }
+
+    #[test]
+    fn malformed_1004_links_are_bounded_and_reported() {
+        let mut data = Vec::new();
+        push_u32(&mut data, AGR_MAGIC);
+        push_u32(&mut data, 1004);
+        push_u32(&mut data, 3);
+        push_u32(&mut data, 0);
+        push_f32(&mut data, 1.0);
+        let identity = 1023u32 << 22;
+        push_packed_1004_words(&mut data, 0, identity, 0);
+        push_packed_1004_words(&mut data, 3, identity, 0); // forward/out-of-range link
+        push_packed_1004_words(&mut data, 511 << 11, identity, 0); // terminal root
+
+        let file = parse_agr(&data).expect("malformed links remain parseable");
+        let clip = &file.clips[0];
+        assert!(clip.tracks.is_empty());
+        assert!(
+            clip.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("invalid 1004 predecessor"))
+        );
     }
 
     /// Extract one named entry from the retail World.img using its .dir
@@ -1490,6 +1816,46 @@ mod tests {
                 assert_eq!(library.clips[14].name, "SK8_GIV_O");
                 assert_eq!(library.clips[15].name, "1_07_PICKUP");
                 assert_eq!(library.clips[16].name, "SK8_EXAMINE_O");
+            }
+        }
+
+        // Exercise different root counts and curve lengths from the archive
+        // corpus. This catches accidental dependence on the SK8Board shape
+        // (one moving curve plus the default/sentinel roots).
+        for name in [
+            "AsyGate.agr",
+            "Armor.agr",
+            "Bike.agr",
+            "1_02_MeetWithGary.agr",
+        ] {
+            let Some(bytes) = world_entry(stream, name) else {
+                continue;
+            };
+            let file = parse_agr(&bytes).unwrap_or_else(|error| {
+                panic!("{name} must parse: {error}");
+            });
+            let object_clips: Vec<&AgrClip> = file
+                .clips
+                .iter()
+                .filter(|clip| clip.variant == 1004)
+                .collect();
+            assert!(!object_clips.is_empty(), "{name} has a 1004 clip");
+            for clip in object_clips {
+                assert!(!clip.tracks.is_empty(), "{name} clip has tracks");
+                assert!(
+                    !clip
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.contains("invalid 1004 predecessor")),
+                    "{name} clip diagnostics: {:?}",
+                    clip.diagnostics
+                );
+                for track in &clip.tracks {
+                    for key in &track.keys {
+                        assert!(key.time_s.is_finite());
+                        assert!(key.time_s >= 0.0 && key.time_s <= clip.duration_s);
+                    }
+                }
             }
         }
 

@@ -162,10 +162,15 @@ remain pending.
   - [x] Character and mission clip naming via `MAINPED.HXD`: sequence owner
     indices and duplicated AGR chunk sizes provide guarded one-to-one mapping,
     including `C_Player.agr`'s 439 clips without namespace guessing.
-  - [ ] Reverse-engineer the 1004 packed-key layout. The expanded 458-chunk
-    corpus disproves the provisional change-stream/time interpretation; use
-    binary or independent-tool evidence before replacing it. See
-    `bully-probe/CHECKPOINT.md` §9.
+  - [x] Reverse-engineer the 1004 packed-key layout from the retail Bully
+    executable: predecessor-linked curves, 9-bit normalized time, packed
+    quaternion/translation fields, default root, and terminal sentinel. The
+    Rust decoder consumes the declared fixed record span and is covered by a
+    captured retail key plus real-corpus tests. See
+    `bully-probe/FINDINGS.md` §2.15.
+  - [ ] Prove the 1004 curve-root-to-NIF joint-name mapping across additional
+    HXD/NIF rigs; keep the validated numeric fallback until that evidence is
+    available.
 
 AV0–AV7 establish the shared player; AV8 is not a prerequisite for real-file
 work. Bully E0–E4 may proceed alongside it; E5 consumes the verified runtime.
