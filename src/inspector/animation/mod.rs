@@ -21,6 +21,7 @@
 //! See `docs/animation-viewer-infrastructure-plan.md` for the design.
 
 pub mod binding;
+pub mod bully;
 pub mod clip;
 pub mod fixtures;
 pub mod model;

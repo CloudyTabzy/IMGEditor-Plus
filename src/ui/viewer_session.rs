@@ -861,9 +861,8 @@ mod tests {
                 }
             }
         }
-        // And the mirrored normal path through the step grid agrees too.
+        // And the step-grid path aggregates to the same position.
         session.stop(t0 + Duration::from_millis(900));
-        let grid = 0.7 / 21.0;
         for _ in 0..21 {
             session.step(t0 + Duration::from_millis(950), 1);
         }
