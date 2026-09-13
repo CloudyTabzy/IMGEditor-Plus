@@ -558,6 +558,10 @@ impl<'a> Reader<'a> {
         self.data.len().saturating_sub(self.pos)
     }
 
+    pub(crate) fn remaining_slice(&self) -> &'a [u8] {
+        &self.data[self.pos.min(self.data.len())..]
+    }
+
     pub(crate) fn require(&self, n: usize, what: &'static str) -> NifResult<()> {
         if self.remaining() < n {
             Err(NifError::UnexpectedEof(what))
@@ -1241,9 +1245,7 @@ fn read_ni_pixel_data(r: &mut Reader<'_>) -> NifResult<NiPixelDataPayload> {
         ));
     }
     let mut raw_pixels = Vec::with_capacity(remaining);
-    for _ in 0..remaining {
-        raw_pixels.push(r.read_u8("pixel_data")?);
-    }
+    raw_pixels.extend_from_slice(r.remaining_slice());
     Ok(NiPixelDataPayload {
         pixel_format,
         num_faces: 0,
