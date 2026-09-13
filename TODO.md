@@ -124,8 +124,9 @@ geometry or colors.
 Detailed local-only design: `docs/animation-viewer-infrastructure-plan.md`
 (ignored from Git). Build and validate the player with synthetic assets before
 depending on AGR/CAT semantics. The same runtime should accept future GTA
-DFF/IFP adapters. AV0–AV7 are implemented against the synthetic fixtures; AV8
-and AV9 remain pending.
+DFF/IFP adapters. AV0–AV7 are implemented against the synthetic fixtures; the
+real Bully AGR adapter is live (see AV9 below); AV8 and the CAT/IFP adapters
+remain pending.
 
 - [x] **AV0 contracts and baselines** — specify coordinate/time/target identity
   rules, analytical rigid/skinned fixtures, and current static preview baselines.
@@ -151,6 +152,15 @@ and AV9 remain pending.
   CPU/GPU parity, device-limit checks and a supported fallback.
 - [ ] **AV9 real format adapters** — connect verified Bully clips/rigs/actions,
   then GTA frame/skin/HAnim/IFP data with separate corpus acceptance gates.
+  - [x] Bully AGR adapter: variants 999/1002/1003/1004 decode into playback
+    tracks; HXD catalog pairing + real clip names; archive and loose
+    `Anim/*.agr` loading; validated on Sk8Board, AniBroom, Bike, C_Player
+    (`742136d`, `14d6ee1`, `6736790`).
+  - [ ] Character skinning (`NiSkinInstance`/`NiSkinPartition`) so ped
+    animations deform meshes instead of rigid per-bone segments.
+  - [ ] Bully CAT/IFP adapters; GTA adapters.
+  - [ ] Character clip naming via `MAINPED.HXD` (namespace-aware matching);
+    1004 time-semantics probe. See `bully-probe/CHECKPOINT.md` §9.
 
 AV0–AV7 establish the shared player; AV8 is not a prerequisite for real-file
 work. Bully E0–E4 may proceed alongside it; E5 consumes the verified runtime.
@@ -164,23 +174,25 @@ checklist is tracked here. AGR and CAT are the first deliverable, LIP is
 deliberately deferred, and LUR will eventually receive a dedicated read-only
 Script tab rather than being forced into the 3D or texture viewers.
 
-- [ ] **E0 corpus profiler and fixtures** — inventory AGR/CAT/LIP/LUR/HXD
+- [x] **E0 corpus profiler and fixtures** — inventory AGR/CAT/LIP/LUR/HXD
   samples from the installed Bully layout, record hashes and byte-order
   hypotheses, and keep legally obtained fixtures outside Git.
+  (`bully-probe/`: census, probes 1–37, `FINDINGS.md`, `CHECKPOINT.md`.)
 - [ ] **E1 resource detection and metadata** — classify the four extensions by
   validated signatures/structure plus archive context; show size, source,
   confidence, and unsupported/rejected reasons in the inspector.
-- [ ] **E2 AGR structural parser** — add bounded, testable parsing for headers,
-  groups/clips, timing, tracks, and references only as each field is proven.
+- [x] **E2 AGR structural parser** — bounded, testable parsing for headers,
+  groups/clips, timing, tracks, and references; all four record variants
+  decode and render (`26124fb`…`742136d`).
 - [ ] **E3 CAT action-tree parser** — expose action nodes, paths, parent/child
   relationships, and raw offsets; preserve unknown bytes and avoid guessed
   serializers.
 - [ ] **E4 AGR/CAT relationship resolver** — connect logical action names to
   AGR clips and compatible NIF/NFT/rig candidates with evidence-labelled links.
-- [ ] **E5 animation inspector and playback proof** — play one validated AGR
-  clip on one matched Bully model through the shared AV runtime and animation
-  dock; prove the source rig/bind/timing semantics without duplicating transport,
-  camera or interpolation infrastructure.
+  (AGR↔model pairing via the HXD catalogs is done; CAT links are not.)
+- [x] **E5 animation inspector and playback proof** — a validated AGR clip
+  plays on a matched model through the shared AV runtime and dock (archive
+  entries and loose `Anim/*.agr`; Sk8Board/AniBroom/Bike/C_Player verified).
 - [ ] **E6 LIP structural inspection (deferred)** — inspect the record table
   and Speech.bin references only after AGR/CAT are stable; do not claim audio
   decoding or editing until payload semantics are verified.
