@@ -1016,60 +1016,6 @@ fn raster_type_code(raster_format: u32) -> u32 {
     }
 }
 
-/// Feature-gated access to the internal decoders for the decode benchmark
-/// example (`cargo run --release --example benchmark_texture_decode
-/// --features bench`).
-#[cfg(feature = "bench")]
-pub mod bench {
-    pub use super::DxtType;
-
-    pub fn decode_1555(
-        data: &[u8],
-        w: u32,
-        h: u32,
-    ) -> Result<Vec<u8>, super::DecodeError> {
-        super::decode_1555(data, w, h)
-    }
-
-    pub fn decode_4444(
-        data: &[u8],
-        w: u32,
-        h: u32,
-    ) -> Result<Vec<u8>, super::DecodeError> {
-        super::decode_4444(data, w, h)
-    }
-
-    pub fn decode_565(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>, super::DecodeError> {
-        super::decode_565(data, w, h)
-    }
-
-    pub fn decode_8888(
-        data: &[u8],
-        w: u32,
-        h: u32,
-    ) -> Result<Vec<u8>, super::DecodeError> {
-        super::decode_8888(data, w, h)
-    }
-
-    pub fn decode_pal8(
-        data: &[u8],
-        palette: &[u8],
-        w: u32,
-        h: u32,
-    ) -> Result<Vec<u8>, super::DecodeError> {
-        super::decode_pal8(data, palette, w, h)
-    }
-
-    pub fn decode_dxt_surface(
-        data: &[u8],
-        w: u32,
-        h: u32,
-        dxt: DxtType,
-    ) -> Result<Vec<u8>, super::DecodeError> {
-        super::decode_dxt_surface(data, w, h, dxt)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
