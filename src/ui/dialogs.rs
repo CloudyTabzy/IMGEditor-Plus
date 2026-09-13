@@ -30,6 +30,28 @@ pub fn open_file() -> Task<Option<PathBuf>> {
     Task::none()
 }
 
+/// Pick a loose Bully animation group (`Anim/*.agr`). The model still comes
+/// from the open archive; only the animation is read from disk.
+#[cfg(feature = "native-dialogs")]
+pub fn open_agr_file() -> Task<Option<PathBuf>> {
+    Task::perform(
+        async {
+            rfd::AsyncFileDialog::new()
+                .set_title("Open Bully animation group")
+                .add_filter("Bully animation group", &["agr"])
+                .pick_file()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        },
+        |path| path,
+    )
+}
+
+#[cfg(not(feature = "native-dialogs"))]
+pub fn open_agr_file() -> Task<Option<PathBuf>> {
+    Task::none()
+}
+
 #[cfg(feature = "native-dialogs")]
 pub fn import_files() -> Task<Vec<PathBuf>> {
     Task::perform(

@@ -460,6 +460,10 @@ pub enum Message {
     AnimationDemoStart,
     /// Leave the synthetic demo and clear the viewer.
     AnimationDemoExit,
+    /// Open the file picker for a loose `Anim/*.agr` animation group.
+    PickAgrFile,
+    /// Result of the loose AGR file picker.
+    AgrFileChosen(Option<std::path::PathBuf>),
     AnimationSelectClip(crate::inspector::animation::ClipId),
     AnimationTogglePlay,
     AnimationStop,
@@ -684,10 +688,13 @@ pub enum Message {
     },
     Viewer3dLoadSelected,
     /// Load an animation group (AGR) together with its associated model
-    /// and install it as an animated viewer session.
+    /// and install it as an animated viewer session. The animation bytes
+    /// come from `agr_entry` (archive) or `agr_path` (loose `Anim/*.agr`);
+    /// the model always comes from the archive.
     ViewerAgrLoadRequest {
         archive_index: usize,
-        agr_entry: usize,
+        agr_entry: Option<usize>,
+        agr_path: Option<std::path::PathBuf>,
         model_entry: usize,
         /// Sequence leaf names from the model's HXD catalog, when one was
         /// resolved. Applied to the clips when the counts agree.
@@ -2613,7 +2620,56 @@ impl App {
         self.toast = Some(format!("Loading {agr_name} on {model_name}…{named}"));
         Task::done(Message::ViewerAgrLoadRequest {
             archive_index,
-            agr_entry: entry_index,
+            agr_entry: Some(entry_index),
+            agr_path: None,
+            model_entry,
+            clip_names,
+        })
+    }
+
+    /// Load a loose `Anim/*.agr` against the active archive's best model.
+    ///
+    /// Loose character groups (`C_Player.agr`, `Grap.agr`, `NPC_Cher.agr`)
+    /// pair with archive NIFs through the same stem heuristic; HXD naming
+    /// applies when a matching catalog record is found next to the file.
+    fn load_loose_agr(&mut self, path: std::path::PathBuf) -> Task<Message> {
+        let Some(archive_index) = self.editor.selected_archive() else {
+            self.toast = Some("Open an IMG archive first; the model comes from it.".into());
+            return Task::none();
+        };
+        let Some(archive) = self.editor.archives().get(archive_index) else {
+            return Task::none();
+        };
+        let agr_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let stem = agr_name
+            .rsplit_once('.')
+            .map(|(stem, _)| stem)
+            .unwrap_or(&agr_name);
+        let clip_names = path
+            .parent()
+            .and_then(|anim| crate::inspector::animation::hxd::find_for_stem(anim, stem))
+            .map(|record| record.sequence_names())
+            .unwrap_or_default();
+        let Some(model_entry) = find_agr_model_entry(&archive.entries, &agr_name) else {
+            self.toast = Some(format!(
+                "No matching .nif model found for {agr_name} in the open archive."
+            ));
+            return Task::none();
+        };
+        let model_name = archive.entries[model_entry].file_name.clone();
+        let named = if clip_names.is_empty() {
+            String::new()
+        } else {
+            format!(" ({} catalog-named clips)", clip_names.len())
+        };
+        self.toast = Some(format!("Loading {agr_name} on {model_name}…{named}"));
+        Task::done(Message::ViewerAgrLoadRequest {
+            archive_index,
+            agr_entry: None,
+            agr_path: Some(path),
             model_entry,
             clip_names,
         })
@@ -4989,6 +5045,9 @@ impl App {
             }
             Message::AnimationFrame(now) => self.on_animation_frame(now),
             Message::AnimationDemoStart => self.start_animation_demo(),
+            Message::PickAgrFile => dialogs::open_agr_file().map(Message::AgrFileChosen),
+            Message::AgrFileChosen(Some(path)) => self.load_loose_agr(path),
+            Message::AgrFileChosen(None) => Task::none(),
             Message::AnimationDemoExit => {
                 self.viewer3d_handle.clear();
                 self.selected_inspector_tab = InspectorTab::Model3D;
@@ -5821,6 +5880,7 @@ impl App {
             Message::ViewerAgrLoadRequest {
                 archive_index,
                 agr_entry,
+                agr_path,
                 model_entry,
                 clip_names,
             } => {
@@ -5828,24 +5888,41 @@ impl App {
                     let Some(archive) = self.editor.archives().get(archive_index) else {
                         return Task::none();
                     };
-                    let (Some(agr), Some(model)) = (
-                        archive.entries.get(agr_entry),
-                        archive.entries.get(model_entry),
-                    ) else {
+                    let Some(model) = archive.entries.get(model_entry) else {
                         return Task::none();
                     };
-                    (agr.clone(), model.clone(), archive.path.clone())
+                    let agr = match agr_entry {
+                        Some(agr_entry) => archive.entries.get(agr_entry).cloned(),
+                        None => None,
+                    };
+                    (agr, model.clone(), archive.path.clone())
                 };
-                let agr_display = agr_entry_data.file_name.clone();
+                let agr_display = agr_path
+                    .as_ref()
+                    .and_then(|path| {
+                        path.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    })
+                    .or_else(|| {
+                        agr_entry_data
+                            .as_ref()
+                            .map(|entry| entry.file_name.to_string())
+                    })
+                    .unwrap_or_else(|| "animation".to_string());
                 let model_display = model_entry_data.file_name.clone();
                 Task::perform(
                     async move {
                         let joined = tokio::task::spawn_blocking(move || {
-                            let agr_bytes = crate::parser::read_entry_data_from_source(
-                                &agr_entry_data,
-                                archive_path.as_deref(),
-                            )
-                            .map_err(|e| format!("I/O: {e}"))?;
+                            let agr_bytes = match (&agr_path, &agr_entry_data) {
+                                (Some(path), _) => std::fs::read(path)
+                                    .map_err(|e| format!("I/O {}: {e}", path.display()))?,
+                                (None, Some(entry)) => crate::parser::read_entry_data_from_source(
+                                    entry,
+                                    archive_path.as_deref(),
+                                )
+                                .map_err(|e| format!("I/O: {e}"))?,
+                                (None, None) => return Err("no AGR source".to_string()),
+                            };
                             let model_bytes = crate::parser::read_entry_data_from_source(
                                 &model_entry_data,
                                 archive_path.as_deref(),
@@ -7169,6 +7246,10 @@ impl App {
                     Message::AnimationDemoStart
                 },
             )),
+            Item::new(menu_button(
+                "Load .agr animation file…".to_string(),
+                Message::PickAgrFile,
+            )),
         ])
         .max_width(220.0);
 
@@ -7597,6 +7678,19 @@ mod tests {
         archive.entries.push(EntryInfo::new("second.txd"));
         archive.update_selected_list("", false);
         app
+    }
+
+    #[test]
+    fn loose_agr_stem_pairs_with_archive_model() {
+        let entries = vec![
+            EntryInfo::new("first.dff"),
+            EntryInfo::new("PLAYER.nif"),
+            EntryInfo::new("Grappler.nif"),
+        ];
+        // C_Player.agr -> PLAYER.nif through the suffix rule.
+        assert_eq!(find_agr_model_entry(&entries, "C_Player.agr"), Some(1));
+        // Grap.agr -> Grappler.nif through the substring rule.
+        assert_eq!(find_agr_model_entry(&entries, "Grap.agr"), Some(2));
     }
 
     /// Run a task's side effects and collect the follow-up messages it
