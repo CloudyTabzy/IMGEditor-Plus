@@ -345,6 +345,13 @@ fn normal_through(linear: Mat3, normal: Vec3, degenerate_normals: &mut u32) -> V
 pub fn rest_scene(model: &ModelAsset) -> Scene {
     let mut buffers = PoseBuffers::new(model);
     evaluate_pose(model, RootMotionPolicy::Source, Vec3::ZERO, &mut buffers);
+    scene_from_pose(model, &buffers)
+}
+
+/// Flatten an already-evaluated pose into the static [`Scene`] container.
+/// Shared by the rest scene, the animation viewer, and headless test
+/// renders so every consumer sees identical geometry.
+pub fn scene_from_pose(model: &ModelAsset, buffers: &PoseBuffers) -> Scene {
     let mut meshes = Vec::with_capacity(model.meshes.len());
     for (mesh_index, mesh) in model.meshes.iter().enumerate() {
         let vertices = buffers.out_vertices[mesh_index].clone();

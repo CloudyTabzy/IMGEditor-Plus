@@ -511,6 +511,99 @@ mod tests {
         assert!(has_line, "overlay line colour must be visible");
     }
 
+    /// Developer tool: render sampled animation frames headlessly.
+    /// Set `IMGEDITOR_AGR_DUMP_AGR` and `IMGEDITOR_AGR_DUMP_NIF`, then run
+    /// with `--nocapture`; PNGs land in `target/agr-frame-*.png` and mesh
+    /// bounds are printed for coordinate inspection.
+    #[test]
+    fn agr_animation_frames_render_when_requested() {
+        let (Ok(agr_path), Ok(nif_path)) = (
+            std::env::var("IMGEDITOR_AGR_DUMP_AGR"),
+            std::env::var("IMGEDITOR_AGR_DUMP_NIF"),
+        ) else {
+            return;
+        };
+        use crate::inspector::animation::binding::bind_clip;
+        use crate::inspector::animation::bully;
+        use crate::inspector::animation::pose::{
+            PoseBuffers, RootMotionPolicy, clip_envelope, evaluate_pose, rest_scene, sample_locals,
+            scene_from_pose,
+        };
+        let renderer = gpu().expect("renderer");
+        let agr_bytes = std::fs::read(&agr_path).expect("read AGR");
+        let nif_bytes = std::fs::read(&nif_path).expect("read NIF");
+        let mut nif = crate::inspector::nif::NifFile::parse(&nif_bytes).expect("parse NIF");
+        nif.resolve_string_indices();
+        let mapping = match std::env::var("IMGEDITOR_AGR_MAPPING").as_deref() {
+            Ok("bones") => bully::NifMapping::BonesOnly,
+            _ => bully::NifMapping::AllNodes,
+        };
+        let model =
+            bully::model_from_nif_with_mapping(&nif, "render", "render", mapping).expect("model");
+        let file = bully::parse_agr(&agr_bytes).expect("parse AGR");
+        let library = bully::to_library(&file, "render");
+        let clip = library
+            .clips
+            .iter()
+            .max_by(|a, b| a.duration.total_cmp(&b.duration))
+            .expect("has clips");
+        let binding = bind_clip(&model, clip);
+        println!(
+            "clip {} dur {:.3}s tracks {} bound {}/{}",
+            clip.name,
+            clip.duration,
+            clip.tracks.len(),
+            binding.bound_count(),
+            binding.total_count()
+        );
+        let mut buffers = PoseBuffers::new(&model);
+        // Fixed camera framed on the clip motion envelope (fallback: rest).
+        let envelope = clip_envelope(
+            &model,
+            clip,
+            &binding,
+            (0.0, clip.duration),
+            16,
+            RootMotionPolicy::Source,
+            glam::Vec3::ZERO,
+        )
+        .unwrap_or_else(|| rest_scene(&model).aabb);
+        let mut camera = OrbitCamera::new(Viewport {
+            width: 512,
+            height: 512,
+        });
+        camera.reset_to_aabb(&envelope);
+        for (i, frac) in [0.0f32, 0.25, 0.5, 0.75].into_iter().enumerate() {
+            let t = clip.duration * frac;
+            sample_locals(clip, &binding, &model, t, &mut buffers.locals);
+            evaluate_pose(
+                &model,
+                RootMotionPolicy::Source,
+                glam::Vec3::ZERO,
+                &mut buffers,
+            );
+            let scene = scene_from_pose(&model, &buffers);
+            println!(
+                "frame {i} t={t:.3}s scene aabb min={:?} max={:?}",
+                scene.aabb.min, scene.aabb.max
+            );
+            for mesh in &scene.meshes {
+                println!(
+                    "   mesh {:<16} min={:?} max={:?}",
+                    mesh.name, mesh.aabb.min, mesh.aabb.max
+                );
+            }
+            let frame = render_frame(&renderer, &scene, &camera, 512, 512, RenderFlags::empty())
+                .expect("render");
+            let mode = match mapping {
+                bully::NifMapping::BonesOnly => "bones",
+                bully::NifMapping::AllNodes => "all",
+            };
+            let path = std::path::Path::new("target").join(format!("agr-frame-{mode}-{i}.png"));
+            write_png(&frame, &path).expect("png");
+        }
+    }
+
     #[test]
     fn readback_strips_alignment_padding() {
         let renderer = gpu().expect("renderer");

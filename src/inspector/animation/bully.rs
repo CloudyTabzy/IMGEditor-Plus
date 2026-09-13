@@ -471,6 +471,20 @@ pub fn to_library(file: &AgrFile, name: impl Into<String>) -> AnimationLibrary {
     }
 }
 
+/// How NIF scene nodes are named for AGR track binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum NifMapping {
+    /// Every scene-graph node counts (shapes included). Retained for
+    /// comparison; it lets AGR tracks rotate geometry leaves independently,
+    /// which splits rigid assemblies (verified visually on SK8Board.nif).
+    AllNodes,
+    /// Only bones count; shapes keep `shape_{n}` names and follow their
+    /// owning node rigidly. Verified correct on the skateboard asset and
+    /// matches the engine convention where animation targets are bones.
+    #[default]
+    BonesOnly,
+}
+
 /// Build a runtime [`ModelAsset`] from a parsed Bully NIF.
 ///
 /// First-pass rig: the node hierarchy and bind-local geometry come from the
@@ -483,10 +497,21 @@ pub fn model_from_nif(
     name: impl Into<String>,
     source_identity: impl Into<String>,
 ) -> Result<ModelAsset, String> {
+    model_from_nif_with_mapping(nif, name, source_identity, NifMapping::default())
+}
+
+/// [`model_from_nif`] with an explicit node-naming strategy.
+pub fn model_from_nif_with_mapping(
+    nif: &NifFile,
+    name: impl Into<String>,
+    source_identity: impl Into<String>,
+    mapping: NifMapping,
+) -> Result<ModelAsset, String> {
     let mut nodes: Vec<SceneNode> = Vec::new();
     let mut meshes: Vec<MeshAsset> = Vec::new();
     let mut diagnostics: Vec<String> = Vec::new();
     let mut visited = std::collections::HashSet::new();
+    let mut track_counter = 0u32;
 
     for &root in &nif.footer.roots {
         visit_nif_block(
@@ -497,6 +522,8 @@ pub fn model_from_nif(
             &mut meshes,
             &mut diagnostics,
             &mut visited,
+            mapping,
+            &mut track_counter,
         );
     }
     if nodes.is_empty() {
@@ -527,6 +554,8 @@ fn visit_nif_block(
     meshes: &mut Vec<MeshAsset>,
     diagnostics: &mut Vec<String>,
     visited: &mut std::collections::HashSet<i32>,
+    mapping: NifMapping,
+    track_counter: &mut u32,
 ) -> Option<NodeId> {
     if block_index < 0 || !visited.insert(block_index) {
         return None;
@@ -581,7 +610,13 @@ fn visit_nif_block(
         BlockPayload::NiTriStrips(data) => data.base.name.clone(),
         _ => None,
     };
-    let track_name = format!("track_{:03}", id.0);
+    let track_name = if mapping == NifMapping::BonesOnly && mesh.is_some() {
+        format!("shape_{:03}", id.0)
+    } else {
+        let name = format!("track_{:03}", *track_counter);
+        *track_counter += 1;
+        name
+    };
     if let Some(original) = &original_name
         && *original != track_name
     {
@@ -600,7 +635,17 @@ fn visit_nif_block(
         mesh,
     });
     for child in children {
-        visit_nif_block(nif, child, Some(id), nodes, meshes, diagnostics, visited);
+        visit_nif_block(
+            nif,
+            child,
+            Some(id),
+            nodes,
+            meshes,
+            diagnostics,
+            visited,
+            mapping,
+            track_counter,
+        );
     }
     Some(id)
 }
@@ -857,6 +902,84 @@ mod tests {
         assert!(model.nodes.len() > 1, "player NIF has a skeleton");
         assert!(!model.meshes.is_empty(), "player NIF has geometry");
         assert!(model.node_by_name("track_000").is_some());
+        // Shapes must not carry AGR track identities: animating a geometry
+        // leaf independently splits rigid assemblies (SK8Board regression).
+        for node in &model.nodes {
+            if node.mesh.is_some() {
+                assert!(
+                    !node.name.starts_with("track_"),
+                    "shape node {} must not be a track target",
+                    node.name
+                );
+            }
+        }
+    }
+
+    /// Developer dump: set `IMGEDITOR_AGR_DUMP_AGR` and
+    /// `IMGEDITOR_AGR_DUMP_NIF` to a sample pair, then run with
+    /// `--nocapture` to print the model node tree, AGR tracks, and the
+    /// name-based binding report. Used to tune the track-id mapping and
+    /// rig alignment without the GUI.
+    #[test]
+    fn dump_agr_pair_when_requested() {
+        let (Ok(agr_path), Ok(nif_path)) = (
+            std::env::var("IMGEDITOR_AGR_DUMP_AGR"),
+            std::env::var("IMGEDITOR_AGR_DUMP_NIF"),
+        ) else {
+            return;
+        };
+        let agr_bytes = std::fs::read(&agr_path).expect("read AGR");
+        let nif_bytes = std::fs::read(&nif_path).expect("read NIF");
+        let mut nif = NifFile::parse(&nif_bytes).expect("parse NIF");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "dump", "dump").expect("model builds");
+        println!(
+            "== model: {} nodes, {} meshes ==",
+            model.nodes.len(),
+            model.meshes.len()
+        );
+        for node in &model.nodes {
+            println!(
+                "  node {:<8} parent={:<8} mesh={:?}",
+                node.name,
+                node.parent.map(|p| p.0).unwrap_or(u32::MAX),
+                node.mesh
+            );
+        }
+        for line in model.diagnostics.iter().take(48) {
+            println!("  name: {line}");
+        }
+        let file = parse_agr(&agr_bytes).expect("parse AGR");
+        println!(
+            "== AGR variant {} clips {} ==",
+            file.variant,
+            file.clip_count()
+        );
+        for clip in file.clips.iter().take(6) {
+            println!(
+                "  clip {:02}: variant={} dur={:.3} tracks={} preamble={} diag={:?}",
+                clip.index,
+                clip.variant,
+                clip.duration_s,
+                clip.tracks.len(),
+                clip.preamble_records,
+                clip.diagnostics
+            );
+            for track in clip.tracks.iter().take(24) {
+                let target = format!("track_{:03}", track.track);
+                let bound = model.node_by_name(&target).is_some();
+                println!(
+                    "     track {:3} ch{} keys={:3} first_t={:.3} last_t={:.3} -> {} {}",
+                    track.track,
+                    track.channel,
+                    track.keys.len(),
+                    track.keys.first().map(|k| k.time_s).unwrap_or(0.0),
+                    track.keys.last().map(|k| k.time_s).unwrap_or(0.0),
+                    target,
+                    if bound { "BOUND" } else { "unbound" }
+                );
+            }
+        }
     }
 
     #[test]
