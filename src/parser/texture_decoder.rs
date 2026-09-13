@@ -68,36 +68,37 @@ fn dxt_color_block(block: &[u8], allow_transparent: bool) -> [[u8; 4]; 16] {
     let col1 = expand(c1);
     let codes = u32::from_le_bytes([block[4], block[5], block[6], block[7]]);
 
+    // The palette depends only on the two endpoints and the mode, so derive
+    // its four entries once instead of re-blending colors per texel. With
+    // `allow_transparent` unset (BC2/BC3 color blocks) the four-color
+    // interpolation applies regardless of the endpoint order.
+    let mut palette = [col0, col1, [0, 0, 0, 255], [0, 0, 0, 255]];
+    if c0 > c1 || !allow_transparent {
+        palette[2] = [
+            ((col0[0] as u16 * 2 + col1[0] as u16) / 3) as u8,
+            ((col0[1] as u16 * 2 + col1[1] as u16) / 3) as u8,
+            ((col0[2] as u16 * 2 + col1[2] as u16) / 3) as u8,
+            255,
+        ];
+        palette[3] = [
+            ((col0[0] as u16 + col1[0] as u16 * 2) / 3) as u8,
+            ((col0[1] as u16 + col1[1] as u16 * 2) / 3) as u8,
+            ((col0[2] as u16 + col1[2] as u16 * 2) / 3) as u8,
+            255,
+        ];
+    } else {
+        palette[2] = [
+            ((col0[0] as u16 + col1[0] as u16) / 2) as u8,
+            ((col0[1] as u16 + col1[1] as u16) / 2) as u8,
+            ((col0[2] as u16 + col1[2] as u16) / 2) as u8,
+            255,
+        ];
+        palette[3] = [0, 0, 0, 0];
+    }
+
     let mut out = [[0u8; 4]; 16];
     for (i, pixel) in out.iter_mut().enumerate() {
-        let idx = ((codes >> (i * 2)) & 3) as u8;
-        *pixel = match (c0 > c1 || !allow_transparent, idx) {
-            (true, 0) | (false, 0) => col0,
-            (true, 1) | (false, 1) => col1,
-            (true, 2) => {
-                let r = ((col0[0] as u16 * 2 + col1[0] as u16) / 3) as u8;
-                let g = ((col0[1] as u16 * 2 + col1[1] as u16) / 3) as u8;
-                let b = ((col0[2] as u16 * 2 + col1[2] as u16) / 3) as u8;
-                [r, g, b, 255]
-            }
-            (false, 2) => {
-                let avg = |a: u8, b: u8| ((a as u16 + b as u16) / 2) as u8;
-                [
-                    avg(col0[0], col1[0]),
-                    avg(col0[1], col1[1]),
-                    avg(col0[2], col1[2]),
-                    255,
-                ]
-            }
-            (true, 3) => {
-                let r = ((col0[0] as u16 + col1[0] as u16 * 2) / 3) as u8;
-                let g = ((col0[1] as u16 + col1[1] as u16 * 2) / 3) as u8;
-                let b = ((col0[2] as u16 + col1[2] as u16 * 2) / 3) as u8;
-                [r, g, b, 255]
-            }
-            (false, 3) => [0, 0, 0, 0],
-            _ => unreachable!("DXT color selector is only two bits"),
-        };
+        *pixel = palette[((codes >> (i * 2)) & 3) as usize];
     }
     out
 }
@@ -127,58 +128,35 @@ fn dxt5_block(block: &[u8]) -> [[u8; 4]; 16] {
         block[2], block[3], block[4], block[5], block[6], block[7], 0, 0,
     ]);
 
-    let interpolate_alpha = |idx: u8| -> u8 {
-        // The `1 *` and `0 *` coefficients below preserve the parallel
-        // structure of the DXT5 alpha interpolation table; they are
-        // load-bearing for readability even when the math collapses.
-        #[allow(clippy::identity_op, clippy::erasing_op)]
-        match idx {
-            0 => alpha0,
-            1 => alpha1,
-            2 => if alpha0 > alpha1 {
-                (6 * alpha0 as u16 + 1 * alpha1 as u16 + 3) / 7
-            } else {
-                (4 * alpha0 as u16 + 1 * alpha1 as u16 + 2) / 5
-            }
-            .min(255) as u8,
-            3 => if alpha0 > alpha1 {
-                (5 * alpha0 as u16 + 2 * alpha1 as u16 + 3) / 7
-            } else {
-                (3 * alpha0 as u16 + 2 * alpha1 as u16 + 2) / 5
-            }
-            .min(255) as u8,
-            4 => if alpha0 > alpha1 {
-                (4 * alpha0 as u16 + 3 * alpha1 as u16 + 3) / 7
-            } else {
-                (2 * alpha0 as u16 + 3 * alpha1 as u16 + 2) / 5
-            }
-            .min(255) as u8,
-            5 => if alpha0 > alpha1 {
-                (3 * alpha0 as u16 + 4 * alpha1 as u16 + 3) / 7
-            } else {
-                (1 * alpha0 as u16 + 4 * alpha1 as u16 + 2) / 5
-            }
-            .min(255) as u8,
-            6 => if alpha0 > alpha1 {
-                (2 * alpha0 as u16 + 5 * alpha1 as u16 + 3) / 7
-            } else {
-                0
-            }
-            .min(255) as u8,
-            7 => if alpha0 > alpha1 {
-                (1 * alpha0 as u16 + 6 * alpha1 as u16 + 3) / 7
-            } else {
-                255
-            }
-            .min(255) as u8,
-            _ => 0,
+    // The interpolated alpha depends only on (alpha0, alpha1, selector), and
+    // the endpoints are fixed per block, so derive the 8-entry palette once
+    // and reduce every texel to a table lookup instead of re-running the
+    // branchy interpolation formula per texel.
+    let mut alpha_palette = [0u8; 8];
+    alpha_palette[0] = alpha0;
+    alpha_palette[1] = alpha1;
+    let a0 = u16::from(alpha0);
+    let a1 = u16::from(alpha1);
+    if alpha0 > alpha1 {
+        // Eight-value block: six interpolated stops.
+        let stops = [(6, 1), (5, 2), (4, 3), (3, 4), (2, 5), (1, 6)];
+        for (slot, (weight_a0, weight_a1)) in stops.iter().enumerate() {
+            alpha_palette[slot + 2] = ((a0 * weight_a0 + a1 * weight_a1 + 3) / 7).min(255) as u8;
         }
-    };
+    } else {
+        // Six-value block: four interpolated stops, then 0 and 255.
+        let stops = [(4, 1), (3, 2), (2, 3), (1, 4)];
+        for (slot, (weight_a0, weight_a1)) in stops.iter().enumerate() {
+            alpha_palette[slot + 2] = ((a0 * weight_a0 + a1 * weight_a1 + 2) / 5).min(255) as u8;
+        }
+        alpha_palette[6] = 0;
+        alpha_palette[7] = 255;
+    }
 
     let mut color_out = dxt_color_block(&block[8..16], false);
     for (i, pixel) in color_out.iter_mut().enumerate() {
-        let alpha_idx = ((alpha_codes >> (i * 3)) & 7) as u8;
-        pixel[3] = interpolate_alpha(alpha_idx);
+        let alpha_idx = ((alpha_codes >> (i * 3)) & 7) as usize;
+        pixel[3] = alpha_palette[alpha_idx];
     }
     color_out
 }
@@ -1108,6 +1086,131 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dxt5_alpha_palette_matches_the_reference_formula() {
+        // Mirrors the per-texel formula the palette-based decoder replaced,
+        // so any change that shifts an interpolated value by one unit fails.
+        let reference = |alpha0: u8, alpha1: u8, selector: u8| -> u8 {
+            let a0 = u16::from(alpha0);
+            let a1 = u16::from(alpha1);
+            match selector {
+                0 => alpha0,
+                1 => alpha1,
+                2 => {
+                    if alpha0 > alpha1 {
+                        (6 * a0 + a1 + 3) / 7
+                    } else {
+                        (4 * a0 + a1 + 2) / 5
+                    }
+                    .min(255) as u8
+                }
+                3 => {
+                    if alpha0 > alpha1 {
+                        (5 * a0 + 2 * a1 + 3) / 7
+                    } else {
+                        (3 * a0 + 2 * a1 + 2) / 5
+                    }
+                    .min(255) as u8
+                }
+                4 => {
+                    if alpha0 > alpha1 {
+                        (4 * a0 + 3 * a1 + 3) / 7
+                    } else {
+                        (2 * a0 + 3 * a1 + 2) / 5
+                    }
+                    .min(255) as u8
+                }
+                5 => {
+                    if alpha0 > alpha1 {
+                        (3 * a0 + 4 * a1 + 3) / 7
+                    } else {
+                        (a0 + 4 * a1 + 2) / 5
+                    }
+                    .min(255) as u8
+                }
+                6 => {
+                    if alpha0 > alpha1 {
+                        (2 * a0 + 5 * a1 + 3) / 7
+                    } else {
+                        0
+                    }
+                    .min(255) as u8
+                }
+                7 => {
+                    if alpha0 > alpha1 {
+                        (a0 + 6 * a1 + 3) / 7
+                    } else {
+                        255
+                    }
+                    .min(255) as u8
+                }
+                _ => unreachable!(),
+            }
+        };
+
+        let mut seed = 0x1234_5678_9ABC_DEF0u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+
+        for _ in 0..512 {
+            let alpha0 = next() as u8;
+            let alpha1 = next() as u8;
+            let codes = next() & ((1u64 << 48) - 1);
+            let mut block = [0u8; 16];
+            block[0] = alpha0;
+            block[1] = alpha1;
+            block[2..8].copy_from_slice(&codes.to_le_bytes()[..6]);
+            block[8..16].copy_from_slice(&next().to_le_bytes());
+
+            let decoded = dxt5_block(&block);
+            for (i, pixel) in decoded.iter().enumerate() {
+                let selector = ((codes >> (i * 3)) & 7) as u8;
+                assert_eq!(
+                    pixel[3],
+                    reference(alpha0, alpha1, selector),
+                    "texel {i}, endpoints ({alpha0}, {alpha1})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dxt_color_block_selectors_follow_both_endpoint_orders() {
+        let block = |c0: u16, c1: u16| {
+            let mut b = [0u8; 8];
+            b[0..2].copy_from_slice(&c0.to_le_bytes());
+            b[2..4].copy_from_slice(&c1.to_le_bytes());
+            // Texel i reads selector i from bits 2i: 0, 1, 2, 3.
+            b[4] = 0b11_10_01_00;
+            b
+        };
+
+        // c0 > c1: selectors 0..3 are the endpoints and the two 1/3 blends.
+        let decoded = dxt_color_block(&block(0xFFFF, 0x0000), true);
+        assert_eq!(decoded[0], [255, 255, 255, 255]);
+        assert_eq!(decoded[1], [0, 0, 0, 255]);
+        assert_eq!(decoded[2], [170, 170, 170, 255]);
+        assert_eq!(decoded[3], [85, 85, 85, 255]);
+
+        // c0 <= c1 with transparency allowed: selector 2 averages, 3 is
+        // transparent black.
+        let decoded = dxt_color_block(&block(0x0000, 0xFFFF), true);
+        assert_eq!(decoded[0], [0, 0, 0, 255]);
+        assert_eq!(decoded[1], [255, 255, 255, 255]);
+        assert_eq!(decoded[2], [127, 127, 127, 255]);
+        assert_eq!(decoded[3], [0, 0, 0, 0]);
+
+        // BC2/BC3 color blocks blend in both endpoint orders regardless of
+        // the endpoint comparison; there is no transparent selector.
+        let decoded = dxt_color_block(&block(0x0000, 0xFFFF), false);
+        assert_eq!(decoded[2], [85, 85, 85, 255]);
+        assert_eq!(decoded[3], [170, 170, 170, 255]);
     }
 
     #[test]
