@@ -168,6 +168,12 @@ remain pending.
     Rust decoder consumes the declared fixed record span and is covered by a
     captured retail key plus real-corpus tests. See
     `bully-probe/FINDINGS.md` §2.15.
+  - [x] Reverse-engineer the 1002 packed character stream from the retail
+    executable: the declared `count × 8` records form predecessor-linked
+    rotation curves, followed by runtime auxiliary records. The shared 9-bit
+    normalized time and packed quaternion fields are decoded; default and
+    terminal identity roots are excluded. Validated against loose
+    `C_Player`/`Grap`/`NPC_Cher` and archive mission AGRs.
   - [ ] Prove the 1004 curve-root-to-NIF joint-name mapping across additional
     HXD/NIF rigs; keep the validated numeric fallback until that evidence is
     available.
