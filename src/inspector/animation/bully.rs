@@ -2533,8 +2533,8 @@ mod tests {
     /// bones on the player rig (export order differs from the NIF's DFS
     /// order), which twists the skinned mesh while bone positions stay
     /// plausible. Calibrated binding matches each curve's first key against
-    /// node rest rotations; at the clip's bind pose the sampled locals must
-    /// then sit near the rest pose for (nearly) every bound bone.
+    /// node rest rotations; action-only clips such as Hang_Workout then use
+    /// the verified Bully offset when their root/torso never reaches rest.
     #[test]
     fn calibrated_binding_matches_bind_pose_when_available() {
         let (Ok(agr_path), Ok(nif_path)) = (
@@ -2569,12 +2569,13 @@ mod tests {
             .and_then(|stem| stem.to_str())
             .unwrap_or_default();
         if nif_stem.eq_ignore_ascii_case("PLAYER")
-            && agr_stem.eq_ignore_ascii_case("C_Player")
+            && (agr_stem.eq_ignore_ascii_case("C_Player")
+                || agr_stem.eq_ignore_ascii_case("Hang_Workout"))
         {
             assert_eq!(
                 binding.bound_count(),
                 35,
-                "C_Player must bind every declared character curve"
+                "player AGR must bind every declared character curve"
             );
             for (track, expected_node) in [
                 (0, "track_001"), // Root

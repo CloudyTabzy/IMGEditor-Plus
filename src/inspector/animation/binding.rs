@@ -8,6 +8,73 @@ use crate::inspector::animation::clip::AnimationClip;
 use crate::inspector::animation::model::ModelAsset;
 use crate::inspector::animation::{ClipId, NodeId};
 
+/// Recover the fixed source/export ordering used by Bully's character AGR
+/// tracks when bind-pose scoring cannot admit an action-only track. The
+/// regular calibrator deliberately rejects a curve that never approaches a
+/// node's rest rotation; that is correct for unknown rigs, but a self-
+/// contained action library can legitimately keep the root and torso far
+/// from rest for every clip.
+///
+/// This is intentionally a narrow adapter contract, not a general numeric
+/// retargeter. The local Bully evidence establishes all of these invariants:
+/// AGR emits a contiguous `track_000..` sequence, the HXD character table
+/// lists the corresponding 35 joints without the NIF scene root, and the
+/// importer exposes those joints as `track_001..` under a synthetic
+/// `Scene Root`. A skinned Z-up model plus the Bully adapter provenance are
+/// required before the offset can be used.
+fn bully_numeric_track_offset(
+    model: &ModelAsset,
+    library: &crate::inspector::animation::clip::AnimationLibrary,
+    targets: &[(String, Vec<crate::inspector::animation::clip::TrackChannel>)],
+    candidates: &[(String, NodeId)],
+) -> Option<std::collections::HashMap<String, NodeId>> {
+    const MIN_CHARACTER_TRACKS: usize = 8;
+
+    if !model.has_skinning()
+        || model.source_orientation != crate::inspector::scene3d::camera::BaseOrientation::Zup
+        || !library.provenance.starts_with("Bully AGR")
+        || targets.len() < MIN_CHARACTER_TRACKS
+    {
+        return None;
+    }
+
+    let scene_root = model.node_by_name("Scene Root")?.id;
+    let dummy = model.node_by_name("track_000")?.id;
+    if model.node(dummy)?.parent != Some(scene_root) {
+        return None;
+    }
+    let candidate_ids: std::collections::HashSet<NodeId> =
+        candidates.iter().map(|(_, id)| *id).collect();
+    let mut used = std::collections::HashSet::with_capacity(targets.len());
+    let mut mapping = std::collections::HashMap::with_capacity(targets.len());
+
+    for (curve_index, (target, _)) in targets.iter().enumerate() {
+        let expected_target = format!("track_{curve_index:03}");
+        if target != &expected_target {
+            return None;
+        }
+
+        let expected_node = format!("track_{:03}", curve_index + 1);
+        let node_matches = model.nodes_named(&expected_node);
+        let [node] = node_matches.as_slice() else {
+            return None;
+        };
+        let node = *node;
+        if !candidate_ids.contains(&node)
+            || model.node(node).is_none_or(|scene_node| scene_node.mesh.is_some())
+            || !used.insert(node)
+        {
+            return None;
+        }
+        if curve_index == 0 && model.node(node)?.parent != Some(dummy) {
+            return None;
+        }
+        mapping.insert(target.clone(), node);
+    }
+
+    Some(mapping)
+}
+
 /// Resolution status of one track.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrackBindingStatus {
@@ -409,7 +476,6 @@ pub fn calibrate_bindings(
     }
 
     let mut assignments = HashMap::new();
-    let mut diagnostics = Vec::new();
     let mut row = 0;
     let mut column = 0;
     while row < targets.len() && column < candidates.len() {
@@ -420,23 +486,37 @@ pub fn calibrate_bindings(
                 column += 1;
             }
             1 => {
-                diagnostics.push(format!(
-                    "AGR target '{}' was not admitted during ordered calibration",
-                    targets[row].0
-                ));
                 row += 1;
             }
             2 => column += 1,
             _ => break,
         }
     }
-    while row < targets.len() {
-        diagnostics.push(format!(
-            "AGR target '{}' was not admitted during ordered calibration",
-            targets[row].0
-        ));
-        row += 1;
+
+    // A compact Bully action library may never visit the bind pose for its
+    // root/torso curves. If the strict DP already agrees with the proven
+    // importer offset, recover only the skipped entries; a disagreement
+    // leaves the generic calibration intact rather than silently replacing
+    // a real mapping.
+    if let Some(numeric) = bully_numeric_track_offset(model, library, &targets, &candidates) {
+        let agrees_with_calibration = assignments
+            .iter()
+            .all(|(target, node)| numeric.get(target) == Some(node));
+        if agrees_with_calibration {
+            assignments = numeric;
+        }
     }
+
+    let diagnostics = targets
+        .iter()
+        .filter(|(target, _)| !assignments.contains_key(target))
+        .map(|(target, _)| {
+            format!(
+                "AGR target '{}' was not admitted during ordered calibration",
+                target
+            )
+        })
+        .collect();
 
     BindingCalibration {
         assignments,
@@ -698,5 +778,117 @@ mod tests {
         assert_eq!(first.node_for_track(1), Some(NodeId(3)));
         assert_eq!(first.node_for_track(0), second.node_for_track(0));
         assert_eq!(first.node_for_track(1), second.node_for_track(1));
+    }
+
+    #[test]
+    fn bully_action_only_tracks_recover_the_imported_numeric_offset() {
+        // Two tracks are deliberately held 90 degrees away from every
+        // rest rotation. The strict pose matcher must skip them, while the
+        // structural Bully adapter rule must recover their source order.
+        let mut nodes = vec![SceneNode {
+            id: NodeId(0),
+            parent: None,
+            name: "Scene Root".into(),
+            local: NodeTransform::IDENTITY,
+            mesh: None,
+        }];
+        for index in 1..=8 {
+            nodes.push(SceneNode {
+                id: NodeId(index + 1),
+                parent: Some(NodeId(index)),
+                name: format!("track_{index:03}"),
+                local: NodeTransform {
+                    rotation: Quat::from_rotation_z(index as f32 * 0.7853982),
+                    ..NodeTransform::IDENTITY
+                },
+                mesh: None,
+            });
+        }
+        nodes.insert(
+            1,
+            SceneNode {
+                id: NodeId(1),
+                parent: Some(NodeId(0)),
+                name: "track_000".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: None,
+            },
+        );
+        let mut influence = VertexSkin::new();
+        influence.push((0, 1.0));
+        nodes.push(SceneNode {
+            id: NodeId(10),
+            parent: Some(NodeId(2)),
+            name: "shape_010".into(),
+            local: NodeTransform::IDENTITY,
+            mesh: Some(0),
+        });
+        let model = ModelAsset::new(
+            "Bully action-only fixture".into(),
+            "fixture:player.nif".into(),
+            nodes,
+            vec![MeshAsset {
+                name: "body".into(),
+                texture_name: None,
+                vertices: vec![Vertex {
+                    position: [0.0, 0.0, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                }],
+                indices: Vec::new(),
+                diffuse: None,
+                skin: Some(SkinBinding {
+                    joints: vec![NodeId(2)],
+                    inverse_bind: vec![Mat4::IDENTITY],
+                    weights: vec![influence],
+                }),
+            }],
+            Mat4::IDENTITY,
+            BaseOrientation::Zup,
+            Some(NodeId(2)),
+        )
+        .unwrap();
+
+        let mut tracks = Vec::new();
+        for index in 0..8 {
+            let rest = Quat::from_rotation_z((index + 1) as f32 * 0.7853982);
+            let rotation = if matches!(index, 0 | 4) {
+                rest * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
+            } else {
+                rest
+            };
+            tracks.push(rotation_track(&format!("track_{index:03}"), rotation));
+        }
+        let mut clip = AnimationClip {
+            id: ClipId(6),
+            name: "action-only".into(),
+            duration: 1.0,
+            tracks,
+            source_rate: None,
+            markers: Vec::new(),
+            provenance: "Bully AGR variant 1002".into(),
+        };
+        clip.normalize_rotation_keys();
+        clip.validate().unwrap();
+        let library = crate::inspector::animation::clip::AnimationLibrary {
+            name: "Hang_Workout.agr".into(),
+            clips: vec![clip.clone()],
+            provenance: "Bully AGR (PC, experimental reader)".into(),
+        };
+
+        let binding = bind_clip_with_calibration(
+            &model,
+            &clip,
+            &calibrate_bindings(&model, &library),
+        );
+        assert_eq!(binding.bound_count(), 8);
+        assert!(binding.diagnostics.is_empty());
+        for index in 0..8 {
+            assert_eq!(
+                binding.node_for_track(index),
+                Some(NodeId(index as u32 + 2)),
+                "curve {index} must preserve the one-node importer offset"
+            );
+        }
     }
 }
