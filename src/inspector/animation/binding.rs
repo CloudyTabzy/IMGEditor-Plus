@@ -109,7 +109,6 @@ pub fn bind_clip(model: &ModelAsset, clip: &AnimationClip) -> ClipBinding {
     }
 }
 
-
 /// Cross-clip binding calibration for one model/library pair. A curve's
 /// keys pass through (or rest at) its target bone's rest rotation, but a
 /// single clip may pose that bone far from rest for its whole duration;
@@ -122,99 +121,219 @@ pub struct BindingCalibration {
 }
 
 /// Build the cross-clip calibration: score each target against each node by
-/// the closest key-to-rest angle across all clips, then assign greedily from
-/// the best score down (one node serves one target).
+/// the closest key-to-rest angle across all clips, then solve one ordered,
+/// one-to-one assignment. AGR's packed curve stream follows the source rig's
+/// depth-first order, so preserving that order prevents a symmetric helper or
+/// sibling from consuming a real limb and changing the inherited parent frame.
 pub fn calibrate_bindings(
     model: &ModelAsset,
     library: &crate::inspector::animation::clip::AnimationLibrary,
 ) -> BindingCalibration {
     use crate::inspector::animation::clip::TrackChannel;
+    use std::collections::{BTreeMap, HashMap, HashSet};
 
     const MAX_BIND_ANGLE_DEG: f32 = 20.0;
+    const CANDIDATE_SKIP_COST: f32 = 0.25;
+    const TARGET_SKIP_COST: f32 = 24.0;
+    const MAX_ASSIGNMENT_CELLS: usize = 4_000_000;
 
-    fn channel_min_angle(
-        channel: &TrackChannel,
+    fn rotation_min_angle(
+        channels: &[TrackChannel],
         rest: &crate::inspector::animation::model::NodeTransform,
     ) -> Option<f32> {
-        match channel {
-            TrackChannel::Rotation { values, .. } => values
-                .iter()
-                .map(|key| {
-                    let dot = key.x * rest.rotation.x
-                        + key.y * rest.rotation.y
-                        + key.z * rest.rotation.z
-                        + key.w * rest.rotation.w;
-                    dot.abs().clamp(-1.0, 1.0).acos().to_degrees() * 2.0
-                })
-                .reduce(f32::min),
-            TrackChannel::Translation { values, .. } => values
-                .iter()
-                .map(|key| (key - rest.translation).length().to_degrees())
-                .reduce(f32::min),
-            TrackChannel::Scale { .. } => None,
+        if !rest.rotation.is_finite() || rest.rotation.length_squared() <= f32::EPSILON {
+            return None;
         }
+        let rest = rest.rotation.normalize();
+        channels
+            .iter()
+            .filter_map(|channel| match channel {
+                TrackChannel::Rotation { values, .. } => Some(values.as_slice()),
+                TrackChannel::Translation { .. } | TrackChannel::Scale { .. } => None,
+            })
+            .flat_map(|values| values.iter())
+            .filter_map(|key| {
+                if !key.is_finite() || key.length_squared() <= f32::EPSILON {
+                    return None;
+                }
+                let key = key.normalize();
+                let dot = key.dot(rest).abs().clamp(-1.0, 1.0);
+                Some((dot.acos() * 2.0).to_degrees())
+            })
+            .reduce(f32::min)
     }
 
-    // Representative rotation channel per target, aggregated over clips.
-    let mut representative: std::collections::HashMap<String, Vec<TrackChannel>> =
-        std::collections::HashMap::new();
-    for clip in &library.clips {
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for track in &clip.tracks {
-            if !seen.insert(track.target.as_str()) {
-                continue;
-            }
-            let entry = representative.entry(track.target.clone()).or_default();
-            if matches!(track.channel, TrackChannel::Rotation { .. })
-                || entry.is_empty()
-            {
-                entry.push(track.channel.clone());
-            }
-        }
-    }
-
-    let mut candidates: Vec<(f32, String, crate::inspector::animation::NodeId)> = Vec::new();
-    for (target, channels) in &representative {
-        for node in &model.nodes {
-            // Shapes follow their owning bone rigidly; they are never
-            // animation targets in the bone naming convention.
-            if node.name.starts_with("shape_") {
-                continue;
-            }
-            let best = channels
-                .iter()
-                .filter_map(|channel| channel_min_angle(channel, &node.local))
-                .reduce(f32::min);
-            if let Some(angle) = best {
-                candidates.push((angle, target.clone(), node.id));
-            }
-        }
-    }
-
-    // Order prior: confident matches vote on the export's track offset
-    // (curve index vs node track number); the export orders bones almost
-    // monotonically, so off-offset candidates are usually a pose-lucky
-    // curve stealing another bone's node.
-    let track_number = |name: &str| {
+    fn track_number(name: &str) -> Option<i64> {
         name.strip_prefix("track_")
             .and_then(|rest| rest.parse::<i64>().ok())
+    }
+
+    fn match_cost(
+        raw_angle: f32,
+        target: &str,
+        node_name: &str,
+        median_offset: Option<i64>,
+    ) -> f32 {
+        let penalty = match (median_offset, track_number(target), track_number(node_name)) {
+            (Some(expected), Some(curve), Some(bone)) => {
+                // Keep adversarial but parseable track names from overflowing
+                // while calculating the ordering hint. Real files use small
+                // non-negative indices, but diagnostics should remain total.
+                let deviation =
+                    (bone as f64 - curve as f64 - expected as f64).abs() as f32;
+                1.5 * deviation
+            }
+            _ => 0.0,
+        };
+        raw_angle + penalty
+    }
+
+    // A representative rotation channel per target, aggregated over valid
+    // clips. BTreeMap keeps both target order and the resulting calibration
+    // deterministic when a library was assembled from a hash-based source.
+    let mut representative: BTreeMap<String, Vec<TrackChannel>> = BTreeMap::new();
+    for clip in &library.clips {
+        if clip.validate().is_err() {
+            continue;
+        }
+        for track in &clip.tracks {
+            if !matches!(track.channel, TrackChannel::Rotation { .. }) {
+                continue;
+            }
+            representative
+                .entry(track.target.clone())
+                .or_default()
+                .push(track.channel.clone());
+        }
+    }
+
+    let mut targets: Vec<(String, Vec<TrackChannel>)> = representative.into_iter().collect();
+    // Most Bully files use zero-padded track names, but numeric ordering is
+    // the format invariant and also keeps non-padded diagnostic fixtures sane.
+    targets.sort_by(|(left, _), (right, _)| {
+        track_number(left)
+            .zip(track_number(right))
+            .map(|(left, right)| left.cmp(&right))
+            .unwrap_or_else(|| left.cmp(right))
+    });
+    if targets.is_empty() {
+        return BindingCalibration::default();
+    }
+
+    // A mesh node cannot be an AGR bone target. For a skinned asset, derive
+    // the candidate set from skin joints and their ancestors, then retain
+    // non-mesh attachment nodes below that skeleton. Bully's player rig has
+    // one such post-skeleton TranslationNode (imported as ARROW); excluding
+    // it would leave the final AGR curve unbound. Geometry/helper branches
+    // below the synthetic Scene Root are not admitted. Scene Root itself is
+    // never an animation target.
+    let skinned_model = model.meshes.iter().any(|mesh| mesh.skin.is_some());
+    let skeleton_candidates = if skinned_model {
+        let mut ids = HashSet::new();
+        for mesh in &model.meshes {
+            let Some(skin) = &mesh.skin else {
+                continue;
+            };
+            for &joint in &skin.joints {
+                let mut current = Some(joint);
+                while let Some(id) = current {
+                    let Some(node) = model.node(id) else {
+                        break;
+                    };
+                    if !node.name.eq_ignore_ascii_case("Scene Root") && node.mesh.is_none() {
+                        ids.insert(id);
+                    }
+                    current = node.parent;
+                }
+            }
+        }
+        if !ids.is_empty() {
+            // Skin palettes do not reference rigid attachment nodes, but AGR
+            // can still animate them. Walk each non-mesh node's ancestry
+            // against the original skin-derived set so a body wrapper under
+            // Scene Root cannot become an accidental candidate merely because
+            // it appears near the skeleton in the imported node list.
+            let skeleton_ids = ids.clone();
+            for node in &model.nodes {
+                if node.mesh.is_some()
+                    || node.name.eq_ignore_ascii_case("Scene Root")
+                    || ids.contains(&node.id)
+                {
+                    continue;
+                }
+                let mut current = node.parent;
+                let under_skeleton = loop {
+                    let Some(id) = current else { break false };
+                    if skeleton_ids.contains(&id) {
+                        break true;
+                    }
+                    current = model.node(id).and_then(|parent| parent.parent);
+                };
+                if under_skeleton {
+                    ids.insert(node.id);
+                }
+            }
+        }
+        (!ids.is_empty()).then_some(ids)
+    } else {
+        None
     };
-    let node_names: std::collections::HashMap<crate::inspector::animation::NodeId, &str> = model
+    let candidates: Vec<(String, crate::inspector::animation::NodeId)> = model
+        .nodes
+        .iter()
+        .filter(|node| node.mesh.is_none())
+        .filter(|node| !node.name.eq_ignore_ascii_case("Scene Root"))
+        .filter(|node| {
+            skeleton_candidates
+                .as_ref()
+                .is_none_or(|ids| ids.contains(&node.id))
+        })
+        .map(|node| (node.name.clone(), node.id))
+        .collect();
+    if candidates.is_empty() {
+        return BindingCalibration {
+            assignments: HashMap::new(),
+            diagnostics: vec![format!(
+                "could not calibrate {} AGR targets: model has no non-mesh nodes",
+                targets.len()
+            )],
+        };
+    }
+
+    let node_names: HashMap<crate::inspector::animation::NodeId, &str> = model
         .nodes
         .iter()
         .map(|node| (node.id, node.name.as_str()))
         .collect();
-    let mut offsets: Vec<i64> = candidates
-        .iter()
-        .filter(|(angle, _, _)| *angle < 5.0)
-        .filter_map(|(_, target, node)| {
-            match (track_number(target), node_names.get(node).and_then(|name| track_number(name)))
-            {
-                (Some(curve), Some(bone)) => Some(bone - curve),
-                _ => None,
-            }
-        })
-        .collect();
+
+    // Confident numeric matches establish the source's curve/node offset.
+    // Only the single best candidate votes per target; collecting every
+    // close candidate made the old median depend on sibling pose symmetry.
+    let mut offsets = Vec::new();
+    for (target, channels) in &targets {
+        let Some((_, _, node)) = candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (_name, node))| {
+                let angle = rotation_min_angle(channels, &model.node(*node)?.local)?;
+                Some((angle, index, *node))
+            })
+            .filter(|(angle, _, _)| *angle < 5.0)
+            .min_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            })
+        else {
+            continue;
+        };
+        if let (Some(curve), Some(bone)) = (
+            track_number(target),
+            node_names.get(&node).and_then(|name| track_number(name)),
+        ) && let Some(offset) = bone.checked_sub(curve) {
+            offsets.push(offset);
+        }
+    }
     let median_offset = if offsets.len() >= 8 {
         offsets.sort_unstable();
         Some(offsets[offsets.len() / 2])
@@ -222,40 +341,107 @@ pub fn calibrate_bindings(
         None
     };
 
-    // Score: raw angle plus an order penalty; keep the raw angle for the
-    // admission threshold so the prior only breaks ties, never admits.
-    let mut scored: Vec<(f32, f32, String, crate::inspector::animation::NodeId)> = candidates
-        .into_iter()
-        .map(|(angle, target, node)| {
-            let penalty = match (
-                median_offset,
-                track_number(&target),
-                node_names.get(&node).and_then(|name| track_number(name)),
-            ) {
-                (Some(expected), Some(curve), Some(bone)) => {
-                    1.5 * (bone - curve - expected).abs() as f32
-                }
-                _ => 0.0,
-            };
-            (angle + penalty, angle, target, node)
-        })
-        .collect();
-    scored.sort_by(|a, b| a.0.total_cmp(&b.0));
-
-    let mut used_nodes: std::collections::HashSet<crate::inspector::animation::NodeId> =
-        std::collections::HashSet::new();
-    let mut calibration = BindingCalibration::default();
-    for (_, raw_angle, target, node) in scored {
-        if raw_angle > MAX_BIND_ANGLE_DEG {
-            break;
-        }
-        if calibration.assignments.contains_key(&target) || used_nodes.contains(&node) {
-            continue;
-        }
-        calibration.assignments.insert(target, node);
-        used_nodes.insert(node);
+    // The source curve stream is ordered. A monotonic dynamic-programming
+    // assignment preserves that invariant while allowing attachment nodes
+    // (for example ARROW) and skipping unrelated model nodes. This is
+    // deliberately global: a greedy local match can consume a sibling's
+    // rest-like pose and leave the leg chain with the wrong parent frame.
+    let rows = targets.len() + 1;
+    let columns = candidates.len() + 1;
+    let cell_count = rows.saturating_mul(columns);
+    if cell_count > MAX_ASSIGNMENT_CELLS {
+        return BindingCalibration {
+            assignments: HashMap::new(),
+            diagnostics: vec![format!(
+                "could not calibrate {} AGR targets against {} model nodes: assignment matrix is too large",
+                targets.len(),
+                candidates.len()
+            )],
+        };
     }
-    calibration
+
+    let mut costs = vec![f32::INFINITY; cell_count];
+    let mut choices = vec![0_u8; cell_count];
+    let cell = |row: usize, column: usize| row * columns + column;
+    costs[cell(targets.len(), candidates.len())] = 0.0;
+    for row in (0..targets.len()).rev() {
+        let index = cell(row, candidates.len());
+        costs[index] = TARGET_SKIP_COST + costs[cell(row + 1, candidates.len())];
+        choices[index] = 1;
+    }
+    for column in (0..candidates.len()).rev() {
+        let index = cell(targets.len(), column);
+        costs[index] = CANDIDATE_SKIP_COST + costs[cell(targets.len(), column + 1)];
+        choices[index] = 2;
+    }
+
+    for row in (0..targets.len()).rev() {
+        for column in (0..candidates.len()).rev() {
+            let (target, channels) = &targets[row];
+            let (node_name, _) = &candidates[column];
+            let mut best = TARGET_SKIP_COST + costs[cell(row + 1, column)];
+            let mut choice = 1_u8;
+
+            let skip_candidate = CANDIDATE_SKIP_COST + costs[cell(row, column + 1)];
+            if skip_candidate < best {
+                best = skip_candidate;
+                choice = 2;
+            }
+
+            if let Some(node) = model.node(candidates[column].1)
+                && let Some(raw_angle) = rotation_min_angle(channels, &node.local)
+                && raw_angle <= MAX_BIND_ANGLE_DEG
+            {
+                let match_value =
+                    match_cost(raw_angle, target, node_name, median_offset)
+                        + costs[cell(row + 1, column + 1)];
+                // Prefer a valid match on exact ties. This avoids dropping
+                // the first curve when all channels are at identity in a
+                // sparse test clip.
+                if match_value <= best {
+                    best = match_value;
+                    choice = 0;
+                }
+            }
+            costs[cell(row, column)] = best;
+            choices[cell(row, column)] = choice;
+        }
+    }
+
+    let mut assignments = HashMap::new();
+    let mut diagnostics = Vec::new();
+    let mut row = 0;
+    let mut column = 0;
+    while row < targets.len() && column < candidates.len() {
+        match choices[cell(row, column)] {
+            0 => {
+                assignments.insert(targets[row].0.clone(), candidates[column].1);
+                row += 1;
+                column += 1;
+            }
+            1 => {
+                diagnostics.push(format!(
+                    "AGR target '{}' was not admitted during ordered calibration",
+                    targets[row].0
+                ));
+                row += 1;
+            }
+            2 => column += 1,
+            _ => break,
+        }
+    }
+    while row < targets.len() {
+        diagnostics.push(format!(
+            "AGR target '{}' was not admitted during ordered calibration",
+            targets[row].0
+        ));
+        row += 1;
+    }
+
+    BindingCalibration {
+        assignments,
+        diagnostics,
+    }
 }
 
 /// Bind a clip through a session calibration; targets the calibration left
@@ -298,9 +484,12 @@ mod tests {
     use super::*;
     use crate::inspector::animation::clip::{Interpolation, PropertyTrack, TrackChannel};
     use crate::inspector::animation::fixtures;
-    use crate::inspector::animation::model::{MeshAsset, NodeTransform, SceneNode};
+    use crate::inspector::animation::model::{
+        MeshAsset, NodeTransform, SceneNode, SkinBinding, VertexSkin,
+    };
     use crate::inspector::scene3d::camera::BaseOrientation;
-    use glam::{Mat4, Vec3};
+    use crate::inspector::scene3d::mesh::Vertex;
+    use glam::{Mat4, Quat, Vec3};
 
     fn track(target: &str) -> PropertyTrack {
         PropertyTrack {
@@ -308,6 +497,17 @@ mod tests {
             channel: TrackChannel::Translation {
                 times: vec![0.0, 1.0],
                 values: vec![Vec3::ZERO, Vec3::X],
+            },
+            interpolation: Interpolation::Linear,
+        }
+    }
+
+    fn rotation_track(target: &str, rotation: Quat) -> PropertyTrack {
+        PropertyTrack {
+            target: target.into(),
+            channel: TrackChannel::Rotation {
+                times: vec![0.0, 1.0],
+                values: vec![rotation, rotation],
             },
             interpolation: Interpolation::Linear,
         }
@@ -390,5 +590,113 @@ mod tests {
             TrackBindingStatus::Ambiguous(ref nodes) if nodes.len() == 2
         ));
         assert!(binding.tracks[0].node.is_none());
+    }
+
+    #[test]
+    fn ordered_calibration_keeps_skeleton_and_attachment_order() {
+        let nodes = vec![
+            SceneNode {
+                id: NodeId(0),
+                parent: None,
+                name: "Scene Root".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: None,
+            },
+            SceneNode {
+                id: NodeId(1),
+                parent: Some(NodeId(0)),
+                name: "track_000".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: None,
+            },
+            SceneNode {
+                id: NodeId(2),
+                parent: Some(NodeId(1)),
+                name: "track_001".into(),
+                local: NodeTransform {
+                    rotation: Quat::from_rotation_z(0.2),
+                    ..NodeTransform::IDENTITY
+                },
+                mesh: None,
+            },
+            SceneNode {
+                id: NodeId(3),
+                parent: Some(NodeId(1)),
+                name: "track_002".into(),
+                local: NodeTransform {
+                    rotation: Quat::from_rotation_z(0.4),
+                    ..NodeTransform::IDENTITY
+                },
+                mesh: None,
+            },
+            SceneNode {
+                id: NodeId(4),
+                parent: Some(NodeId(0)),
+                name: "shape_004".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: Some(0),
+            },
+        ];
+        let mut influence = VertexSkin::new();
+        influence.push((0, 1.0));
+        let model = ModelAsset::new(
+            "ordered calibration".into(),
+            "synthetic:ordered-calibration".into(),
+            nodes,
+            vec![MeshAsset {
+                name: "body".into(),
+                texture_name: None,
+                vertices: vec![Vertex {
+                    position: [0.0, 0.0, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                }],
+                indices: Vec::new(),
+                diffuse: None,
+                skin: Some(SkinBinding {
+                    joints: vec![NodeId(2)],
+                    inverse_bind: vec![Mat4::IDENTITY],
+                    weights: vec![influence],
+                }),
+            }],
+            Mat4::IDENTITY,
+            BaseOrientation::Yup,
+            None,
+        )
+        .unwrap();
+        let mut clip = AnimationClip {
+            id: ClipId(5),
+            name: "ordered".into(),
+            duration: 1.0,
+            tracks: vec![
+                rotation_track("track_000", Quat::from_rotation_z(0.2)),
+                rotation_track("track_001", Quat::from_rotation_z(0.4)),
+            ],
+            source_rate: None,
+            markers: Vec::new(),
+            provenance: "synthetic".into(),
+        };
+        clip.normalize_rotation_keys();
+        clip.validate().unwrap();
+        let library = crate::inspector::animation::clip::AnimationLibrary {
+            name: "ordered".into(),
+            clips: vec![clip.clone()],
+            provenance: "synthetic".into(),
+        };
+
+        let first = bind_clip_with_calibration(
+            &model,
+            &clip,
+            &calibrate_bindings(&model, &library),
+        );
+        let second = bind_clip_with_calibration(
+            &model,
+            &clip,
+            &calibrate_bindings(&model, &library),
+        );
+        assert_eq!(first.node_for_track(0), Some(NodeId(2)));
+        assert_eq!(first.node_for_track(1), Some(NodeId(3)));
+        assert_eq!(first.node_for_track(0), second.node_for_track(0));
+        assert_eq!(first.node_for_track(1), second.node_for_track(1));
     }
 }

@@ -1055,9 +1055,10 @@ pub enum NifMapping {
 /// `NiSkinInstance -> NiSkinData -> NiSkinPartition`: partition vertices
 /// reference a per-partition bone palette, the palette indexes the skin
 /// instance's bone list, and each bone carries the mesh-local inverse bind
-/// transform. Nodes are named `track_{id}` in scene-graph DFS order so AGR
-/// tracks bind by index — the mapping is a trial assumption that the viewer
-/// makes visible immediately.
+/// transform. Nodes are initially named `track_{id}` in scene-graph DFS order
+/// to keep the imported hierarchy stable; AGR sessions resolve those names
+/// through cross-clip bind-pose calibration because packed curve order can
+/// include a source-root offset and attachment nodes.
 pub fn model_from_nif(
     nif: &NifFile,
     name: impl Into<String>,
@@ -2559,6 +2560,40 @@ mod tests {
             crate::inspector::animation::binding::bind_clip_with_calibration(
                 &model, clip, &calibration,
             );
+        let nif_stem = std::path::Path::new(&nif_path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        let agr_stem = std::path::Path::new(&agr_path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        if nif_stem.eq_ignore_ascii_case("PLAYER")
+            && agr_stem.eq_ignore_ascii_case("C_Player")
+        {
+            assert_eq!(
+                binding.bound_count(),
+                35,
+                "C_Player must bind every declared character curve"
+            );
+            for (track, expected_node) in [
+                (0, "track_001"), // Root
+                (1, "track_002"), // pelvis
+                (2, "track_003"), // left thigh
+                (3, "track_004"), // left calf
+                (4, "track_005"), // left foot
+                (5, "track_006"), // right thigh
+                (6, "track_007"), // right calf
+                (7, "track_008"), // right foot
+                (34, "track_035"), // TranslationNode/ARROW attachment
+            ] {
+                assert_eq!(
+                    binding.node_for_track(track),
+                    model.node_by_name(expected_node).map(|node| node.id),
+                    "C_Player curve {track} must bind to {expected_node}"
+                );
+            }
+        }
         assert!(
             binding.bound_count() >= 33,
             "calibrated binding places nearly all curves (bound {} of {})",
