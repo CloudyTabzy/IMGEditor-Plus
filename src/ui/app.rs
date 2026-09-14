@@ -482,6 +482,7 @@ pub enum Message {
     AnimationSetRootPolicy(crate::inspector::animation::pose::RootMotionPolicy),
     AnimationToggleFollowRoot(bool),
     AnimationToggleSkeleton(bool),
+    AnimationToggleGroundClip(bool),
     AnimationRangeDragStart(f64),
     AnimationRangeDragEnd(f64),
     AnimationFrameRest,
@@ -5253,6 +5254,13 @@ impl App {
             Message::AnimationToggleSkeleton(value) => {
                 self.viewer3d_handle.with_animation_session_mut(|session| {
                     session.panel.show_skeleton = value;
+                });
+                Task::none()
+            }
+            Message::AnimationToggleGroundClip(value) => {
+                self.viewer3d_handle.with_animation_session_mut(|session| {
+                    session.panel.ground_clip = value;
+                    session.evaluate();
                 });
                 Task::none()
             }

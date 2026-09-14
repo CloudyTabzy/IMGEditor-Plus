@@ -2638,6 +2638,57 @@ mod tests {
         );
     }
 
+    /// Regression: rotation-only character clips pivot at standing height,
+    /// so prone/lying clips (push-ups, ground states) hang their contact
+    /// points in the air. `clip_ground_offset` returns one constant per
+    /// clip that plants the lowest sampled excursion on the floor: small
+    /// for standing clips, substantial for clips that reach for the floor.
+    #[test]
+    fn clip_ground_offset_plants_contact_points() {
+        let (Ok(agr_path), Ok(nif_path)) = (
+            std::env::var("IMGEDITOR_AGR_DUMP_AGR"),
+            std::env::var("IMGEDITOR_AGR_DUMP_NIF"),
+        ) else {
+            return;
+        };
+        let agr_bytes = std::fs::read(&agr_path).expect("read AGR");
+        let nif_bytes = std::fs::read(&nif_path).expect("read NIF");
+        let mut nif = crate::inspector::nif::NifFile::parse(&nif_bytes).expect("parse NIF");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "ground", "ground").expect("model builds");
+        let file = parse_agr(&agr_bytes).expect("parse AGR");
+        let library = to_library(&file, "ground");
+        let calibration =
+            crate::inspector::animation::binding::calibrate_bindings(&model, &library);
+        let up = model.ground_normal_model();
+        let mut buffers =
+            crate::inspector::animation::pose::PoseBuffers::new(&model);
+        let mut offset_of = |index: usize| {
+            let clip = library.clips.get(index).expect("clip exists");
+            let binding =
+                crate::inspector::animation::binding::bind_clip_with_calibration(
+                    &model, clip, &calibration,
+                );
+            crate::inspector::animation::pose::clip_ground_offset(
+                &model, clip, &binding, 12, &mut buffers,
+            )
+        };
+        // RUN dips to the floor within its cycle (a real foot plant).
+        let run = offset_of(0);
+        println!("RUN ground offset {run:?}");
+        assert!(
+            run.dot(up) > 0.2,
+            "RUN must reach the floor within its cycle (offset {run:?})"
+        );
+        // GROUND_ONBACK goes prone/lying: the offset must plant the body.
+        let ground = offset_of(8);
+        println!("GROUND_ONBACK ground offset {ground:?}");
+        assert!(
+            ground.dot(up) > 0.7,
+            "GROUND_ONBACK must plant its contact points (offset {ground:?})"
+        );
+    }
+
     #[test]
     fn skinned_ped_model_when_available() {
         let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {

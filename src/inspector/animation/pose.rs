@@ -371,9 +371,45 @@ pub fn scene_from_pose(model: &ModelAsset, buffers: &PoseBuffers) -> Scene {
     scene
 }
 
+/// Constant grounding offset for one clip: the negated lowest excursion of
+/// any deformed vertex along the model ground normal, sampled uniformly over
+/// the clip. Character clips are authored rotation-only; prone and lying
+/// clips then pivot at standing height and the contact points (hands, feet)
+/// hang in the air. Planting the clip's lowest excursion on the floor
+/// mirrors the runtime's actor grounding, is a sub-centimetre no-op for
+/// standing clips, and - being one constant per clip - cannot bob between
+/// frames the way per-frame grounding would.
+pub fn clip_ground_offset(
+    model: &ModelAsset,
+    clip: &AnimationClip,
+    binding: &ClipBinding,
+    samples: usize,
+    buffers: &mut PoseBuffers,
+) -> Vec3 {
+    let up = model.ground_normal_model();
+    let mut lowest = f32::INFINITY;
+    let samples = samples.max(2);
+    for step in 0..samples {
+        let time = clip.duration * step as f32 / (samples - 1) as f32;
+        sample_locals(clip, binding, model, time, &mut buffers.locals);
+        evaluate_pose(model, RootMotionPolicy::Source, Vec3::ZERO, buffers);
+        for mesh_vertices in &buffers.out_vertices {
+            for vertex in mesh_vertices {
+                let position = Vec3::from_array(vertex.position);
+                lowest = lowest.min(position.dot(up));
+            }
+        }
+    }
+    if lowest.is_finite() {
+        -up * lowest
+    } else {
+        Vec3::ZERO
+    }
+}
+
 /// Sampled motion envelope of a clip over `[start, end]`: the union of
-/// posed bounds at uniformly spaced sample times. This is an estimate —
-/// uniform sampling can miss extrema during rotations — so it is labelled
+/// posed bounds at uniformly spaced sample times. This is an estimate -
+/// uniform sampling can miss extrema during rotations - so it is labelled
 /// "sampled" and never used alone to cull moving geometry.
 pub fn clip_envelope(
     model: &ModelAsset,

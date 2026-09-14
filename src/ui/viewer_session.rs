@@ -33,6 +33,9 @@ pub struct AnimationPanel {
     pub show_motion_path: bool,
     /// Blend compatible clip switches instead of cutting (viewer preview).
     pub crossfade: bool,
+    /// Plant the clip's lowest excursion on the floor (constant per clip);
+    /// without it, rotation-only clips float at their authored pivot height.
+    pub ground_clip: bool,
 }
 
 impl Default for AnimationPanel {
@@ -43,6 +46,7 @@ impl Default for AnimationPanel {
             show_skeleton: false,
             show_motion_path: false,
             crossfade: false,
+            ground_clip: true,
         }
     }
 }
@@ -93,6 +97,9 @@ pub struct AnimationSession {
     /// Cross-clip binding calibration, built lazily on the first clip
     /// selection (one pass over the library's keys).
     calibration: Option<std::sync::Arc<BindingCalibration>>,
+    /// Constant grounding offset of the selected clip (model space),
+    /// recomputed on every selection.
+    ground_offset: Vec3,
     crossfade: Option<CrossfadeState>,
     /// Scratch for sampling the incoming clip before a blend.
     scratch_locals: Vec<NodeTransform>,
@@ -125,6 +132,7 @@ impl AnimationSession {
             demo,
             motion_path: None,
             calibration: None,
+            ground_offset: Vec3::ZERO,
             crossfade: None,
             scratch_locals: vec![NodeTransform::IDENTITY; node_count],
         };
@@ -197,6 +205,20 @@ impl AnimationSession {
         }
         let calibration = self.calibration.clone().unwrap_or_default();
         let binding = bind_clip_with_calibration(&self.asset, clip, &calibration);
+        // Character clips are rotation-only; prone/lying clips pivot at
+        // standing height and their contact points hang in the air. Plant
+        // the clip's lowest excursion on the floor with one constant offset
+        // (a no-op for standing clips, no per-frame bobbing).
+        {
+            let mut scratch = PoseBuffers::new(&self.asset);
+            self.ground_offset = crate::inspector::animation::pose::clip_ground_offset(
+                &self.asset,
+                clip,
+                &binding,
+                12,
+                &mut scratch,
+            );
+        }
         self.capability = capability_for(&self.asset, &self.library, Some(clip), Some(&binding));
         self.clip = Some(id);
         self.binding = Some(binding);
@@ -252,12 +274,23 @@ impl AnimationSession {
                 }
             }
         }
+        let display_offset = self.effective_display_offset();
         evaluate_pose(
             &self.asset,
             self.root_policy,
-            self.display_offset,
+            display_offset,
             &mut self.pose,
         );
+    }
+
+    /// Presentation offset actually applied to the pose: the recentering
+    /// offset plus the clip grounding offset when the panel enables it.
+    pub(crate) fn effective_display_offset(&self) -> Vec3 {
+        if self.panel.ground_clip {
+            self.display_offset + self.ground_offset
+        } else {
+            self.display_offset
+        }
     }
 
     /// Progress of a running crossfade in `0..=1`, or `None` when no fade
@@ -734,7 +767,7 @@ mod tests {
         evaluate_pose(
             &session.asset,
             session.root_policy,
-            session.display_offset,
+            session.effective_display_offset(),
             &mut reference,
         );
         session

@@ -99,6 +99,7 @@ struct DockData {
     show_skeleton: bool,
     show_motion_path: bool,
     crossfade: bool,
+    ground_clip: bool,
     shown: f64,
     duration: f64,
     frame: u64,
@@ -993,6 +994,7 @@ impl App {
             show_skeleton: session.panel.show_skeleton,
             show_motion_path: session.panel.show_motion_path,
             crossfade: session.panel.crossfade,
+            ground_clip: session.panel.ground_clip,
             shown: session.transport.shown_time(),
             duration: session.transport.duration(),
             frame: session.transport.shown_frame(),
@@ -1304,6 +1306,12 @@ impl App {
                 data.show_motion_path,
                 "Show the root motion path",
                 Message::AnimationToggleMotionPath(!data.show_motion_path),
+            ),
+            overlay_toggle(
+                icons::chevrons_down,
+                data.ground_clip,
+                "Plant the clip's lowest point on the floor",
+                Message::AnimationToggleGroundClip(!data.ground_clip),
             ),
             overlay_toggle(
                 icons::crossfade,
