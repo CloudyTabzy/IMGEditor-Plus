@@ -109,6 +109,190 @@ pub fn bind_clip(model: &ModelAsset, clip: &AnimationClip) -> ClipBinding {
     }
 }
 
+
+/// Cross-clip binding calibration for one model/library pair. A curve's
+/// keys pass through (or rest at) its target bone's rest rotation, but a
+/// single clip may pose that bone far from rest for its whole duration;
+/// scanning every clip's keys still catches the passage. Built once per
+/// session and reused for every clip selection.
+#[derive(Clone, Debug, Default)]
+pub struct BindingCalibration {
+    assignments: std::collections::HashMap<String, crate::inspector::animation::NodeId>,
+    pub diagnostics: Vec<String>,
+}
+
+/// Build the cross-clip calibration: score each target against each node by
+/// the closest key-to-rest angle across all clips, then assign greedily from
+/// the best score down (one node serves one target).
+pub fn calibrate_bindings(
+    model: &ModelAsset,
+    library: &crate::inspector::animation::clip::AnimationLibrary,
+) -> BindingCalibration {
+    use crate::inspector::animation::clip::TrackChannel;
+
+    const MAX_BIND_ANGLE_DEG: f32 = 20.0;
+
+    fn channel_min_angle(
+        channel: &TrackChannel,
+        rest: &crate::inspector::animation::model::NodeTransform,
+    ) -> Option<f32> {
+        match channel {
+            TrackChannel::Rotation { values, .. } => values
+                .iter()
+                .map(|key| {
+                    let dot = key.x * rest.rotation.x
+                        + key.y * rest.rotation.y
+                        + key.z * rest.rotation.z
+                        + key.w * rest.rotation.w;
+                    dot.abs().clamp(-1.0, 1.0).acos().to_degrees() * 2.0
+                })
+                .reduce(f32::min),
+            TrackChannel::Translation { values, .. } => values
+                .iter()
+                .map(|key| (key - rest.translation).length().to_degrees())
+                .reduce(f32::min),
+            TrackChannel::Scale { .. } => None,
+        }
+    }
+
+    // Representative rotation channel per target, aggregated over clips.
+    let mut representative: std::collections::HashMap<String, Vec<TrackChannel>> =
+        std::collections::HashMap::new();
+    for clip in &library.clips {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for track in &clip.tracks {
+            if !seen.insert(track.target.as_str()) {
+                continue;
+            }
+            let entry = representative.entry(track.target.clone()).or_default();
+            if matches!(track.channel, TrackChannel::Rotation { .. })
+                || entry.is_empty()
+            {
+                entry.push(track.channel.clone());
+            }
+        }
+    }
+
+    let mut candidates: Vec<(f32, String, crate::inspector::animation::NodeId)> = Vec::new();
+    for (target, channels) in &representative {
+        for node in &model.nodes {
+            // Shapes follow their owning bone rigidly; they are never
+            // animation targets in the bone naming convention.
+            if node.name.starts_with("shape_") {
+                continue;
+            }
+            let best = channels
+                .iter()
+                .filter_map(|channel| channel_min_angle(channel, &node.local))
+                .reduce(f32::min);
+            if let Some(angle) = best {
+                candidates.push((angle, target.clone(), node.id));
+            }
+        }
+    }
+
+    // Order prior: confident matches vote on the export's track offset
+    // (curve index vs node track number); the export orders bones almost
+    // monotonically, so off-offset candidates are usually a pose-lucky
+    // curve stealing another bone's node.
+    let track_number = |name: &str| {
+        name.strip_prefix("track_")
+            .and_then(|rest| rest.parse::<i64>().ok())
+    };
+    let node_names: std::collections::HashMap<crate::inspector::animation::NodeId, &str> = model
+        .nodes
+        .iter()
+        .map(|node| (node.id, node.name.as_str()))
+        .collect();
+    let mut offsets: Vec<i64> = candidates
+        .iter()
+        .filter(|(angle, _, _)| *angle < 5.0)
+        .filter_map(|(_, target, node)| {
+            match (track_number(target), node_names.get(node).and_then(|name| track_number(name)))
+            {
+                (Some(curve), Some(bone)) => Some(bone - curve),
+                _ => None,
+            }
+        })
+        .collect();
+    let median_offset = if offsets.len() >= 8 {
+        offsets.sort_unstable();
+        Some(offsets[offsets.len() / 2])
+    } else {
+        None
+    };
+
+    // Score: raw angle plus an order penalty; keep the raw angle for the
+    // admission threshold so the prior only breaks ties, never admits.
+    let mut scored: Vec<(f32, f32, String, crate::inspector::animation::NodeId)> = candidates
+        .into_iter()
+        .map(|(angle, target, node)| {
+            let penalty = match (
+                median_offset,
+                track_number(&target),
+                node_names.get(&node).and_then(|name| track_number(name)),
+            ) {
+                (Some(expected), Some(curve), Some(bone)) => {
+                    1.5 * (bone - curve - expected).abs() as f32
+                }
+                _ => 0.0,
+            };
+            (angle + penalty, angle, target, node)
+        })
+        .collect();
+    scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut used_nodes: std::collections::HashSet<crate::inspector::animation::NodeId> =
+        std::collections::HashSet::new();
+    let mut calibration = BindingCalibration::default();
+    for (_, raw_angle, target, node) in scored {
+        if raw_angle > MAX_BIND_ANGLE_DEG {
+            break;
+        }
+        if calibration.assignments.contains_key(&target) || used_nodes.contains(&node) {
+            continue;
+        }
+        calibration.assignments.insert(target, node);
+        used_nodes.insert(node);
+    }
+    calibration
+}
+
+/// Bind a clip through a session calibration; targets the calibration left
+/// unassigned stay unbound with a diagnostic rather than guessing.
+pub fn bind_clip_with_calibration(
+    model: &ModelAsset,
+    clip: &AnimationClip,
+    calibration: &BindingCalibration,
+) -> ClipBinding {
+    let mut tracks = Vec::with_capacity(clip.tracks.len());
+    let mut diagnostics = calibration.diagnostics.clone();
+    for track in &clip.tracks {
+        let binding = match calibration.assignments.get(&track.target) {
+            Some(&node) => TrackBinding {
+                node: Some(node),
+                status: TrackBindingStatus::Bound,
+            },
+            None => {
+                diagnostics.push(format!(
+                    "track target '{}' has no calibrated node in model '{}'",
+                    track.target, model.name
+                ));
+                TrackBinding {
+                    node: None,
+                    status: TrackBindingStatus::Missing,
+                }
+            }
+        };
+        tracks.push(binding);
+    }
+    ClipBinding {
+        clip: clip.id,
+        tracks,
+        diagnostics,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

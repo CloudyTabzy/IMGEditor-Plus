@@ -483,6 +483,7 @@ fn decode_packed_rotation_key(record: &[u8]) -> PackedRotationKey {
     PackedRotationKey {
         previous: (word0 & PACKED_LINK_MASK) as usize,
         time_code: ((word0 >> 11) & 0x1ff) as u16,
+        // AXIS_PERM probe: temporary y/z transposition test.
         rotation: [qx, qy, qz, qw],
     }
 }
@@ -2525,6 +2526,116 @@ mod tests {
                 assert!((q.length() - 1.0).abs() < 1e-3, "unit quat");
             }
         }
+    }
+
+    /// Regression: index-based track naming binds AGR curves to neighbor
+    /// bones on the player rig (export order differs from the NIF's DFS
+    /// order), which twists the skinned mesh while bone positions stay
+    /// plausible. Calibrated binding matches each curve's first key against
+    /// node rest rotations; at the clip's bind pose the sampled locals must
+    /// then sit near the rest pose for (nearly) every bound bone.
+    #[test]
+    fn calibrated_binding_matches_bind_pose_when_available() {
+        let (Ok(agr_path), Ok(nif_path)) = (
+            std::env::var("IMGEDITOR_AGR_DUMP_AGR"),
+            std::env::var("IMGEDITOR_AGR_DUMP_NIF"),
+        ) else {
+            return;
+        };
+        let agr_bytes = std::fs::read(&agr_path).expect("read AGR");
+        let nif_bytes = std::fs::read(&nif_path).expect("read NIF");
+        let mut nif = crate::inspector::nif::NifFile::parse(&nif_bytes).expect("parse NIF");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "calibration", "calibration").expect("model builds");
+        let file = parse_agr(&agr_bytes).expect("parse AGR");
+        let library = to_library(&file, "calibration");
+        let clip = library
+            .clips
+            .first()
+            .expect("at least one clip");
+        let calibration =
+            crate::inspector::animation::binding::calibrate_bindings(&model, &library);
+        let binding =
+            crate::inspector::animation::binding::bind_clip_with_calibration(
+                &model, clip, &calibration,
+            );
+        assert!(
+            binding.bound_count() >= 33,
+            "calibrated binding places nearly all curves (bound {} of {})",
+            binding.bound_count(),
+            binding.total_count()
+        );
+
+        // Pose vs misbind discrimination: a single clip's first frame may
+        // legitimately pose a bone 150 deg from rest, but a *misbound* bone
+        // never matches any clip. Take each bound node's minimum deviation
+        // across the first several clips' t=0 poses.
+        let mut locals = model.default_locals();
+        let mut best: Vec<f32> = vec![f32::MAX; model.nodes.len()];
+        for clip in library.clips.iter().take(8) {
+            crate::inspector::animation::pose::sample_locals(
+                clip,
+                &binding,
+                &model,
+                0.0,
+                &mut locals,
+            );
+            for (node_index, node) in model.nodes.iter().enumerate() {
+                if binding
+                    .tracks
+                    .iter()
+                    .any(|track| track.node == Some(node.id))
+                {
+                    let sampled = locals[node_index].rotation;
+                    let rest = node.local.rotation;
+                    let dot = (sampled.x * rest.x
+                        + sampled.y * rest.y
+                        + sampled.z * rest.z
+                        + sampled.w * rest.w)
+                        .abs()
+                        .clamp(-1.0, 1.0);
+                    let deviation = dot.acos().to_degrees() * 2.0;
+                    best[node_index] = best[node_index].min(deviation);
+                }
+            }
+        }
+        let mut minima: Vec<(String, f32)> = best
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, v)| *v < f32::MAX)
+            .map(|(index, v)| (model.nodes[index].name.clone(), v))
+            .collect();
+        minima.sort_by(|a, b| a.1.total_cmp(&b.1));
+        eprintln!(
+            "per-node minimum deviations over 8 clips: {}",
+            minima
+                .iter()
+                .map(|(name, v)| format!("{name}={v:.1}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let median_min = minima[minima.len() / 2].1;
+        // The Root/Pelvis/Root01 chain rests within a few degrees of each
+        // other, so their curves are only partially separable by rest
+        // matching; the order prior binds them, but a couple may stay
+        // opposed in every sampled pose.
+        let stuck = minima.iter().filter(|(_, angle)| *angle > 60.0).count();
+        assert!(
+            median_min < 15.0,
+            "median per-node minimum deviation {median_min:.1} deg (n={})",
+            minima.len()
+        );
+        assert!(
+            stuck <= 4,
+            "{stuck} bound bones never approach their rest pose across 8 clips: {}",
+            minima
+                .iter()
+                .filter(|(_, angle)| *angle > 60.0)
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 
     #[test]

@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 
-use crate::inspector::animation::binding::{ClipBinding, bind_clip};
+use crate::inspector::animation::binding::{
+    BindingCalibration, ClipBinding, bind_clip_with_calibration, calibrate_bindings,
+};
 use crate::inspector::animation::clip::{AnimationClip, AnimationLibrary, ClipMarker};
 use crate::inspector::animation::model::{ModelAsset, NodeTransform};
 use crate::inspector::animation::pose::{
@@ -88,6 +90,9 @@ pub struct AnimationSession {
     /// Cached sampled root trajectory for the motion-path overlay; cleared
     /// whenever the clip, range, root policy or display offset changes.
     pub motion_path: Option<Vec<Vec3>>,
+    /// Cross-clip binding calibration, built lazily on the first clip
+    /// selection (one pass over the library's keys).
+    calibration: Option<std::sync::Arc<BindingCalibration>>,
     crossfade: Option<CrossfadeState>,
     /// Scratch for sampling the incoming clip before a blend.
     scratch_locals: Vec<NodeTransform>,
@@ -119,6 +124,7 @@ impl AnimationSession {
             last_marker: None,
             demo,
             motion_path: None,
+            calibration: None,
             crossfade: None,
             scratch_locals: vec![NodeTransform::IDENTITY; node_count],
         };
@@ -183,7 +189,14 @@ impl AnimationSession {
         let crossfade =
             switching && self.panel.crossfade && was_playing && !self.pose.locals.is_empty();
         let from_locals = crossfade.then(|| self.pose.locals.clone());
-        let binding = bind_clip(&self.asset, clip);
+        if self.calibration.is_none() {
+            self.calibration = Some(std::sync::Arc::new(calibrate_bindings(
+                &self.asset,
+                &self.library,
+            )));
+        }
+        let calibration = self.calibration.clone().unwrap_or_default();
+        let binding = bind_clip_with_calibration(&self.asset, clip, &calibration);
         self.capability = capability_for(&self.asset, &self.library, Some(clip), Some(&binding));
         self.clip = Some(id);
         self.binding = Some(binding);

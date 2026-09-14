@@ -523,7 +523,6 @@ mod tests {
         ) else {
             return;
         };
-        use crate::inspector::animation::binding::bind_clip;
         use crate::inspector::animation::bully;
         use crate::inspector::animation::pose::{
             PoseBuffers, RootMotionPolicy, clip_envelope, evaluate_pose, rest_scene, sample_locals,
@@ -558,7 +557,12 @@ mod tests {
                 .max_by(|a, b| a.duration.total_cmp(&b.duration))
                 .expect("has clips"),
         };
-        let binding = bind_clip(&model, clip);
+        let calibration =
+            crate::inspector::animation::binding::calibrate_bindings(&model, &library);
+        let binding =
+            crate::inspector::animation::binding::bind_clip_with_calibration(
+                &model, clip, &calibration,
+            );
         println!(
             "clip {} dur {:.3}s tracks {} bound {}/{}",
             clip.name,
