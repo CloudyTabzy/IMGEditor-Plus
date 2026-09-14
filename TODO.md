@@ -1,11 +1,12 @@
 # IMGEditor-rs — Next Objectives
 
-Last shipped: **v4.5.0** (Asset Compatibility Engine: corpus-verified validator,
-texture converter, and save-side repair).
+Last tagged release: **v4.6.0** (Bully AGR playback, HXD naming, CPU skinning,
+and the shared animation dock). Local `master` also contains subsequent AGR
+binding and parser-hardening commits; those are documented in
+[`docs/bully-agr-research-record.md`](docs/bully-agr-research-record.md).
 
-Next phase: **Shared animation viewer infrastructure (AV0–AV7)**, preparing
-for **Bully AGR/CAT resource inspection and playback (Phase E)** and later
-GTA animation adapters. The remaining
+Next phase: **Bully AGR completion and CAT/LIP/LUR inspection**, followed by
+separate GTA animation adapters. The remaining
 **DFF/NIF model profiles (Phase D)** and compatibility/asset-hardening items
 are tracked below. The shipped compatibility-engine details are recorded in
 the release notes and the dedicated documents under `docs/`.
@@ -156,8 +157,9 @@ remain pending.
     tracks; HXD catalog pairing + real clip names; archive and loose
     `Anim/*.agr` loading; validated on Sk8Board, AniBroom, Bike, C_Player
     (`742136d`, `14d6ee1`, `6736790`).
-  - [ ] Character skinning (`NiSkinInstance`/`NiSkinPartition`) so ped
-    animations deform meshes instead of rigid per-bone segments.
+  - [x] Character skinning (`NiSkinInstance`/`NiSkinPartition`) with direct
+    `NiSkinData` fallback, CPU LBS, strict palette/weight validation, and
+    corpus coverage (`5c67290`, `1593e10`).
   - [ ] Bully CAT/IFP adapters; GTA adapters.
   - [x] Character and mission clip naming via `MAINPED.HXD`: sequence owner
     indices and duplicated AGR chunk sizes provide guarded one-to-one mapping,
@@ -174,9 +176,15 @@ remain pending.
     normalized time and packed quaternion fields are decoded; default and
     terminal identity roots are excluded. Validated against loose
     `C_Player`/`Grap`/`NPC_Cher` and archive mission AGRs.
+  - [x] Calibrate character AGR curves across the clip library and recover the
+    guarded player `track_i → track_(i + 1)` importer offset for action-only
+    root/torso clips (`0308bf9`, `ed06dbe`, `75ea7f6`).
+  - [x] Establish that observed character 1002 clips are rotation-only and
+    keep floor placement as an explicit constant per-clip viewer policy
+    (`43f5660`).
   - [ ] Prove the 1004 curve-root-to-NIF joint-name mapping across additional
-    HXD/NIF rigs; keep the validated numeric fallback until that evidence is
-    available.
+    HXD/NIF rigs; keep the validated numeric fallback for object/prop adapters
+    until that evidence is available.
 
 AV0–AV7 establish the shared player; AV8 is not a prerequisite for real-file
 work. Bully E0–E4 may proceed alongside it; E5 consumes the verified runtime.
@@ -215,10 +223,13 @@ Script tab rather than being forced into the 3D or texture viewers.
 - [ ] **E7 LUR Script tab (future)** — add a read-only Lua 5.0-era bytecode
   header/prototype/constant/instruction inspector; never execute untrusted LUR
   chunks in the editor.
-- [ ] **E8 dependency-aware cache and invalidation** — key parsed resource
-  summaries and resolved previews by archive identity, generation, entry, and
-  parser profile; invalidate dependent AGR/CAT/model views after moves or
-  mutations.
+- [x] **E8 archive-backed preview invalidation** — source and target archive
+  generations, scene/texture cache eviction, stale completion rejection, and
+  index repair after cross-archive moves are covered by regression tests.
+- [ ] **E8b dependency-graph cache** — once CAT/resource graphs exist, key
+  parsed AGR/CAT/model summaries by every participating archive identity,
+  generation, entry, and parser profile; invalidate the whole graph after a
+  move or mutation.
 - [ ] **E9 regression and compatibility gates** — add synthetic truncation,
   count/offset overflow, endian, alias-resolution, and cross-resource tests;
   validate against representative World, Act, Scripts, and Anim samples.

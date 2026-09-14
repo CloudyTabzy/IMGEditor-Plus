@@ -1,0 +1,794 @@
+# Bully AGR and animation research record
+
+**Status:** current local engineering record
+**Updated:** 2026-09-15
+**Scope:** Bully Scholarship Edition PC AGR/HXD/NIF animation assets and the
+shared animation runtime in IMGEditor Plus
+
+This document consolidates the important AGR discoveries made during the local
+reverse-engineering work. The raw probe output remains in
+[`bully-probe/FINDINGS.md`](../../bully-probe/FINDINGS.md), and the
+handoff/checkpoint remains in
+[`bully-probe/CHECKPOINT.md`](../../bully-probe/CHECKPOINT.md).
+
+The evidence in this record comes from the locally available Bully PC corpus,
+small synthetic fixtures, the local retail executable audit, and rendered pose
+checks. No public description is being treated as an AGR specification. The
+game files and executable are not part of the repository.
+
+## 1. Executive summary
+
+Bully AGR is an animation-group container, not a model format. An AGR chunk
+contains compact transform keys for one clip, but it does not contain a model
+name or enough information to identify the skeleton on its own. The practical
+dependency chain is:
+
+~~~text
+AGR chunk(s)                         motion keys and clip durations
+       │
+       ├── HXD / hxds.dat            model association and clip names
+       │
+       └── matching NIF              hierarchy, bind pose, mesh and skin
+                                      │
+                                      └── NFT / texture sources
+~~~
+
+The current Rust implementation can:
+
+- walk mixed AGR chunks and validate their declared byte spans;
+- decode variants 999, 1002, 1003 and 1004 into normalized runtime tracks;
+- preserve diagnostic information about padding, trailers, auxiliary records,
+  unknown variants and malformed links;
+- pair ordinary and compound HXD metadata with AGR chunks and assign real clip
+  names when the evidence is sufficient;
+- parse Bully NIF skin instances and deform meshes with CPU linear blend
+  skinning;
+- play archive AGR entries and loose `Anim/*.agr` files in the shared 3D
+  animation dock; and
+- bind the fully-skinned player character's 35 AGR curves to its imported NIF
+  hierarchy, including action-only clips that never visit the bind pose.
+
+The important remaining format questions are variant 1000 and 1001 field
+semantics, the runtime purpose of the 1002 auxiliary tail, channel 2 if it is
+ever emitted, and CAT/LIP/LUR relationship work. These are not reasons to
+discard or reinterpret the four decoded variants.
+
+## 2. Corpus and dependency model
+
+The primary evidence set was the local retail PC installation:
+
+~~~text
+C:\Games\Bully - Scholarship Edition
+~~~
+
+The useful layout is:
+
+~~~text
+<game root>\Stream\World.img     models, textures, AGR/CAT/LIP/LUR/COL entries
+<game root>\Anim\                 loose AGRs, HXD files, hxds.dat
+<game root>\Act\Act.img           action catalog resources
+<game root>\Scripts\Scripts.img   compiled script resources
+~~~
+
+The local census recorded the following population. These counts describe one
+installation and are not a universal game-version contract.
+
+| Source | Entries/files | Relevant population |
+| --- | ---: | --- |
+| `Stream/World.img` | 11,980 | 550 AGR, 119 CAT, 493 LIP, 52 LUR, 5,724 NIF, 4,469 NFT, 488 COL |
+| `Act/Act.img` | 479 | 479 CAT |
+| `Scripts/Scripts.img` | 515 | 515 LUR |
+| loose `Anim/` | 25 | 4 AGR, 20 HXD, `hxds.dat` |
+
+The archive directory does not contain dependency edges between entries. AGR
+therefore cannot be resolved by looking for an embedded model reference. The
+engine's resource layer uses names and external catalogs, and mission AGRs may
+contain tracks for more than one actor.
+
+Useful known loose groups:
+
+| AGR | Clips | First variant | Association/evidence |
+| --- | ---: | ---: | --- |
+| `C_Player.agr` | 439 | 1002 | `MAINPED.HXD` ownership table → `player.mxd` / `PLAYER.nif` |
+| `Grap.agr` | 59 | 1002 | `MAINPED.HXD` ownership table → `player.mxd` |
+| `MOT_CTRL.agr` | 418 | 1004 | direct HXD association; no ordinary mesh model |
+| `NPC_Cher.agr` | 12 | 1002 | `MAINPED.HXD` ownership table → `player.mxd` |
+
+Additional local validation assets include `SK8Board.agr`,
+`AniBroom.agr`, `Bike.agr`, `AsyGate.agr`,
+`Armor.agr`, `1_02_MeetWithGary.agr`, and the
+mission/action fixture `Hang_Workout.agr`. `Grap.agr` occurs both loose and
+in the archive; the archive copy is the same logical file with sector padding.
+
+## 3. AGR container layout
+
+An AGR file is a sequence of chunks. The common 20-byte little-endian header
+is:
+
+~~~text
+u32 magic       = 0x00000100
+u32 variant     = 999..=1004 in the observed PC corpus
+u32 count       = declared record count for decoded variants
+u32 reserved    = 0
+f32 duration_s  > 0
+~~~
+
+The record data follows immediately. Chunks can use different variants in one
+file, so a parser must not use the first file-level variant as a global
+filter. The current reader finds candidate chunk boundaries by the aligned
+`magic + known variant` signature and then validates each chunk's own declared
+span.
+
+For known fixed-size variants, the logical data span is exactly
+`count × record_size`. Bytes after that span are not silently made into keys;
+zero trailing bytes can be archive-sector padding, while non-zero trailing
+bytes are reported as diagnostics. Variant 1002 has an additional runtime
+auxiliary section, described below.
+
+### Container invariants
+
+A safe reader must enforce all of the following before decoding records:
+
+1. The input contains a complete 20-byte header.
+2. The first magic and variant are valid.
+3. Duration is finite, positive and within a bounded safety limit.
+4. `count × record_size` uses checked arithmetic and fits the chunk slice.
+5. A predecessor link points to an earlier record in the same declared
+   stream, never forward or outside the stream.
+6. A curve walk is bounded by the declared record count and cannot cycle.
+7. Key times are finite and clamped to the clip's declared duration.
+8. Quaternions are finite and non-degenerate before normalization.
+9. Unknown variants remain inspectable as metadata/raw bytes rather than being
+   guessed into a known layout.
+
+The distinction between a logical chunk and an IMG sector-padded entry is
+important. An archive entry may have zero bytes after its logical AGR payload;
+those bytes must not create phantom clips or keys. Conversely, a real packed
+record may legitimately end in zero bytes, so global zero trimming before
+variant-aware parsing is unsafe.
+
+## 4. Decoded AGR variants
+
+### 4.1 Variant 999: float object transforms
+
+Record size is 32 bytes:
+
+~~~text
+u16 ordinal
+u16 time_norm
+f32 quat_w
+f32 quat_x
+f32 quat_y
+f32 quat_z
+f32 translation_x
+f32 translation_y
+f32 translation_z
+~~~
+
+The quaternion is Gamebryo `(w, x, y, z)` order. The normalized time is:
+
+~~~text
+time_s = time_norm / 65535.0 × duration_s
+~~~
+
+Corpus checks against `ANIBALL` and `SK8Board` place keys on the expected
+30-fps frame grid. Ordinal-zero records are default/preamble records and are
+not emitted as animated keys. The decoded runtime representation exposes one
+rotation channel and one translation channel for object track 0; translations
+are already in metre-like source units.
+
+Confirmed examples:
+
+- `SK8Board.agr` contains the board's object animation family;
+- the board's `IDLE`, pickup and examine clips map to HXD sequence rows; and
+- float quaternion interpretation is distinguished from alternate field
+  orders by the smooth full-roll behavior in the `ANIBALL` fixture.
+
+### 4.2 Variant 1003: compact object transforms
+
+Record size is 20 bytes:
+
+~~~text
+u16 ordinal
+u16 time_norm
+i16 quat_x
+i16 quat_y
+i16 quat_z
+i16 quat_w
+i16 translation_x
+i16 translation_y
+i16 translation_z
+u16 padding_or_reserved
+~~~
+
+The compact components use a `1 / 32767` scale. The normalized time uses the
+same `time_norm / 65535.0 × duration_s` equation as variant 999. The adapter
+normalizes the stored quaternion into the common `(x, y, z)` representation
+with a derived positive-hemisphere `w`. Translation is exposed as a linear
+translation channel.
+
+`AniBroom.agr` is the clearest validation fixture: it has three 1003 clips,
+and its `LEFT`/`RIGHT` clips contain four-key sweeps that move the broom from
+upright to horizontal. Their HXD durations also agree with the AGR chunks.
+
+### 4.3 Variants 1002 and 1004: predecessor-linked packed streams
+
+The low bits in these formats are not track/channel identifiers. They are
+predecessor record indices. This was the major correction to the early probe
+model.
+
+The shared first two words are:
+
+~~~text
+word0 bits  0..10  previous_record_index
+       bits 11..19 normalized_time_code (0..511)
+       bit      20  qx sign
+       bits 21..30 qx magnitude (10 bits)
+       bit      31  qy sign
+
+word1 bits  0..9   qy magnitude (10 bits)
+       bit      10  qz sign
+       bits 11..20 qz magnitude (10 bits)
+       bit      21  qw sign
+       bits 22..31 qw magnitude (10 bits)
+~~~
+
+Each quaternion component is signed-magnitude and scaled by `1 / 1023`.
+Negative `w` keys are moved to the same quaternion hemisphere before entering
+the runtime. Time is:
+
+~~~text
+time_s = min(time_code / 511.0 × duration_s, duration_s)
+~~~
+
+Records with predecessor zero start a curve. A non-zero predecessor must point
+to an earlier physical record. The stream is therefore a forest of linked
+chains, not a flat list of independent `(track, channel, time)` rows. The
+adapter follows each chain, sorts/deduplicates keys by time, and emits a
+rotation track.
+
+#### Variant 1002
+
+Variant 1002 records are 8 bytes and are the character rotation stream:
+
+~~~text
+20-byte header
+count × 8-byte declared animation records
+runtime-selected auxiliary records (also 8 bytes each)
+optional four-byte trailer/padding
+~~~
+
+The declared stream convention observed across the character corpus is:
+
+1. Record 0 is a stream-wide default identity root.
+2. Later zero-predecessor roots begin authored curves.
+3. The final root is an identity-only curve ending at time code 511. It is a
+   runtime termination sentinel, not a bone.
+4. The viewer exposes each remaining curve as numeric track
+   `root_index - 1` and emits rotation channel 0.
+
+The auxiliary tail is not animation data. Its size depends on runtime/model
+state and cannot be reconstructed from the header alone. Tail records can look
+like valid packed keys; including them creates phantom curves and corrupts
+track binding. The Rust reader counts and reports the tail but excludes it
+from the curve graph.
+
+Corpus evidence includes 507 normal loose 1002 chunks with 37 roots (default,
+35 character curves, sentinel), special one-curve 1002 groups, and mission
+chunks with validated declared/auxiliary splits. The reader also handles the
+four-byte trailer observed in extracted/archive-backed data.
+
+#### Variant 1004
+
+Variant 1004 records are 12 bytes and add packed translation:
+
+~~~text
+word0: predecessor, time, qx sign/magnitude, qy sign
+word1: qy magnitude, qz sign/magnitude, qw sign/magnitude
+word2 bits  0..9   tx magnitude; bit 10 tx sign
+       bits 11..20 ty magnitude; bit 21 ty sign
+       bits 22..30 tz magnitude; bit 31 tz sign
+~~~
+
+Quaternion magnitudes use `1 / 1023`. Translation uses signed magnitude with
+`0.01` units for each component. The first root is the default; the terminal
+identity root is a sentinel. The remaining roots are exposed as
+`root_index - 1`, with both rotation and translation channels.
+
+The 1004 interpretation was revised after a larger corpus audit disproved an
+early byte-oriented time/track hypothesis. The decisive evidence was the
+retail evaluator's fixed 12-byte stride, low-11-bit predecessor lookup,
+9-bit time extraction and coherent translation fields. The current decoder is
+based on that packed transform model.
+
+### 4.4 Variants 1000 and 1001
+
+The PC corpus contains both variants, but their field semantics are not yet
+reduced. The local executable audit established that they have distinct
+record descriptors/strides, but that is not enough to safely decode them.
+
+Current behavior is intentionally conservative:
+
+- the header and duration are reported;
+- the record layout is marked unsupported/unknown;
+- no guessed tracks are sent to the animation sampler; and
+- the raw entry remains exportable.
+
+Do not label these variants as corrupt simply because they are unsupported,
+and do not copy the 1002 or 1004 layout into them without a fixture-backed
+invariant.
+
+### 4.5 Channel policy
+
+The normalized runtime currently has:
+
+~~~text
+channel 0 = rotation
+channel 1 = translation
+channel 2 = reserved/withheld; semantics not established
+~~~
+
+Translation is known for 999, 1003 and 1004. Character 1002 records account
+for predecessor, time and quaternion bits only; they do not contain root
+translation. A future channel-2 discovery must be independently validated
+before it is treated as scale, visibility, material or any other property.
+
+## 5. HXD and `hxds.dat`: association and naming
+
+AGR has no useful embedded model name in the observed corpus. The association
+layer is outside the AGR bytes:
+
+- loose `Anim/<MODEL>.HXD` records describe actor, vehicle and prop groups;
+- `Anim/hxds.dat` contains concatenated `ANIM + body_length + body` records for
+  level objects; and
+- `MAINPED.HXD` contains a compound external-resource table for character
+  groups.
+
+The two catalogs are disjoint in the local installation. `hxds.dat` contains
+130 level-object records; the loose HXD set contains 20 actor/vehicle/weapon
+records. The body is a compiler/heap dump rather than a clean portable schema:
+serialized pointer-looking values, `0xCD` fill, and even a stale editor-dialog
+string are present. Only the fields that survive cross-file checks are used.
+
+### Reliable HXD fields
+
+The current reader safely extracts:
+
+- model name: an identifier after the last `01 00 00 00` marker, with a file
+  stem fallback for `MAINPED.HXD`;
+- ordered namespaced sequence strings such as
+  `SKATEBOARD\1_07_PICKUP`;
+- sequence duration and blend weight from the preceding floats; and
+- for `MAINPED.HXD`, a duplicated sequence descriptor containing AGR encoded
+  size and external-resource index.
+
+The HXD sequence order is a strong relation to AGR chunk order:
+
+| Pair | Evidence |
+| --- | --- |
+| `SK8Board.agr` ↔ `SK8BOARD.HXD` | 17 sequences and 17 AGR chunks; durations agree |
+| `AniBroom.agr` ↔ its HXD record | 3 sequences and 3 chunks; IDLE/LEFT/RIGHT durations agree |
+| `MOT_CTRL.agr` ↔ direct HXD | 418 sequence/chunk rows; old 386 count was an incomplete probe |
+
+Ordinary records use exact sequence-count equality before names are applied.
+Compound `MAINPED.HXD` records are different:
+
+1. Select sequence rows by the external resource index.
+2. Require the two duplicated descriptors to agree.
+3. Align rows to AGR chunks by encoded chunk size, with duration only as a
+   tie-breaker.
+4. Allow only the bounded, four-byte-aligned final padding discrepancy found
+   in the retail catalog.
+5. Reject malformed/stale rows instead of guessing a name.
+
+This guarded alignment names all 439 `C_Player.agr` clips and all 59 `Grap`
+clips. Namespace matching alone is insufficient because one AGR can contain
+sequences from several namespaces and a namespace can occur under more than
+one external resource.
+
+HXD joint strings are useful evidence for prop rigs, but the semantic names in
+`MAINPED.HXD` do not directly name the imported player NIF nodes. They cannot
+be used as a shortcut for the player bone binding problem.
+
+## 6. NIF hierarchy, skinning and AGR binding
+
+### 6.1 Skin data contract
+
+For a skinned Bully NIF, the runtime follows this chain:
+
+~~~text
+vertex influence row
+  → partition bone-index slot
+  → partition palette entry
+  → NiSkinInstance bone reference
+  → NiNode / runtime NodeId
+~~~
+
+The `NiSkinData` per-bone `SkinTransform` supplies the mesh-local inverse bind
+transform. The validated partition layout is:
+
+~~~text
+u16 num_vertices, num_triangles, num_bones, num_strips,
+    num_weights_per_vertex
+u16 palette[num_bones]
+u8  has_vertex_map       → u16 vertex_map[num_vertices]
+u8  has_vertex_weights   → f32 weights[num_vertices][width]
+u16 strip_lengths[num_strips]
+u8  has_faces            → u16 triangles[num_triangles][3]
+u8  has_bone_indices     → u8 bone_indices[num_vertices][width]
+~~~
+
+There is no hidden count before each weight row. The `has_faces` byte is real;
+an independent Python parser in the local tooling omitted it and compensated
+by reading the next flag at the wrong width. That mistake happened to make
+some weight rows appear correct while shifting partition triangles. The Rust
+reader follows the raw retail bytes and keeps the direct `NiSkinData` weight
+rows as a fallback when a valid partition is absent.
+
+The full local NIF audit found 2,613 skin instances across 5,725 files. It
+found no invalid bone references, malformed palettes, non-finite weights,
+conflicting partition overlaps or skeleton-root violations. Seventy-three
+instances omit `NiSkinPartition` and use direct `NiSkinData` weights. On the
+player model, four skinned meshes account for 2,587 influenced vertices.
+
+The pose evaluator is CPU linear blend skinning:
+
+~~~text
+posed_vertex = Σ weight × (view × world[joint] × inverse_bind) × bind_vertex
+~~~
+
+The CPU path is the correctness oracle. GPU skinning remains an optional
+optimization and is not needed to understand AGR semantics.
+
+### 6.2 Why the first player animation was twisted
+
+The initial assumption was that AGR's numeric curve order directly matched the
+NIF depth-first node order. On the player this produced the characteristic
+“neighbor rotation” failure: bone positions could look plausible while the
+skinned body twisted around the spine, hands and legs.
+
+The investigation eliminated several misleading signals:
+
+- bone lengths cannot detect a rotation permutation;
+- a hierarchy direction test in a single composed model frame accepts any
+  consistent local-rotation assignment;
+- HXD semantic joint names do not name the player NIF's `Root ...` nodes; and
+- a single clip may hold a joint far from its rest rotation throughout the
+  clip.
+
+The current generic solution is cross-clip bind-pose calibration:
+
+1. Aggregate valid rotation keys for each AGR target over the whole library.
+2. Score a candidate node by the closest quaternion angle to its NIF rest
+   rotation.
+3. Solve an ordered, one-to-one assignment instead of greedy nearest-neighbor
+   matching.
+4. Exclude mesh nodes and, for skinned models, derive candidates from skin
+   joints and their valid ancestors/attachments.
+5. Use confident numeric matches only as an order-offset prior; the prior
+   cannot admit a candidate that fails the raw angle threshold.
+6. Leave unmatched tracks explicitly unbound with diagnostics.
+
+This fixed ordinary `C_Player`/`PLAYER.nif` clips and keeps the calibration
+stable across clip selection.
+
+### 6.3 The action-only root/torso failure
+
+The remaining failure appeared in `Hang_Workout.agr`, especially the
+`JOCK_PSHUP_IN` and `JOCK_PSHUP_LOOP` actions. The feet and hands moved locally,
+but the body did not rotate into the floor-facing push-up pose. The problem
+was not a missing foot mesh or an AGR quaternion axis issue. The strict
+calibrator intentionally refused three curves because those action clips
+never brought their root/torso rotations close enough to the NIF bind pose.
+Those curves were therefore left at rest, so the child limbs animated under a
+standing torso.
+
+The local fixture contained seven observed clips, all variant 1002 with 35
+rotation tracks. The missing tracks were the root-chain entries:
+
+~~~text
+AGR track_000  → NIF track_001  Root
+AGR track_008  → NIF track_009  Root01
+AGR track_009  → NIF track_010  Root Spine
+~~~
+
+The imported player hierarchy has a synthetic scene root and a non-animated
+dummy before the actual animated skeleton:
+
+~~~text
+Scene Root
+└── track_000       Dummy helper
+    └── track_001   Root
+        └── track_002   Root Pelvis
+            ├── track_003 ... left leg chain
+            └── track_006 ... right leg chain
+~~~
+
+The AGR character stream has 35 curves and omits the synthetic NIF scene root;
+the importer exposes the corresponding animated nodes as `track_001` through
+`track_035`. Thus the proven player relationship is:
+
+~~~text
+AGR track_i  →  imported NIF track_(i + 1)
+~~~
+
+The latest adapter recovery is deliberately narrow. It is allowed only when
+all of the following hold:
+
+- the model is actually skinned and Z-up;
+- the animation library carries the Bully AGR provenance;
+- targets form a contiguous `track_000...` sequence;
+- `Scene Root → track_000` has the expected dummy structure;
+- every expected `track_(i + 1)` is a unique non-mesh skin candidate; and
+- the strict ordered calibration agrees with the numeric mapping for every
+  assignment it did make.
+
+When those checks pass, the structural mapping recovers action-only root and
+torso tracks, producing 35/35 bindings and allowing the push-up body rotation
+to propagate into the legs and arms. If any check fails, the generic
+calibration remains in place and the track stays honestly partial. This is a
+Bully importer invariant, not a general-purpose numeric retargeter.
+
+### 6.4 Root motion and floor placement
+
+Character 1002 clips are rotation-only in the observed data. No root
+translation field is missing from the packed record: its bits are accounted
+for by predecessor, time and quaternion. The runtime/game code grounds the
+actor separately. `MOT_CTRL.agr` is a 1004 object-transform group and does not
+index-match `C_Player.agr` as a hidden player root-motion source.
+
+The viewer therefore keeps source rotation semantics and offers a presentation
+policy that samples a clip at uniform times, finds its lowest deformed vertex,
+and applies one constant grounding offset for the whole clip. A per-frame
+offset was rejected because it causes visible bobbing/yanking during falls and
+transitions. This policy makes prone clips inspectable without claiming to
+reproduce the game's actor-placement code.
+
+## 7. Runtime implementation map
+
+The format adapter and shared player are intentionally separate:
+
+| Area | Current responsibility |
+| --- | --- |
+| [`src/inspector/animation/bully.rs`](../src/inspector/animation/bully.rs) | AGR chunk parsing, four decoded variants, HXD-independent library conversion, NIF model bridge |
+| [`src/inspector/animation/hxd.rs`](../src/inspector/animation/hxd.rs) | loose HXD and `hxds.dat` records, `MAINPED` ownership alignment, model/clip naming |
+| [`src/inspector/animation/clip.rs`](../src/inspector/animation/clip.rs) | normalized tracks, key validation, sampling |
+| [`src/inspector/animation/binding.rs`](../src/inspector/animation/binding.rs) | exact binding, ordered calibration, guarded Bully action-only recovery |
+| [`src/inspector/animation/model.rs`](../src/inspector/animation/model.rs) | validated hierarchy, bind pose, skin assets and node transforms |
+| [`src/inspector/animation/pose.rs`](../src/inspector/animation/pose.rs) | hierarchy evaluation, CPU skinning and constant clip grounding |
+| [`src/ui/viewer_session.rs`](../src/ui/viewer_session.rs) | persistent animation session, calibration lifetime, transport, crossfade and pose revisions |
+| `src/ui/view.rs` / `src/ui/app.rs` | clip dock, loading/pairing actions, diagnostics and user controls |
+| `src/inspector/scene3d/headless.rs` | deterministic headless render/probe path for pose regressions |
+
+Calibration is built once per model/library session and reused for clip
+selection. Invalid clips are rejected before sampling. Invalid model
+transforms, malformed skin records, non-finite values and unsafe counted
+arrays fail closed rather than reaching the renderer.
+
+## 8. Validation record
+
+The current implementation has both synthetic and local-corpus coverage.
+
+### Structural and parser checks
+
+- 554 local AGR files and 3,261 clips were structurally scanned with no
+  reported structural errors in the validated four-variant population.
+- Packed 1002/1004 predecessor links are checked for forward/out-of-range
+  references, branches, cycles and decreasing key times.
+- Fixed-size variants are bounded by declared counts; archive padding is not
+  treated as records.
+- Real HXD duration/order and compound ownership checks cover `SK8Board`,
+  `AniBroom`, `MOT_CTRL`, `C_Player`, `Grap` and `NPC_Cher`.
+- AGR parser fixtures cover bad magic, unsupported variants, bad durations,
+  record overflow, misalignment, packed-link failures and valid zero-ended
+  records.
+
+### Rendering and binding checks
+
+- `SK8Board.agr`: board object motion and named clips.
+- `AniBroom.agr`: compact 1003 sweep motion.
+- `Bike.agr`: object animation with partial track coverage reported honestly.
+- `1_07_Sk8Board.agr`: mission/action 1002 preview with partial model binding.
+- `C_Player.agr` + `PLAYER.nif`: 35/35 character curves, CPU LBS, RUN/STRAFE/
+  ground-state pose checks and rest-bridge agreement.
+- `Hang_Workout.agr` + `PLAYER.nif`: action-only root recovery, including
+  push-up root/torso propagation and the leg/hand binding regression.
+
+The core test names that encode the latest lessons are:
+
+- `calibrated_binding_matches_bind_pose_when_available`;
+- `bully_action_only_tracks_recover_the_imported_numeric_offset`;
+- `stepping_never_stalls_at_grid_rounding`;
+- `focus_loss_cancels_an_active_drag`;
+- `invalid_clips_are_never_sampled`; and
+- `non_finite_or_degenerate_node_transforms_are_rejected`.
+
+Real-corpus gates are environment-dependent and must not embed game data in
+Git. The local paths and probe scripts are described in the checkpoint.
+
+## 9. Related Bully formats: current boundaries
+
+These files are related to the AGR workflow but are not AGR variants:
+
+| Format | Established role | Current state |
+| --- | --- | --- |
+| HXD / `hxds.dat` | animation hierarchy/catalog and AGR association | model pairing and guarded clip naming implemented |
+| NIF | model hierarchy, mesh, materials and skin data | static and animated CPU-skinned preview implemented |
+| NFT | Bully/Gamebryo texture catalog/payload | texture preview and source resolution implemented |
+| CAT | compiled action tree/catalog | strings and relationship research only; no safe typed parser yet |
+| LIP | lip-sync records with `Speech.bin` references | record shape and reference offsets observed; payload semantics deferred |
+| LUR | compiled Lua 5.0-era script bytecode | identified; future read-only script inspector, never execution |
+
+Useful local observations that must remain attached to the roadmap:
+
+- CAT strings can reveal action paths, resource paths and logical `.act`
+  names, but a readable path is not proof of a typed node or an AGR link.
+- LIP starts with a 16-bit count and uses a 0x18-byte record stride in the
+  local reference tooling. Observed fields at `+0x00`, `+0x0C`, `+0x10` and
+  `+0x14` maintain Speech entry index/offset/size/hash relationships; the
+  remaining words and compressed payload are not decoded.
+- LUR files begin with the Lua 5.0 binary signature (`\x1bLuaP`) in the local
+  Scripts corpus. Header flags must be read from the chunk; a hard-coded Lua
+  host layout is unsafe.
+- No PC AGR result should be generalized to Xbox 360, PS2, Wii, PSP, mobile or
+  Anniversary resources without a real fixture. Shared extensions do not prove
+  shared byte layouts.
+
+The long-form work plan is
+[`bully-agr-cat-lip-lur-roadmap.md`](bully-agr-cat-lip-lur-roadmap.md). Its
+older phase prose is being reconciled with this record; the tracked checklist
+is [`TODO.md`](../TODO.md).
+
+## 10. Lessons learned for researching AGR
+
+### Start with a corpus census, not a format guess
+
+Count files, variants, durations, sizes, archive locations and duplicate
+copies before assigning meaning to a field. The first AGR observations made
+the second word look like a version and the third word like a universal count;
+the expanded corpus showed mixed chunks, auxiliary data and multiple resource
+families. A census prevents a convenient sample from becoming a false rule.
+
+### Separate framing from semantics
+
+First establish where a chunk begins and ends. Only then interpret record
+fields. The 1002 tail and IMG sector padding demonstrate why “read until the
+next plausible header” and “trim all zeros” are dangerous unless bounded by
+the surrounding archive/chunk context.
+
+### Treat linked streams as graphs
+
+The low 11 bits looked like a track field until the retail evaluator and corpus
+showed predecessor chains. For packed data, build a bounded graph, check
+forward links/branches/cycles, then recover curves. Never flatten an index into
+an identity merely because its numeric range looks convenient.
+
+### Use orthogonal evidence
+
+A convincing interpretation should agree across at least two independent
+signals: executable access pattern, record stride, key monotonicity, duration
+alignment, HXD sequence order, model pose, or exact byte sizes. A visual match
+alone is especially weak because neighboring rotations can still produce
+plausible silhouettes.
+
+### Keep confidence labels explicit
+
+Use three practical labels in notes and diagnostics:
+
+~~~text
+confirmed       repeated invariant across corpus or direct runtime evidence
+strong          independent cross-check, but limited to a resource family
+open            plausible hypothesis not safe for decoding or writing
+~~~
+
+Do not silently promote a strong prop observation into a universal character
+rule. The current 1002/1004 packed layout is confirmed for the observed PC
+families; 1000/1001 remain open.
+
+### Compare timing against known rates
+
+Normalize candidate time fields against the chunk duration and test whether
+keys land on plausible frame grids across multiple clips. This separated the
+16-bit normalized time in 999/1003 from the 9-bit packed time in 1002/1004 and
+caught the old 1004 byte-time hypothesis.
+
+### Never use one animation to identify a skeleton
+
+Static or action-only clips can hide an error. Use a library of clips, a bind
+pose, a non-zero sample, and an independent rest-bridge check. A root or torso
+curve can remain far from rest for an entire action; a calibrator that rejects
+it must have a structurally justified recovery path or an honest partial state.
+
+### Distinguish source IDs, imported IDs and runtime IDs
+
+AGR `track_i`, NIF block indices, DFS order, HXD sequence indices and runtime
+`NodeId`s are different namespaces. Name each conversion explicitly. The
+player fix works because it records the synthetic scene-root/dummy offset
+instead of pretending the source and imported indices are the same.
+
+### Validate the deformed mesh, not only the skeleton
+
+Bone endpoints and lengths can look correct while the mesh is twisted by a
+wrong palette, inverse bind, partition map or curve assignment. Always compare
+the static rest bridge and rendered skinned poses. For difficult cases, dump
+posed node positions and a deterministic headless frame in addition to looking
+at the GUI.
+
+### Preserve unknown bytes and refuse unsafe writes
+
+A parser can be useful before it is a serializer. Unknown AGR variants,
+auxiliary 1002 records, compiler pointers and HXD padding should remain
+diagnostic/raw data. Editing or round-tripping should wait until unknown
+sections, sizes, padding and external dependencies can be preserved exactly.
+
+### Make probes small, repeatable and adversarial
+
+Prefer focused scripts that answer one question: record stride, time scale,
+predecessor validity, HXD row alignment or model pairing. Add synthetic cases
+for truncation, zero records, terminal identity keys, forward links, duplicate
+times and absurd counts. A successful normal-file probe is not a safety test.
+
+### Keep external tools as oracles, not dependencies
+
+Local Python parsers, independent packages and executable disassembly are
+valuable for comparison, but each layout must be checked against raw bytes and
+the app's own invariants. One local parser's compensated SkinPartition flag
+read is a useful warning: an apparent agreement can come from two mistakes
+canceling each other.
+
+### Record provenance with every conclusion
+
+Keep the source file, archive/loose origin, clip index, variant, model, probe
+name and date beside a finding. This makes it possible to tell whether a result
+came from a retail PC asset, a mission group, a synthetic fixture or a modified
+community archive. It also prevents a mislabeled/incomplete archive from being
+used as a platform specification.
+
+## 11. Recommended future work
+
+In priority order:
+
+1. Reduce variants 1000 and 1001 using the local executable descriptor table,
+   targeted `C_Player`/rare-variant fixtures, bounded field hypotheses and
+   pose validation. Do not infer them from 1002/1004.
+2. Broaden the guarded AGR-to-NIF binding evidence across additional matching
+   character/prop rigs. Keep the current fallback narrow and diagnostics-rich.
+3. Investigate the runtime inputs and purpose of the 1002 auxiliary tail only
+   if authoring, lossless round-trip or gameplay-accurate export requires it.
+4. Build a CAT structural reader and evidence-labelled CAT → AGR relationship
+   resolver; do not execute action nodes.
+5. Add the deferred LIP structural inspector and `Speech.bin` association
+   checks without claiming viseme decoding.
+6. Add a read-only LUR bytecode inspector with strict Lua header/prototype
+   bounds; never embed a Lua VM or execute archive scripts.
+7. Add real cross-platform fixtures before making claims about Xbox 360, Wii,
+   PS2, PSP, mobile or other Bully resource dialects.
+8. Consider GPU skinning only after profiling large real models and keeping the
+   CPU path as the numerical reference.
+
+Editing/serialization remains a separate decision. Playback success is not
+proof that an AGR can be safely rewritten.
+
+## 12. Source map and historical notes
+
+Primary raw evidence:
+
+- [`../../bully-probe/FINDINGS.md`](../../bully-probe/FINDINGS.md) — probes,
+  byte layouts, corpus tables and retired hypotheses;
+- [`../../bully-probe/CHECKPOINT.md`](../../bully-probe/CHECKPOINT.md) — prior
+  implementation handoff and reproduction commands;
+- [`bully-agr-cat-lip-lur-roadmap.md`](bully-agr-cat-lip-lur-roadmap.md) —
+  broader CAT/LIP/LUR plan;
+- [`animation-viewer-infrastructure-plan.md`](animation-viewer-infrastructure-plan.md) —
+  format-independent player architecture; and
+- [`../TODO.md`](../TODO.md) — tracked phase checklist.
+
+The local probe suite is outside the authoritative Rust repository:
+
+~~~text
+C:\Dev\IMGEditor-master\bully-probe\
+~~~
+
+Its generated JSON, extracted game data, executable dumps and exploratory
+scripts must remain outside Git. This document records conclusions, not game
+payloads.

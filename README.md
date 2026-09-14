@@ -68,7 +68,8 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - 🧰 **Named clips via HXD catalogs** - `Anim/*.HXD` and `hxds.dat` are parsed so clips get real names (all 439 `C_Player` clips: RUN, GROUND_ONBACK, ...), with compound `MAINPED.HXD` records resolved to their owning AGR
 - 🧰 **Packed AGR decoders** - variant 1002/1004 packed rotation curves (bitfields recovered from the retail executable) plus 999/1003 object transforms with translation; loose `Anim/*.agr` files load through the View menu against the open model
 - 🧰 **NIF skinning** - `NiSkinInstance`/`NiSkinData`/`NiSkinPartition` are parsed and skinned meshes deform through linear blend skinning, so the player character animates instead of holding a T-pose
-- 🧰 **Known limitation** - character clips are authored rotation-only by design (the game grounds actors at runtime), so knockdown-style clips pivot about the root rather than lying on the floor
+- 🧰 **Known limitation** - observed character clips are authored rotation-only by design (the game grounds actors at runtime); the viewer offers constant per-clip floor planting for inspection, but does not claim to reproduce the game's runtime locomotion grounding
+- 🧪 **AGR research record** - the recovered layouts, HXD association rules, NIF skinning findings, validation corpus, and reverse-engineering lessons are preserved in [`docs/bully-agr-research-record.md`](docs/bully-agr-research-record.md)
 
 **v4.5.0 release highlights:**
 - 🛡 **Asset compatibility engine** — retail-verified profiles for GTA III, Vice City, San Andreas and Bully. Pick the game an archive is for (or accept an advisory content hint): every texture is checked against that target's dialect, entry rows are tinted by verdict with an icon legend, and the choice is remembered per archive path. Imports get a pre-flight format check before touching the archive
@@ -262,7 +263,7 @@ The codebase is architected so the core parsers and archive logic are platform-a
 The main UI layer uses Iced, which is cross-platform by design, so the desktop porting effort is mostly packaging and platform-specific window integration.
 
 ### Platform-specific note on GTA support
-Version 4.0 is developed and tested primarily against **Bully Scholarship Edition** archives, with the embedded viewer now covering common PC RenderWare DFF/TXD assets used by GTA III, Vice City, and San Andreas. Genuine per-game fixtures are still needed for compatibility claims; console-native geometry, skinning, animation, and advanced RenderWare material effects remain future work. Broader GTA workflow polish — importing, exporting, and format edge cases — will be addressed as representative archives become available.
+Version 4.0 was developed and tested primarily against **Bully Scholarship Edition** archives, with the embedded viewer now covering common PC RenderWare DFF/TXD assets used by GTA III, Vice City, and San Andreas. Genuine per-game fixtures are still needed for compatibility claims; console-native geometry and advanced RenderWare material effects remain future work. Bully AGR animation, HXD association, and NIF CPU skinning are now documented in the AGR research record above. Broader GTA workflow polish — importing, exporting, and format edge cases — will be addressed as representative archives become available.
 
 ### Unicode and non-ASCII language support
 Core archive parsing stores entry names as UTF-8, so non-ASCII characters inside archives round-trip correctly. However, full support for languages like Russian (Cyrillic) is not yet guaranteed:
