@@ -179,6 +179,11 @@ pub(crate) struct AgrPlayback {
     pub models: Vec<(usize, String)>,
     /// The selected clip's name, restored after a model switch when present.
     pub last_clip_name: Option<String>,
+    /// True from request dispatch until the load completes; drives the
+    /// viewer's spinner and notice.
+    pub pending: bool,
+    /// `"<agr> on <model>"` label shown while [`Self::pending`].
+    pub pending_label: String,
 }
 
 /// Success payload of an AGR load (initial or model-switch re-load).
@@ -1446,6 +1451,12 @@ pub struct App {
     /// via a byte-budgeted `quick_cache` LRU; invalidation is driven by the
     /// archive's `generation` counter (see `ArchiveInfo::invalidate_entry_caches`).
     scene_cache: SceneCache,
+    /// Decoded AGR playback pairs (model + named library) keyed by (archive
+    /// file name, generation, AGR source, model entry). A repeat load of the
+    /// same pair — re-selecting an AGR, switching models back and forth —
+    /// installs instantly instead of re-parsing. Same LRU/invalidation model
+    /// as [`App::scene_cache`].
+    agr_cache: AgrCache,
     /// Memoized `IdeMap` per game root directory. Building walks the game
     /// folder on disk, so it's built at most once per archive path per
     /// session and shared across loads by `Arc`.
@@ -1494,6 +1505,78 @@ const SCENE_CACHE_ITEM_CAPACITY: usize = 256;
 /// A memoized `IdeMap` paired with the game root it was built from, shipped
 /// back to the app by a 3D load task for memoization.
 type BuiltIdeMap = (PathBuf, Arc<crate::inspector::texture::IdeMap>);
+
+/// Identifies the AGR source of a cached animation load: an archive entry
+/// index or a loose file path.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum AgrCacheSource {
+    Entry(usize),
+    Path(PathBuf),
+}
+
+/// Cache key for [`App::agr_cache`]: archive identity + generation, the AGR
+/// source, and the model entry the library plays on. Mirrors `SceneCacheKey`:
+/// closing an archive cannot re-key stale libraries onto a new archive, and
+/// the generation counter folds in entry-list mutations.
+type AgrCacheKey = (String, u64, AgrCacheSource, usize);
+
+/// Everything an AGR completion needs to install a session, cached so a
+/// repeat load of the same AGR+model pair skips the parse and texture decode.
+struct AgrCached {
+    model: Arc<crate::inspector::animation::ModelAsset>,
+    library: Arc<crate::inspector::animation::AnimationLibrary>,
+    summary: String,
+    models: Vec<(usize, String)>,
+}
+
+type AgrCache = std::sync::Arc<
+    quick_cache::sync::Cache<AgrCacheKey, std::sync::Arc<AgrCached>, AgrWeight>,
+>;
+
+/// Weighs a cached AGR pair by its estimated CPU memory: mesh buffers,
+/// decoded RGBA textures, skin influences, and clip key data.
+#[derive(Clone)]
+struct AgrWeight;
+
+impl quick_cache::Weighter<AgrCacheKey, std::sync::Arc<AgrCached>> for AgrWeight {
+    fn weight(&self, _key: &AgrCacheKey, val: &std::sync::Arc<AgrCached>) -> u64 {
+        let mut bytes = 0u64;
+        for mesh in &val.model.meshes {
+            bytes +=
+                (mesh.vertices.len() * std::mem::size_of::<crate::inspector::scene3d::mesh::Vertex>())
+                    as u64;
+            bytes += (mesh.indices.len() * 4) as u64;
+            if let Some(skin) = &mesh.skin {
+                bytes += (skin.joints.len() * 16 + skin.inverse_bind.len() * 64) as u64;
+                bytes += (skin.weights.len()
+                    * std::mem::size_of::<crate::inspector::animation::model::VertexSkin>())
+                    as u64;
+            }
+            if let Some(texture) = &mesh.diffuse {
+                bytes += texture.rgba.len() as u64;
+            }
+        }
+        bytes += (val.model.nodes.len() * 96) as u64;
+        for clip in &val.library.clips {
+            for track in &clip.tracks {
+                // Times and values are validated parallel arrays; value
+                // entries are at most a quaternion (16 bytes).
+                bytes += (track.channel.times().len() * 20) as u64;
+                bytes += track.target.capacity() as u64;
+            }
+        }
+        bytes.max(1)
+    }
+}
+
+/// Soft memory budget for the AGR cache. A skinned ped with decoded textures
+/// lands around 5-15 MiB, so this keeps roughly the last two dozen played
+/// pairs resident.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+const AGR_CACHE_WEIGHT_CAPACITY: u64 = 32 * 1024 * 1024;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const AGR_CACHE_WEIGHT_CAPACITY: u64 = 128 * 1024 * 1024;
+const AGR_CACHE_ITEM_CAPACITY: usize = 256;
 
 impl Default for App {
     fn default() -> Self {
@@ -1616,6 +1699,13 @@ impl App {
                 SCENE_CACHE_ITEM_CAPACITY,
                 SCENE_CACHE_WEIGHT_CAPACITY,
                 SceneCpuWeight,
+                Default::default(),
+                Default::default(),
+            )),
+            agr_cache: std::sync::Arc::new(quick_cache::sync::Cache::with(
+                AGR_CACHE_ITEM_CAPACITY,
+                AGR_CACHE_WEIGHT_CAPACITY,
+                AgrWeight,
                 Default::default(),
                 Default::default(),
             )),
@@ -2904,6 +2994,12 @@ impl App {
         self.scene_cache.retain(|key, _| key.0 != archive_name);
     }
 
+    /// Same as [`Self::drop_scene_cache_for_archive`] for cached AGR
+    /// playback pairs.
+    fn drop_agr_cache_for_archive(&self, archive_name: &str) {
+        self.agr_cache.retain(|key, _| key.0 != archive_name);
+    }
+
     /// `Cache::retain` skips in-flight placeholders, so closing the archive
     /// that owns a load would otherwise let the late decode publish into
     /// the closed archive's key. Removing the key drops the placeholder;
@@ -2984,6 +3080,7 @@ impl App {
         self.agr_playback = None;
         if let Some((name, generation)) = closing {
             self.drop_scene_cache_for_archive(&name);
+            self.drop_agr_cache_for_archive(&name);
             self.drop_in_flight_placeholder(&name, generation, in_flight, index);
         }
         let task = self.refresh_inspection();
@@ -5511,7 +5608,12 @@ impl App {
                         .saturating_duration_since(prev)
                         .min(Duration::from_millis(50));
                     self.animator.update(dt);
-                    if self.viewer_load.is_some() {
+                    if self.viewer_load.is_some()
+                        || self
+                            .agr_playback
+                            .as_ref()
+                            .is_some_and(|playback| playback.pending)
+                    {
                         self.viewer_load_phase =
                             (self.viewer_load_phase + dt.as_secs_f32() * 0.72).fract();
                     }
@@ -5670,7 +5772,6 @@ impl App {
                     playback.model_entry = model_entry;
                     playback.last_clip_name = last_clip_name;
                 }
-                self.toast = Some("Replaying animation on model…".into());
                 Task::done(Message::ViewerAgrLoadRequest {
                     archive_index: playback.archive_index,
                     agr_entry: playback.agr_entry,
@@ -6547,6 +6648,36 @@ impl App {
                         archive.file_name.clone(),
                     )
                 };
+                let agr_display = agr_path
+                    .as_ref()
+                    .and_then(|path| {
+                        path.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    })
+                    .or_else(|| {
+                        agr_entry_data
+                            .as_ref()
+                            .map(|entry| entry.file_name.to_string())
+                    })
+                    .unwrap_or_else(|| "animation".to_string());
+                let model_display = model_entry_data.file_name.clone();
+                // Repeat loads of the same pair are served from the cache;
+                // build the key while the archive identity is still owned.
+                let cache_key = match (agr_entry, agr_path.as_ref()) {
+                    (Some(entry), _) => Some((
+                        archive_name.clone(),
+                        archive_generation,
+                        AgrCacheSource::Entry(entry),
+                        model_entry,
+                    )),
+                    (None, Some(path)) => Some((
+                        archive_name.clone(),
+                        archive_generation,
+                        AgrCacheSource::Path(path.clone()),
+                        model_entry,
+                    )),
+                    (None, None) => None,
+                };
                 // Retain the request so the dock's model picker can re-play
                 // the same clip set on another model. A re-dispatch for the
                 // same AGR keeps the candidate list and the selected clip.
@@ -6572,7 +6703,30 @@ impl App {
                     model_entry,
                     models,
                     last_clip_name,
+                    pending: true,
+                    pending_label: format!("{agr_display} on {model_display}"),
                 });
+                // Mirror the static viewer load: reset the animation clock so
+                // the first spinner frame never skips ahead.
+                if self.animator.running_count() == 0 && self.toast.is_none() {
+                    self.prev_tick = None;
+                }
+                // Cache hit: no parse, no texture decode — install straight
+                // from the stored pair through the regular completion path.
+                if let Some(key) = &cache_key
+                    && let Some(cached) = self.agr_cache.get(key)
+                {
+                    return Task::done(Message::ViewerAgrLoadCompleted {
+                        serial,
+                        result: Ok(AgrLoadOutcome {
+                            model: Arc::clone(&cached.model),
+                            library: Arc::clone(&cached.library),
+                            summary: cached.summary.clone(),
+                            models: cached.models.clone(),
+                            ide_map: None,
+                        }),
+                    });
+                }
                 // Reuse a memoized IdeMap for this game root when one has
                 // already been built; otherwise the task builds one and
                 // hands it back for memoization.
@@ -6583,19 +6737,6 @@ impl App {
                 let ide_map_hit: Option<BuiltIdeMap> = game_root
                     .as_ref()
                     .and_then(|root| self.ide_maps.get(root).map(|map| (root.clone(), Arc::clone(map))));
-                let agr_display = agr_path
-                    .as_ref()
-                    .and_then(|path| {
-                        path.file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                    })
-                    .or_else(|| {
-                        agr_entry_data
-                            .as_ref()
-                            .map(|entry| entry.file_name.to_string())
-                    })
-                    .unwrap_or_else(|| "animation".to_string());
-                let model_display = model_entry_data.file_name.clone();
                 // The resolver keys its NFT catalog lookup by the model's
                 // file stem (`PLAYER`), not the file name (`PLAYER.nif`).
                 let model_stem = std::path::Path::new(&model_display)
@@ -6741,6 +6882,11 @@ impl App {
                 if serial != self.agr_serial {
                     return Task::none();
                 }
+                // A closed archive or a static load superseded this request
+                // while it was in flight; never install a session for it.
+                if self.agr_playback.is_none() {
+                    return Task::none();
+                }
                 match result {
                     Ok(outcome) => {
                         let AgrLoadOutcome {
@@ -6775,8 +6921,8 @@ impl App {
                             .and_then(|id| library.clips.iter().find(|clip| clip.id == id))
                             .map(|clip| clip.name.clone());
                         self.viewer3d_handle.install_animation_session(
-                            model,
-                            library,
+                            Arc::clone(&model),
+                            Arc::clone(&library),
                             false,
                             Instant::now(),
                         );
@@ -6807,13 +6953,44 @@ impl App {
                             }
                         }
                         if let Some(playback) = &mut self.agr_playback {
-                            playback.models = models;
+                            playback.models = models.clone();
                             playback.last_clip_name = selected_name;
+                            playback.pending = false;
                         }
                         self.selected_inspector_tab = InspectorTab::Model3D;
                         self.active_viewer_entry = None;
                         self.toast = Some(format!("Animation ready: {summary}"));
                         dev_logger::breadcrumb(&format!("AGR load ok: {summary}"));
+                        // Publish the freshly decoded pair so replays of the
+                        // same AGR+model install instantly.
+                        if let Some(playback) = self.agr_playback.as_ref()
+                            && let Some(archive) =
+                                self.editor.archives().get(playback.archive_index)
+                            && archive.file_name == playback.archive_name
+                            && archive.generation() == playback.archive_generation
+                        {
+                            let source = match (playback.agr_entry, playback.agr_path.clone()) {
+                                (Some(entry), _) => Some(AgrCacheSource::Entry(entry)),
+                                (None, Some(path)) => Some(AgrCacheSource::Path(path)),
+                                (None, None) => None,
+                            };
+                            if let Some(source) = source {
+                                self.agr_cache.insert(
+                                    (
+                                        playback.archive_name.clone(),
+                                        playback.archive_generation,
+                                        source,
+                                        playback.model_entry,
+                                    ),
+                                    Arc::new(AgrCached {
+                                        model,
+                                        library,
+                                        summary,
+                                        models,
+                                    }),
+                                );
+                            }
+                        }
                     }
                     Err(error) => {
                         // A failed model switch leaves the previous animation
@@ -6839,6 +7016,7 @@ impl App {
                                 return false;
                             };
                             playback.model_entry = entry_index;
+                            playback.pending = false;
                             true
                         });
                         if !restored {
@@ -7436,6 +7614,8 @@ impl App {
         // waiting for the byte-budgeted cache to pressure them out.
         self.drop_scene_cache_for_archive(&source_name);
         self.drop_scene_cache_for_archive(&target_name);
+        self.drop_agr_cache_for_archive(&source_name);
+        self.drop_agr_cache_for_archive(&target_name);
 
         // Insert into the target archive. If the target already
         // has an entry with the same name, we rename the moved
@@ -7860,6 +8040,10 @@ impl App {
             || self.toast.is_some()
             || self.toast_reveal_text.is_some()
             || self.viewer_load.is_some()
+            || self
+                .agr_playback
+                .as_ref()
+                .is_some_and(|playback| playback.pending)
             || self
                 .compare_state
                 .as_ref()
@@ -8683,6 +8867,8 @@ mod tests {
             model_entry: 1,
             models: Vec::new(),
             last_clip_name: None,
+            pending: false,
+            pending_label: String::new(),
         });
 
         // The played model stands in for the animation row ...
@@ -8693,6 +8879,95 @@ mod tests {
         // the follow instead of resolving a shifted entry index.
         app.editor.archives_mut()[0].invalidate_entry_caches_keeping_report();
         assert_eq!(app.agr_texture_follow(0, 0), None);
+    }
+
+    #[test]
+    fn agr_cache_hit_installs_without_a_reparse() {
+        let mut app = test_app_with_entries();
+        let (model, library) = crate::inspector::animation::fixtures::parent_child_prop();
+        let model = Arc::new(model);
+        let library = Arc::new(library);
+        let path = PathBuf::from("C:/Anim/test.agr");
+        let archive = &app.editor.archives()[0];
+        app.agr_cache.insert(
+            (
+                archive.file_name.clone(),
+                archive.generation(),
+                AgrCacheSource::Path(path.clone()),
+                0,
+            ),
+            Arc::new(AgrCached {
+                model: Arc::clone(&model),
+                library: Arc::clone(&library),
+                summary: "test.agr on first.dff (2 clips)".to_string(),
+                models: Vec::new(),
+            }),
+        );
+        app.agr_serial += 1;
+        let serial = app.agr_serial;
+
+        let messages = drain_task(app.update(Message::ViewerAgrLoadRequest {
+            archive_index: 0,
+            agr_entry: None,
+            agr_path: Some(path),
+            model_entry: 0,
+            hxd_record: None,
+            hxd_source: String::new(),
+            serial,
+        }));
+
+        // The hit path answers synchronously with the cached pair.
+        let Message::ViewerAgrLoadCompleted {
+            serial: completed,
+            result: Ok(outcome),
+        } = &messages[0]
+        else {
+            panic!("expected a cached completion, got {:?}", messages.first());
+        };
+        assert_eq!(*completed, serial);
+        assert!(Arc::ptr_eq(&outcome.model, &model));
+        assert!(Arc::ptr_eq(&outcome.library, &library));
+
+        for message in messages {
+            let _ = app.update(message);
+        }
+        let playback = app.agr_playback.as_ref().expect("playback retained");
+        assert!(!playback.pending);
+        let installed = app
+            .viewer3d_handle
+            .animation_session(|session| Arc::ptr_eq(&session.asset, &model));
+        assert_eq!(installed, Some(true));
+    }
+
+    #[test]
+    fn agr_cache_miss_failure_clears_the_pending_playback() {
+        let mut app = test_app_with_entries();
+        app.agr_serial += 1;
+        let serial = app.agr_serial;
+
+        // No cache entry and no archive backing file: the spawned parse
+        // fails, and the failed completion must drop the pending playback.
+        let messages = drain_task(app.update(Message::ViewerAgrLoadRequest {
+            archive_index: 0,
+            agr_entry: Some(0),
+            agr_path: None,
+            model_entry: 0,
+            hxd_record: None,
+            hxd_source: String::new(),
+            serial,
+        }));
+
+        assert!(matches!(
+            messages.as_slice(),
+            [Message::ViewerAgrLoadCompleted {
+                serial: s,
+                result: Err(_),
+            }] if *s == serial
+        ));
+        for message in messages {
+            let _ = app.update(message);
+        }
+        assert!(app.agr_playback.is_none());
     }
 
     /// Run a task's side effects and collect the follow-up messages it

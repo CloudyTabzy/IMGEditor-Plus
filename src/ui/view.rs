@@ -959,11 +959,56 @@ impl App {
     }
 
     fn build_animation_tab(&self) -> Element<'_, Message> {
+        // While an AGR load (initial or model switch) is in flight, show the
+        // same spinner + notice the static 3D preview uses instead of the
+        // previous scene.
+        let pending = self
+            .agr_playback
+            .as_ref()
+            .is_some_and(|playback| playback.pending);
+        let pending_label = if pending {
+            self.agr_playback
+                .as_ref()
+                .map(|playback| playback.pending_label.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let toolbar = self.build_viewer3d_toolbar(true, true, false);
-        let body: Element<'_, Message> =
-            crate::ui::viewer3d_widget::Scene3dWidget::new(self.viewer3d_handle.clone()).into();
+        let body: Element<'_, Message> = if pending {
+            container(
+                column![
+                    canvas::Canvas::new(LoadingSpinner::new(self.viewer_load_phase))
+                        .width(Length::Fixed(48.0))
+                        .height(Length::Fixed(48.0)),
+                    fonts::header("Preparing animation"),
+                    fonts::body(pending_label.clone()),
+                    fonts::caption("Decoding clips and resolving textures…"),
+                    fonts::caption("Future replays of this pair will be instant."),
+                ]
+                .spacing(8)
+                .align_x(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .padding(16)
+            .into()
+        } else {
+            crate::ui::viewer3d_widget::Scene3dWidget::new(self.viewer3d_handle.clone()).into()
+        };
         let dock = self.build_animation_dock();
-        let stats = self.build_viewer3d_stats(true);
+        let stats: Element<'_, Message> = if pending {
+            container(fonts::caption(format!("Preparing {pending_label}…")))
+                .width(Length::Fill)
+                .height(Length::Fixed(20.0))
+                .align_x(Alignment::Center)
+                .padding(2)
+                .into()
+        } else {
+            self.build_viewer3d_stats(true)
+        };
         column![toolbar, body, dock, stats]
             .spacing(4)
             .padding(4)
@@ -1122,13 +1167,19 @@ impl App {
             .map(|(id, name)| (name.clone(), *id))
             .collect();
         let clip_map = std::sync::Arc::new(clip_map);
+        // Clip libraries run into the hundreds of entries: cap the dropdown
+        // so it scrolls instead of covering the viewer, but let short lists
+        // size to their content instead of leaving an empty box.
+        let clip_menu_height = if data.clips.len() <= 13 {
+            Length::Shrink
+        } else {
+            Length::Fixed(360.0)
+        };
         let clip_picker = pick_list(clip_names, data.current.clone(), move |name| {
             Message::AnimationSelectClip(clip_map[&name])
         })
         .text_size(12.0)
-        // Clip libraries run into the hundreds of entries; cap the dropdown
-        // so it scrolls instead of covering the whole viewer.
-        .menu_height(Length::Fixed(360.0))
+        .menu_height(clip_menu_height)
         .width(Length::Fill);
 
         // Compact model picker: re-play the retained AGR clip set on another
@@ -1168,12 +1219,17 @@ impl App {
                         .map(|(entry, name)| (name.clone(), *entry))
                         .collect::<std::collections::HashMap<String, usize>>(),
                 );
+                let menu_height = if models.len() <= 13 {
+                    Length::Shrink
+                } else {
+                    Length::Fixed(360.0)
+                };
                 let picker = pick_list(names, current, move |name| {
                     Message::AnimationSelectModel(model_map[&name])
                 })
                 .text_size(12.0)
-                .menu_height(Length::Fixed(360.0))
-                .width(Length::Fixed(170.0));
+                .menu_height(menu_height)
+                .width(Length::Fixed(140.0));
                 Some(
                     w::styled_tooltip(
                         row![icons::person().size(13), picker]
@@ -1316,14 +1372,11 @@ impl App {
             tooltip::Position::Top,
         );
 
-        let transport_row = row![
-            clip_row,
-            Space::new().width(Length::Fill),
-            transport_group,
-            readout,
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
+        // No spacer: the clip picker is Fill, so it absorbs the row's slack
+        // and pushes the transport group against the right edge.
+        let transport_row = row![clip_row, transport_group, readout]
+            .spacing(10)
+            .align_y(Alignment::Center);
 
         let frame_button = |label: &'static str, message: Message, tip: &'static str| {
             w::styled_tooltip(
