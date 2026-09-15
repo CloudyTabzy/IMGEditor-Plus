@@ -3104,6 +3104,73 @@ mod tests {
         }
     }
 
+    /// AGR playback texture resolution: the model's diffuse texture names
+    /// must resolve to pixels through the shared three-tier resolver (NFT
+    /// catalog → archive texture → loose file) with the model *stem* as the
+    /// catalog key, so the animated scene and the Texture tab can show them.
+    #[test]
+    fn agr_textures_resolve_for_models_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let img_path = stream.join("World.img");
+        let Ok(dir_bytes) = std::fs::read(stream.join("World.dir")) else {
+            return;
+        };
+        // Offsets/sectors are in 2048-byte units, exactly as the v1 parser
+        // stores them; `ArchiveTextureIndex::read` needs them to fetch bytes.
+        let entries: Vec<crate::archive::EntryInfo> = dir_bytes
+            .chunks_exact(32)
+            .map(|record| {
+                let end = record[8..].iter().position(|byte| *byte == 0).unwrap_or(24);
+                let mut entry = crate::archive::EntryInfo::new(
+                    String::from_utf8_lossy(&record[8..8 + end]).into_owned(),
+                );
+                entry.offset = u32::from_le_bytes(record[0..4].try_into().unwrap());
+                entry.sector = u32::from_le_bytes(record[4..8].try_into().unwrap());
+                entry
+            })
+            .collect();
+        let Some(nif_bytes) = world_entry(stream, "PLAYER.nif") else {
+            return;
+        };
+        let mut nif = NifFile::parse(&nif_bytes).expect("PLAYER.nif parses");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "PLAYER", "PLAYER").expect("player model builds");
+        let names: Vec<String> = model
+            .meshes
+            .iter()
+            .filter_map(|mesh| mesh.texture_name.clone())
+            .collect();
+        assert!(
+            !names.is_empty(),
+            "player meshes must carry diffuse texture names"
+        );
+        let game_root = stream.parent().expect("game root");
+        let ide_map =
+            std::sync::Arc::new(crate::inspector::texture::IdeMap::build(game_root));
+        let resolver = crate::ui::app::nif_texture_resolver(
+            crate::inspector::texture::ArchiveTextureIndex::from_entries(&entries, Some(&img_path)),
+            Some(ide_map),
+            "PLAYER",
+        );
+        let resolved: Vec<&str> = names
+            .iter()
+            .filter(|name| resolver(name).is_some())
+            .map(String::as_str)
+            .collect();
+        eprintln!("resolved {}/{}: {resolved:?}", resolved.len(), names.len());
+        assert!(
+            resolved.len() == names.len(),
+            "every player diffuse texture must resolve to pixels, missing: {:?}",
+            names
+                .iter()
+                .filter(|name| resolver(name).is_none())
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn real_agr_parses_when_available() {
         let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {

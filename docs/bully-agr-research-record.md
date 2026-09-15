@@ -837,11 +837,18 @@ build (`bully::model_from_nif*` reads the shape's `NiTexturingProperty`,
 falling back to the NIF-wide first texture) and the loader resolves pixels
 through the static preview's three-tier resolver (NFT catalog → archive
 texture → loose file), so `Textured` and `Alpha blend` behave identically
-in both viewer paths. The animation dock's **Model** picker re-plays a
-retained AGR request on any catalog-associated archive model (loose HXD
-stems + `hxds.dat` + `MAINPED` resources resolved to NIF entries) and
-recomputes the binding badge per selection; stale loads are dropped by a
-monotonic serial and an archive generation/name guard.
+in both viewer paths. The resolver keys its NFT lookup by the model *stem*
+(`PLAYER`), never the entry file name (`PLAYER.nif`, which would probe
+`PLAYER.nif.nft`); a corpus gate pins this by resolving every `PLAYER.nif`
+diffuse to pixels through the shared `nif_texture_resolver`. The animation
+dock's **Model** picker re-plays a retained AGR request on any
+catalog-associated archive model (loose HXD stems + `hxds.dat` + `MAINPED`
+resources resolved to NIF entries) and recomputes the binding badge per
+selection; stale loads are dropped by a monotonic serial and an archive
+generation/name guard. While a re-play is active and the animation entry
+stays selected, the Texture tab follows the picked model: the completion
+publishes the model's decoded companion textures under the model entry and
+pins it, so switching models swaps the viewport and the previews together.
 
 ## 8. Validation record
 
@@ -897,6 +904,11 @@ The core test names that encode the latest lessons are:
 - `wrapper_ped_body_stays_visible_when_available`;
 - `compound_resource_partial_naming_when_available`;
 - `compound_fused_prefix_rows_recover_when_available`;
+- `catalog_model_candidates_resolve_when_available`;
+- `model_build_reads_diffuse_texture_names`;
+- `agr_textures_resolve_for_models_when_available` (every `PLAYER.nif`
+  diffuse resolves to pixels through the shared resolver);
+- `texture_tab_follows_the_played_model_while_an_agr_replays`;
 - `partial_coverage_names_only_matched_clips`;
 - `numeric_recovery_requires_the_verified_dummy_identity`;
 - `stepping_never_stalls_at_grid_rounding`;

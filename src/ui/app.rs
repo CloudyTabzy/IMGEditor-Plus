@@ -130,7 +130,7 @@ pub(crate) fn find_agr_model_entry(
 /// archive's NFT catalog for the model, then direct archive texture entries,
 /// then loose files under the game root. Used by both the static 3D preview
 /// and AGR animation playback so textured rendering behaves identically.
-fn nif_texture_resolver(
+pub(crate) fn nif_texture_resolver(
     archive_texture_index: crate::inspector::texture::ArchiveTextureIndex,
     ide_map: Option<Arc<crate::inspector::texture::IdeMap>>,
     nif_basename: &str,
@@ -2513,6 +2513,24 @@ impl App {
             && self.viewer3d_handle.with(|inner| inner.scene.is_some())
     }
 
+    /// While an AGR re-plays on a picked model and that animation entry is
+    /// the selected row, the played model stands in for the selection as the
+    /// Texture tab's target: the dock's model picker then swaps both the
+    /// viewport and the texture previews. Returns the model's entry index.
+    pub(crate) fn agr_texture_follow(
+        &self,
+        archive_index: usize,
+        entry_index: usize,
+    ) -> Option<usize> {
+        let archive = self.editor.archives().get(archive_index)?;
+        let playback = self.agr_playback.as_ref()?;
+        (playback.archive_index == archive_index
+            && playback.archive_name == archive.file_name
+            && playback.archive_generation == archive.generation()
+            && playback.agr_entry == Some(entry_index))
+        .then_some(playback.model_entry)
+    }
+
     pub(crate) fn viewer_load_matches_selection(&self) -> bool {
         self.viewer_load
             .as_ref()
@@ -2640,7 +2658,14 @@ impl App {
             || lower.ends_with(".dff")
             || lower.ends_with(".txd")
             || lower.ends_with(".nft");
-        self.set_active_texture_preview_target(previewable.then_some((archive_index, entry_index)));
+        // A playing AGR's model stays pinned here: the Texture tab follows
+        // the picked model and must keep its previews resident.
+        let follow = self.agr_texture_follow(archive_index, entry_index);
+        self.set_active_texture_preview_target(
+            follow
+                .map(|model_entry| (archive_index, model_entry))
+                .or_else(|| previewable.then_some((archive_index, entry_index))),
+        );
         self.selected_inspector_tab = InspectorTab::Texture;
         self.reset_texture_preview_state();
         if lower.ends_with(".nif") || lower.ends_with(".dff") {
@@ -6218,9 +6243,14 @@ impl App {
                 let Some(archive_index) = self.editor.selected_archive() else {
                     return Task::none();
                 };
-                let Some(entry_index) = self.editor.selected_entry() else {
+                let Some(selected_entry) = self.editor.selected_entry() else {
                     return Task::none();
                 };
+                // Export whichever entry the tab is showing, including the
+                // model picked while an AGR re-plays.
+                let entry_index = self
+                    .agr_texture_follow(archive_index, selected_entry)
+                    .unwrap_or(selected_entry);
                 let textures = self
                     .editor
                     .archives()
@@ -6566,6 +6596,13 @@ impl App {
                     })
                     .unwrap_or_else(|| "animation".to_string());
                 let model_display = model_entry_data.file_name.clone();
+                // The resolver keys its NFT catalog lookup by the model's
+                // file stem (`PLAYER`), not the file name (`PLAYER.nif`).
+                let model_stem = std::path::Path::new(&model_display)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(|stem| stem.to_string())
+                    .unwrap_or_else(|| model_display.to_string());
                 Task::perform(
                     async move {
                         let joined = tokio::task::spawn_blocking(move || {
@@ -6618,7 +6655,7 @@ impl App {
                                         archive_path.as_deref(),
                                     ),
                                     ide_map.clone(),
-                                    model_display.as_str(),
+                                    model_stem.as_str(),
                                 );
                                 let mut resolved: std::collections::HashMap<
                                     String,
@@ -6748,6 +6785,27 @@ impl App {
                                 session.select_clip(best, Instant::now());
                             });
                         }
+                        // The Texture tab follows the played model: publish
+                        // its decoded companion textures under the model
+                        // entry and pin that entry as the preview target, so
+                        // switching models swaps the shown textures too.
+                        if let Some(playback) = self.agr_playback.as_ref() {
+                            let (archive_index, model_entry) =
+                                (playback.archive_index, playback.model_entry);
+                            if let Some(scene) =
+                                self.viewer3d_handle.with(|inner| inner.scene.clone())
+                            {
+                                self.set_active_texture_preview_target(Some((
+                                    archive_index,
+                                    model_entry,
+                                )));
+                                self.store_scene_texture_previews(
+                                    &scene,
+                                    archive_index,
+                                    model_entry,
+                                );
+                            }
+                        }
                         if let Some(playback) = &mut self.agr_playback {
                             playback.models = models;
                             playback.last_clip_name = selected_name;
@@ -6758,7 +6816,34 @@ impl App {
                         dev_logger::breadcrumb(&format!("AGR load ok: {summary}"));
                     }
                     Err(error) => {
-                        self.agr_playback = None;
+                        // A failed model switch leaves the previous animation
+                        // installed: put the picker back on that model instead
+                        // of dropping the retained request.
+                        let installed = self
+                            .viewer3d_handle
+                            .animation_session(|session| session.asset.name.clone());
+                        let restored = installed.is_some_and(|name| {
+                            let Some(playback) = self.agr_playback.as_mut() else {
+                                return false;
+                            };
+                            let Some(archive) =
+                                self.editor.archives().get(playback.archive_index)
+                            else {
+                                return false;
+                            };
+                            let Some(entry_index) = archive
+                                .entries
+                                .iter()
+                                .position(|entry| entry.file_name == name)
+                            else {
+                                return false;
+                            };
+                            playback.model_entry = entry_index;
+                            true
+                        });
+                        if !restored {
+                            self.agr_playback = None;
+                        }
                         dev_logger::breadcrumb(&format!("AGR load failed: {error}"));
                         self.toast = Some(format!("Animation load failed: {error}"));
                     }
@@ -8581,6 +8666,33 @@ mod tests {
         assert_eq!(find_agr_model_entry(&entries, "C_Player.agr"), Some(1));
         // Grap.agr -> Grappler.nif through the substring rule.
         assert_eq!(find_agr_model_entry(&entries, "Grap.agr"), Some(2));
+    }
+
+    #[test]
+    fn texture_tab_follows_the_played_model_while_an_agr_replays() {
+        let mut app = test_app_with_entries();
+        let archive = &app.editor.archives()[0];
+        app.agr_playback = Some(AgrPlayback {
+            archive_index: 0,
+            archive_name: archive.file_name.clone(),
+            archive_generation: archive.generation(),
+            agr_entry: Some(0),
+            agr_path: None,
+            hxd_record: None,
+            hxd_source: String::new(),
+            model_entry: 1,
+            models: Vec::new(),
+            last_clip_name: None,
+        });
+
+        // The played model stands in for the animation row ...
+        assert_eq!(app.agr_texture_follow(0, 0), Some(1));
+        // ... while any other selection keeps its own textures.
+        assert_eq!(app.agr_texture_follow(0, 1), None);
+        // A stale generation (entry list changed under the playback) voids
+        // the follow instead of resolving a shifted entry index.
+        app.editor.archives_mut()[0].invalidate_entry_caches_keeping_report();
+        assert_eq!(app.agr_texture_follow(0, 0), None);
     }
 
     /// Run a task's side effects and collect the follow-up messages it

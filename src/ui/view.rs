@@ -1123,7 +1123,62 @@ impl App {
             None => Space::new().width(Length::Fixed(0.0)).into(),
         };
 
-        let clip_row = row![
+        // Compact model picker: re-play the retained AGR clip set on another
+        // catalog-associated model. Icon + name only (with a tooltip) so it
+        // rides inside the clip row instead of taking its own line.
+        let model_picker: Option<Element<'_, Message>> = if demo {
+            None
+        } else {
+            self.agr_playback.as_ref().and_then(|playback| {
+                if playback.models.is_empty() {
+                    return None;
+                }
+                let mut models = playback.models.clone();
+                if !models.iter().any(|(entry, _)| *entry == playback.model_entry)
+                    && let Some(entry) = self
+                        .editor
+                        .archives()
+                        .get(playback.archive_index)
+                        .and_then(|archive| archive.entries.get(playback.model_entry))
+                {
+                    models.push((playback.model_entry, entry.file_name.to_string()));
+                    models.sort_by(|left, right| {
+                        left.1
+                            .to_ascii_lowercase()
+                            .cmp(&right.1.to_ascii_lowercase())
+                    });
+                }
+                let names: Vec<String> =
+                    models.iter().map(|(_, name)| name.clone()).collect();
+                let current = models
+                    .iter()
+                    .find(|(entry, _)| *entry == playback.model_entry)
+                    .map(|(_, name)| name.clone());
+                let model_map = std::sync::Arc::new(
+                    models
+                        .iter()
+                        .map(|(entry, name)| (name.clone(), *entry))
+                        .collect::<std::collections::HashMap<String, usize>>(),
+                );
+                let picker = pick_list(names, current, move |name| {
+                    Message::AnimationSelectModel(model_map[&name])
+                })
+                .text_size(12.0)
+                .width(Length::Fixed(170.0));
+                Some(
+                    w::styled_tooltip(
+                        row![icons::person().size(13), picker]
+                            .spacing(6)
+                            .align_y(Alignment::Center),
+                        fonts::caption("Re-play this animation on another model"),
+                        tooltip::Position::Top,
+                    )
+                    .into(),
+                )
+            })
+        };
+
+        let mut clip_row = row![
             icons::film().size(13),
             fonts::caption("Clip"),
             clip_picker,
@@ -1132,6 +1187,9 @@ impl App {
         ]
         .spacing(8)
         .align_y(Alignment::Center);
+        if let Some(model_picker) = model_picker {
+            clip_row = clip_row.push(model_picker);
+        }
 
         let transport_button =
             |icon: iced::widget::Text<'static>, message: Message, tip: &'static str| {
@@ -1225,61 +1283,6 @@ impl App {
         ]
         .spacing(10)
         .align_y(Alignment::Center);
-
-        // Model picker: re-play the retained AGR clip set on another
-        // catalog-associated model. Hidden for the synthetic demo and until
-        // a load has produced its candidate list.
-        let model_row: Option<Element<'_, Message>> = if demo {
-            None
-        } else {
-            self.agr_playback.as_ref().and_then(|playback| {
-                if playback.models.is_empty() {
-                    return None;
-                }
-                let mut models = playback.models.clone();
-                if !models.iter().any(|(entry, _)| *entry == playback.model_entry)
-                    && let Some(entry) = self
-                        .editor
-                        .archives()
-                        .get(playback.archive_index)
-                        .and_then(|archive| archive.entries.get(playback.model_entry))
-                {
-                    models.push((playback.model_entry, entry.file_name.to_string()));
-                    models.sort_by(|left, right| {
-                        left.1
-                            .to_ascii_lowercase()
-                            .cmp(&right.1.to_ascii_lowercase())
-                    });
-                }
-                let names: Vec<String> =
-                    models.iter().map(|(_, name)| name.clone()).collect();
-                let current = models
-                    .iter()
-                    .find(|(entry, _)| *entry == playback.model_entry)
-                    .map(|(_, name)| name.clone());
-                let model_map = std::sync::Arc::new(
-                    models
-                        .iter()
-                        .map(|(entry, name)| (name.clone(), *entry))
-                        .collect::<std::collections::HashMap<String, usize>>(),
-                );
-                let picker = pick_list(names, current, move |name| {
-                    Message::AnimationSelectModel(model_map[&name])
-                })
-                .text_size(12.0);
-                Some(
-                    row![
-                        icons::person().size(13),
-                        fonts::caption("Model"),
-                        picker,
-                        muted_caption("re-play on another model".to_string()),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                    .into(),
-                )
-            })
-        };
 
         let frame_button = |label: &'static str, message: Message, tip: &'static str| {
             w::styled_tooltip(
@@ -1392,11 +1395,9 @@ impl App {
 
         let timeline = crate::ui::animation_timeline::timeline(self.viewer3d_handle.clone());
 
-        let mut dock = column![header, transport_row];
-        if let Some(model_row) = model_row {
-            dock = dock.push(model_row);
-        }
-        let dock = dock.push(timeline).push(bottom_row).spacing(10).padding([10, 12]);
+        let dock = column![header, transport_row, timeline, bottom_row]
+            .spacing(10)
+            .padding([10, 12]);
 
         container(dock)
             .width(Length::Fill)
@@ -1465,11 +1466,8 @@ impl App {
             .into()
     }
     fn build_texture_tab(&self) -> Element<'_, Message> {
-        let Some(archive) = self
-            .editor
-            .archives()
-            .get(self.editor.selected_archive().unwrap_or(0))
-        else {
+        let archive_index = self.editor.selected_archive().unwrap_or(0);
+        let Some(archive) = self.editor.archives().get(archive_index) else {
             return container(fonts::caption("No archive open."))
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -1477,7 +1475,7 @@ impl App {
                 .align_y(Alignment::Center)
                 .into();
         };
-        let Some(entry_index) = self.editor.selected_entry() else {
+        let Some(selected_entry) = self.editor.selected_entry() else {
             return container(fonts::caption(
                 "Select a TXD, NFT, NIF, or DFF entry to preview textures.",
             ))
@@ -1487,6 +1485,11 @@ impl App {
             .align_y(Alignment::Center)
             .into();
         };
+        // While an AGR re-plays on a picked model, this tab follows that
+        // model: the dock's model picker then swaps the previews shown here
+        // together with the animated viewport.
+        let following_model = self.agr_texture_follow(archive_index, selected_entry);
+        let entry_index = following_model.unwrap_or(selected_entry);
         let Some(entry) = archive.entries.get(entry_index) else {
             return container(fonts::caption(
                 "Select a .txd, .nft, .nif, or .dff entry to preview textures.",
@@ -1516,6 +1519,16 @@ impl App {
         }
         let textures = archive.texture_cache.get(&entry_index);
         let Some(textures) = textures else {
+            if following_model.is_some() {
+                return container(fonts::caption(format!(
+                    "No companion textures were resolved for {entry_name}."
+                )))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into();
+            }
             if is_nif || is_dff {
                 return column![
                     fonts::caption("Load the selected model to resolve its textures."),
@@ -1559,11 +1572,17 @@ impl App {
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(8);
+        if following_model.is_some() {
+            col = col.push(muted_caption(format!(
+                "Animation model {entry_name} — switch models in the 3D dock"
+            )));
+        }
         let mut action_row = Row::new()
             .spacing(6)
             .width(Length::Fill)
             .align_y(Alignment::Center);
-        if (is_nif || is_dff) && !self.viewer_scene_matches_selection() {
+        if (is_nif || is_dff) && following_model.is_none() && !self.viewer_scene_matches_selection()
+        {
             action_row = action_row.push(
                 button(w::icon_label(
                     icons::model().size(14),
