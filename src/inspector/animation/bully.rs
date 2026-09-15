@@ -3171,6 +3171,247 @@ mod tests {
         );
     }
 
+    /// Signed horizontal facing of a scene's body in view space. The thin
+    /// horizontal principal axis of the vertex cloud is the front/back line
+    /// (a standing character is narrow shoulder-to-chest... rather hip-to-bum
+    /// is thin front-to-back? no: shoulders are wide left-right, chest-to-back
+    /// is thin), signed by which way the feet extend. Returned angle is in
+    /// degrees from view +Z, the side the default orbit camera sits on.
+    #[cfg(test)]
+    fn facing_probe_angle(verts: &[[f32; 3]]) -> Option<(f32, f32)> {
+        if verts.len() < 200 {
+            return None;
+        }
+        let n = verts.len() as f32;
+        let mut c = [0.0f32; 3];
+        for v in verts {
+            c[0] += v[0];
+            c[1] += v[1];
+            c[2] += v[2];
+        }
+        c = [c[0] / n, c[1] / n, c[2] / n];
+        let mut y_min = f32::MAX;
+        let mut y_max = f32::MIN;
+        let (mut sxx, mut szz, mut sxz) = (0.0f32, 0.0f32, 0.0f32);
+        for v in verts {
+            let dx = v[0] - c[0];
+            let dz = v[2] - c[2];
+            sxx += dx * dx;
+            szz += dz * dz;
+            sxz += dx * dz;
+            y_min = y_min.min(v[1]);
+            y_max = y_max.max(v[1]);
+        }
+        sxx /= n;
+        szz /= n;
+        sxz /= n;
+        let mean = (sxx + szz) * 0.5;
+        let disc = (((sxx - szz) * 0.5).powi(2) + sxz * sxz).sqrt();
+        let l_thin = mean - disc;
+        let (mut ax, mut az) = if sxz.abs() > 1e-9 {
+            (sxz, l_thin - sxx)
+        } else if sxx < szz {
+            (1.0, 0.0)
+        } else {
+            (0.0, 1.0)
+        };
+        let len = (ax * ax + az * az).sqrt();
+        ax /= len;
+        az /= len;
+        // Facing sign, anatomically: the shin/ankle column sits at the rear
+        // of the foot, so the horizontal vector from the ankle slice to the
+        // sole slice points toward the toes.
+        let h = (y_max - y_min).max(1e-6);
+        let ground = y_min + 0.06 * h;
+        let ankle_top = y_min + 0.14 * h;
+        let (mut fx, mut fz, mut fc) = (0.0f32, 0.0f32, 0.0f32);
+        let (mut sx, mut sz, mut sc) = (0.0f32, 0.0f32, 0.0f32);
+        for v in verts {
+            if v[1] < ground {
+                fx += v[0] - c[0];
+                fz += v[2] - c[2];
+                fc += 1.0;
+            } else if v[1] < ankle_top {
+                sx += v[0] - c[0];
+                sz += v[2] - c[2];
+                sc += 1.0;
+            }
+        }
+        if fc > 0.0 && sc > 0.0 {
+            let forward = (fx / fc - sx / sc, fz / fc - sz / sc);
+            if ax * forward.0 + az * forward.1 < 0.0 {
+                ax = -ax;
+                az = -az;
+            }
+        }
+        Some((
+            f32::atan2(ax, az).to_degrees(),
+            (fx / fc.max(1.0)).hypot(fz / fc.max(1.0)),
+        ))
+    }
+
+    fn facing_probe_collect(scene: &crate::inspector::scene3d::Scene) -> Option<(f32, f32)> {
+        let mut verts: Vec<[f32; 3]> = Vec::new();
+        for mesh in &scene.meshes {
+            if mesh.vertices.len() >= 200 {
+                verts.extend(mesh.vertices.iter().map(|v| v.position));
+            }
+        }
+        facing_probe_angle(&verts)
+    }
+
+    /// Facing conventions across the three ways a character can be shown:
+    /// the static NIF preview, the animation rest scene, and posed clips.
+    /// Pins the invariants the GUI relies on:
+    /// 1. the static preview and the animation rest scene face identically
+    ///    (one display convention, no per-path yaw);
+    /// 2. the bind pose's front points toward the default orbit camera
+    ///    (source -Y, view +Z at yaw 0);
+    /// 3. clip poses keep the body on the source ±Y facing line, but the
+    ///    clip data itself splits between -Y and +Y — the game's actor node
+    ///    (the Dummy placeholder the AGR stream never animates) supplies the
+    ///    world-facing on top, so a played clip may legitimately show the
+    ///    character's back. That split is a format property, reported below.
+    #[test]
+    fn facing_conventions_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let Some(nif_bytes) = world_entry(stream, "PLAYER.nif") else {
+            return;
+        };
+        let anim = stream
+            .parent()
+            .map(|root| root.join("Anim"))
+            .filter(|dir| dir.is_dir())
+            .unwrap_or_else(|| stream.join("Anim"));
+        let Ok(agr_bytes) = std::fs::read(anim.join("C_Player.agr")) else {
+            return;
+        };
+        let mut nif = NifFile::parse(&nif_bytes).expect("parse");
+        nif.resolve_string_indices();
+
+        // 1. The static 3D preview path (hardcoded Zup, as app.rs does).
+        let static_scene = crate::inspector::scene3d::decode::build_scene_from_nif(
+            &nif,
+            crate::inspector::scene3d::camera::BaseOrientation::Zup,
+            |_| None,
+        )
+        .expect("static scene");
+        let static_facing = facing_probe_collect(&static_scene).expect("static facing");
+
+        // 2. The animation rest scene (bind pose through source_to_view).
+        let model = model_from_nif(&nif, "PLAYER", "PLAYER").expect("model");
+        let rest = crate::inspector::animation::pose::rest_scene(&model);
+        let rest_facing = facing_probe_collect(&rest).expect("rest facing");
+
+        eprintln!("static preview facing: {static_facing:?}");
+        eprintln!("animation rest facing: {rest_facing:?}");
+        let delta = (static_facing.0 - rest_facing.0).abs();
+        assert!(
+            delta < 1.0,
+            "static preview and animation rest must share one facing convention (Δ{delta:.2} deg)"
+        );
+        assert!(
+            static_facing.0.abs() < 45.0,
+            "the bind pose front must face the default camera (view +Z / source -Y), got {:?}",
+            static_facing
+        );
+
+        // 3. Clip poses: tally every clip's t=0 facing relative to the
+        // default camera (0 deg = toward, 180 deg = away).
+        let file = parse_agr(&agr_bytes).expect("agr");
+        let library = to_library(&file, "C_Player");
+        let calibration =
+            crate::inspector::animation::binding::calibrate_bindings(&model, &library);
+        let mut toward = 0usize;
+        let mut away = 0usize;
+        let mut other = 0usize;
+        let mut buffers = crate::inspector::animation::pose::PoseBuffers::new(&model);
+        let mut motion_samples: Vec<f32> = Vec::new();
+        for clip in library.clips.iter() {
+            let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
+                &model, clip, &calibration,
+            );
+            // Root travel direction (source XY) over the first half of the
+            // clip: locomotion evidence for which way is "forward".
+            let root_node = binding.node_for_track(0);
+            crate::inspector::animation::pose::sample_locals(
+                clip,
+                &binding,
+                &model,
+                0.0,
+                &mut buffers.locals,
+            );
+            let root_start = root_node
+                .map(|id| buffers.locals[id.0 as usize].translation)
+                .unwrap_or_default();
+            crate::inspector::animation::pose::sample_locals(
+                clip,
+                &binding,
+                &model,
+                clip.duration * 0.5,
+                &mut buffers.locals,
+            );
+            let root_mid = root_node
+                .map(|id| buffers.locals[id.0 as usize].translation)
+                .unwrap_or_default();
+            let travel = root_mid - root_start;
+            let travel_len = (travel.x * travel.x + travel.y * travel.y).sqrt();
+            if travel_len > 1.0 {
+                motion_samples.push(f32::atan2(travel.y, travel.x).to_degrees());
+            }
+            crate::inspector::animation::pose::sample_locals(
+                clip,
+                &binding,
+                &model,
+                0.0,
+                &mut buffers.locals,
+            );
+            crate::inspector::animation::pose::evaluate_pose(
+                &model,
+                crate::inspector::animation::pose::RootMotionPolicy::Source,
+                glam::Vec3::ZERO,
+                &mut buffers,
+            );
+            let posed = crate::inspector::animation::pose::scene_from_pose(&model, &buffers);
+            if let Some((angle, _)) = facing_probe_collect(&posed) {
+                let a = angle.rem_euclid(360.0);
+                if a < 90.0 || a > 270.0 {
+                    toward += 1;
+                } else if a > 90.0 && a < 270.0 {
+                    away += 1;
+                } else {
+                    other += 1;
+                }
+            }
+        }
+        eprintln!(
+            "clip t=0 facing distribution: toward-camera={toward} away={away} sideways={other} of {}",
+            library.clips.len()
+        );
+        motion_samples.sort_by(|a, b| a.total_cmp(b));
+        let mid = motion_samples.len() / 2;
+        eprintln!(
+            "root travel directions ({} clips with >1u half-travel): median {:+.1} deg in source XY, p10 {:+.1}, p90 {:+.1}",
+            motion_samples.len(),
+            motion_samples.get(mid).copied().unwrap_or(f32::NAN),
+            motion_samples
+                .get(motion_samples.len() / 10)
+                .copied()
+                .unwrap_or(f32::NAN),
+            motion_samples
+                .get(motion_samples.len() * 9 / 10)
+                .copied()
+                .unwrap_or(f32::NAN),
+        );
+        assert_eq!(
+            other, 0,
+            "every clip must keep the body on the source ±Y facing line"
+        );
+    }
+
     #[test]
     fn real_agr_parses_when_available() {
         let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {

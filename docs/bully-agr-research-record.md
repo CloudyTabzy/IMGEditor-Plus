@@ -811,6 +811,36 @@ without claiming to reproduce the game's actor-placement code. Helper meshes
 such as the Mandy axis/arrow geometry are excluded from both the lowest-point
 measurement and the rendered scene.
 
+### 6.6 Facing conventions: why played clips may show the character's back
+
+A recurring observation: the static NIF preview shows PLAYER.nif facing the
+camera, while many played clips show the character from behind. A
+signed-facing probe (`facing_conventions_when_available`, over
+PLAYER.nif + C_Player.agr) measured the front direction — the thin horizontal
+principal axis of the posed vertex cloud, signed by the ankle-to-sole offset
+so the toes define "front" — and established:
+
+- The static preview and the animation rest scene face identically
+  (0.21 vs 0.29 deg from view +Z). There is exactly one display convention:
+  both paths apply the same `Zup -> Yup` matrix and the same camera reset
+  (`yaw = 0`, camera on view +Z). The viewer never yaws one path relative to
+  the other.
+- The bind pose's front points toward the default camera: source **-Y**
+  maps to view +Z (source +Y maps to view -Z by design so the depth axis
+  aligns with the view).
+- Every one of C_Player's 439 clips keeps the body on that same source ±Y
+  facing line (zero sideways), but the clip data itself splits roughly evenly
+  between facing -Y (211 clips) and +Y (228 clips) at t=0.
+
+The split is a format property, not a binding or display defect: AGR clips
+are authored relative to the game's actor node — the `Dummy` placeholder the
+stream never animates — and the engine composes the actor's world facing on
+top. The bind pose has no reason to match any clip's authored facing, and in
+Bully it happens to face the opposite way from about half of them. A played
+clip showing the character's back at the default camera is therefore
+faithful to the data; orbiting the camera (or enabling follow-root during
+motion) recovers the front view.
+
 ## 7. Runtime implementation map
 
 The format adapter and shared player are intentionally separate:
