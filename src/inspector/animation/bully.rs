@@ -2654,6 +2654,9 @@ mod tests {
             std::collections::BTreeMap::new();
         let (mut total, mut paired, mut failed) = (0usize, 0usize, 0usize);
         let mut character_rows: Vec<String> = Vec::new();
+        let mut naming_gaps: Vec<String> = Vec::new();
+        let (mut naming_no_record, mut naming_zero_named, mut naming_partial) =
+            (0usize, 0usize, 0usize);
 
         for entry in &entries {
             let agr_name = entry.file_name.to_string();
@@ -2737,6 +2740,62 @@ mod tests {
             let calibration = calibrate_bindings(model, &library);
             let binding = bind_clip_with_calibration(model, clip, &calibration);
 
+            // Naming coverage: how many clips the HXD catalog names, and
+            // whether the unnamed ones are single-frame held-pose stubs
+            // (one-frame duration, at most a two-key hold per curve) or real
+            // motion that the catalog failed to cover.
+            let signatures: Vec<_> = file
+                .clips
+                .iter()
+                .map(|agr_clip| crate::inspector::animation::hxd::HxdClipSignature {
+                    source_size: agr_clip.source_size,
+                    duration_s: agr_clip.duration_s,
+                })
+                .collect();
+            let names = hxd
+                .as_ref()
+                .map(|record| record.sequence_names_for_agr(stem, &signatures))
+                .unwrap_or_default();
+            let named = names.iter().filter(|name| !name.is_empty()).count();
+            let mut unnamed_stubs = 0usize;
+            let mut unnamed_micro = 0usize;
+            let mut unnamed_motion = 0usize;
+            for (index, agr_clip) in file.clips.iter().enumerate() {
+                if names.get(index).is_some_and(|name| !name.is_empty()) {
+                    continue;
+                }
+                let tracks_empty = agr_clip.tracks.is_empty();
+                let max_keys = agr_clip
+                    .tracks
+                    .iter()
+                    .map(|track| track.keys.len())
+                    .max()
+                    .unwrap_or(0);
+                if !tracks_empty && max_keys <= 2 {
+                    // A held pose: every curve is a single hold pair.
+                    unnamed_stubs += 1;
+                } else if agr_clip.duration_s <= 2.0 / 30.0 {
+                    // A two-frame micro-clip with a token extra key.
+                    unnamed_micro += 1;
+                } else {
+                    unnamed_motion += 1;
+                }
+            }
+            if named < file.clips.len() {
+                naming_gaps.push(format!(
+                    "{agr_name} | {model_name} | hxd={} | named={named}/{} stub={unnamed_stubs} micro={unnamed_micro} motion={unnamed_motion}",
+                    if hxd.is_some() { "yes" } else { "no" },
+                    file.clips.len(),
+                ));
+                if hxd.is_none() {
+                    naming_no_record += 1;
+                } else if named == 0 {
+                    naming_zero_named += 1;
+                } else {
+                    naming_partial += 1;
+                }
+            }
+
             let placeholder = model.root_motion_node;
             let placeholder_source = placeholder
                 .and_then(|id| model.source_name(id))
@@ -2806,7 +2865,7 @@ mod tests {
                 .filter(|index| model.mesh_is_hidden(*index))
                 .count();
             let row = format!(
-                "{agr_name} | {model_name} | hxd={} v{} clips={} nodes={} meshes={} hidden={} skinned={} zup={} | placeholder={}({}) wraps={} | tracks={} bound={}/{} offset={} contract={} | conf={} viol={} {}",
+                "{agr_name} | {model_name} | hxd={} v{} clips={} nodes={} meshes={} hidden={} skinned={} zup={} | placeholder={}({}) wraps={} | tracks={} bound={}/{} offset={} contract={} | names={named}/{} stub={unnamed_stubs} micro={unnamed_micro} motion={unnamed_motion} | conf={} viol={} {}",
                 if hxd.is_some() { "yes" } else { "no" },
                 file.variant,
                 file.clip_count(),
@@ -2823,6 +2882,7 @@ mod tests {
                 binding.total_count(),
                 offset.map_or("-".to_string(), |value| format!("+{value}")),
                 if contract_match { "match" } else { "MISMATCH" },
+                file.clips.len(),
                 confident,
                 violations.len(),
                 violations.join(" "),
@@ -2850,6 +2910,15 @@ mod tests {
                 names.len(),
                 names.join(", ")
             ));
+        }
+        report.push_str(&format!(
+            "\nnaming coverage gaps (named < clips): {} pairs\n  no HXD record: {naming_no_record}\n  record but zero named: {naming_zero_named}\n  partially named: {naming_partial}\n",
+            naming_gaps.len()
+        ));
+        for row in &naming_gaps {
+            report.push_str("  ");
+            report.push_str(row);
+            report.push('\n');
         }
         report.push_str("\n== character-shaped rows ==\n");
         for row in &character_rows {

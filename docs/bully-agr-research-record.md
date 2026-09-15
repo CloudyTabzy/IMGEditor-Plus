@@ -421,22 +421,24 @@ practical sense, and they should be recognized by shape rather than treated
 as parse or naming failures. The `Area_GirlsDorm` AGR shows the pattern
 (2026-09-15 probe of all 15 chunks):
 
-- The six uncovered chunks (5, 10-14) are each ~628 bytes: the declared
-  stream holds exactly two keys per curve, at `t = 0.000` and
-  `t = 0.033 s` — one frame at the game's 30 fps — so every curve is a
-  held value.
+- Five of the six uncovered chunks (5, 10, 12, 13, 14) are each 628 bytes:
+  the declared stream holds exactly two keys per curve, at `t = 0.000` and
+  `t = 0.033 s` — one frame at the game's 30 fps — so every curve is a held
+  value.
+- The sixth (clip 11, 636 bytes) spans two frames (0.067 s) with a token
+  third key on one curve: a micro-hold, still effectively static.
 - They are distinct poses, not byte duplicates: pairwise diffs run 80-124
   u32 words, so each stub freezes a different pose (seated, lying, tool-in-
   hand variants and similar placeholders).
 - The catalog omits them because nothing moves; the nine named rows in
   `MAINPED.HXD` cover only the authored actions.
 
-Recognition rules distilled from this case: a chunk whose duration is
-exactly one frame and whose curves carry a single hold pair is a static
-pose stub. It plays correctly as a frozen frame, legitimately has no
-catalog name, and must keep the positional `clip_NN` label rather than a
-guessed one. `Area_GirlsDorm` clip 5 and clips 10-14 are the reference
-examples.
+Recognition rules distilled from this case: a chunk whose curves each carry
+a single hold pair (at most two keys) is a static pose stub, and a chunk of
+at most two frames with a stray third key is a micro-hold. Both play
+correctly as frozen frames, legitimately have no catalog name, and must
+keep the positional `clip_NN` label rather than a guessed one.
+`Area_GirlsDorm` clip 5 and clips 10-14 are the reference examples.
 
 ## 5. HXD and `hxds.dat`: association and naming
 
@@ -495,6 +497,25 @@ This guarded alignment names all 439 `C_Player.agr` clips and all 59 `Grap`
 clips. Namespace matching alone is insufficient because one AGR can contain
 sequences from several namespaces and a namespace can occur under more than
 one external resource.
+
+A full `World.img` naming census (2026-09-15, via
+`agr_corpus_audit_when_requested`) found only three paired AGRs with any
+unnamed clip; every other pair is fully named (or never reaches naming
+because the HXD-first pairing only selects files with a catalog presence):
+
+| AGR | named | unnamed content |
+| --- | --- | --- |
+| `Area_GirlsDorm` | 9/15 | five one-frame held poses plus one two-frame micro-hold (§4.6) |
+| `N2B Dishonerable` | 4/5 | clip 00 is real motion (1.167 s, up to 36 keys) with no catalog row |
+| `W_snowshwl` | 7/8 | clip 00 is real motion (1.167 s, up to 32 keys) with no catalog row |
+
+The two `player.mxd` resources simply list fewer rows than the AGR has
+chunks, so one authored clip per file stays positional. Guessing a
+neighbouring row's name would be worse than an honest blank, so the
+alignment's no-guess rule stands: an uncovered real animation is reported
+as `clip_NN`, not named. The census also classifies each unnamed clip in
+the audit output (`stub`/`micro`/`motion` counts per pair) so a future
+catalog change that starts hiding real motion is visible at a glance.
 
 HXD joint strings are useful evidence for prop rigs, but the semantic names in
 `MAINPED.HXD` do not directly name the imported player NIF nodes. They cannot
@@ -1008,6 +1029,11 @@ positional `clip_NN` fallback. Two lessons generalize beyond naming:
   stubs (see §4.6) — files can contain engine-generated filler that no
   catalog should name, and recognizing that shape is cheaper than debugging
   a resolver that was working correctly.
+- Instrument the resolver and census the corpus instead of reasoning from
+  examples: the same audit that classified each unnamed clip
+  (`stub`/`micro`/`motion`) reduced "are there more like this?" from
+  speculation to a three-row list (§5) and gives a tripwire if a future
+  catalog change starts hiding real motion.
 
 ### Keep external tools as oracles, not dependencies
 
