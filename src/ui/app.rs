@@ -1170,6 +1170,8 @@ pub struct ReplaceState {
     pub high_quality: bool,
     pub plan: CompactPlan,
     pub before_handle: iced::widget::image::Handle,
+    /// The source texture's dimensions, for the fullscreen preview.
+    pub before_dims: (u32, u32),
     pub after_handle: iced::widget::image::Handle,
     pub planning: bool,
 }
@@ -1224,12 +1226,14 @@ const INLINE_PREVIEW_MAX_DIM: u32 = 512;
 #[derive(Clone)]
 pub struct TextureSnapshot {
     pub handle: iced::widget::image::Handle,
+    pub width: u32,
+    pub height: u32,
     pub label: String,
 }
 
 impl std::fmt::Debug for TextureSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TextureSnapshot({:?})", self.label)
+        write!(f, "TextureSnapshot({:?}, {}x{})", self.label, self.width, self.height)
     }
 }
 
@@ -3605,6 +3609,11 @@ impl App {
                     ready.plan.0.height,
                     ready.plan.0.preview_rgba.clone(),
                 );
+                let before_dims = ready
+                    .before
+                    .as_ref()
+                    .map(|(width, height, _)| (*width, *height))
+                    .unwrap_or((ready.plan.0.width, ready.plan.0.height));
                 self.pending_replace = Some(ReplaceState {
                     archive_index: ready.archive_index,
                     entry_index: ready.entry_index,
@@ -3620,6 +3629,7 @@ impl App {
                     high_quality: false,
                     plan: ready.plan,
                     before_handle,
+                    before_dims,
                     after_handle,
                     planning: false,
                 });
@@ -5074,6 +5084,11 @@ impl App {
                 // safety net: a modal with a rendering bug must never be
                 // able to trap the user (the window close is intercepted
                 // while a dirty-archive guard is open).
+                // The fullscreen texture preview sits on top of its dialog,
+                // so Escape steps out of it first.
+                if self.texture_fullscreen.take().is_some() {
+                    return Task::none();
+                }
                 if self.pending_close.is_some() {
                     self.pending_close = None;
                     self.close_after_save = None;
@@ -9176,6 +9191,8 @@ mod tests {
 
         let _ = app.update(Message::OpenTextureFullscreen(TextureSnapshot {
             handle: app.pending_new_txd.as_ref().unwrap().after_handle.clone(),
+            width: 4,
+            height: 4,
             label: "x.dds (4x4)".to_string(),
         }));
         assert!(app.texture_fullscreen.is_some());
@@ -9187,6 +9204,8 @@ mod tests {
         // the full-resolution pixels never outlive the dialog state.
         let _ = app.update(Message::OpenTextureFullscreen(TextureSnapshot {
             handle: app.pending_new_txd.as_ref().unwrap().after_handle.clone(),
+            width: 4,
+            height: 4,
             label: "x.dds (4x4)".to_string(),
         }));
         let _ = app.update(Message::NewTxdCancelled);

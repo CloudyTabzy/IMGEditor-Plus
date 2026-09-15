@@ -2998,13 +2998,20 @@ fn plan_warnings(warnings: &[String]) -> Element<'_, Message> {
     list.into()
 }
 
-fn preview_column(title: &str, handle: image::Handle) -> Element<'static, Message> {
+fn preview_column(
+    title: &str,
+    handle: image::Handle,
+    image_width: u32,
+    image_height: u32,
+) -> Element<'static, Message> {
     let snapshot = crate::ui::app::TextureSnapshot {
         handle: handle.clone(),
+        width: image_width,
+        height: image_height,
         label: title.to_string(),
     };
     let expand = w::styled_tooltip(
-        button(icons::expand().size(13))
+        button(icons::expand().size(13).width(Length::Fill).height(Length::Fill).center())
             .on_press(Message::OpenTextureFullscreen(snapshot))
             .width(Length::Fixed(26.0))
             .height(Length::Fixed(26.0))
@@ -3049,34 +3056,60 @@ fn preview_column(title: &str, handle: image::Handle) -> Element<'static, Messag
 }
 
 /// Fullscreen texture preview opened from a converter dialog: the untouched
-/// full-resolution pixels, centered on a dark backdrop. Any click closes it.
+/// full-resolution pixels on a translucent backdrop, with the same pan/zoom
+/// navigation the texture tab uses (scroll to zoom, LMB/MMB drag to pan).
+/// Escape or the shrink button closes it.
 fn build_texture_fullscreen(app: &App) -> Option<Element<'_, Message>> {
     let snapshot = app.texture_fullscreen.as_ref()?;
+    let viewport = canvas(
+        crate::ui::texture_preview::TextureViewport {
+            handle: snapshot.handle.clone(),
+            image_width: snapshot.width,
+            image_height: snapshot.height,
+            render_image: true,
+            show_grid: false,
+            grid_divisions: 0,
+            show_uv: false,
+            uv_triangles: Vec::new(),
+        },
+    )
+    .width(Length::Fill)
+    .height(Length::Fill);
     let layer = container(
         column![
             row![
                 fonts::caption(format!("{} — full quality", snapshot.label)),
                 Space::new().width(Length::Fill),
-                button(icons::shrink().size(14))
-                    .on_press(Message::CloseTextureFullscreen)
-                    .width(Length::Fixed(28.0))
-                    .height(Length::Fixed(28.0))
-                    .padding(0.0)
-                    .style(animation_subtle_button_style),
+                fonts::caption("Scroll to zoom · drag to pan · Esc to close"),
+                button(
+                    icons::shrink()
+                        .size(14)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .center(),
+                )
+                .on_press(Message::CloseTextureFullscreen)
+                .width(Length::Fixed(28.0))
+                .height(Length::Fixed(28.0))
+                .padding(0.0)
+                .style(animation_subtle_button_style),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
-            container(
-                image(snapshot.handle.clone())
-                    .content_fit(iced::ContentFit::Contain)
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center),
-            fonts::caption("Click anywhere to close"),
+            container(viewport)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|theme: &iced::Theme| container::Style {
+                    background: Some(iced::Background::Color(
+                        theme.extended_palette().background.weak.color,
+                    )),
+                    border: Border {
+                        color: theme.extended_palette().background.strong.color,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }),
         ]
         .spacing(8)
         .width(Length::Fill)
@@ -3086,10 +3119,19 @@ fn build_texture_fullscreen(app: &App) -> Option<Element<'_, Message>> {
     .width(Length::Fill)
     .height(Length::Fill)
     .style(|_theme: &iced::Theme| iced::widget::container::Style {
-        background: Some(iced::Background::Color(Color::from_rgb8(10, 10, 12))),
+        // 75%-opaque black: the interface stays faintly visible behind the
+        // fullscreen preview.
+        background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.75))),
         ..Default::default()
     });
-    Some(opaque(mouse_area(layer).on_press(Message::CloseTextureFullscreen)))
+    // Presses on the canvas are captured by the pan/zoom program, so the
+    // click-to-close here only fires on the frame around it; uncaptured
+    // wheel scrolls are swallowed so the table behind cannot scroll.
+    Some(opaque(
+        mouse_area(layer)
+            .on_press(Message::CloseTextureFullscreen)
+            .on_scroll(|_| Message::Noop),
+    ))
 }
 
 /// Replace-texture dialog: format picker, warnings, before/after.
@@ -3131,8 +3173,18 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
     }
     body = body.push(
         row![
-            preview_column("Current", state.before_handle.clone()),
-            preview_column("After (encoded)", state.after_handle.clone()),
+            preview_column(
+                "Current",
+                state.before_handle.clone(),
+                state.before_dims.0,
+                state.before_dims.1,
+            ),
+            preview_column(
+                "After (encoded)",
+                state.after_handle.clone(),
+                state.plan.0.width,
+                state.plan.0.height,
+            ),
         ]
         .spacing(10),
     );
@@ -3211,9 +3263,11 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
     // button; the fullscreen layer shows the untouched full-resolution
     // pixels straight from the dialog state.
     let expand = w::styled_tooltip(
-        button(icons::expand().size(14))
+        button(icons::expand().size(14).width(Length::Fill).height(Length::Fill).center())
             .on_press(Message::OpenTextureFullscreen(TextureSnapshot {
                 handle: state.after_handle.clone(),
+                width: state.plan.0.width,
+                height: state.plan.0.height,
                 label: format!(
                     "{} ({}x{})",
                     state.source_name, state.plan.0.width, state.plan.0.height
