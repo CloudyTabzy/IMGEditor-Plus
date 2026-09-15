@@ -8,7 +8,7 @@ that should remain stable when the feature evolves.
 
 ## User workflow
 
-The File menu contains two actions:
+The Edit menu contains two actions:
 
 - Export as list (Ctrl+L) writes the currently open archive's entry names.
 - Compare with list (Ctrl+P) reads a previously exported list and opens a

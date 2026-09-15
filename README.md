@@ -64,7 +64,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - ✅ **Automated regression tests** — cover parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, six-axis navigation, alpha rendering, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
 
 **v4.6.0 release highlights:**
-- 📑 **Entry-list comparison** — File → Export as list (Ctrl+L) creates a compatible UTF-8 manifest, while File → Compare with list (Ctrl+P) compares it asynchronously with case-sensitive matching by default, optional case-insensitive/archive-only diagnostics, duplicate counts, and copyable missing names. See docs/compare-feature.md.
+- 📑 **Entry-list comparison** — Edit → Export as list (Ctrl+L) creates a compatible UTF-8 manifest, while Edit → Compare with list (Ctrl+P) compares it asynchronously with case-sensitive matching by default, optional case-insensitive/archive-only diagnostics, duplicate counts, and copyable missing names. See docs/compare-feature.md.
 - 🧰 **Bully animation player** - select a model in a Bully archive and play its animations: a transport bar plays, pauses, seeks and loops clips in the 3D viewer
 - 🧰 **Named clips via HXD catalogs** - `Anim/*.HXD` and `hxds.dat` are parsed so clips get real names (all 439 `C_Player` clips: RUN, GROUND_ONBACK, ...), with compound `MAINPED.HXD` records resolved to their owning AGR
 - 🧰 **Packed AGR decoders** - variant 1002/1004 packed rotation curves (bitfields recovered from the retail executable) plus 999/1003 object transforms with translation; loose `Anim/*.agr` files load through the View menu against the open model
