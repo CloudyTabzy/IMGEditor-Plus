@@ -76,7 +76,7 @@ The original C++ IMG Editor worked well, but maintaining it meant fighting:
 - 🛡 **Asset compatibility engine** — retail-verified profiles for GTA III, Vice City, San Andreas and Bully. Pick the game an archive is for (or accept an advisory content hint): every texture is checked against that target's dialect, entry rows are tinted by verdict with an icon legend, and the choice is remembered per archive path. Imports get a pre-flight format check before touching the archive
 - 🔄 **Texture replacement & converter** — import **PNG / DDS / BMP / TGA** and re-encode to the target's native language: DXT1/3/5 (texpresso), PAL8/PAL4 with an alpha-aware k-means/Oklab palettizer, 888/8888/565/1555/4444, full mip chains. A plan dialog shows the chosen format, loss warnings and a **true preview decoded back from the encoded bytes** before anything is written
 - ✨ **Import image as TXD** — author a brand-new texture entry from any image, with a name and format picker
-- 🧰 **Convert selection to target dialect** — bulk re-encode selected TXDs (e.g. move content between games) with a before/after plan
+- 🧰 **Convert selection to target dialect** — bulk re-encode selected TXDs (e.g. move content between games) with a before/after plan; one parse + one splice pass per entry, and non-TXD selections are explained instead of silently skipped
 - 💾 **Save-side validation & repair** — saving runs a pre-save report (native / convertible / incompatible / unknown counts, container mismatches, broken headers). "Fix & Save" applies lossless header repairs in the background
 - 🖼 **Texture tab verdicts** — per-texture compat chip with the classifier's notes, plus a "PAL8-ready" badge when the pixels fit an 8-bit palette
 - 🧭 **UX hardening** — byte-preserving edits (only the changed texture's section is re-serialized; untouched entries stay verbatim), ellipsized table names with wrapped tooltips, modals that fully block the background, and dialogs that can't be re-opened by stale background work
@@ -170,7 +170,7 @@ for the engineering story.
 - ✅ **Copy entry details** to clipboard
 
 ### 🏗️ Design & UX
-- ✅ **7 theme modes** — Dark, Light, Catppuccin Mocha, Tokyo Night, Gruvbox, Everforest, **GitHub Dark**
+- ✅ **8 theme modes** — Dark, Light, Catppuccin Mocha, Tokyo Night, Gruvbox, Everforest, **GitHub Dark**, **Ayu Dark**
 - ✅ **Design token system** — Tailwind-inspired color/spacing/radius/elevation scales, vendored in-tree
 - ✅ **Smooth animation engine** — 26 easing curves, animated progress bar, animated status-bar pulse
 - ✅ **Inter + Bricolage + Lucide icon fonts** — clean, modern typography
@@ -229,6 +229,14 @@ GitHub's own dark look: a near-black blue-tinted canvas with the familiar blue a
 <!-- Screenshot pending: add asset/themes-images/GitHub_Dark.png, then uncomment:
 ![GitHub Dark theme](asset/themes-images/GitHub_Dark.png)
 *Canvas #0D1117, subtle #161B22 surfaces, and the classic GitHub blue — perfect for a developer's toolbox.*
+-->
+
+### Ayu Dark 🟠
+The Ayu theme's dark variant, tuned with a deeper terracotta-orange accent.
+
+<!-- Screenshot pending: add asset/themes-images/Ayu_Dark.png, then uncomment:
+![Ayu Dark theme](asset/themes-images/Ayu_Dark.png)
+*Near-black navy canvas #0B0E14, warm-grey text, and a burnt-orange #F29A4B accent — inspired by ayutheme.com.*
 -->
 
 </details>

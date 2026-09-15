@@ -104,6 +104,27 @@ for the format notes and the important caveat that the current local
 `Gta_3_img` corpus is labelled as GTA III but contains San Andreas-style
 assets.
 
+### Shipped converter hardening (2026-09-16)
+
+- ✅ **Bulk converter selection + honesty** — "Convert selection to target
+  dialect" now reads the per-entry selection (the old code read the table's
+  display-row list and converted every visible row with nothing selected);
+  empty selections are refused, non-TXD selections explain themselves
+  ("Only TXD entries can be converted..."), and the confirm dialog states
+  how many selected entries stay untouched.
+- ✅ **Bulk converter performance** — each TXD is parsed exactly once for
+  planning (`plan_conversion_for_texture`, skipping the per-texture preview
+  decode and RGBA buffer the bulk dialog never renders) and all planned
+  textures are spliced in a single pass per entry
+  (`txd_writer::replace_textures`); a unit test proves the batch result is
+  byte-identical to sequential single splices.
+- ✅ **Fullscreen full-quality texture previews** — the import/replace
+  dialogs show a centered, downscaled (max 512px) preview with an expand
+  button that opens a fullscreen layer showing the untouched
+  full-resolution encoded result on a 75%-opaque backdrop, with the
+  texture tab's pan/zoom navigation (scroll zoom, left/middle drag) and
+  Esc/button to close; the pixels drop with the dialog state.
+
 Recommended future adaptations, each gated by representative fixtures:
 
 - [x] Add optional local GTA III and Vice City DFF/TXD corpus coverage and an
@@ -341,6 +362,13 @@ This is fine for **another IMG version** (`PcV3Parser` etc.). For a brand-new co
 
 ## 5. Quality-of-life improvements
 
+- ✅ **Ayu Dark theme** — eighth theme mode: Ayu's dark palette
+  (bg #0B0E14, panels #131722) tuned toward a deep terracotta accent
+  (#F29A4B) per the user's reference, with Ayu green/yellow/red/cyan
+  semantic ramps; persisted as "Ayu Dark"/"Ayu" in settings.ini.
+  `design_for_theme` now resolves custom themes by name to their own
+  token sets, so Everforest and GitHub Dark style closures match
+  `App::design` too.
 - **Cache parsed NFT catalogs** — partially done. The per-game-root `IdeMap` is memoized and decoded texture pixels are cached in the `quick_cache` LRU, so repeated 3D loads skip the directory walk and pixel decode. The catalog parse itself (`parse_nft_catalog_bytes`) still runs per NIF load; parked because parsing is cheap next to decode.
 - **Game root path override** — not started. `Config` has no `game_root` field; the root is still derived from the archive path (`parent().parent()`). A CLI flag or settings field is the planned seam.
 - **Clear old temp files on startup** — done. `main.rs::clean_temp_preview` sweeps `%TEMP%\IMGEditor\preview\` best-effort on launch; locked entries are skipped so it never blocks startup.
