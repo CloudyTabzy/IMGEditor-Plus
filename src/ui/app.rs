@@ -7682,20 +7682,6 @@ impl App {
                 Message::PackArchive,
             )),
             Item::new(menu_button(
-                format!(
-                    "Export as list ({})",
-                    shortcut_display(Shortcut::ExportEntryList)
-                ),
-                Message::ExportEntryList,
-            )),
-            Item::new(menu_button(
-                format!(
-                    "Compare with list ({})",
-                    shortcut_display(Shortcut::CompareWithList)
-                ),
-                Message::CompareWithList,
-            )),
-            Item::new(menu_button(
                 format!("Close tab ({})", shortcut_display(Shortcut::Close)),
                 Message::CloseSelectedArchive,
             )),
@@ -7725,6 +7711,20 @@ impl App {
                     shortcut_display(Shortcut::ExportSelected)
                 ),
                 Message::ExportSelected,
+            )),
+            Item::new(menu_button(
+                format!(
+                    "Export as list ({})",
+                    shortcut_display(Shortcut::ExportEntryList)
+                ),
+                Message::ExportEntryList,
+            )),
+            Item::new(menu_button(
+                format!(
+                    "Compare with list ({})",
+                    shortcut_display(Shortcut::CompareWithList)
+                ),
+                Message::CompareWithList,
             )),
         ])
         .max_width(220.0);
