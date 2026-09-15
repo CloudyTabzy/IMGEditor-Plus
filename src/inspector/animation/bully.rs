@@ -3962,6 +3962,52 @@ mod tests {
         }
     }
 
+    /// Regression (2026-09-15): `MAINPED.HXD` rows whose 32-byte name field
+    /// carries a fused float-tail byte (`8MINISNOW\...`) or a multi-word
+    /// namespace (`N2B DISHONERABLE\...`) failed descriptor validation
+    /// because the copies were read from the found string position instead
+    /// of the field start; the rows were dropped and one clip per file
+    /// stayed unnamed (`VAULT_BAR`, `MINISNOW_HITSHVL`). The candidate scan
+    /// must recover them without disturbing any other row.
+    #[test]
+    fn compound_fused_prefix_rows_recover_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let anim = stream.parent().expect("game root").join("Anim");
+        for (stem, clip_count, first_name) in [
+            ("N2B Dishonerable", 5usize, "VAULT_BAR"),
+            ("W_snowshwl", 8, "MINISNOW_HITSHVL"),
+        ] {
+            let Some(record) =
+                crate::inspector::animation::hxd::find_for_agr(&anim, stem)
+            else {
+                continue;
+            };
+            let Some(agr_bytes) = world_entry(stream, &format!("{stem}.agr")) else {
+                continue;
+            };
+            let file = parse_agr(&agr_bytes).expect("AGR parses");
+            assert_eq!(file.clip_count(), clip_count, "{stem} clip count");
+            let signatures: Vec<_> = file
+                .clips
+                .iter()
+                .map(|clip| crate::inspector::animation::hxd::HxdClipSignature {
+                    source_size: clip.source_size,
+                    duration_s: clip.duration_s,
+                })
+                .collect();
+            let names = record.sequence_names_for_agr(stem, &signatures);
+            assert_eq!(names.len(), clip_count, "{stem} names align to clips");
+            assert_eq!(names[0], first_name, "{stem} first clip name");
+            assert!(
+                names.iter().all(|name| !name.is_empty()),
+                "{stem} must be fully named: {names:?}"
+            );
+        }
+    }
+
     /// Compound-resource naming may cover only part of an AGR: the
     /// `Area_GirlsDorm` resource lists nine sequences while the AGR carries
     /// fifteen chunks (six single-frame filler clips). Covered clips take

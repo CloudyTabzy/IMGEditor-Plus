@@ -422,17 +422,79 @@ pub fn parse_record(body: &[u8], fallback_model: &str) -> HxdRecord {
         }
     }
 
-    // Sequences: `{ f32 duration, f32 weight }` then `NS\NAME`.
+    // Sequences: `{ f32 duration, f32 weight }` then `NS\NAME`. Fused
+    // prefix bytes (printable tails of the weight float) and multi-word
+    // namespaces can shift the found string away from the row's 32-byte
+    // name field, so the duration/weight floats and the duplicated
+    // descriptors must be pinned to the field start: try a small candidate
+    // window and keep the offset whose floats are plausible and whose
+    // descriptor copies agree. `DISHONERABLE\VAULT_BAR` and
+    // `MINISNOW\MINISNOW_HITSHVL` only validate at their true field start,
+    // which is why they were previously dropped as malformed.
     let mut sequences: Vec<HxdSequence> = Vec::new();
     for (begin, text) in &strings {
         let Some((offset, name)) = sequence_in_string(text) else {
             continue;
         };
-        let name_start = begin + offset;
-        let Some(duration) = read_f32(body, name_start.saturating_sub(8)) else {
+        let found = begin + offset;
+        let run_start = *begin;
+        let mut accepted = false;
+        // The 32-byte name field starts at the found string position for
+        // clean rows; a fused float-tail byte swallowed into the namespace
+        // shifts it one to four bytes later (`8MINISNOW\...`), a multi-word
+        // namespace one to four bytes earlier (`N2B DISHONERABLE\...`).
+        // Try the plain position first so every already-working row keeps
+        // its exact values, then the nearest neighbours outward. Row-tail
+        // blocks can look like a descriptor pair, so a candidate must also
+        // carry a catalog-plausible duration (one 30 fps frame minimum),
+        // a bounded size, and an in-range resource index.
+        for delta in [0_i64, 1, 2, 3, 4, -1, -2, -3, -4] {
+            let candidate = found as i64 + delta;
+            if candidate < run_start as i64 {
+                continue;
+            }
+            let candidate = candidate as usize;
+            let Some(duration) = read_f32(body, candidate.saturating_sub(8)) else {
+                continue;
+            };
+            let Some(weight) = read_f32(body, candidate.saturating_sub(4)) else {
+                continue;
+            };
+            if !duration.is_finite() || duration < 0.01 || duration > 600.0 {
+                continue;
+            }
+            if !weight.is_finite() || !(0.0..=1.0).contains(&weight) {
+                continue;
+            }
+            let Some((encoded_size, source_index)) = sequence_source(body, candidate) else {
+                continue;
+            };
+            if !(4..=4 * 1024 * 1024).contains(&encoded_size) {
+                continue;
+            }
+            if resources.is_empty() || source_index as usize >= resources.len() {
+                continue;
+            }
+            sequences.push(HxdSequence {
+                name: name.clone(),
+                duration_s: duration,
+                weight,
+                encoded_size: Some(encoded_size),
+                source_index: Some(source_index),
+            });
+            accepted = true;
+            break;
+        }
+        if accepted {
+            continue;
+        }
+        // Historical readback: ordinary records without a validated
+        // descriptor pair stay useful, with the optional source fields
+        // left empty.
+        let Some(duration) = read_f32(body, found.saturating_sub(8)) else {
             continue;
         };
-        let Some(weight) = read_f32(body, name_start.saturating_sub(4)) else {
+        let Some(weight) = read_f32(body, found.saturating_sub(4)) else {
             continue;
         };
         if !duration.is_finite() || duration <= 0.0 || duration > 600.0 {
@@ -441,7 +503,7 @@ pub fn parse_record(body: &[u8], fallback_model: &str) -> HxdRecord {
         if !weight.is_finite() || !(0.0..=1.0).contains(&weight) {
             continue;
         }
-        let source = sequence_source(body, name_start);
+        let source = sequence_source(body, found);
         sequences.push(HxdSequence {
             name,
             duration_s: duration,
@@ -794,7 +856,10 @@ mod tests {
             std::fs::read(anim.join("C_Player.agr")),
         ) {
             let record = parse_record(&hxd_bytes, "MAINPED");
-            assert_eq!(record.sequences.len(), 3_358);
+            // 3,358 rows through the historical reader plus the two fused-
+            // prefix rows recovered by the descriptor-pinning candidate scan
+            // (`MINISNOW\MINISNOW_HITSHVL`, `DISHONERABLE\VAULT_BAR`).
+            assert_eq!(record.sequences.len(), 3_359);
             assert_eq!(record.resources.len(), 425);
             assert_eq!(record.resources[0].name, "C_Player");
             assert_eq!(record.model_for_source("c_player"), Some("player.mxd"));

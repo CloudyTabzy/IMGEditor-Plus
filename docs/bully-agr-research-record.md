@@ -481,12 +481,19 @@ Ordinary records use exact sequence-count equality before names are applied.
 Compound `MAINPED.HXD` records are different:
 
 1. Select sequence rows by the external resource index.
-2. Require the two duplicated descriptors to agree.
+2. Require the two duplicated descriptors to agree. The copies must be read
+   from the row's 32-byte name *field start*, not from wherever the name
+   string was found: fused float-tail bytes (`8MINISNOW\...`) and multi-word
+   namespaces (`N2B DISHONERABLE\...`) shift the found position by up to
+   four bytes either way. The reader pins the field by trying the found
+   position first (so clean rows keep their exact values) and then the
+   nearest offsets outward, requiring plausible duration/weight floats, a
+   bounded chunk size and an in-range resource index.
 3. Align rows to AGR chunks by encoded chunk size, with duration only as a
    tie-breaker.
 4. Allow only the bounded, four-byte-aligned final padding discrepancy found
    in the retail catalog.
-5. Reject malformed/stale rows instead of guessing a name.
+5. Reject rows that fail every candidate instead of guessing a name.
 6. Accept partial coverage: a resource may list fewer rows than the AGR has
    chunks, and the aligned run still names its covered clips while the rest
    keep the positional `clip_NN` label (`Area_GirlsDorm` names 9 of its 15
@@ -498,19 +505,25 @@ clips. Namespace matching alone is insufficient because one AGR can contain
 sequences from several namespaces and a namespace can occur under more than
 one external resource.
 
+The earlier note that `DISHONERABLE\VAULT_BAR` was a "malformed stale row"
+was wrong and is retracted: the row is valid (size 7440, resource 97) as is
+`MINISNOW\MINISNOW_HITSHVL` (size 4344, resource 95). Both were dropped by
+the descriptor-offset bug described in point 2, so `N2B Dishonerable` clip
+00 and `W_snowshwl` clip 00 stayed unnamed even though the catalog names
+them. Correcting the field pinning recovered both rows and changed nothing
+else in the 3,359-row catalog — verified by a full per-resource diff of
+every owned sequence before and after the change.
+
 A full `World.img` naming census (2026-09-15, via
-`agr_corpus_audit_when_requested`) found only three paired AGRs with any
+`agr_corpus_audit_when_requested`) now finds **one** paired AGR with any
 unnamed clip; every other pair is fully named (or never reaches naming
 because the HXD-first pairing only selects files with a catalog presence):
 
 | AGR | named | unnamed content |
 | --- | --- | --- |
 | `Area_GirlsDorm` | 9/15 | five one-frame held poses plus one two-frame micro-hold (§4.6) |
-| `N2B Dishonerable` | 4/5 | clip 00 is real motion (1.167 s, up to 36 keys) with no catalog row |
-| `W_snowshwl` | 7/8 | clip 00 is real motion (1.167 s, up to 32 keys) with no catalog row |
 
-The two `player.mxd` resources simply list fewer rows than the AGR has
-chunks, so one authored clip per file stays positional. Guessing a
+Guessing a
 neighbouring row's name would be worse than an honest blank, so the
 alignment's no-guess rule stands: an uncovered real animation is reported
 as `clip_NN`, not named. The census also classifies each unnamed clip in
@@ -872,6 +885,7 @@ The core test names that encode the latest lessons are:
 - `wrapper_rig_stream_skips_the_placeholder`;
 - `wrapper_ped_body_stays_visible_when_available`;
 - `compound_resource_partial_naming_when_available`;
+- `compound_fused_prefix_rows_recover_when_available`;
 - `partial_coverage_names_only_matched_clips`;
 - `numeric_recovery_requires_the_verified_dummy_identity`;
 - `stepping_never_stalls_at_grid_rounding`;
@@ -1024,15 +1038,21 @@ positional `clip_NN` fallback. Two lessons generalize beyond naming:
   every result for the whole file is strictly worse than a labeled partial
   result. When designing a matcher, make the unmatched case a first-class
   branch with an honest output, never a global bail-out.
-- Before blaming a parse, inspect the unmatched content. The six uncovered
-  `Area_GirlsDorm` chunks turned out to be legitimate one-frame held-pose
-  stubs (see §4.6) — files can contain engine-generated filler that no
-  catalog should name, and recognizing that shape is cheaper than debugging
-  a resolver that was working correctly.
+- Before blaming a parse, inspect the unmatched content — and, before
+  writing data off as corrupt, re-derive the row layout from raw bytes. The
+  six uncovered `Area_GirlsDorm` chunks were legitimate one-frame held-pose
+  stubs (§4.6), while `VAULT_BAR`/`MINISNOW_HITSHVL` were first mislabelled
+  "stale/compiler-debris rows" and later proved to be valid rows dropped by
+  a four-byte descriptor-offset error. The structural fix (pin the field
+  start, validate floats/size/index, prefer the found position first) is
+  the same discipline the AGR reader applies to records: bounded search,
+  orthogonal evidence, no guessing — and a before/after per-row diff to
+  prove the recovery moved nothing else.
 - Instrument the resolver and census the corpus instead of reasoning from
   examples: the same audit that classified each unnamed clip
   (`stub`/`micro`/`motion`) reduced "are there more like this?" from
-  speculation to a three-row list (§5) and gives a tripwire if a future
+  speculation to a single-row list (§5 — one stub-only AGR after the
+  fused-prefix rows were recovered) and gives a tripwire if a future
   catalog change starts hiding real motion.
 
 ### Keep external tools as oracles, not dependencies
