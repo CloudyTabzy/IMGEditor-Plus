@@ -3120,6 +3120,9 @@ fn build_texture_fullscreen(app: &App) -> Option<Element<'_, Message>> {
     )
     .width(Length::Fill)
     .height(Length::Fill)
+    // The content column clamps to its max_width; this centers the clamped
+    // column inside the translucent backdrop.
+    .align_x(iced::alignment::Horizontal::Center)
     .style(|_theme: &iced::Theme| iced::widget::container::Style {
         // 75%-opaque black: the interface stays faintly visible behind the
         // fullscreen preview.
