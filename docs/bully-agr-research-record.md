@@ -939,6 +939,10 @@ The core test names that encode the latest lessons are:
 - `agr_textures_resolve_for_models_when_available` (every `PLAYER.nif`
   diffuse resolves to pixels through the shared resolver);
 - `texture_tab_follows_the_played_model_while_an_agr_replays`;
+- `facing_conventions_when_available` (static preview == animation rest;
+  bind front = source −Y toward the default camera; C_Player's 439 clips
+  all keep the ±Y facing line while splitting ~evenly between −Y and +Y —
+  see §6.6);
 - `partial_coverage_names_only_matched_clips`;
 - `numeric_recovery_requires_the_verified_dummy_identity`;
 - `stepping_never_stalls_at_grid_rounding`;

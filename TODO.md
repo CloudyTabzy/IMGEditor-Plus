@@ -223,6 +223,24 @@ remain pending.
     the animated path); the animation dock lists the catalog-associated
     models and re-plays the retained AGR clip set on another model with the
     binding badge recomputed per selection.
+  - [x] Runtime polish on that path (2026-09-16): the AGR loader keys its
+    NFT lookup by the model *stem* (the file-name key probed
+    `PLAYER.nif.nft` and left every animated scene gray; gated by
+    `agr_textures_resolve_for_models_when_available`, 6/6 PLAYER diffuses);
+    the Texture tab follows the picked model while a re-play is active
+    (`agr_texture_follow`); decoded AGR+model pairs cache in a byte-budgeted
+    `quick_cache` LRU (128 MiB desktop / 32 MiB mobile) so repeat loads and
+    model switches install instantly; the animation tab reuses the static
+    preview's spinner + "Preparing…" notice while loading; dock dropdowns
+    are height-capped and the transport readout is a fixed-width padded
+    monospace block that never reflows.
+  - [x] Facing conventions established (`facing_conventions_when_available`):
+    the static preview and animation rest share one facing (bind front =
+    source −Y, toward the default camera), every C_Player clip stays on the
+    source ±Y facing line, and the clip data itself splits ~evenly between
+    −Y (211) and +Y (228) — played clips may legitimately show the back
+    because clips are authored relative to the game's actor node (the
+    never-animated `Dummy`). See research record §6.6 and FINDINGS §2.21.
   - [ ] **Low priority — resolve the 22 partial-bound pairs** (from the
     corpus audit; these are association problems, not binding defects):
     - ~14 mission groups mispaired onto same-named props via the stem
