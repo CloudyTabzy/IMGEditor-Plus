@@ -1180,7 +1180,7 @@ impl App {
         })
         .text_size(12.0)
         .menu_height(clip_menu_height)
-        .width(Length::Fill);
+        .width(Length::Fixed(250.0));
 
         // Compact model picker: re-play the retained AGR clip set on another
         // catalog-associated model. Icon + name only (with a tooltip) so it
@@ -1231,13 +1231,18 @@ impl App {
                 .menu_height(menu_height)
                 .width(Length::Fixed(140.0));
                 Some(
-                    w::styled_tooltip(
-                        row![icons::person().size(13), picker]
-                            .spacing(6)
-                            .align_y(Alignment::Center),
-                        fonts::caption("Re-play this animation on another model"),
-                        tooltip::Position::Top,
-                    )
+                    // Tooltip on the icon only: wrapping the picker would pop
+                    // the tooltip over the open dropdown list.
+                    row![
+                        w::styled_tooltip(
+                            icons::person().size(13),
+                            fonts::caption("Re-play this animation on another model"),
+                            tooltip::Position::Top,
+                        ),
+                        picker,
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
                     .into(),
                 )
             })
@@ -1372,11 +1377,16 @@ impl App {
             tooltip::Position::Top,
         );
 
-        // No spacer: the clip picker is Fill, so it absorbs the row's slack
-        // and pushes the transport group against the right edge.
-        let transport_row = row![clip_row, transport_group, readout]
-            .spacing(10)
-            .align_y(Alignment::Center);
+        // The spacer keeps the transport group against the right edge while
+        // the pickers stay on the left at their fixed widths.
+        let transport_row = row![
+            clip_row,
+            Space::new().width(Length::Fill),
+            transport_group,
+            readout,
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
 
         let frame_button = |label: &'static str, message: Message, tip: &'static str| {
             w::styled_tooltip(
