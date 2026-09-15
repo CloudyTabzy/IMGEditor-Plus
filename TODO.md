@@ -2,7 +2,7 @@
 
 Last tagged release: **v4.6.0** (Bully AGR playback, HXD naming, CPU skinning,
 and the shared animation dock). Local `master` also contains subsequent AGR
-binding and parser-hardening commits; those are documented in
+binding, parser-hardening, and full-variant decoding commits; those are documented in
 [`docs/bully-agr-research-record.md`](docs/bully-agr-research-record.md).
 
 Next phase: **Bully AGR completion and CAT/LIP/LUR inspection**, followed by
@@ -162,9 +162,9 @@ remain pending.
   CPU/GPU parity, device-limit checks and a supported fallback.
 - [ ] **AV9 real format adapters** — connect verified Bully clips/rigs/actions,
   then GTA frame/skin/HAnim/IFP data with separate corpus acceptance gates.
-  - [x] Bully AGR adapter: variants 999/1002/1003/1004 decode into playback
-    tracks; HXD catalog pairing + real clip names; archive and loose
-    `Anim/*.agr` loading; validated on Sk8Board, AniBroom, Bike, C_Player
+  - [x] Bully AGR adapter: variants 999–1004 decode into playback tracks; HXD
+    catalog pairing + real clip names; archive and loose `Anim/*.agr` loading;
+    validated on Sk8Board, AniBroom, Bike, C_Player
     (`742136d`, `14d6ee1`, `6736790`).
   - [x] Character skinning (`NiSkinInstance`/`NiSkinPartition`) with direct
     `NiSkinData` fallback, CPU LBS, strict palette/weight validation, and
@@ -185,15 +185,20 @@ remain pending.
     normalized time and packed quaternion fields are decoded; default and
     terminal identity roots are excluded. Validated against loose
     `C_Player`/`Grap`/`NPC_Cher` and archive mission AGRs.
+  - [x] Decode AGR variants 1000 and 1001 from the retail descriptors:
+    20-byte full-float and 12-byte compact linked rotation records, plus
+    16-byte/8-byte sparse translation rows. In-range metadata admission,
+    padding-safe logical sizes, linked curves and terminal sentinels are
+    covered by synthetic and retail C_Player tests.
   - [x] Calibrate character AGR curves across the clip library and recover the
     guarded player `track_i → track_(i + 1)` importer offset for action-only
     root/torso clips (`0308bf9`, `ed06dbe`, `75ea7f6`).
   - [x] Establish that observed character 1002 clips are rotation-only and
     keep floor placement as an explicit constant per-clip viewer policy
     (`43f5660`).
-  - [ ] Prove the 1004 curve-root-to-NIF joint-name mapping across additional
-    HXD/NIF rigs; keep the validated numeric fallback for object/prop adapters
-    until that evidence is available.
+  - [x] Prove the 1004 curve-root-to-NIF joint-name mapping across additional
+    same-stem HXD/NIF prop rigs (AsyGate, Armor, Bike and SK8Board); keep the
+    numeric fallback for unrelated or unsupported rigs.
 
 AV0–AV7 establish the shared player; AV8 is not a prerequisite for real-file
 work. Bully E0–E4 may proceed alongside it; E5 consumes the verified runtime.
@@ -215,8 +220,8 @@ Script tab rather than being forced into the 3D or texture viewers.
   validated signatures/structure plus archive context; show size, source,
   confidence, and unsupported/rejected reasons in the inspector.
 - [x] **E2 AGR structural parser** — bounded, testable parsing for headers,
-  groups/clips, timing, tracks, and references; all four record variants
-  decode and render (`26124fb`…`742136d`).
+  groups/clips, timing, tracks, and references; all six observed record
+  variants decode into playback tracks and render (`26124fb`…`742136d`).
 - [ ] **E3 CAT action-tree parser** — expose action nodes, paths, parent/child
   relationships, and raw offsets; preserve unknown bytes and avoid guessed
   serializers.

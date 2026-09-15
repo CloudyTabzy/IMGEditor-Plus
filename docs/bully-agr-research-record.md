@@ -36,7 +36,7 @@ AGR chunk(s)                         motion keys and clip durations
 The current Rust implementation can:
 
 - walk mixed AGR chunks and validate their declared byte spans;
-- decode variants 999, 1002, 1003 and 1004 into normalized runtime tracks;
+- decode all six observed variants (999–1004) into normalized runtime tracks;
 - preserve diagnostic information about padding, trailers, auxiliary records,
   unknown variants and malformed links;
 - pair ordinary and compound HXD metadata with AGR chunks and assign real clip
@@ -48,10 +48,11 @@ The current Rust implementation can:
 - bind the fully-skinned player character's 35 AGR curves to its imported NIF
   hierarchy, including action-only clips that never visit the bind pose.
 
-The important remaining format questions are variant 1000 and 1001 field
-semantics, the runtime purpose of the 1002 auxiliary tail, channel 2 if it is
-ever emitted, and CAT/LIP/LUR relationship work. These are not reasons to
-discard or reinterpret the four decoded variants.
+The important remaining format questions are the runtime purpose of the 1002
+auxiliary tail, channel 2 if it is ever emitted, and CAT/LIP/LUR relationship
+work. Variants 1000 and 1001 are now decoded through their own retail-verified
+record descriptors; that promotion is limited to the observed Bully PC
+dialect and is not a claim about other platforms.
 
 ## 2. Corpus and dependency model
 
@@ -124,6 +125,11 @@ For known fixed-size variants, the logical data span is exactly
 zero trailing bytes can be archive-sector padding, while non-zero trailing
 bytes are reported as diagnostics. Variant 1002 has an additional runtime
 auxiliary section, described below.
+
+Variants 1000 and 1001 have a declared rotation stream followed by a
+variant-specific sparse translation table. The table has no explicit count,
+so the parser admits only rows whose referenced rotation index is inside the
+declared stream and treats all-zero rows as archive padding.
 
 ### Container invariants
 
@@ -301,22 +307,94 @@ retail evaluator's fixed 12-byte stride, low-11-bit predecessor lookup,
 9-bit time extraction and coherent translation fields. The current decoder is
 based on that packed transform model.
 
-### 4.4 Variants 1000 and 1001
+### 4.4 Variants 1000 and 1001: linked transform streams
 
-The PC corpus contains both variants, but their field semantics are not yet
-reduced. The local executable audit established that they have distinct
-record descriptors/strides, but that is not enough to safely decode them.
+These variants were promoted only after the retail executable audit supplied
+both the exact record sizes and the field access pattern. The descriptor size
+routines report:
 
-Current behavior is intentionally conservative:
+~~~text
+1000: count × 0x14 + metadata_count × 0x10
+1001: count × 0x0c + metadata_count × 0x08
+~~~
 
-- the header and duration are reported;
-- the record layout is marked unsupported/unknown;
-- no guessed tracks are sent to the animation sampler; and
-- the raw entry remains exportable.
+Variant 1000 uses a 20-byte linked rotation record:
 
-Do not label these variants as corrupt simply because they are unsupported,
-and do not copy the 1002 or 1004 layout into them without a fixture-backed
-invariant.
+~~~text
+u16 previous_record
+u16 time_norm
+f32 quat_w
+f32 quat_x
+f32 quat_y
+f32 quat_z
+~~~
+
+Its sparse post-key translation row is 16 bytes:
+
+~~~text
+u32 rotation_record_index
+f32 translation_x
+f32 translation_y
+f32 translation_z
+~~~
+
+Variant 1001 uses a compact equivalent:
+
+~~~text
+u16 previous_record
+u16 time_norm
+i16 quat_x
+i16 quat_y
+i16 quat_z
+i16 quat_w
+~~~
+
+The 1001 translation row is eight bytes:
+
+~~~text
+u16 rotation_record_index
+i16 translation_x
+i16 translation_y
+i16 translation_z
+~~~
+
+Both variants use the same predecessor forest as 1002/1004. A predecessor
+value of zero starts a curve; non-zero values reference an earlier physical
+record. Record zero is the default root, later roots are curve starts, and a
+terminal all-identity curve at the maximum 16-bit time code is treated as the
+runtime sentinel. Each remaining curve becomes runtime track root_index minus
+one. Translation rows attach to the curve owning their referenced rotation
+record and reuse that key's time.
+
+The scalar rules recovered from the executable and checked against the raw
+corpus are:
+
+~~~text
+time_s       = time_norm / 65535.0 × duration_s
+1001 quat    = signed_i16 / 32767.0
+1001 vector  = signed_i16 / 1000.0
+1000 quat    = full-float source values
+1000 vector  = full-float source values
+~~~
+
+The first field is a predecessor index, not a bone ID. This matters for
+character clips: C_Player has hundreds of 1000/1001 records but only a few
+dozen animation curves. The translation table has no explicit count in the
+chunk. The reader scans only complete descriptor-sized rows, admits a row
+when its non-zero rotation-record index is inside the declared stream, and
+reports malformed non-zero rows. Rows are treated as a contiguous table: the
+first all-zero padding row or malformed non-zero index closes admission, and
+later record-shaped bytes remain ignored. This prevents coincidental words in
+sector padding or a trailer from becoming a translation while still preserving
+a valid final row whose vector components end in zero bytes.
+
+The strongest local confirmations are C_Player.agr clip 13 (1001, 382
+rotation records and seven translation rows), clip 377 (1000, 442 records and
+25 translation rows), and clip 438 (1000, 237 records and 12 translation
+rows). The broader archive census found the same strides, valid predecessor
+forests and in-range metadata indices across the observed 1000/1001
+population. This is confirmed for the Bully PC dialect only; no other
+platform's AGR dialect is implied.
 
 ### 4.5 Channel policy
 
@@ -529,7 +607,30 @@ to propagate into the legs and arms. If any check fails, the generic
 calibration remains in place and the track stays honestly partial. This is a
 Bully importer invariant, not a general-purpose numeric retargeter.
 
-### 6.4 Root motion and floor placement
+### 6.4 Cross-rig 1004 binding evidence
+
+The object/prop side now has a separate acceptance gate from the player
+calibration. Four same-stem archive pairs were checked through the exact
+runtime binding path:
+
+| AGR | NIF | 1004 clips checked | Result |
+| --- | --- | ---: | --- |
+| AsyGate.agr | AsyGate.nif | 3 | every emitted rotation and translation track bound |
+| Armor.agr | Armor.nif | 4 | every emitted rotation and translation track bound |
+| Bike.agr | bike.nif | 3 | every emitted rotation and translation track bound |
+| SK8Board.agr | SK8Board.nif | 2 | every emitted rotation and translation track bound |
+
+These pairs establish that the curve-root-minus-one numbering used by the
+1004 adapter agrees with the importer’s BonesOnly NIF order across more than
+one prop hierarchy. The regression test is
+object_1004_curve_roots_bind_across_matching_rigs_when_available and is gated
+by IMGEDITOR_BULLY_STREAM so game data stays outside Git. This is evidence for
+the observed Bully PC object rigs, not permission to apply the numbering to
+unrelated skeletons or console dialects. A future named-joint resolver can
+still improve diagnostics, but it is no longer required for these validated
+same-stem prop pairs.
+
+### 6.5 Root motion and floor placement
 
 Character 1002 clips are rotation-only in the observed data. No root
 translation field is missing from the packed record: its bits are accounted
@@ -550,7 +651,7 @@ The format adapter and shared player are intentionally separate:
 
 | Area | Current responsibility |
 | --- | --- |
-| [`src/inspector/animation/bully.rs`](../src/inspector/animation/bully.rs) | AGR chunk parsing, four decoded variants, HXD-independent library conversion, NIF model bridge |
+| [`src/inspector/animation/bully.rs`](../src/inspector/animation/bully.rs) | AGR chunk parsing, six decoded variants, HXD-independent library conversion, NIF model bridge |
 | [`src/inspector/animation/hxd.rs`](../src/inspector/animation/hxd.rs) | loose HXD and `hxds.dat` records, `MAINPED` ownership alignment, model/clip naming |
 | [`src/inspector/animation/clip.rs`](../src/inspector/animation/clip.rs) | normalized tracks, key validation, sampling |
 | [`src/inspector/animation/binding.rs`](../src/inspector/animation/binding.rs) | exact binding, ordered calibration, guarded Bully action-only recovery |
@@ -572,11 +673,13 @@ The current implementation has both synthetic and local-corpus coverage.
 ### Structural and parser checks
 
 - 554 local AGR files and 3,261 clips were structurally scanned with no
-  reported structural errors in the validated four-variant population.
-- Packed 1002/1004 predecessor links are checked for forward/out-of-range
-  references, branches, cycles and decreasing key times.
-- Fixed-size variants are bounded by declared counts; archive padding is not
-  treated as records.
+  reported structural errors in the validated six-variant population.
+- Linked 1000/1001/1002/1004 predecessor links are checked for
+  forward/out-of-range references, branches, cycles and decreasing key times.
+- Fixed-size variants are bounded by declared counts; 1000/1001 metadata rows
+  are admitted only with in-range record references, the first padding or
+  malformed row closes the table, and archive padding is not treated as
+  records.
 - Real HXD duration/order and compound ownership checks cover `SK8Board`,
   `AniBroom`, `MOT_CTRL`, `C_Player`, `Grap` and `NPC_Cher`.
 - AGR parser fixtures cover bad magic, unsupported variants, bad durations,
@@ -594,6 +697,11 @@ The current implementation has both synthetic and local-corpus coverage.
 - `Hang_Workout.agr` + `PLAYER.nif`: action-only root recovery, including
   push-up root/torso propagation and the leg/hand binding regression.
 
+The latest rendering and binding coverage also includes the full-float 1000
+and compact 1001 streams from C_Player.agr, plus same-stem 1004 binding across
+AsyGate/AsyGate.nif, Armor/Armor.nif, Bike/bike.nif and
+SK8Board/SK8Board.nif.
+
 The core test names that encode the latest lessons are:
 
 - `calibrated_binding_matches_bind_pose_when_available`;
@@ -602,6 +710,11 @@ The core test names that encode the latest lessons are:
 - `focus_loss_cancels_an_active_drag`;
 - `invalid_clips_are_never_sampled`; and
 - `non_finite_or_degenerate_node_transforms_are_rejected`.
+
+The new decoder and cross-rig gates are:
+
+- linked_1000_and_1001_decode_with_sparse_translations;
+- object_1004_curve_roots_bind_across_matching_rigs_when_available.
 
 Real-corpus gates are environment-dependent and must not embed game data in
 Git. The local paths and probe scripts are described in the checkpoint.
@@ -682,8 +795,8 @@ open            plausible hypothesis not safe for decoding or writing
 ~~~
 
 Do not silently promote a strong prop observation into a universal character
-rule. The current 1002/1004 packed layout is confirmed for the observed PC
-families; 1000/1001 remain open.
+rule. The current 1000/1001/1002/1004 linked layouts are confirmed for the
+observed Bully PC families, while their cross-platform status remains open.
 
 ### Compare timing against known rates
 
@@ -748,10 +861,10 @@ used as a platform specification.
 
 In priority order:
 
-1. Reduce variants 1000 and 1001 using the local executable descriptor table,
+1. [completed] Reduce variants 1000 and 1001 using the local executable descriptor table,
    targeted `C_Player`/rare-variant fixtures, bounded field hypotheses and
    pose validation. Do not infer them from 1002/1004.
-2. Broaden the guarded AGR-to-NIF binding evidence across additional matching
+2. [completed] Broaden the guarded AGR-to-NIF binding evidence across additional matching
    character/prop rigs. Keep the current fallback narrow and diagnostics-rich.
 3. Investigate the runtime inputs and purpose of the 1002 auxiliary tail only
    if authoring, lossless round-trip or gameplay-accurate export requires it.
