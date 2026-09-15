@@ -3512,6 +3512,170 @@ mod tests {
         assert_eq!(scene.total_triangles(), model.meshes[0].indices.len() / 3);
     }
 
+    /// Regression (2026-09-15): a generalized wrapper offset bound the
+    /// player's first curve to the `Dummy` placeholder whenever the pose
+    /// calibration came up short. The ordinary importer contract must keep
+    /// the exported one-node offset for the player family on every library.
+    #[test]
+    fn player_family_binding_keeps_the_imported_order_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let anim = stream.parent().expect("game root").join("Anim");
+        let (Ok(agr_bytes), Some(nif_bytes)) = (
+            std::fs::read(anim.join("C_Player.agr")),
+            world_entry(stream, "PLAYER.nif"),
+        ) else {
+            return;
+        };
+
+        let mut nif = NifFile::parse(&nif_bytes).expect("PLAYER.nif parses");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "player", "player").expect("player model builds");
+        let file = parse_agr(&agr_bytes).expect("C_Player.agr parses");
+        let library = to_library(&file, "C_Player.agr");
+        let calibration =
+            crate::inspector::animation::binding::calibrate_bindings(&model, &library);
+        let clip = library.clips.first().expect("first player clip");
+        let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
+            &model, clip, &calibration,
+        );
+
+        let dummy = model
+            .node_by_name("track_000")
+            .expect("player placeholder")
+            .id;
+        assert_eq!(model.source_name(dummy), Some("Dummy"));
+        assert_eq!(
+            binding.bound_count(),
+            clip.tracks.len(),
+            "every C_Player curve must bind"
+        );
+        for (track_index, node) in [
+            (0usize, "track_001"),
+            (8, "track_009"),
+            (9, "track_010"),
+            (34, "track_035"),
+        ] {
+            let expected = model.node_by_name(node).map(|node| node.id);
+            assert_ne!(expected, Some(dummy), "sanity: {node} is not the placeholder");
+            assert_eq!(
+                binding.node_for_track(track_index),
+                expected,
+                "C_Player curve {track_index} must bind to {node}, not the Dummy placeholder"
+            );
+        }
+    }
+
+    /// Regression (2026-09-15): `Hang_Workout` is the action-only library
+    /// whose root/torso curves never reach the bind pose. The ordinary
+    /// importer contract must recover those tracks (`curve i -> track_(i+1)`)
+    /// instead of binding the first curve to the `Dummy` placeholder.
+    #[test]
+    fn action_only_player_clips_recover_root_tracks_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let (Some(agr_bytes), Some(nif_bytes)) = (
+            world_entry(stream, "Hang_Workout.agr"),
+            world_entry(stream, "PLAYER.nif"),
+        ) else {
+            return;
+        };
+
+        let mut nif = NifFile::parse(&nif_bytes).expect("PLAYER.nif parses");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "player", "player").expect("player model builds");
+        let file = parse_agr(&agr_bytes).expect("Hang_Workout.agr parses");
+        let library = to_library(&file, "Hang_Workout.agr");
+        let calibration =
+            crate::inspector::animation::binding::calibrate_bindings(&model, &library);
+        let clip = library.clips.first().expect("first workout clip");
+        let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
+            &model, clip, &calibration,
+        );
+
+        let dummy = model
+            .node_by_name("track_000")
+            .expect("player placeholder")
+            .id;
+        assert_eq!(
+            binding.bound_count(),
+            clip.tracks.len(),
+            "action-only root/torso curves must recover through the importer contract"
+        );
+        for (track_index, node) in [
+            (0usize, "track_001"),
+            (8, "track_009"),
+            (9, "track_010"),
+            (34, "track_035"),
+        ] {
+            let expected = model.node_by_name(node).map(|node| node.id);
+            assert_ne!(expected, Some(dummy), "sanity: {node} is not the placeholder");
+            assert_eq!(
+                binding.node_for_track(track_index),
+                expected,
+                "Hang_Workout curve {track_index} must bind to {node}"
+            );
+        }
+    }
+
+    /// An ordinary character rig outside the player family must keep the
+    /// exported one-node offset (`RAT_PED`): curve 0 binds to `Root`, never
+    /// to the `Dummy` placeholder, and every curve binds.
+    #[test]
+    fn ordinary_character_rig_keeps_the_exported_order_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let (Some(agr_bytes), Some(nif_bytes)) = (
+            world_entry(stream, "RAT_PED.agr"),
+            world_entry(stream, "rat_ped.nif"),
+        ) else {
+            return;
+        };
+
+        let mut nif = NifFile::parse(&nif_bytes).expect("rat_ped.nif parses");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "rat", "rat").expect("rat model builds");
+        let file = parse_agr(&agr_bytes).expect("RAT_PED.agr parses");
+        let library = to_library(&file, "RAT_PED.agr");
+        let calibration =
+            crate::inspector::animation::binding::calibrate_bindings(&model, &library);
+        let clip = library.clips.first().expect("first rat clip");
+        let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
+            &model, clip, &calibration,
+        );
+
+        let dummy = model.node_by_name("track_000").expect("rat placeholder").id;
+        assert_eq!(model.source_name(dummy), Some("Dummy"));
+        assert_eq!(
+            binding.bound_count(),
+            clip.tracks.len(),
+            "every RAT_PED curve must bind"
+        );
+        for (track_index, track) in clip.tracks.iter().enumerate() {
+            let curve = track
+                .target
+                .strip_prefix("track_")
+                .and_then(|value| value.parse::<u32>().ok())
+                .expect("numeric rat target");
+            let expected = model
+                .node_by_name(&format!("track_{:03}", curve + 1))
+                .map(|node| node.id);
+            assert_ne!(expected, Some(dummy), "curve {curve} must skip the placeholder");
+            assert_eq!(
+                binding.node_for_track(track_index),
+                expected,
+                "RAT_PED curve {} must bind one node below the placeholder",
+                track.target
+            );
+        }
+    }
+
     /// Regression: index-based track naming binds AGR curves to neighbor
     /// bones on the player rig (export order differs from the NIF's DFS
     /// order), which twists the skinned mesh while bone positions stay

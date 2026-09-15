@@ -593,14 +593,17 @@ the importer exposes the corresponding animated nodes as `track_001` through
 AGR track_i  →  imported NIF track_(i + 1)
 ~~~
 
-The latest adapter recovery is deliberately narrow. It is allowed only when
-all of the following hold:
+The latest adapter recovery is deliberately narrow. The ordinary importer
+contract (the player-family shape) is allowed only when all of the
+following hold:
 
 - the model is actually skinned and Z-up;
 - the animation library carries the Bully AGR provenance;
 - targets form a contiguous `track_000...` sequence;
-- `Scene Root → track_000` has the expected dummy structure;
-- every expected `track_(i + 1)` is a unique non-mesh skin candidate; and
+- `Scene Root → track_000` is the placeholder whose preserved source name
+  is `Dummy`;
+- the covered `track_(i + 1)` run selects unique non-mesh skin candidates,
+  and the first curve targets the placeholder's child; and
 - the strict ordered calibration agrees with the numeric mapping for every
   assignment it did make.
 
@@ -609,6 +612,15 @@ torso tracks, producing 35/35 bindings and allowing the push-up body rotation
 to propagate into the legs and arms. If any check fails, the generic
 calibration remains in place and the track stays honestly partial. This is a
 Bully importer invariant, not a general-purpose numeric retargeter.
+
+A 2026-09-15 correction re-anchored the offset to the semantic root for
+every rig; that generalized the wrapper rule to ordinary character shapes
+and bound the player's first curve to the `Dummy` placeholder whenever the
+pose calibration came up short (`Hang_Workout` and `RAT_PED` both regressed
+while the Mandy gate stayed green). The current code restores the ordinary
+`+1` contract above and admits the root-inclusive variant only under the
+wrapper signature below; a numeric run is never preferred merely because it
+binds a larger count.
 
 #### Wrapper-heavy character rigs: Mandy
 
@@ -623,14 +635,18 @@ animation path:         Dummy → Root → Root Pelvis → legs, spine and arms
 preview helper path:    ARROW → Editable Poly
 ~~~
 
-The normalized NIF names put `Dummy` at `track_002`, so this rig uses
-`AGR track_i → NIF track_(i + 2)`; the original player rig uses `+1`. The
-calibrator now derives the offset from the adapter-designated semantic root,
-requires a complete contiguous run of unique skin-derived non-mesh nodes, and
-rejects the mapping if curve 0 would not drive that root. This keeps wrapper
-nodes from becoming a plausible-but-wrong root and avoids a whole-character
-twist. The real Mandy regression binds all 35 rotation curves and all 36
-property tracks, including the right arm.
+The normalized NIF names put `Dummy` at `track_002` behind the sibling
+wrapper chain, so this rig uses `AGR track_i → NIF track_(i + 2)`; the
+ordinary player rig uses `+1` because its `Dummy` occupies `track_000`
+itself. The root-inclusive variant is admitted only when the semantic root
+(with its preserved `Dummy` source name) is preceded by sibling wrapper
+branches, the targets form a contiguous run, and the stream covers a prefix
+of the root's non-mesh subtree in imported order and every covered node is a
+unique skin-derived non-mesh candidate. That keeps wrapper nodes from
+becoming a plausible-but-wrong root and avoids a whole-character twist, and
+it never fires for shapes whose placeholder is already `track_000`. The real
+Mandy regression binds all 35 rotation curves and all 36 property tracks,
+including the right arm.
 
 The NIF also contains axis/arrow helper meshes. They remain in the hierarchy
 for skin and binding validation, but are marked preview-only: they do not draw,
@@ -742,6 +758,9 @@ The current implementation has both synthetic and local-corpus coverage.
 - `1_08_MandPuke.agr` + `JKGirl_Mandy.nif`: wrapper-aware `+2` binding from
   semantic `Dummy`, helper-mesh suppression, source/view floor conversion,
   grounded framing and right-arm deformation coverage.
+- `RAT_PED.agr` + `rat_ped.nif`: ordinary character rig keeping the exported
+  one-node offset (`curve i → track_(i + 1)`), never binding the `Dummy`
+  placeholder.
 
 The latest rendering and binding coverage also includes the full-float 1000
 and compact 1001 streams from C_Player.agr, plus same-stem 1004 binding across
@@ -752,6 +771,11 @@ The core test names that encode the latest lessons are:
 
 - `calibrated_binding_matches_bind_pose_when_available`;
 - `bully_action_only_tracks_recover_the_imported_numeric_offset`;
+- `player_family_binding_keeps_the_imported_order_when_available`;
+- `action_only_player_clips_recover_root_tracks_when_available`;
+- `ordinary_character_rig_keeps_the_exported_order_when_available`;
+- `wrapper_rig_uses_the_root_inclusive_numeric_run`;
+- `numeric_recovery_requires_the_verified_dummy_identity`;
 - `stepping_never_stalls_at_grid_rounding`;
 - `focus_loss_cancels_an_active_drag`;
 - `invalid_clips_are_never_sampled`; and

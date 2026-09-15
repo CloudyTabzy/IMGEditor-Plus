@@ -8,6 +8,20 @@ use crate::inspector::animation::clip::AnimationClip;
 use crate::inspector::animation::model::ModelAsset;
 use crate::inspector::animation::{ClipId, NodeId};
 
+/// How a verified numeric run relates the AGR curve space to the imported
+/// node order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NumericRunKind {
+    /// Ordinary character shape (`PLAYER`, `RAT_PED`): the semantic `Dummy`
+    /// placeholder occupies `track_000` under `Scene Root`, and the
+    /// exported stream starts at its first child (`track_i -> track_(i + 1)`).
+    Ordinary,
+    /// Wrapper-heavy shape (`JKGirl_Mandy`): sibling wrappers precede the
+    /// semantic root, and the stream starts at the root itself
+    /// (`track_i -> root + i`).
+    RootInclusive,
+}
+
 /// Recover the fixed source/export ordering used by Bully's character AGR
 /// tracks when bind-pose scoring cannot admit an action-only track. The
 /// regular calibrator deliberately rejects a curve that never approaches a
@@ -16,18 +30,23 @@ use crate::inspector::animation::{ClipId, NodeId};
 /// from rest for every clip.
 ///
 /// This is intentionally a narrow adapter contract, not a general numeric
-/// retargeter. The local Bully evidence establishes all of these invariants:
-/// AGR emits a contiguous `track_000..` sequence, the HXD character table
-/// lists the corresponding 35 joints without the NIF scene root, and the
-/// importer exposes those joints as `track_001..` under a synthetic
-/// `Scene Root`. A skinned Z-up model plus the Bully adapter provenance are
-/// required before the offset can be used.
+/// retargeter. Two importer shapes are verified against the retail corpus,
+/// and each is admitted only with its full structural signature:
+/// `Ordinary` needs the `Dummy` placeholder at `track_000` under
+/// `Scene Root` with the first curve targeting its child; `RootInclusive`
+/// needs the `Dummy` root behind sibling wrapper branches, with the stream
+/// starting at the root itself. The covered run is a prefix of the root's
+/// non-mesh subtree (trailing helper attachments may stay unanimated), and
+/// every covered node must be a skin-derived candidate. Anything else
+/// returns `None` and leaves the pose calibration in charge.
 fn bully_numeric_track_offset(
     model: &ModelAsset,
     library: &crate::inspector::animation::clip::AnimationLibrary,
     targets: &[(String, Vec<crate::inspector::animation::clip::TrackChannel>)],
     candidates: &[(String, NodeId)],
-) -> Option<std::collections::HashMap<String, NodeId>> {
+) -> Option<(std::collections::HashMap<String, NodeId>, NumericRunKind)> {
+    use std::collections::HashSet;
+
     const MIN_CHARACTER_TRACKS: usize = 8;
 
     if !model.has_skinning()
@@ -38,69 +57,98 @@ fn bully_numeric_track_offset(
         return None;
     }
 
-    let candidate_ids: std::collections::HashSet<NodeId> =
-        candidates.iter().map(|(_, id)| *id).collect();
+    // The adapter emits one contiguous numeric target run per clip.
+    for (curve_index, (target, _)) in targets.iter().enumerate() {
+        if target != &format!("track_{curve_index:03}") {
+            return None;
+        }
+    }
 
-    // The AGR curve stream starts at the adapter-designated character root,
-    // not necessarily at the first normalized NIF node. Derive the offset
-    // from that semantic root instead of guessing from the first candidate:
-    // wrapper nodes can themselves be skin-derived ancestors, and choosing
-    // one of them would rotate the whole body under an apparently valid
-    // contiguous mapping.
+    let candidate_ids: HashSet<NodeId> = candidates.iter().map(|(_, id)| *id).collect();
+
+    let scene_root = model.node_by_name("Scene Root")?.id;
     let root_motion = model.root_motion_node?;
     let root_node = model.node(root_motion)?;
     if root_node.parent.is_none()
         || root_node.mesh.is_some()
         || !candidate_ids.contains(&root_motion)
+        || !model
+            .source_name(root_motion)
+            .is_some_and(|name| name.eq_ignore_ascii_case("Dummy"))
     {
         return None;
     }
-    let root_number = root_node
-        .name
-        .strip_prefix("track_")
-        .and_then(|number| number.parse::<u32>().ok())?;
-    let offsets = [root_number];
 
-    for offset in offsets {
-        let mut used = std::collections::HashSet::with_capacity(targets.len());
-        let mut mapping = std::collections::HashMap::with_capacity(targets.len());
-        let mut valid = true;
-        for (curve_index, (target, _)) in targets.iter().enumerate() {
-            let expected_target = format!("track_{curve_index:03}");
-            if target != &expected_target {
-                valid = false;
-                break;
-            }
+    // The semantic root's subtree, in imported order.
+    let run: Vec<NodeId> = model
+        .nodes
+        .iter()
+        .filter(|node| node.mesh.is_none() && is_descendant(model, node.id, root_motion))
+        .map(|node| node.id)
+        .collect();
 
-            let Some(node_number) = offset.checked_add(curve_index as u32) else {
-                valid = false;
-                break;
-            };
-            let expected_node = format!("track_{node_number:03}");
-            let node_matches = model.nodes_named(&expected_node);
-            let [node] = node_matches.as_slice() else {
-                valid = false;
-                break;
-            };
-            let node = *node;
-            if !candidate_ids.contains(&node)
-                || model.node(node).is_none_or(|scene_node| scene_node.mesh.is_some())
-                || !used.insert(node)
-            {
-                valid = false;
-                break;
-            }
-            if curve_index == 0 && node != root_motion {
-                valid = false;
-                break;
-            }
-            mapping.insert(target.clone(), node);
+    // Ordinary character shape: the `Dummy` placeholder itself occupies
+    // `track_000`, and the exported stream starts one node below it.
+    // `TrackChannel`s ride the same curve slots, so the covered prefix is
+    // compared by curve index, not by unique channel target.
+    if model.node_by_name("track_000").map(|node| node.id) == Some(root_motion) {
+        if root_node.parent != Some(scene_root) {
+            return None;
         }
-        if valid {
-            return Some(mapping);
+        let without_root = &run[1.min(run.len())..];
+        if without_root.len() < targets.len() {
+            return None;
+        }
+        let covered = &without_root[..targets.len()];
+        if model.node(covered[0])?.parent != Some(root_motion)
+            || !covered.iter().all(|node| candidate_ids.contains(node))
+        {
+            return None;
+        }
+        let mapping = targets
+            .iter()
+            .zip(covered)
+            .map(|((target, _), node)| (target.clone(), *node))
+            .collect();
+        return Some((mapping, NumericRunKind::Ordinary));
+    }
+
+    // Wrapper-heavy shape: sibling wrappers precede the semantic root in
+    // the imported order, and the stream covers the root's subtree from
+    // the root itself (`JKGirl_Mandy`). Exact coverage is not required:
+    // trailing helper attachments may stay unanimated.
+    let wrapper_precedes = model.nodes.iter().any(|node| {
+        node.id.0 < root_motion.0
+            && node.id != scene_root
+            && node.mesh.is_none()
+            && !is_descendant(model, node.id, root_motion)
+    });
+    if !wrapper_precedes || run.len() < targets.len() {
+        return None;
+    }
+    let covered = &run[..targets.len()];
+    if !covered.iter().all(|node| candidate_ids.contains(node)) {
+        return None;
+    }
+
+    let mapping = targets
+        .iter()
+        .zip(covered)
+        .map(|((target, _), node)| (target.clone(), *node))
+        .collect();
+    Some((mapping, NumericRunKind::RootInclusive))
+}
+
+fn is_descendant(model: &ModelAsset, mut id: NodeId, ancestor: NodeId) -> bool {
+    loop {
+        if id == ancestor {
+            return true;
+        }
+        match model.node(id).and_then(|node| node.parent) {
+            Some(parent) => id = parent,
+            None => return false,
         }
     }
-    None
 }
 
 /// Resolution status of one track.
@@ -522,20 +570,24 @@ pub fn calibrate_bindings(
     }
 
     // A compact Bully action library may never visit the bind pose for its
-    // root/torso curves. If the strict DP already agrees with the proven
-    // importer offset, recover only the skipped entries; a disagreement
-    // leaves the generic calibration intact rather than silently replacing
-    // a real mapping.
-    if let Some(numeric) = bully_numeric_track_offset(model, library, &targets, &candidates) {
+    // root/torso curves. The verified importer contract may recover those
+    // tracks, but only under the guard its shape provides: the ordinary
+    // contract must agree with every assignment the pose calibration
+    // already admitted before it fills the gaps, and the wrapper-inclusive
+    // contract, which the pose matcher cannot recover on wrapper-heavy
+    // rigs, may supersede a partial pose guess. A numeric run is never
+    // preferred merely because it binds a larger count.
+    if let Some((numeric, kind)) =
+        bully_numeric_track_offset(model, library, &targets, &candidates)
+    {
         let agrees_with_calibration = assignments
             .iter()
             .all(|(target, node)| numeric.get(target) == Some(node));
-        // A wrapper-heavy character can make the pose matcher bind a few
-        // sibling bones by chance while rejecting the actual root/limb run.
-        // A complete structural run is stronger than that partial result;
-        // use it when it recovers additional targets, while retaining the
-        // old agreement guard for equally-sized ambiguous assignments.
-        if agrees_with_calibration || numeric.len() > assignments.len() {
+        let replace = match kind {
+            NumericRunKind::Ordinary => agrees_with_calibration,
+            NumericRunKind::RootInclusive => true,
+        };
+        if replace {
             assignments = numeric;
         }
     }
@@ -856,7 +908,12 @@ mod tests {
             local: NodeTransform::IDENTITY,
             mesh: Some(0),
         });
-        let model = ModelAsset::new(
+        let mut source_names: Vec<Option<String>> =
+            nodes.iter().map(|node| Some(node.name.clone())).collect();
+        // The ordinary contract is anchored to the placeholder's original
+        // `Dummy` identity, which the NIF adapter preserves in source names.
+        source_names[1] = Some("Dummy".into());
+        let mut model = ModelAsset::new(
             "Bully action-only fixture".into(),
             "fixture:player.nif".into(),
             nodes,
@@ -878,9 +935,10 @@ mod tests {
             }],
             Mat4::IDENTITY,
             BaseOrientation::Zup,
-            Some(NodeId(2)),
+            Some(NodeId(1)),
         )
         .unwrap();
+        model.set_source_names(source_names);
 
         let mut tracks = Vec::new();
         for index in 0..8 {
@@ -923,5 +981,251 @@ mod tests {
                 "curve {index} must preserve the one-node importer offset"
             );
         }
+    }
+
+    #[test]
+    fn wrapper_rig_uses_the_root_inclusive_numeric_run() {
+        // JKGirl_Mandy shape: a mesh-bearing wrapper branch precedes the
+        // semantic `Dummy` root, and the AGR stream covers the root's whole
+        // subtree including the root itself. The strict pose matcher cannot
+        // admit the action-only curves, so the verified wrapper run must
+        // replace its partial guess instead of leaving the rig partial.
+        let mut nodes = vec![
+            SceneNode {
+                id: NodeId(0),
+                parent: None,
+                name: "Scene Root".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: None,
+            },
+            SceneNode {
+                id: NodeId(1),
+                parent: Some(NodeId(0)),
+                name: "track_000".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: None,
+            },
+            SceneNode {
+                id: NodeId(2),
+                parent: Some(NodeId(1)),
+                name: "track_001".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: None,
+            },
+            SceneNode {
+                id: NodeId(3),
+                parent: Some(NodeId(2)),
+                name: "shape_003".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: Some(0),
+            },
+            SceneNode {
+                id: NodeId(4),
+                parent: Some(NodeId(0)),
+                name: "track_002".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: None,
+            },
+        ];
+        for index in 3..=9 {
+            nodes.push(SceneNode {
+                id: NodeId(index + 2),
+                parent: Some(NodeId(if index == 3 { 4 } else { index + 1 })),
+                name: format!("track_{index:03}"),
+                local: NodeTransform {
+                    rotation: Quat::from_rotation_z(index as f32 * 0.5),
+                    ..NodeTransform::IDENTITY
+                },
+                mesh: None,
+            });
+        }
+        let mut influence = VertexSkin::new();
+        influence.push((0, 1.0));
+        let mut source_names: Vec<Option<String>> =
+            nodes.iter().map(|node| Some(node.name.clone())).collect();
+        source_names[1] = Some("JKGirl_Mandy".into());
+        source_names[2] = Some("__NDL_MultiMtl_Node".into());
+        source_names[4] = Some("Dummy".into());
+        let mut model = ModelAsset::new(
+            "Bully wrapper fixture".into(),
+            "fixture:mandy.nif".into(),
+            nodes,
+            vec![MeshAsset {
+                name: "body".into(),
+                texture_name: None,
+                vertices: vec![Vertex {
+                    position: [0.0, 0.0, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                }],
+                indices: Vec::new(),
+                diffuse: None,
+                skin: Some(SkinBinding {
+                    joints: vec![NodeId(5)],
+                    inverse_bind: vec![Mat4::IDENTITY],
+                    weights: vec![influence],
+                }),
+            }],
+            Mat4::IDENTITY,
+            BaseOrientation::Zup,
+            Some(NodeId(4)),
+        )
+        .unwrap();
+        model.set_source_names(source_names);
+
+        let mut tracks = Vec::new();
+        for index in 0..8 {
+            let rest = if index == 0 {
+                Quat::IDENTITY
+            } else {
+                Quat::from_rotation_z((index + 2) as f32 * 0.5)
+            };
+            let rotation = if matches!(index, 2 | 5) {
+                rest * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
+            } else {
+                rest
+            };
+            tracks.push(rotation_track(&format!("track_{index:03}"), rotation));
+        }
+        let mut clip = AnimationClip {
+            id: ClipId(7),
+            name: "wrapper".into(),
+            duration: 1.0,
+            tracks,
+            source_rate: None,
+            markers: Vec::new(),
+            provenance: "Bully AGR variant 1001".into(),
+        };
+        clip.normalize_rotation_keys();
+        clip.validate().unwrap();
+        let library = crate::inspector::animation::clip::AnimationLibrary {
+            name: "1_08_MandPuke.agr".into(),
+            clips: vec![clip.clone()],
+            provenance: "Bully AGR (PC, experimental reader)".into(),
+        };
+
+        let binding = bind_clip_with_calibration(
+            &model,
+            &clip,
+            &calibrate_bindings(&model, &library),
+        );
+        assert_eq!(binding.bound_count(), 8);
+        assert!(binding.diagnostics.is_empty());
+        for index in 0..8 {
+            assert_eq!(
+                binding.node_for_track(index),
+                Some(NodeId(index as u32 + 4)),
+                "wrapper curve {index} must bind to track_{:03}",
+                index + 2
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_recovery_requires_the_verified_dummy_identity() {
+        // Same shape as the action-only fixture, but the placeholder keeps
+        // its generated name: neither contract may fire, so the strict pose
+        // calibration governs and the action-only curves stay honestly
+        // unbound instead of binding to a neighbor.
+        let mut nodes = vec![SceneNode {
+            id: NodeId(0),
+            parent: None,
+            name: "Scene Root".into(),
+            local: NodeTransform::IDENTITY,
+            mesh: None,
+        }];
+        for index in 0..=8 {
+            nodes.push(SceneNode {
+                id: NodeId(index + 1),
+                parent: Some(NodeId(index)),
+                name: format!("track_{index:03}"),
+                local: NodeTransform {
+                    rotation: Quat::from_rotation_z((index + 1) as f32 * 0.7853982),
+                    ..NodeTransform::IDENTITY
+                },
+                mesh: None,
+            });
+        }
+        let mut influence = VertexSkin::new();
+        influence.push((0, 1.0));
+        nodes.push(SceneNode {
+            id: NodeId(10),
+            parent: Some(NodeId(2)),
+            name: "shape_010".into(),
+            local: NodeTransform::IDENTITY,
+            mesh: Some(0),
+        });
+        let mut model = ModelAsset::new(
+            "anonymous placeholder fixture".into(),
+            "fixture:anonymous.nif".into(),
+            nodes,
+            vec![MeshAsset {
+                name: "body".into(),
+                texture_name: None,
+                vertices: vec![Vertex {
+                    position: [0.0, 0.0, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                }],
+                indices: Vec::new(),
+                diffuse: None,
+                skin: Some(SkinBinding {
+                    joints: vec![NodeId(2)],
+                    inverse_bind: vec![Mat4::IDENTITY],
+                    weights: vec![influence],
+                }),
+            }],
+            Mat4::IDENTITY,
+            BaseOrientation::Zup,
+            Some(NodeId(1)),
+        )
+        .unwrap();
+        let source_names: Vec<Option<String>> = model
+            .nodes
+            .iter()
+            .map(|node| Some(node.name.clone()))
+            .collect();
+        model.set_source_names(source_names);
+
+        let mut tracks = Vec::new();
+        for index in 0..8 {
+            let rest = Quat::from_rotation_z((index + 1) as f32 * 0.7853982);
+            let rotation = if matches!(index, 0 | 4) {
+                rest * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
+            } else {
+                rest
+            };
+            tracks.push(rotation_track(&format!("track_{index:03}"), rotation));
+        }
+        let mut clip = AnimationClip {
+            id: ClipId(8),
+            name: "anonymous".into(),
+            duration: 1.0,
+            tracks,
+            source_rate: None,
+            markers: Vec::new(),
+            provenance: "Bully AGR variant 1002".into(),
+        };
+        clip.normalize_rotation_keys();
+        clip.validate().unwrap();
+        let library = crate::inspector::animation::clip::AnimationLibrary {
+            name: "Anonymous.agr".into(),
+            clips: vec![clip.clone()],
+            provenance: "Bully AGR (PC, experimental reader)".into(),
+        };
+
+        let binding = bind_clip_with_calibration(
+            &model,
+            &clip,
+            &calibrate_bindings(&model, &library),
+        );
+        assert_eq!(
+            binding.bound_count(),
+            6,
+            "only rest-matching curves may bind without the verified identity"
+        );
+        assert!(binding.node_for_track(0).is_none());
+        assert!(binding.node_for_track(4).is_none());
+        assert!(!binding.diagnostics.is_empty());
     }
 }
