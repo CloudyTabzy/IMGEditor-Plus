@@ -10,18 +10,14 @@ use crate::inspector::animation::{ClipId, NodeId};
 
 /// How a verified numeric run relates the AGR curve space to the imported
 /// node order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NumericRunKind {
-    /// Ordinary character shape (`PLAYER`, `RAT_PED`): the semantic `Dummy`
-    /// placeholder occupies `track_000` under `Scene Root`, and the
-    /// exported stream starts at its first child (`track_i -> track_(i + 1)`).
-    Ordinary,
-    /// Wrapper-heavy shape (`JKGirl_Mandy`): sibling wrappers precede the
-    /// semantic root, and the stream starts at the root itself
-    /// (`track_i -> root + i`).
-    RootInclusive,
-}
-
+///
+/// One shape is verified across the retail corpus: the character stream
+/// lists the semantic root's descendants in imported order, starting at the
+/// root's first child. The `Dummy` placeholder is never an animation target;
+/// sibling wrappers (`JKGirl_Mandy`, `MAINPED` body branches) only shift the
+/// normalized numbering (`PLAYER` and `RAT_PED`: `track_i -> track_(i + 1)`;
+/// the wrapper-heavy `JKGirl_Mandy`: `track_i -> track_(i + 3)`).
+///
 /// Recover the fixed source/export ordering used by Bully's character AGR
 /// tracks when bind-pose scoring cannot admit an action-only track. The
 /// regular calibrator deliberately rejects a curve that never approaches a
@@ -30,21 +26,18 @@ enum NumericRunKind {
 /// from rest for every clip.
 ///
 /// This is intentionally a narrow adapter contract, not a general numeric
-/// retargeter. Two importer shapes are verified against the retail corpus,
-/// and each is admitted only with its full structural signature:
-/// `Ordinary` needs the `Dummy` placeholder at `track_000` under
-/// `Scene Root` with the first curve targeting its child; `RootInclusive`
-/// needs the `Dummy` root behind sibling wrapper branches, with the stream
-/// starting at the root itself. The covered run is a prefix of the root's
-/// non-mesh subtree (trailing helper attachments may stay unanimated), and
-/// every covered node must be a skin-derived candidate. Anything else
-/// returns `None` and leaves the pose calibration in charge.
+/// retargeter. It is admitted only with its full structural signature: the
+/// semantic root is the preserved `Dummy` node under `Scene Root`, targets
+/// form a contiguous `track_000...` run, the covered prefix selects unique
+/// non-mesh skin candidates, and the first curve targets the placeholder's
+/// first child. Anything else returns `None` and leaves the pose calibration
+/// in charge.
 fn bully_numeric_track_offset(
     model: &ModelAsset,
     library: &crate::inspector::animation::clip::AnimationLibrary,
     targets: &[(String, Vec<crate::inspector::animation::clip::TrackChannel>)],
     candidates: &[(String, NodeId)],
-) -> Option<(std::collections::HashMap<String, NodeId>, NumericRunKind)> {
+) -> Option<std::collections::HashMap<String, NodeId>> {
     use std::collections::HashSet;
 
     const MIN_CHARACTER_TRACKS: usize = 8;
@@ -69,7 +62,7 @@ fn bully_numeric_track_offset(
     let scene_root = model.node_by_name("Scene Root")?.id;
     let root_motion = model.root_motion_node?;
     let root_node = model.node(root_motion)?;
-    if root_node.parent.is_none()
+    if root_node.parent != Some(scene_root)
         || root_node.mesh.is_some()
         || !candidate_ids.contains(&root_motion)
         || !model
@@ -79,64 +72,31 @@ fn bully_numeric_track_offset(
         return None;
     }
 
-    // The semantic root's subtree, in imported order.
-    let run: Vec<NodeId> = model
+    // The stream covers a prefix of the semantic root's non-mesh subtree,
+    // skipping the placeholder itself (trailing helper attachments such as
+    // `ARROW` may stay unanimated when the library is shorter).
+    let covered: Vec<NodeId> = model
         .nodes
         .iter()
         .filter(|node| node.mesh.is_none() && is_descendant(model, node.id, root_motion))
         .map(|node| node.id)
+        .skip(1)
+        .take(targets.len())
         .collect();
+    if covered.len() != targets.len()
+        || model.node(covered[0])?.parent != Some(root_motion)
+        || !covered.iter().all(|node| candidate_ids.contains(node))
+    {
+        return None;
+    }
 
-    // Ordinary character shape: the `Dummy` placeholder itself occupies
-    // `track_000`, and the exported stream starts one node below it.
-    // `TrackChannel`s ride the same curve slots, so the covered prefix is
-    // compared by curve index, not by unique channel target.
-    if model.node_by_name("track_000").map(|node| node.id) == Some(root_motion) {
-        if root_node.parent != Some(scene_root) {
-            return None;
-        }
-        let without_root = &run[1.min(run.len())..];
-        if without_root.len() < targets.len() {
-            return None;
-        }
-        let covered = &without_root[..targets.len()];
-        if model.node(covered[0])?.parent != Some(root_motion)
-            || !covered.iter().all(|node| candidate_ids.contains(node))
-        {
-            return None;
-        }
-        let mapping = targets
+    Some(
+        targets
             .iter()
-            .zip(covered)
+            .zip(&covered)
             .map(|((target, _), node)| (target.clone(), *node))
-            .collect();
-        return Some((mapping, NumericRunKind::Ordinary));
-    }
-
-    // Wrapper-heavy shape: sibling wrappers precede the semantic root in
-    // the imported order, and the stream covers the root's subtree from
-    // the root itself (`JKGirl_Mandy`). Exact coverage is not required:
-    // trailing helper attachments may stay unanimated.
-    let wrapper_precedes = model.nodes.iter().any(|node| {
-        node.id.0 < root_motion.0
-            && node.id != scene_root
-            && node.mesh.is_none()
-            && !is_descendant(model, node.id, root_motion)
-    });
-    if !wrapper_precedes || run.len() < targets.len() {
-        return None;
-    }
-    let covered = &run[..targets.len()];
-    if !covered.iter().all(|node| candidate_ids.contains(node)) {
-        return None;
-    }
-
-    let mapping = targets
-        .iter()
-        .zip(covered)
-        .map(|((target, _), node)| (target.clone(), *node))
-        .collect();
-    Some((mapping, NumericRunKind::RootInclusive))
+            .collect(),
+    )
 }
 
 fn is_descendant(model: &ModelAsset, mut id: NodeId, ancestor: NodeId) -> bool {
@@ -570,26 +530,15 @@ pub fn calibrate_bindings(
     }
 
     // A compact Bully action library may never visit the bind pose for its
-    // root/torso curves. The verified importer contract may recover those
-    // tracks, but only under the guard its shape provides: the ordinary
-    // contract must agree with every assignment the pose calibration
-    // already admitted before it fills the gaps, and the wrapper-inclusive
-    // contract, which the pose matcher cannot recover on wrapper-heavy
-    // rigs, may supersede a partial pose guess. A numeric run is never
-    // preferred merely because it binds a larger count.
-    if let Some((numeric, kind)) =
-        bully_numeric_track_offset(model, library, &targets, &candidates)
-    {
-        let agrees_with_calibration = assignments
-            .iter()
-            .all(|(target, node)| numeric.get(target) == Some(node));
-        let replace = match kind {
-            NumericRunKind::Ordinary => agrees_with_calibration,
-            NumericRunKind::RootInclusive => true,
-        };
-        if replace {
-            assignments = numeric;
-        }
+    // root/torso curves, and on wrapper-heavy rigs the pose matcher can bind
+    // sibling bones by chance while rejecting the actual root/limb run. The
+    // verified importer contract (semantic `Dummy` placeholder, stream
+    // starting at its first child, every covered node a unique skin
+    // candidate) is the export order whenever its signature holds, so it
+    // supersedes the pose result; a disagreement without that signature
+    // leaves the generic calibration intact.
+    if let Some(numeric) = bully_numeric_track_offset(model, library, &targets, &candidates) {
+        assignments = numeric;
     }
 
     let diagnostics = targets
@@ -984,12 +933,13 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_rig_uses_the_root_inclusive_numeric_run() {
-        // JKGirl_Mandy shape: a mesh-bearing wrapper branch precedes the
-        // semantic `Dummy` root, and the AGR stream covers the root's whole
-        // subtree including the root itself. The strict pose matcher cannot
-        // admit the action-only curves, so the verified wrapper run must
-        // replace its partial guess instead of leaving the rig partial.
+    fn wrapper_rig_stream_skips_the_placeholder() {
+        // JKGirl_Mandy shape: sibling wrapper branches precede the semantic
+        // `Dummy` root in the imported order. The stream still starts at the
+        // root's first child — the placeholder is never an animation target —
+        // so curve i binds to track_(i + 3) instead of the player's +1. The
+        // strict pose matcher cannot admit the action-only curves, so the
+        // verified run must replace its partial guess.
         let mut nodes = vec![
             SceneNode {
                 id: NodeId(0),
@@ -1027,7 +977,7 @@ mod tests {
                 mesh: None,
             },
         ];
-        for index in 3..=9 {
+        for index in 3..=10 {
             nodes.push(SceneNode {
                 id: NodeId(index + 2),
                 parent: Some(NodeId(if index == 3 { 4 } else { index + 1 })),
@@ -1075,11 +1025,7 @@ mod tests {
 
         let mut tracks = Vec::new();
         for index in 0..8 {
-            let rest = if index == 0 {
-                Quat::IDENTITY
-            } else {
-                Quat::from_rotation_z((index + 2) as f32 * 0.5)
-            };
+            let rest = Quat::from_rotation_z((index + 3) as f32 * 0.5);
             let rotation = if matches!(index, 2 | 5) {
                 rest * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
             } else {
@@ -1114,9 +1060,9 @@ mod tests {
         for index in 0..8 {
             assert_eq!(
                 binding.node_for_track(index),
-                Some(NodeId(index as u32 + 4)),
+                Some(NodeId(index as u32 + 5)),
                 "wrapper curve {index} must bind to track_{:03}",
-                index + 2
+                index + 3
             );
         }
     }

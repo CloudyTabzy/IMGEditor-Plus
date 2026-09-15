@@ -3376,9 +3376,12 @@ mod tests {
         );
         assert_eq!(binding.bound_count(), clip.tracks.len());
 
-        // The wrapper and body branches mean the AGR curve index is not the
-        // normalized NIF node index. Every curve, including the right arm,
-        // must use the validated +2 run discovered by calibration.
+        // The wrapper and body branches shift the normalized NIF numbering;
+        // the AGR stream still lists the skeleton from `Root` (never the
+        // `Dummy` placeholder), so every curve binds at the validated `+3`
+        // offset. The rigid facial chain carries unique ~0-degree rest
+        // matches at exactly this offset and pins the stream against the
+        // placeholder-inclusive reading that twisted the skinned body.
         for (track_index, track) in clip.tracks.iter().enumerate() {
             let curve = track
                 .target
@@ -3386,7 +3389,7 @@ mod tests {
                 .and_then(|value| value.parse::<u32>().ok())
                 .expect("numeric AGR target");
             let expected = model
-                .node_by_name(&format!("track_{:03}", curve + 2))
+                .node_by_name(&format!("track_{:03}", curve + 3))
                 .expect("Mandy calibrated node")
                 .id;
             assert_eq!(
@@ -3394,8 +3397,29 @@ mod tests {
                     .node_for_track(track_index)
                     .expect("curve is bound"),
                 expected,
-                "AGR {} must bind to the wrapper-adjusted NIF node",
+                "AGR {} must bind three nodes below the Dummy placeholder",
                 track.target
+            );
+        }
+        for (curve, node) in [
+            (0usize, "track_003"),
+            (14, "track_017"),
+            (15, "track_018"),
+            (16, "track_019"),
+            (17, "track_020"),
+            (34, "track_037"),
+        ] {
+            let target = format!("track_{curve:03}");
+            let track_index = clip
+                .tracks
+                .iter()
+                .position(|track| track.target == target)
+                .expect("curve entry exists");
+            let expected = model.node_by_name(node).expect("Mandy anchor node").id;
+            assert_eq!(
+                binding.node_for_track(track_index),
+                Some(expected),
+                "Mandy curve {curve} must bind to {node}"
             );
         }
 
