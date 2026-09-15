@@ -1557,6 +1557,8 @@ impl App {
     pub fn design(&self) -> Design {
         let tokens = if matches!(self.config.theme, ThemeMode::DarkEverforest) {
             crate::ui::tokens::ThemeTokens::everforest()
+        } else if matches!(self.config.theme, ThemeMode::DarkGithub) {
+            crate::ui::tokens::ThemeTokens::github_dark()
         } else if self.theme().extended_palette().is_dark {
             crate::ui::tokens::ThemeTokens::dark()
         } else {

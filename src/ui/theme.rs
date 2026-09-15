@@ -22,12 +22,26 @@ const LIGHT_OCEAN_PALETTE: iced::theme::Palette = iced::theme::Palette {
     danger: iced::color!(0xEF4444),
 };
 
+// GitHub Primer "dark default": canvas #0D1117, fg #E6EDF3, blue accent.
+const GITHUB_DARK_PALETTE: iced::theme::Palette = iced::theme::Palette {
+    background: iced::color!(0x0D1117),
+    text: iced::color!(0xE6EDF3),
+    primary: iced::color!(0x2F81F7),
+    success: iced::color!(0x3FB950),
+    warning: iced::color!(0xD29922),
+    danger: iced::color!(0xF85149),
+};
+
 pub fn light_theme() -> Theme {
     Theme::custom("Light", LIGHT_OCEAN_PALETTE)
 }
 
 pub fn everforest_theme() -> Theme {
     Theme::custom("Everforest", EVERFOREST_PALETTE)
+}
+
+pub fn github_dark_theme() -> Theme {
+    Theme::custom("GitHub Dark", GITHUB_DARK_PALETTE)
 }
 
 pub fn resolve_theme(mode: ThemeMode) -> Theme {
@@ -38,6 +52,7 @@ pub fn resolve_theme(mode: ThemeMode) -> Theme {
         ThemeMode::DarkTokyoNight => Theme::TokyoNight,
         ThemeMode::DarkGruvbox => Theme::GruvboxDark,
         ThemeMode::DarkEverforest => everforest_theme(),
+        ThemeMode::DarkGithub => github_dark_theme(),
     }
 }
 
@@ -62,6 +77,10 @@ mod tests {
         ));
         assert!(matches!(
             resolve_theme(ThemeMode::DarkEverforest),
+            Theme::Custom(_)
+        ));
+        assert!(matches!(
+            resolve_theme(ThemeMode::DarkGithub),
             Theme::Custom(_)
         ));
     }

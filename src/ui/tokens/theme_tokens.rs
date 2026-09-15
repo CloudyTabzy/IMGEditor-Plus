@@ -163,6 +163,93 @@ impl ThemeTokens {
         t
     }
 
+    /// GitHub dark default: near-black blue-tinted canvas with the blue
+    /// accent (Primer dark: canvas #0D1117, subtle #161B22, border #30363D,
+    /// fg #E6EDF3, accent #2F81F7/#1F6FEB).
+    pub fn github_dark() -> Self {
+        let mut t = Self::light();
+        t.colors.neutral = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x0D1117), // s50: page (canvas.default)
+            crate::ui::tokens::color::Color::from_hex(0x12171E), // s100: chrome
+            crate::ui::tokens::color::Color::from_hex(0x161B22), // s200: surface (canvas.subtle)
+            crate::ui::tokens::color::Color::from_hex(0x30363D), // s300 (border.default)
+            crate::ui::tokens::color::Color::from_hex(0x444C56), // s400
+            crate::ui::tokens::color::Color::from_hex(0x656C76), // s500
+            crate::ui::tokens::color::Color::from_hex(0x7D8590), // s600 (fg.muted)
+            crate::ui::tokens::color::Color::from_hex(0x9EA7B3), // s700
+            crate::ui::tokens::color::Color::from_hex(0xC9D1D9), // s800
+            crate::ui::tokens::color::Color::from_hex(0xE6EDF3), // s900: text (fg.default)
+        );
+        t.colors.primary = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x0A1F42),
+            crate::ui::tokens::color::Color::from_hex(0x0F2D57),
+            crate::ui::tokens::color::Color::from_hex(0x143D7A),
+            crate::ui::tokens::color::Color::from_hex(0x1A56AD),
+            crate::ui::tokens::color::Color::from_hex(0x1F6FEB), // s400 (btn.primary.bg)
+            crate::ui::tokens::color::Color::from_hex(0x2F81F7), // s500: accent
+            crate::ui::tokens::color::Color::from_hex(0x4493F8), // s600 (accent.fg)
+            crate::ui::tokens::color::Color::from_hex(0x6CAEFF),
+            crate::ui::tokens::color::Color::from_hex(0x9CCBFF),
+            crate::ui::tokens::color::Color::from_hex(0xCCE5FF),
+        );
+        t.colors.semantic.success = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x0D2417),
+            crate::ui::tokens::color::Color::from_hex(0x123321),
+            crate::ui::tokens::color::Color::from_hex(0x17462D),
+            crate::ui::tokens::color::Color::from_hex(0x238636), // s300 (success.emphasis)
+            crate::ui::tokens::color::Color::from_hex(0x2EA043),
+            crate::ui::tokens::color::Color::from_hex(0x3FB950), // s500: success.fg
+            crate::ui::tokens::color::Color::from_hex(0x56D364),
+            crate::ui::tokens::color::Color::from_hex(0x7EE787),
+            crate::ui::tokens::color::Color::from_hex(0xA4F0B0),
+            crate::ui::tokens::color::Color::from_hex(0xCCF5DB),
+        );
+        t.colors.semantic.warning = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x221A0B),
+            crate::ui::tokens::color::Color::from_hex(0x34280F),
+            crate::ui::tokens::color::Color::from_hex(0x4D3A14),
+            crate::ui::tokens::color::Color::from_hex(0x9E6A03), // s300 (attention.emphasis)
+            crate::ui::tokens::color::Color::from_hex(0xBB8009),
+            crate::ui::tokens::color::Color::from_hex(0xD29922), // s500: attention.fg
+            crate::ui::tokens::color::Color::from_hex(0xE3B341),
+            crate::ui::tokens::color::Color::from_hex(0xEAC54F),
+            crate::ui::tokens::color::Color::from_hex(0xF2D887),
+            crate::ui::tokens::color::Color::from_hex(0xF9E6B3),
+        );
+        t.colors.semantic.destructive = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x2D1212),
+            crate::ui::tokens::color::Color::from_hex(0x401B1A),
+            crate::ui::tokens::color::Color::from_hex(0x5C2624),
+            crate::ui::tokens::color::Color::from_hex(0x8E2E2B),
+            crate::ui::tokens::color::Color::from_hex(0xDA3633), // s400 (danger.emphasis)
+            crate::ui::tokens::color::Color::from_hex(0xF85149), // s500: danger.fg
+            crate::ui::tokens::color::Color::from_hex(0xFF7B72),
+            crate::ui::tokens::color::Color::from_hex(0xFFA198),
+            crate::ui::tokens::color::Color::from_hex(0xFFC1BA),
+            crate::ui::tokens::color::Color::from_hex(0xFFE0DB),
+        );
+        t.elevation = {
+            let strong = crate::ui::tokens::color::Color::new(0.0, 0.0, 0.0, 0.5);
+            let soft = crate::ui::tokens::color::Color::new(0.0, 0.0, 0.0, 0.3);
+            crate::ui::tokens::elevation::ElevationScale {
+                flat: crate::ui::tokens::elevation::Elevation::FLAT,
+                raised: crate::ui::tokens::elevation::Elevation::new(
+                    crate::ui::tokens::elevation::Shadow::new(0.0, 1.0, 3.0, 0.0, soft),
+                ),
+                overlay: crate::ui::tokens::elevation::Elevation::new(
+                    crate::ui::tokens::elevation::Shadow::new(0.0, 4.0, 6.0, -1.0, soft),
+                ),
+                floating: crate::ui::tokens::elevation::Elevation::new(
+                    crate::ui::tokens::elevation::Shadow::new(0.0, 10.0, 15.0, -3.0, strong),
+                ),
+                modal: crate::ui::tokens::elevation::Elevation::new(
+                    crate::ui::tokens::elevation::Shadow::new(0.0, 25.0, 50.0, -12.0, strong),
+                ),
+            }
+        };
+        t
+    }
+
     #[inline]
     pub fn colors(&self) -> &ColorPalette {
         &self.colors
