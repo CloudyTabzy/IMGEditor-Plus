@@ -4048,7 +4048,17 @@ impl App {
                         Some("Bully (Gamebryo) texture writing is not supported yet.".into());
                     return Task::none();
                 };
-                let selected: Vec<usize> = archive.selected_indices.iter().copied().collect();
+                // The user's selection is the per-entry `selected` flag.
+                // `selected_indices` is the display-row list (every row the
+                // table currently shows), not the selection — using it here
+                // converted the whole visible list with nothing selected.
+                let selected: Vec<usize> = archive
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, entry)| entry.selected)
+                    .map(|(index, _)| index)
+                    .collect();
                 if selected.is_empty() {
                     self.toast = Some("Select the entries to convert first.".into());
                     return Task::none();
@@ -8968,6 +8978,74 @@ mod tests {
             let _ = app.update(message);
         }
         assert!(app.agr_playback.is_none());
+    }
+
+    #[test]
+    fn bulk_convert_uses_the_user_selection_not_the_display_rows() {
+        let mut app = test_app();
+        app.editor.new_archive();
+        // A real VC-target TXD carrying a DXT5 raster (not the VC dialect),
+        // so the planner has something to convert when it is selected.
+        let rgba = vec![128u8; 4 * 4 * 4];
+        let encoded = crate::compat::encode::encode_texture(
+            &rgba,
+            4,
+            4,
+            crate::compat::encode::EncodeFormat::Dxt5,
+            9,
+            Default::default(),
+        )
+        .expect("encode fixture");
+        let native =
+            crate::parser::txd_writer::native_from_encoded(&encoded, 9, "tex", "");
+        let txd = crate::parser::txd_writer::single_texture_txd(
+            native,
+            crate::compat::convert::target_rw_version(
+                crate::compat::convert::writable_target("vc").unwrap(),
+            ),
+        );
+        let archive = app.editor.archives_mut().first_mut().unwrap();
+        archive.target_game = Some("vc");
+        archive.entries.push(EntryInfo::new("first.dff"));
+        let mut txd_entry = EntryInfo::new("converted.txd");
+        txd_entry.override_bytes = Some(std::sync::Arc::new(txd));
+        archive.entries.push(txd_entry);
+        archive.update_selected_list("", false);
+
+        // Nothing selected: the request must refuse instead of planning the
+        // whole visible list (the old code read the display-row list here).
+        let _ = app.update(Message::BulkConvertRequested);
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("Select the entries to convert first.")
+        );
+
+        // A selection that excludes the TXD plans nothing from it.
+        app.editor.select_entry(0, false, false);
+        let messages = drain_task(app.update(Message::BulkConvertRequested));
+        let [Message::BulkConvertPlanned(planned)] = messages.as_slice() else {
+            panic!("expected one planned message, got {messages:?}");
+        };
+        let Ok(ready) = &**planned else {
+            panic!("planning failed: {:?}", planned.as_ref().as_ref().err());
+        };
+        assert!(ready.entries.is_empty(), "unselected TXD must not convert");
+        let _ = app.update(messages.into_iter().next().unwrap());
+        assert!(app.pending_bulk.is_none());
+
+        // Selecting the TXD plans exactly its one non-native texture.
+        app.editor.select_entry(1, false, false);
+        let messages = drain_task(app.update(Message::BulkConvertRequested));
+        let [Message::BulkConvertPlanned(planned)] = messages.as_slice() else {
+            panic!("expected one planned message, got {messages:?}");
+        };
+        let Ok(ready) = &**planned else {
+            panic!("planning failed: {:?}", planned.as_ref().as_ref().err());
+        };
+        assert_eq!(ready.entries.len(), 1);
+        assert_eq!(ready.entries[0].textures.len(), 1);
+        let _ = app.update(messages.into_iter().next().unwrap());
+        assert!(app.pending_bulk.is_some());
     }
 
     /// Run a task's side effects and collect the follow-up messages it
