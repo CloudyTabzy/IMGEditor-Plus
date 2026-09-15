@@ -328,6 +328,28 @@ pub(crate) struct ViewerLoadState {
     entry_name: String,
 }
 
+/// Stable archive snapshot used by the background manifest comparison. The
+/// generation guard prevents a late result from being shown after an import,
+/// rename, delete, or other archive mutation changed the entry table.
+#[derive(Debug, Clone)]
+pub(crate) struct CompareTarget {
+    pub(crate) request_id: u64,
+    pub(crate) archive_name: String,
+    pub(crate) archive_path: Option<PathBuf>,
+    pub(crate) archive_generation: u64,
+    pub(crate) manifest_path: PathBuf,
+    pub(crate) archive_entries: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CompareState {
+    pub(crate) target: CompareTarget,
+    pub(crate) manifest: Option<crate::compare::ParsedManifest>,
+    pub(crate) report: Option<crate::compare::CompareReport>,
+    pub(crate) case_sensitive: bool,
+    pub(crate) show_archive_only: bool,
+}
+
 /// Application event type. Heterogeneous by design — some variants carry
 /// large payloads (`Viewer3dLoadCompleted::Scene`, `ExportCompleted::Vec<String>`)
 /// while most are unit or single-value. Boxing the large variants would
@@ -411,6 +433,41 @@ pub enum Message {
         index: usize,
         result: Result<(usize, Vec<String>), String>,
     },
+    /// Export the selected archive's storage-order names in the compact
+    /// manifest format used by the original IMG Editor.
+    ExportEntryList,
+    ExportEntryListResult(Option<PathBuf>),
+    ExportEntryListCompleted {
+        archive_index: usize,
+        archive_name: String,
+        archive_path: Option<PathBuf>,
+        archive_generation: u64,
+        path: PathBuf,
+        count: usize,
+        result: Result<(), String>,
+    },
+    /// Compare the selected archive against a previously exported entry list.
+    CompareWithList,
+    CompareManifestResult(Option<PathBuf>),
+    CompareCompleted {
+        request_id: u64,
+        archive_index: usize,
+        archive_name: String,
+        archive_path: Option<PathBuf>,
+        archive_generation: u64,
+        manifest_path: PathBuf,
+        result: Result<
+            (
+                crate::compare::ParsedManifest,
+                crate::compare::CompareReport,
+            ),
+            String,
+        >,
+    },
+    CompareCaseSensitivityToggled(bool),
+    CompareShowArchiveOnlyToggled(bool),
+    CopyCompareMissing,
+    CloseCompare,
 
     SelectAll,
     InvertSelection,
@@ -1206,6 +1263,19 @@ pub struct App {
     pub sort_draft: Option<crate::sort::SortChain>,
     /// `true` while the Sort Manager modal is visible.
     pub show_sort_manager: bool,
+    /// Entry-list comparison report. The state remains present while the
+    /// manifest is being read so the modal can show a bounded loading view.
+    pub(crate) compare_state: Option<CompareState>,
+    /// Guards the native compare-manifest picker against duplicate launches.
+    pub(crate) compare_picker_open: bool,
+    /// Guards the native entry-list export picker against duplicate launches.
+    pub(crate) manifest_export_picker_open: bool,
+    /// Normalized phase for the compare dialog's indeterminate spinner.
+    pub(crate) compare_phase: f32,
+    /// Monotonic identity for the current compare request. Archive identity
+    /// alone is not enough when a canceled request is immediately replaced
+    /// with another request for the same archive and manifest path.
+    pub(crate) compare_request_id: u64,
     /// True while the texture-validator game picker is visible.
     pub validator_popup_open: bool,
     /// Whether entry rows are tinted by their validator verdict.
@@ -1383,6 +1453,11 @@ impl App {
             config,
             sort_draft: None,
             show_sort_manager: false,
+            compare_state: None,
+            compare_picker_open: false,
+            manifest_export_picker_open: false,
+            compare_phase: 0.0,
+            compare_request_id: 0,
             validator_popup_open: false,
             compat_highlight_enabled: true,
             tab_resize_drag: None,
@@ -1944,6 +2019,7 @@ impl App {
             || self.pending_close.is_some()
             || self.show_update_status.is_some()
             || self.show_sort_manager
+            || self.compare_state.is_some()
             || self.validator_popup_open
     }
 
@@ -2125,6 +2201,10 @@ impl App {
             || self.toast.is_some()
             || self.toast_reveal_text.is_some()
             || self.viewer_load.is_some()
+            || self
+                .compare_state
+                .as_ref()
+                .is_some_and(|state| state.report.is_none())
             || self.has_active_progress()
             || self.autoscroll_momentum.is_active()
             || (self.editor.archives().is_empty() && self.config.motion_enabled);
@@ -2785,6 +2865,8 @@ impl App {
 
     /// Actually close the archive and clean up everything keyed to it.
     fn close_archive_at(&mut self, index: usize) -> Task<Message> {
+        self.compare_state = None;
+        self.compare_phase = 0.0;
         let closing = self
             .editor
             .archives()
@@ -2958,6 +3040,8 @@ impl App {
             Shortcut::ImportReplace => Task::done(Message::ImportFiles),
             Shortcut::ExportAll => Task::done(Message::ExportAll),
             Shortcut::ExportSelected => Task::done(Message::ExportSelected),
+            Shortcut::ExportEntryList => Task::done(Message::ExportEntryList),
+            Shortcut::CompareWithList => Task::done(Message::CompareWithList),
             Shortcut::SelectAll => Task::done(Message::SelectAll),
             Shortcut::InvertSelection => Task::done(Message::InvertSelection),
             Shortcut::ClearSelection => Task::done(Message::ClearSelection),
@@ -4146,6 +4230,8 @@ impl App {
                 Task::none()
             }
             Message::SelectArchiveTab(index) => {
+                self.compare_state = None;
+                self.compare_phase = 0.0;
                 self.start_archive_tab_feedback(index);
                 self.start_click_ripple(RippleTarget::ArchiveTab(index));
                 self.set_active_texture_preview_target(None);
@@ -4414,6 +4500,272 @@ impl App {
                 Task::none()
             }
 
+            Message::ExportEntryList => self.start_manifest_export(),
+
+            Message::ExportEntryListResult(Some(path)) => {
+                self.manifest_export_picker_open = false;
+                let Some((archive_index, archive)) = self.editor.clone_selected_archive() else {
+                    self.toast = Some("No archive selected.".into());
+                    return Task::none();
+                };
+                let archive_name = archive.file_name.to_string();
+                let archive_path = archive.path.clone();
+                let archive_generation = archive.generation();
+                let names: Vec<String> = archive
+                    .entries
+                    .iter()
+                    .map(|entry| entry.file_name.to_string())
+                    .collect();
+                let count = names.len();
+                if let Some(parent) = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                {
+                    self.config.last_compare_folder = Some(parent.to_path_buf());
+                    self.save_config();
+                }
+                let task_path = path.clone();
+                let callback_name = archive_name.clone();
+                let callback_path = archive_path.clone();
+                dev_logger::breadcrumb(&format!(
+                    "entry-list export started: {archive_name} ({count} entries)"
+                ));
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            crate::compare::write_manifest_file(&task_path, &names)
+                                .map_err(|error| error.to_string())
+                        })
+                        .await
+                        .map_err(|error| format!("entry-list export task panicked: {error}"))?
+                    },
+                    move |result| Message::ExportEntryListCompleted {
+                        archive_index,
+                        archive_name: callback_name,
+                        archive_path: callback_path,
+                        archive_generation,
+                        path,
+                        count,
+                        result,
+                    },
+                )
+            }
+            Message::ExportEntryListResult(None) => {
+                self.manifest_export_picker_open = false;
+                Task::none()
+            }
+            Message::ExportEntryListCompleted {
+                archive_index,
+                archive_name,
+                archive_path,
+                archive_generation,
+                path,
+                count,
+                result,
+            } => {
+                let target_matches = self.compare_archive_matches(
+                    archive_index,
+                    &archive_name,
+                    archive_path.as_ref(),
+                    archive_generation,
+                );
+                match result {
+                    Ok(()) => {
+                        if target_matches {
+                            if let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
+                            {
+                                archive.add_log(format!(
+                                    "Exported entry list ({count} names) to {}",
+                                    path.display()
+                                ));
+                            }
+                        }
+                        self.toast = Some(format!(
+                            "Exported {count} entry names to {}.",
+                            path.display()
+                        ));
+                        dev_logger::breadcrumb(&format!(
+                            "entry-list export completed: {} ({count} entries)",
+                            path.display()
+                        ));
+                    }
+                    Err(error) => {
+                        self.toast = Some(format!("Entry-list export failed: {error}"));
+                    }
+                }
+                Task::none()
+            }
+
+            Message::CompareWithList => self.start_manifest_compare(),
+
+            Message::CompareManifestResult(Some(path)) => {
+                self.compare_picker_open = false;
+                let Some((archive_index, archive)) = self.editor.clone_selected_archive() else {
+                    self.toast = Some("No archive selected.".into());
+                    return Task::none();
+                };
+                let target = CompareTarget {
+                    request_id: self.compare_request_id.wrapping_add(1),
+                    archive_name: archive.file_name.to_string(),
+                    archive_path: archive.path.clone(),
+                    archive_generation: archive.generation(),
+                    manifest_path: path.clone(),
+                    archive_entries: archive
+                        .entries
+                        .iter()
+                        .map(|entry| entry.file_name.to_string())
+                        .collect(),
+                };
+                self.compare_request_id = target.request_id;
+                let request_id = target.request_id;
+                if let Some(parent) = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                {
+                    self.config.last_compare_folder = Some(parent.to_path_buf());
+                    self.save_config();
+                }
+                let task_entries = target.archive_entries.clone();
+                let task_path = target.manifest_path.clone();
+                let archive_name = target.archive_name.clone();
+                let archive_path = target.archive_path.clone();
+                let archive_generation = target.archive_generation;
+                let manifest_path = target.manifest_path.clone();
+                self.compare_state = Some(CompareState {
+                    target,
+                    manifest: None,
+                    report: None,
+                    case_sensitive: true,
+                    show_archive_only: false,
+                });
+                self.compare_phase = 0.0;
+                dev_logger::breadcrumb(&format!(
+                    "entry-list comparison started: {archive_name} against {}",
+                    manifest_path.display()
+                ));
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            let manifest = crate::compare::read_manifest_file(&task_path)?;
+                            let report = crate::compare::compare_names(
+                                &task_entries,
+                                &manifest,
+                                crate::compare::CompareOptions::default(),
+                            );
+                            Ok((manifest, report))
+                        })
+                        .await
+                        .map_err(|error| format!("comparison task panicked: {error}"))?
+                    },
+                    move |result| Message::CompareCompleted {
+                        request_id,
+                        archive_index,
+                        archive_name,
+                        archive_path,
+                        archive_generation,
+                        manifest_path,
+                        result,
+                    },
+                )
+            }
+            Message::CompareManifestResult(None) => {
+                self.compare_picker_open = false;
+                Task::none()
+            }
+            Message::CompareCompleted {
+                request_id,
+                archive_index,
+                archive_name,
+                archive_path,
+                archive_generation,
+                manifest_path,
+                result,
+            } => {
+                let target_matches = self.compare_archive_matches(
+                    archive_index,
+                    &archive_name,
+                    archive_path.as_ref(),
+                    archive_generation,
+                );
+                let state_matches = self
+                    .compare_state
+                    .as_ref()
+                    .is_some_and(|state| {
+                        state.target.request_id == request_id
+                            && state.target.manifest_path == manifest_path
+                    });
+                if !target_matches || !state_matches {
+                    let current_request = self
+                        .compare_state
+                        .as_ref()
+                        .map(|state| state.target.request_id);
+                    if current_request == Some(request_id) {
+                        self.compare_state = None;
+                        self.compare_phase = 0.0;
+                        self.toast = Some(
+                            "Comparison discarded because the archive changed; please retry."
+                                .into(),
+                        );
+                    }
+                    dev_logger::breadcrumb("entry-list comparison discarded as stale");
+                    return Task::none();
+                }
+                match result {
+                    Ok((manifest, report)) => {
+                        let missing = report.missing.len();
+                        let archive_only = report.archive_only.len();
+                        if let Some(state) = self.compare_state.as_mut() {
+                            state.manifest = Some(manifest);
+                            state.report = Some(report);
+                        }
+                        self.compare_phase = 0.0;
+                        dev_logger::breadcrumb(&format!(
+                            "entry-list comparison completed: {missing} missing, {archive_only} archive-only"
+                        ));
+                    }
+                    Err(error) => {
+                        self.compare_state = None;
+                        self.compare_phase = 0.0;
+                        self.toast = Some(format!("Entry-list comparison failed: {error}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::CompareCaseSensitivityToggled(case_sensitive) => {
+                if let Some(state) = self.compare_state.as_mut() {
+                    state.case_sensitive = case_sensitive;
+                }
+                self.recompute_compare_report();
+                Task::none()
+            }
+            Message::CompareShowArchiveOnlyToggled(show_archive_only) => {
+                if let Some(state) = self.compare_state.as_mut() {
+                    state.show_archive_only = show_archive_only;
+                }
+                Task::none()
+            }
+            Message::CopyCompareMissing => {
+                let Some(report) = self
+                    .compare_state
+                    .as_ref()
+                    .and_then(|state| state.report.as_ref())
+                else {
+                    return Task::none();
+                };
+                if report.missing.is_empty() {
+                    self.toast = Some("There are no missing entries to copy.".into());
+                    return Task::none();
+                }
+                let count = report.missing.len();
+                self.toast = Some(format!("Copied {count} missing entry name(s)."));
+                iced::clipboard::write::<Message>(report.missing.join("\r\n"))
+            }
+            Message::CloseCompare => {
+                self.compare_state = None;
+                self.compare_phase = 0.0;
+                Task::none()
+            }
+
             Message::SelectAll => {
                 self.editor.select_all(true);
                 let task = self.refresh_inspection();
@@ -4432,6 +4784,11 @@ impl App {
                 if self.pending_close.is_some() {
                     self.pending_close = None;
                     self.close_after_save = None;
+                    return Task::none();
+                }
+                if self.compare_state.is_some() {
+                    self.compare_state = None;
+                    self.compare_phase = 0.0;
                     return Task::none();
                 }
                 if self.pending_import.is_some() {
@@ -5049,6 +5406,13 @@ impl App {
                     if self.viewer_load.is_some() {
                         self.viewer_load_phase =
                             (self.viewer_load_phase + dt.as_secs_f32() * 0.72).fract();
+                    }
+                    if self
+                        .compare_state
+                        .as_ref()
+                        .is_some_and(|state| state.report.is_none())
+                    {
+                        self.compare_phase = (self.compare_phase + dt.as_secs_f32() * 0.8).fract();
                     }
                     if self.has_active_progress() {
                         self.shimmer_phase = (self.shimmer_phase + dt.as_secs_f32() * 0.9).fract();
@@ -6946,6 +7310,89 @@ impl App {
         dialogs::save_folder().map(Message::ExportFolderResult)
     }
 
+    fn start_manifest_export(&mut self) -> Task<Message> {
+        if self.manifest_export_picker_open {
+            return Task::none();
+        }
+        let Some((_index, archive)) = self.editor.clone_selected_archive() else {
+            self.toast = Some("No archive selected.".into());
+            return Task::none();
+        };
+        let archive_name = archive.file_name.to_string();
+        let default_directory = self
+            .config
+            .last_compare_folder
+            .clone()
+            .filter(|path| path.is_dir())
+            .or_else(|| {
+                archive
+                    .path
+                    .as_deref()
+                    .and_then(|path| path.parent())
+                    .map(PathBuf::from)
+            });
+        let default_path = default_directory
+            .clone()
+            .map(|directory| directory.join(format!("{archive_name}.compare")))
+            .unwrap_or_else(|| PathBuf::from(format!("{archive_name}.compare")));
+        self.manifest_export_picker_open = true;
+        dev_logger::breadcrumb("user: export archive entry list");
+        dialogs::save_compare_manifest(default_path, default_directory)
+            .map(Message::ExportEntryListResult)
+    }
+
+    fn start_manifest_compare(&mut self) -> Task<Message> {
+        if self.compare_picker_open || self.compare_state.is_some() {
+            return Task::none();
+        }
+        let Some((_index, archive)) = self.editor.clone_selected_archive() else {
+            self.toast = Some("No archive selected.".into());
+            return Task::none();
+        };
+        if archive.entries.is_empty() {
+            self.toast = Some("The selected archive has no entries to compare.".into());
+            return Task::none();
+        }
+        self.compare_picker_open = true;
+        dev_logger::breadcrumb("user: compare archive with entry list");
+        dialogs::open_compare_manifest(self.config.last_compare_folder.clone())
+            .map(Message::CompareManifestResult)
+    }
+
+    fn compare_archive_matches(
+        &self,
+        archive_index: usize,
+        archive_name: &str,
+        archive_path: Option<&PathBuf>,
+        archive_generation: u64,
+    ) -> bool {
+        self.editor
+            .archives()
+            .get(archive_index)
+            .is_some_and(|archive| {
+                archive.file_name == archive_name
+                    && archive.path.as_ref() == archive_path
+                    && archive.generation() == archive_generation
+            })
+    }
+
+    fn recompute_compare_report(&mut self) {
+        let Some(state) = self.compare_state.as_mut() else {
+            return;
+        };
+        let Some(manifest) = state.manifest.as_ref() else {
+            state.report = None;
+            return;
+        };
+        state.report = Some(crate::compare::compare_names(
+            &state.target.archive_entries,
+            manifest,
+            crate::compare::CompareOptions {
+                case_sensitive: state.case_sensitive,
+            },
+        ));
+    }
+
     fn poll_viewer_rxs(&mut self) {
         let mut logs: Vec<String> = Vec::new();
         let mut toast: Option<String> = None;
@@ -7057,6 +7504,10 @@ impl App {
             || self.toast.is_some()
             || self.toast_reveal_text.is_some()
             || self.viewer_load.is_some()
+            || self
+                .compare_state
+                .as_ref()
+                .is_some_and(|state| state.report.is_none())
             || self.has_active_progress()
             || self.autoscroll_momentum.is_active()
             || (self.editor.archives().is_empty() && self.config.motion_enabled)
@@ -7229,6 +7680,20 @@ impl App {
             Item::new(menu_button(
                 "Pack archive".to_string(),
                 Message::PackArchive,
+            )),
+            Item::new(menu_button(
+                format!(
+                    "Export as list ({})",
+                    shortcut_display(Shortcut::ExportEntryList)
+                ),
+                Message::ExportEntryList,
+            )),
+            Item::new(menu_button(
+                format!(
+                    "Compare with list ({})",
+                    shortcut_display(Shortcut::CompareWithList)
+                ),
+                Message::CompareWithList,
             )),
             Item::new(menu_button(
                 format!("Close tab ({})", shortcut_display(Shortcut::Close)),
@@ -7550,7 +8015,8 @@ fn menu_icon(message: &Message) -> Element<'static, Message> {
         Message::OpenSortManager => icons::sort(),
         Message::ImportFiles => icons::import(),
         Message::ImportFolder => icons::open_archive(),
-        Message::ExportAll | Message::ExportSelected => icons::export(),
+        Message::ExportAll | Message::ExportSelected | Message::ExportEntryList => icons::export(),
+        Message::CompareWithList => icons::search(),
         Message::SelectAll => icons::check(),
         Message::InvertSelection => icons::invert_selection(),
         Message::ClearSelection => icons::close(),
@@ -7870,6 +8336,91 @@ mod tests {
                 .collect::<Vec<_>>()
                 .await
         })
+    }
+
+    #[test]
+    fn compare_manifest_completion_installs_report_and_preserves_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entries.compare");
+        std::fs::write(&path, "first.dff\r\nmissing.col\r\nextra.txd").unwrap();
+
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0]
+            .entries
+            .push(EntryInfo::new("extra.txd"));
+        app.editor.archives_mut()[0].update_selected_list("", false);
+
+        let messages = drain_task(app.update(Message::CompareManifestResult(Some(path))));
+        assert_eq!(messages.len(), 1);
+        for message in messages {
+            let _ = app.update(message);
+        }
+
+        let state = app.compare_state.as_ref().expect("comparison state");
+        let report = state.report.as_ref().expect("comparison report");
+        assert_eq!(report.missing, ["missing.col"]);
+        assert_eq!(report.archive_only, ["second.txd"]);
+        assert!(state.case_sensitive);
+    }
+
+    #[test]
+    fn stale_compare_completion_is_discarded_after_archive_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entries.compare");
+        std::fs::write(&path, "first.dff").unwrap();
+
+        let mut app = test_app_with_entries();
+        let task = app.update(Message::CompareManifestResult(Some(path)));
+        app.editor.archives_mut()[0].invalidate_entry_caches();
+        for message in drain_task(task) {
+            let _ = app.update(message);
+        }
+
+        assert!(app.compare_state.is_none());
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("archive changed"))
+        );
+    }
+
+    #[test]
+    fn canceled_compare_cannot_replace_a_new_request_for_the_same_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entries.compare");
+        std::fs::write(&path, "first.dff").unwrap();
+
+        let mut app = test_app_with_entries();
+        let first_messages =
+            drain_task(app.update(Message::CompareManifestResult(Some(path.clone()))));
+        let _ = app.update(Message::CloseCompare);
+
+        let second_task = app.update(Message::CompareManifestResult(Some(path)));
+        assert!(
+            app.compare_state
+                .as_ref()
+                .is_some_and(|state| state.report.is_none()),
+            "the replacement request should still be loading"
+        );
+
+        for message in first_messages {
+            let _ = app.update(message);
+        }
+        assert!(
+            app.compare_state
+                .as_ref()
+                .is_some_and(|state| state.report.is_none()),
+            "a canceled request must not clear or complete its replacement"
+        );
+
+        for message in drain_task(second_task) {
+            let _ = app.update(message);
+        }
+        assert!(
+            app.compare_state
+                .as_ref()
+                .is_some_and(|state| state.report.is_some())
+        );
     }
 
     #[test]

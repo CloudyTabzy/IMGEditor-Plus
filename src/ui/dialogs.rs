@@ -25,6 +25,33 @@ pub fn open_file() -> Task<Option<PathBuf>> {
     )
 }
 
+/// Pick an entry-list manifest for archive comparison. The remembered
+/// directory is only used when it still exists; rfd otherwise falls back to
+/// its normal platform location.
+#[cfg(feature = "native-dialogs")]
+pub fn open_compare_manifest(directory: Option<PathBuf>) -> Task<Option<PathBuf>> {
+    Task::perform(
+        async move {
+            let mut dialog = rfd::AsyncFileDialog::new()
+                .set_title("Compare with entry list")
+                .add_filter("IMG entry list", &["img.compare", "compare"]);
+            if let Some(directory) = directory.filter(|path| path.is_dir()) {
+                dialog = dialog.set_directory(directory);
+            }
+            dialog
+                .pick_file()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        },
+        |path| path,
+    )
+}
+
+#[cfg(not(feature = "native-dialogs"))]
+pub fn open_compare_manifest(_directory: Option<PathBuf>) -> Task<Option<PathBuf>> {
+    Task::none()
+}
+
 #[cfg(not(feature = "native-dialogs"))]
 pub fn open_file() -> Task<Option<PathBuf>> {
     Task::none()
@@ -143,6 +170,43 @@ pub fn save_archive(default_path: PathBuf, version: ImgVersion) -> Task<Option<S
         },
         |choice| choice,
     )
+}
+
+/// Pick the destination for an exported entry-list manifest.
+#[cfg(feature = "native-dialogs")]
+pub fn save_compare_manifest(
+    default_path: PathBuf,
+    directory: Option<PathBuf>,
+) -> Task<Option<PathBuf>> {
+    let file_name = default_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("archive.img.compare")
+        .to_string();
+    Task::perform(
+        async move {
+            let mut dialog = rfd::AsyncFileDialog::new()
+                .set_title("Export entry list")
+                .add_filter("IMG entry list", &["img.compare", "compare"])
+                .set_file_name(file_name);
+            if let Some(directory) = directory.filter(|path| path.is_dir()) {
+                dialog = dialog.set_directory(directory);
+            }
+            dialog
+                .save_file()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        },
+        |path| path,
+    )
+}
+
+#[cfg(not(feature = "native-dialogs"))]
+pub fn save_compare_manifest(
+    _default_path: PathBuf,
+    _directory: Option<PathBuf>,
+) -> Task<Option<PathBuf>> {
+    Task::none()
 }
 
 #[cfg(not(feature = "native-dialogs"))]

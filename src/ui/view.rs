@@ -2625,6 +2625,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_unsaved_dialog(app),
         build_update_status(app),
         build_sort_manager(app),
+        build_compare_dialog(app),
         build_toast_overlay(app),
         build_validator_popup(app),
         build_replace_dialog(app),
@@ -3049,6 +3050,143 @@ fn build_bulk_dialog(app: &App) -> Option<Element<'_, Message>> {
     Some(modal_box(
         "Convert to target dialect",
         container(body).width(Length::Fixed(460.0)),
+    ))
+}
+
+/// Entry-list comparison dialog. The file read happens on a blocking worker;
+/// this view deliberately keeps the same modal card while it is in flight so
+/// the workspace layout and its scroll state remain untouched.
+fn build_compare_dialog(app: &App) -> Option<Element<'_, Message>> {
+    let state = app.compare_state.as_ref()?;
+    let mut body = Column::new().spacing(6).width(Length::Fill);
+
+    if let Some(report) = state.report.as_ref() {
+        let manifest = state.manifest.as_ref()?;
+        body = body.push(fonts::caption_wrapped(format!(
+            "Manifest: {}",
+            state.target.manifest_path.display()
+        )));
+        body = body.push(fonts::body_wrapped(format!(
+            "Archive: {} · {} archive entries",
+            state.target.archive_name, report.archive_entry_count
+        )));
+        body = body.push(fonts::caption_wrapped(format!(
+            "{} manifest name(s) ({} unique) · {} matched · {} missing ({} unique)",
+            report.manifest_entry_count,
+            report.unique_manifest_count,
+            report.matched_count,
+            report.missing.len(),
+            report.unique_missing_count
+        )));
+        body = body.push(
+            checkbox(state.case_sensitive)
+                .label("Case-sensitive matching")
+                .on_toggle(Message::CompareCaseSensitivityToggled),
+        );
+        body = body.push(
+            checkbox(state.show_archive_only)
+                .label("Show archive-only entries")
+                .on_toggle(Message::CompareShowArchiveOnlyToggled),
+        );
+
+        if report.duplicate_manifest_count > 0 || manifest.ignored_blank_lines > 0 {
+            let mut details = Vec::new();
+            if report.duplicate_manifest_count > 0 {
+                details.push(format!(
+                    "{} duplicate manifest line(s)",
+                    report.duplicate_manifest_count
+                ));
+            }
+            if manifest.ignored_blank_lines > 0 {
+                details.push(format!(
+                    "{} blank line(s) ignored",
+                    manifest.ignored_blank_lines
+                ));
+            }
+            body = body.push(fonts::caption_wrapped(details.join(" · ")));
+        }
+
+        let mut results = Column::new().spacing(4).width(Length::Fill);
+        results = results.push(fonts::strong(format!(
+            "Missing from archive ({})",
+            report.missing.len()
+        )));
+        if report.missing.is_empty() {
+            results = results.push(fonts::caption("No missing entries found."));
+        } else {
+            for name in report.missing.iter().take(500) {
+                results = results.push(fonts::caption_wrapped(name.clone()));
+            }
+            if report.missing.len() > 500 {
+                results = results.push(fonts::caption_wrapped(format!(
+                    "… and {} more missing name(s)",
+                    report.missing.len() - 500
+                )));
+            }
+        }
+        if state.show_archive_only {
+            results = results.push(Space::new().height(Length::Fixed(6.0)));
+            results = results.push(fonts::strong(format!(
+                "Archive-only entries ({})",
+                report.archive_only.len()
+            )));
+            if report.archive_only.is_empty() {
+                results = results.push(fonts::caption("No archive-only entries found."));
+            } else {
+                for name in report.archive_only.iter().take(500) {
+                    results = results.push(fonts::caption_wrapped(name.clone()));
+                }
+                if report.archive_only.len() > 500 {
+                    results = results.push(fonts::caption_wrapped(format!(
+                        "… and {} more archive-only name(s)",
+                        report.archive_only.len() - 500
+                    )));
+                }
+            }
+        }
+        body = body.push(
+            Scrollable::new(results)
+                .height(Length::Fixed(260.0))
+                .width(Length::Fill),
+        );
+
+        let mut copy = button(fonts::body("Copy missing names"));
+        if !report.missing.is_empty() {
+            copy = copy.on_press(Message::CopyCompareMissing);
+        }
+        body = body.push(
+            row![
+                copy,
+                button(fonts::body("Close")).on_press(Message::CloseCompare),
+            ]
+            .spacing(8),
+        );
+    } else {
+        body = body.push(
+            container(
+                column![
+                    canvas::Canvas::new(LoadingSpinner::new(app.compare_phase))
+                        .width(Length::Fixed(48.0))
+                        .height(Length::Fixed(48.0)),
+                    fonts::header("Comparing entry list"),
+                    fonts::caption_wrapped(format!(
+                        "Reading {} and checking it against {}…",
+                        state.target.manifest_path.display(),
+                        state.target.archive_name
+                    )),
+                    button(fonts::body("Cancel")).on_press(Message::CloseCompare),
+                ]
+                .spacing(8)
+                .align_x(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .align_x(Alignment::Center),
+        );
+    }
+
+    Some(modal_box(
+        "Compare with list",
+        container(body).width(Length::Fixed(440.0)),
     ))
 }
 

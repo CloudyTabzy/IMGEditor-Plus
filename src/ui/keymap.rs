@@ -15,6 +15,8 @@ pub enum Shortcut {
     ImportReplace,
     ExportAll,
     ExportSelected,
+    ExportEntryList,
+    CompareWithList,
     SelectAll,
     InvertSelection,
     ClearSelection,
@@ -36,6 +38,8 @@ impl Shortcut {
             Shortcut::ImportReplace => "Import and replace",
             Shortcut::ExportAll => "Export all",
             Shortcut::ExportSelected => "Export selected",
+            Shortcut::ExportEntryList => "Export as list",
+            Shortcut::CompareWithList => "Compare with list",
             Shortcut::SelectAll => "Select all",
             Shortcut::InvertSelection => "Invert selection",
             Shortcut::ClearSelection => "Clear selection",
@@ -84,6 +88,8 @@ pub fn shortcut_chord(shortcut: Shortcut) -> KeyChord {
             Physical::Code(Code::KeyE),
             Modifiers::CTRL | Modifiers::SHIFT,
         ),
+        Shortcut::ExportEntryList => (Physical::Code(Code::KeyL), Modifiers::CTRL),
+        Shortcut::CompareWithList => (Physical::Code(Code::KeyP), Modifiers::CTRL),
         Shortcut::SelectAll => (Physical::Code(Code::KeyA), Modifiers::CTRL),
         Shortcut::InvertSelection => (
             Physical::Code(Code::KeyA),
@@ -238,6 +244,8 @@ pub fn all_shortcuts() -> Vec<Shortcut> {
         Shortcut::ImportReplace,
         Shortcut::ExportAll,
         Shortcut::ExportSelected,
+        Shortcut::ExportEntryList,
+        Shortcut::CompareWithList,
         Shortcut::SelectAll,
         Shortcut::InvertSelection,
         Shortcut::ClearSelection,
@@ -267,6 +275,18 @@ mod tests {
             Modifiers::CTRL | Modifiers::SHIFT,
         );
         assert_eq!(detected, Some(Shortcut::SaveAs));
+    }
+
+    #[test]
+    fn detect_compare_manifest_shortcuts() {
+        assert_eq!(
+            detect_pressed(Physical::Code(Code::KeyL), Modifiers::CTRL),
+            Some(Shortcut::ExportEntryList)
+        );
+        assert_eq!(
+            detect_pressed(Physical::Code(Code::KeyP), Modifiers::CTRL),
+            Some(Shortcut::CompareWithList)
+        );
     }
 
     #[test]

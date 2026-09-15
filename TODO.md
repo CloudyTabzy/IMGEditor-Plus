@@ -11,6 +11,15 @@ separate GTA animation adapters. The remaining
 are tracked below. The shipped compatibility-engine details are recorded in
 the release notes and the dedicated documents under `docs/`.
 
+## 0. Entry-list comparison (implemented)
+
+The Alci-compatible name manifest workflow is now shipped. Ctrl+L exports raw
+archive storage order with UTF-8/CRLF/no trailing newline, and Ctrl+P opens an
+asynchronous, generation-guarded comparison report. The default result remains
+exact, case-sensitive, one-directional missing-name containment; the report
+adds opt-in case-insensitive matching and archive-only diagnostics, plus
+duplicate/blank-line counts and copyable results. See docs/compare-feature.md.
+
 Shipped in v4.5.0 (previously listed here as unreleased):
 
 - Byte-budgeted `quick_cache` LRU for decoded 3D scenes (256 MiB desktop / 64 MiB mobile, keyed by `(archive, generation, entry)`) and texture previews (128 MiB / 32 MiB, keyed by entry index); `ArchiveInfo::generation` invalidates both on entry mutations. `Arc<Scene>` / `Arc<Vec<DecodedTexture>>` values are shared zero-copy with the viewer handle and per-frame lookups.

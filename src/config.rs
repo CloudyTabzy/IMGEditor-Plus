@@ -223,6 +223,8 @@ pub struct Config {
     pub window: WindowGeometry,
     pub last_export_folder: Option<PathBuf>,
     pub last_open_folder: Option<PathBuf>,
+    /// Last directory used for entry-list export or comparison.
+    pub last_compare_folder: Option<PathBuf>,
     pub recent_files: RecentFiles,
     /// Default sort chain applied to newly-opened archives. Per-archive
     /// sort state lives on `ArchiveInfo::sort_chain` and is initialized
@@ -333,6 +335,7 @@ impl Default for Config {
             window: WindowGeometry::default(),
             last_export_folder: None,
             last_open_folder: None,
+            last_compare_folder: None,
             recent_files: RecentFiles::new(),
             default_sort_chain: SortChain::default(),
             update_check_enabled: true,
@@ -412,6 +415,11 @@ impl Config {
                 "last_open_folder" => {
                     if !value.is_empty() {
                         config.last_open_folder = Some(PathBuf::from(value));
+                    }
+                }
+                "last_compare_folder" => {
+                    if !value.is_empty() {
+                        config.last_compare_folder = Some(PathBuf::from(value));
                     }
                 }
                 key if key.starts_with("recent_") => {
@@ -615,6 +623,9 @@ impl Config {
         if let Some(folder) = &self.last_open_folder {
             writeln!(file, "last_open_folder={}", folder.display())?;
         }
+        if let Some(folder) = &self.last_compare_folder {
+            writeln!(file, "last_compare_folder={}", folder.display())?;
+        }
         for (index, entry) in self.recent_files.iter() {
             writeln!(file, "recent_{}={}", index, entry.path.display())?;
         }
@@ -816,6 +827,7 @@ mod tests {
         assert_eq!(config.theme, ThemeMode::System);
         assert!(config.window.size.is_none());
         assert!(config.window.position.is_none());
+        assert!(config.last_compare_folder.is_none());
         assert!(config.show_navigation_gizmo);
         assert!(config.autoscroll_momentum_enabled);
         assert!(config.motion_enabled);
@@ -843,6 +855,7 @@ mod tests {
             },
             last_export_folder: Some(PathBuf::from("C:/out")),
             last_open_folder: Some(PathBuf::from("C:/in")),
+            last_compare_folder: Some(PathBuf::from("C:/lists")),
             recent_files: RecentFiles::new(),
             default_sort_chain: SortChain::default(),
             update_check_enabled: false,
@@ -878,6 +891,7 @@ mod tests {
         assert!(loaded.window.maximized);
         assert_eq!(loaded.last_export_folder, Some(PathBuf::from("C:/out")));
         assert_eq!(loaded.last_open_folder, Some(PathBuf::from("C:/in")));
+        assert_eq!(loaded.last_compare_folder, Some(PathBuf::from("C:/lists")));
         assert_eq!(loaded.archive_tab_width, 220.0);
         assert_eq!(loaded.recent_files.len(), 2);
         // MRU-first: b was touched last, so it's at index 0.
