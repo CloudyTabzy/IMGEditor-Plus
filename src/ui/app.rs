@@ -79,7 +79,10 @@ pub(crate) fn is_animation_group_name(name: &str) -> bool {
 /// Name heuristic pairing an AGR with its model inside one archive: exact
 /// stem first (`PLAYER.agr` -> `PLAYER.nif`), then the stem suffix after the
 /// last underscore (`C_Player.agr` -> `Player.nif`).
-fn find_agr_model_entry(entries: &[crate::archive::EntryInfo], agr_name: &str) -> Option<usize> {
+pub(crate) fn find_agr_model_entry(
+    entries: &[crate::archive::EntryInfo],
+    agr_name: &str,
+) -> Option<usize> {
     let stem = agr_name
         .rsplit_once('.')
         .map(|(stem, _)| stem)

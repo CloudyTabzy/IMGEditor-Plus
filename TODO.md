@@ -209,6 +209,14 @@ remain pending.
     envelope, cover Mandy's right-arm deformation with a real-corpus gate,
     and bind her full `+3` stream (placeholder skipped) with the
     `MANDY_PUKE_LOOP` render GUI-validated 2026-09-15.
+  - [x] Corpus-wide AGR audit (`agr_corpus_audit_when_requested`; 433/550
+    paired, 280 character-shaped): the placeholder-skip rule holds on every
+    pair, with offsets `+1` (193), `+2` (43), `+3` (38) and `+5` (2) set by
+    the model's wrapper count. Fixed the `Editable Poly` body-hiding
+    regression it found (`wrapper_ped_body_stays_visible_when_available`).
+    Honest leftovers: 2-track weapon AGRs (0/2), `V_*` vehicle mission
+    groups (~12/35) and nonsensical heuristic pairs — association work, not
+    binding work.
 
 AV0–AV7 establish the shared player; AV8 is not a prerequisite for real-file
 work. Bully E0–E4 may proceed alongside it; E5 consumes the verified runtime.

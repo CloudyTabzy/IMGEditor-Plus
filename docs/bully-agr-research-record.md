@@ -661,6 +661,37 @@ anchors.
 the app — the wrapper case is closed, and the same run keeps the player
 family and `RAT_PED` at their verified `+1` order.
 
+#### Wrapper-offset classes across the corpus (2026-09-15 audit)
+
+A full `World.img` sweep (`agr_corpus_audit_when_requested`; 550 AGRs, 433
+paired, 280 character-shaped) shows the placeholder-skip rule holds on every
+pair — the semantic root just sits behind a different number of wrapper
+branches per model, so the effective offset varies but never the rule:
+
+| offset | pairs | representative models |
+| --- | ---: | --- |
+| `+1` | 193 | `PLAYER.nif` (Jimmy and the player mission/action libraries), `RAT_PED`, the plain ped rigs |
+| `+2` | 43 | `DOH3a_Gurney`, `GN_Sexygirl`, `TO_Business1`, `Nemesis_Gary`, `NDH1a_Algernon`, `GRH3a_Ricky` |
+| `+3` | 38 | `JKGirl_Mandy`, `JKGirl_MandyUW`, `PRGirl_Pinky`, `GRGirl_Lola`, `TO_Cop`, `TE_Art`, `Player_Mascot`, `TO_Oldman2` |
+| `+5` | 2 | `bike.nif`, `SCOOTER.nif` (four wrappers before an uppercase `DUMMY`) |
+
+The sweep also exposed a rendering bug from the Mandy hardening: the
+helper-mesh suppression hid every mesh named `Editable Poly`, but that 3ds
+Max default name is also used for the *body* of several ped NIFs (for
+example `DOH3a_Gurney`'s skinned 32-joint body), so the `+2`/`+3` classes
+rendered empty. The rule now hides `Editable Poly`/`Mesh` only when the mesh
+is unskinned; the existing `ARROW`-parent and six-vertex checks still cover
+Mandy's helper geometry.
+`wrapper_ped_body_stays_visible_when_available` pins the regression.
+
+Known sweep leftovers (honest partials, no twist risk): three 2-track
+weapon AGRs (`BATON`→`bat.nif`, `BROCKETL`→`rock.nif`,
+`Slingsh`→`slingshot.nif`) bind 0/2 through the rest-angle admission; the
+`V_*` vehicle mission groups (`V_Bike` 12/35, `V_COPBIKE` 9/35,
+`V_SCOOTER` 12/35) and the nonsensical heuristic pairs
+(`2_S02CharSheets`→`charSheet.nif`, `2_06MovieTickets`→`ticket.nif`) stay
+partial and mostly need association/pairing work rather than binding work.
+
 The NIF also contains axis/arrow helper meshes. They remain in the hierarchy
 for skin and binding validation, but are marked preview-only: they do not draw,
 do not contribute to posed bounds or floor placement, and retain an empty
@@ -789,6 +820,7 @@ The core test names that encode the latest lessons are:
 - `action_only_player_clips_recover_root_tracks_when_available`;
 - `ordinary_character_rig_keeps_the_exported_order_when_available`;
 - `wrapper_rig_stream_skips_the_placeholder`;
+- `wrapper_ped_body_stays_visible_when_available`;
 - `numeric_recovery_requires_the_verified_dummy_identity`;
 - `stepping_never_stalls_at_grid_rounding`;
 - `focus_loss_cancels_an_active_drag`;

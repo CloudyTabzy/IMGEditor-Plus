@@ -223,73 +223,56 @@ pub struct BindingCalibration {
     pub diagnostics: Vec<String>,
 }
 
-/// Build the cross-clip calibration: score each target against each node by
-/// the closest key-to-rest angle across all clips, then solve one ordered,
-/// one-to-one assignment. AGR's packed curve stream follows the source rig's
-/// depth-first order, so preserving that order prevents a symmetric helper or
-/// sibling from consuming a real limb and changing the inherited parent frame.
-pub fn calibrate_bindings(
+/// Minimum angle (degrees) between a target's rotation keys and a node's
+/// rest rotation; `None` when either side is missing or unusable.
+fn rotation_min_angle(
+    channels: &[crate::inspector::animation::clip::TrackChannel],
+    rest: &crate::inspector::animation::model::NodeTransform,
+) -> Option<f32> {
+    use crate::inspector::animation::clip::TrackChannel;
+
+    if !rest.rotation.is_finite() || rest.rotation.length_squared() <= f32::EPSILON {
+        return None;
+    }
+    let rest = rest.rotation.normalize();
+    channels
+        .iter()
+        .filter_map(|channel| match channel {
+            TrackChannel::Rotation { values, .. } => Some(values.as_slice()),
+            TrackChannel::Translation { .. } | TrackChannel::Scale { .. } => None,
+        })
+        .flat_map(|values| values.iter())
+        .filter_map(|key| {
+            if !key.is_finite() || key.length_squared() <= f32::EPSILON {
+                return None;
+            }
+            let key = key.normalize();
+            let dot = key.dot(rest).abs().clamp(-1.0, 1.0);
+            Some((dot.acos() * 2.0).to_degrees())
+        })
+        .reduce(f32::min)
+}
+
+/// Numeric part of a generated `track_NNN` identity.
+fn track_number(name: &str) -> Option<i64> {
+    name.strip_prefix("track_")
+        .and_then(|rest| rest.parse::<i64>().ok())
+}
+
+/// Shared calibration inputs: one representative rotation channel list per
+/// AGR target (aggregated over valid clips) and the admissible non-mesh
+/// candidate set (skin-derived for skinned models). Used by the live
+/// calibration and by the diagnostics-only audit so both measure the same
+/// semantics.
+fn calibration_inputs(
     model: &ModelAsset,
     library: &crate::inspector::animation::clip::AnimationLibrary,
-) -> BindingCalibration {
+) -> (
+    Vec<(String, Vec<crate::inspector::animation::clip::TrackChannel>)>,
+    Vec<(String, NodeId)>,
+) {
     use crate::inspector::animation::clip::TrackChannel;
-    use std::collections::{BTreeMap, HashMap, HashSet};
-
-    const MAX_BIND_ANGLE_DEG: f32 = 20.0;
-    const CANDIDATE_SKIP_COST: f32 = 0.25;
-    const TARGET_SKIP_COST: f32 = 24.0;
-    const MAX_ASSIGNMENT_CELLS: usize = 4_000_000;
-
-    fn rotation_min_angle(
-        channels: &[TrackChannel],
-        rest: &crate::inspector::animation::model::NodeTransform,
-    ) -> Option<f32> {
-        if !rest.rotation.is_finite() || rest.rotation.length_squared() <= f32::EPSILON {
-            return None;
-        }
-        let rest = rest.rotation.normalize();
-        channels
-            .iter()
-            .filter_map(|channel| match channel {
-                TrackChannel::Rotation { values, .. } => Some(values.as_slice()),
-                TrackChannel::Translation { .. } | TrackChannel::Scale { .. } => None,
-            })
-            .flat_map(|values| values.iter())
-            .filter_map(|key| {
-                if !key.is_finite() || key.length_squared() <= f32::EPSILON {
-                    return None;
-                }
-                let key = key.normalize();
-                let dot = key.dot(rest).abs().clamp(-1.0, 1.0);
-                Some((dot.acos() * 2.0).to_degrees())
-            })
-            .reduce(f32::min)
-    }
-
-    fn track_number(name: &str) -> Option<i64> {
-        name.strip_prefix("track_")
-            .and_then(|rest| rest.parse::<i64>().ok())
-    }
-
-    fn match_cost(
-        raw_angle: f32,
-        target: &str,
-        node_name: &str,
-        median_offset: Option<i64>,
-    ) -> f32 {
-        let penalty = match (median_offset, track_number(target), track_number(node_name)) {
-            (Some(expected), Some(curve), Some(bone)) => {
-                // Keep adversarial but parseable track names from overflowing
-                // while calculating the ordering hint. Real files use small
-                // non-negative indices, but diagnostics should remain total.
-                let deviation =
-                    (bone as f64 - curve as f64 - expected as f64).abs() as f32;
-                1.5 * deviation
-            }
-            _ => 0.0,
-        };
-        raw_angle + penalty
-    }
+    use std::collections::{BTreeMap, HashSet};
 
     // A representative rotation channel per target, aggregated over valid
     // clips. BTreeMap keeps both target order and the resulting calibration
@@ -319,9 +302,6 @@ pub fn calibrate_bindings(
             .map(|(left, right)| left.cmp(&right))
             .unwrap_or_else(|| left.cmp(right))
     });
-    if targets.is_empty() {
-        return BindingCalibration::default();
-    }
 
     // A mesh node cannot be an AGR bone target. For a skinned asset, derive
     // the candidate set from skin joints and their ancestors, then retain
@@ -381,7 +361,7 @@ pub fn calibrate_bindings(
     } else {
         None
     };
-    let candidates: Vec<(String, crate::inspector::animation::NodeId)> = model
+    let candidates: Vec<(String, NodeId)> = model
         .nodes
         .iter()
         .filter(|node| node.mesh.is_none())
@@ -393,6 +373,79 @@ pub fn calibrate_bindings(
         })
         .map(|node| (node.name.clone(), node.id))
         .collect();
+
+    (targets, candidates)
+}
+
+/// Diagnostics-only corpus aid: for each calibration target, the closest
+/// and second-closest candidate rest matches. A "confident unique" match
+/// (small `best`, clearly ahead of `second`) pins a target semantically,
+/// so the audit can flag structurally valid bindings that contradict such
+/// evidence without re-deriving the calibration's candidate logic.
+#[cfg(test)]
+pub(crate) fn target_rest_matches(
+    model: &ModelAsset,
+    library: &crate::inspector::animation::clip::AnimationLibrary,
+) -> Vec<(String, Option<(NodeId, f32)>, Option<(NodeId, f32)>)> {
+    let (targets, candidates) = calibration_inputs(model, library);
+    targets
+        .iter()
+        .map(|(target, channels)| {
+            let mut ranked: Vec<(f32, NodeId)> = candidates
+                .iter()
+                .filter_map(|(_, node)| {
+                    let angle = rotation_min_angle(channels, &model.node(*node)?.local)?;
+                    Some((angle, *node))
+                })
+                .collect();
+            ranked.sort_by(|left, right| left.0.total_cmp(&right.0));
+            let best = ranked.first().map(|(angle, node)| (*node, *angle));
+            let second = ranked.get(1).map(|(angle, node)| (*node, *angle));
+            (target.clone(), best, second)
+        })
+        .collect()
+}
+
+/// Build the cross-clip calibration: score each target against each node by
+/// the closest key-to-rest angle across all clips, then solve one ordered,
+/// one-to-one assignment. AGR's packed curve stream follows the source rig's
+/// depth-first order, so preserving that order prevents a symmetric helper or
+/// sibling from consuming a real limb and changing the inherited parent frame.
+pub fn calibrate_bindings(
+    model: &ModelAsset,
+    library: &crate::inspector::animation::clip::AnimationLibrary,
+) -> BindingCalibration {
+    use std::collections::HashMap;
+
+    const MAX_BIND_ANGLE_DEG: f32 = 20.0;
+    const CANDIDATE_SKIP_COST: f32 = 0.25;
+    const TARGET_SKIP_COST: f32 = 24.0;
+    const MAX_ASSIGNMENT_CELLS: usize = 4_000_000;
+
+    fn match_cost(
+        raw_angle: f32,
+        target: &str,
+        node_name: &str,
+        median_offset: Option<i64>,
+    ) -> f32 {
+        let penalty = match (median_offset, track_number(target), track_number(node_name)) {
+            (Some(expected), Some(curve), Some(bone)) => {
+                // Keep adversarial but parseable track names from overflowing
+                // while calculating the ordering hint. Real files use small
+                // non-negative indices, but diagnostics should remain total.
+                let deviation =
+                    (bone as f64 - curve as f64 - expected as f64).abs() as f32;
+                1.5 * deviation
+            }
+            _ => 0.0,
+        };
+        raw_angle + penalty
+    }
+
+    let (targets, candidates) = calibration_inputs(model, library);
+    if targets.is_empty() {
+        return BindingCalibration::default();
+    }
     if candidates.is_empty() {
         return BindingCalibration {
             assignments: HashMap::new(),

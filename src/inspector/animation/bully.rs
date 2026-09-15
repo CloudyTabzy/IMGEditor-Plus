@@ -1955,7 +1955,15 @@ pub fn model_from_nif_with_mapping(
             let axis_helper = source_name.eq_ignore_ascii_case("Mesh")
                 && mesh.vertices.len() == 6
                 && mesh.indices.len() == 24;
-            source_name.eq_ignore_ascii_case("Editable Poly") || parent_is_arrow || axis_helper
+            // `Editable Poly`/`Mesh` are 3ds Max default names: editor
+            // helpers carry them, but so do many character bodies (the
+            // wrapper-heavy ped NIFs). Only an unskinned mesh under one of
+            // those names is treated as a stray editor object; a skinned
+            // mesh is real geometry and must stay visible.
+            let named_editor_object = mesh.skin.is_none()
+                && (source_name.eq_ignore_ascii_case("Editable Poly")
+                    || source_name.eq_ignore_ascii_case("Mesh"));
+            parent_is_arrow || axis_helper || named_editor_object
         })
         .collect();
     asset.set_hidden_meshes(hidden_meshes);
@@ -2568,6 +2576,285 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Developer corpus sweep: walk every `.agr` entry in the retail
+    /// `World.img`, pair it exactly like the GUI does (HXD catalog first,
+    /// the stem heuristic second), run the real calibration/binding path on
+    /// the first clip, and report per-pair rig-shape facts. Surfaces the
+    /// "Mandy-like" cases (placeholder behind wrapper branches), structural
+    /// contract mismatches, and confident-rest-match violations — the
+    /// semantic twist signal.
+    ///
+    /// Set `IMGEDITOR_BULLY_STREAM`, then run:
+    /// `cargo test -j 2 --lib agr_corpus_audit_when_requested -- --ignored --nocapture`
+    /// The full report is written to `target/agr-corpus-audit.txt`.
+    #[test]
+    #[ignore = "developer corpus sweep; run explicitly with --ignored"]
+    fn agr_corpus_audit_when_requested() {
+        use crate::archive::EntryInfo;
+        use crate::inspector::animation::binding::{
+            bind_clip_with_calibration, calibrate_bindings, target_rest_matches,
+        };
+        use crate::inspector::animation::model::ModelAsset;
+        use crate::inspector::scene3d::camera::BaseOrientation;
+
+        fn descends_from(model: &ModelAsset, mut id: crate::inspector::animation::NodeId, ancestor: crate::inspector::animation::NodeId) -> bool {
+            loop {
+                if id == ancestor {
+                    return true;
+                }
+                match model.node(id).and_then(|node| node.parent) {
+                    Some(parent) => id = parent,
+                    None => return false,
+                }
+            }
+        }
+        let track_of = |model: &ModelAsset, id: crate::inspector::animation::NodeId| -> Option<u32> {
+            model
+                .node(id)?
+                .name
+                .strip_prefix("track_")
+                .and_then(|number| number.parse::<u32>().ok())
+        };
+        let node_name = |model: &ModelAsset, id: Option<crate::inspector::animation::NodeId>| {
+            id.and_then(|id| model.node(id))
+                .map(|node| node.name.clone())
+                .unwrap_or_else(|| "-".to_string())
+        };
+
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let Ok(dir_bytes) = std::fs::read(stream.join("World.dir")) else {
+            return;
+        };
+        let entries: Vec<EntryInfo> = dir_bytes
+            .chunks_exact(32)
+            .map(|record| {
+                let end = record[8..].iter().position(|byte| *byte == 0).unwrap_or(24);
+                EntryInfo::new(String::from_utf8_lossy(&record[8..8 + end]).into_owned())
+            })
+            .collect();
+        let anim = stream.parent().expect("game root").join("Anim");
+
+        let mut models: std::collections::HashMap<usize, ModelAsset> =
+            std::collections::HashMap::new();
+        let mut rows: Vec<String> = Vec::new();
+        let mut character_offsets: std::collections::BTreeMap<u32, Vec<String>> =
+            std::collections::BTreeMap::new();
+        let (mut total, mut paired, mut failed) = (0usize, 0usize, 0usize);
+        let mut character_rows: Vec<String> = Vec::new();
+
+        for entry in &entries {
+            let agr_name = entry.file_name.to_string();
+            if !agr_name.to_ascii_lowercase().ends_with(".agr") {
+                continue;
+            }
+            total += 1;
+            let stem = agr_name
+                .rsplit_once('.')
+                .map(|(stem, _)| stem)
+                .unwrap_or(&agr_name);
+            let hxd = crate::inspector::animation::hxd::find_for_agr(&anim, stem);
+            let model_entry = hxd
+                .as_ref()
+                .and_then(|record| {
+                    record
+                        .model_for_source(stem)
+                        .and_then(|model| {
+                            crate::inspector::animation::hxd::find_model_entry(&entries, model)
+                        })
+                        .or_else(|| {
+                            crate::inspector::animation::hxd::find_model_entry(
+                                &entries,
+                                &record.model,
+                            )
+                        })
+                })
+                .or_else(|| crate::ui::app::find_agr_model_entry(&entries, &agr_name));
+            let Some(model_index) = model_entry else {
+                failed += 1;
+                rows.push(format!("{agr_name}: no model paired"));
+                continue;
+            };
+            let model_name = entries[model_index].file_name.to_string();
+            let Some(agr_bytes) = world_entry(stream, &agr_name) else {
+                failed += 1;
+                rows.push(format!("{agr_name}: archive read failed"));
+                continue;
+            };
+            let Ok(file) = parse_agr(&agr_bytes) else {
+                failed += 1;
+                rows.push(format!("{agr_name} | {model_name}: AGR parse failed"));
+                continue;
+            };
+            let library = to_library(&file, &agr_name);
+            let Some(clip) = library.clips.first() else {
+                failed += 1;
+                rows.push(format!("{agr_name} | {model_name}: no clips"));
+                continue;
+            };
+            if !models.contains_key(&model_index) {
+                let Some(nif_bytes) = world_entry(stream, &model_name) else {
+                    failed += 1;
+                    rows.push(format!("{agr_name} | {model_name}: NIF read failed"));
+                    continue;
+                };
+                let Ok(mut nif) = NifFile::parse(&nif_bytes) else {
+                    failed += 1;
+                    rows.push(format!("{agr_name} | {model_name}: NIF parse failed"));
+                    continue;
+                };
+                nif.resolve_string_indices();
+                match model_from_nif(&nif, &model_name, format!("audit:{model_name}")) {
+                    Ok(model) => {
+                        models.insert(model_index, model);
+                    }
+                    Err(error) => {
+                        failed += 1;
+                        rows.push(format!(
+                            "{agr_name} | {model_name}: model admission failed: {error}"
+                        ));
+                        continue;
+                    }
+                }
+            }
+            let Some(model) = models.get(&model_index) else {
+                continue;
+            };
+            paired += 1;
+
+            let calibration = calibrate_bindings(model, &library);
+            let binding = bind_clip_with_calibration(model, clip, &calibration);
+
+            let placeholder = model.root_motion_node;
+            let placeholder_source = placeholder
+                .and_then(|id| model.source_name(id))
+                .unwrap_or("-");
+            let wrappers_before = placeholder.map_or(0, |root| {
+                model
+                    .nodes
+                    .iter()
+                    .filter(|node| {
+                        node.id.0 < root.0
+                            && node.mesh.is_none()
+                            && !node.name.eq_ignore_ascii_case("Scene Root")
+                            && !descends_from(model, node.id, root)
+                    })
+                    .count()
+            });
+            let first_child = placeholder.and_then(|root| {
+                model
+                    .nodes
+                    .iter()
+                    .find(|node| {
+                        node.mesh.is_none()
+                            && node.id != root
+                            && model.node(node.id).and_then(|child| child.parent) == Some(root)
+                    })
+                    .map(|node| node.id)
+            });
+            let curve0_index = clip
+                .tracks
+                .iter()
+                .position(|track| track.target == "track_000");
+            let curve0_node = curve0_index.and_then(|index| binding.node_for_track(index));
+            let contract_match = curve0_node.is_some() && curve0_node == first_child;
+
+            let rest_matches = target_rest_matches(model, &library);
+            let mut confident = 0usize;
+            let mut violations: Vec<String> = Vec::new();
+            for (target, best, second) in &rest_matches {
+                let Some((best_node, best_angle)) = best else {
+                    continue;
+                };
+                let second_angle = second.map(|(_, angle)| angle).unwrap_or(f32::INFINITY);
+                if *best_angle > 5.0 || second_angle - best_angle < 10.0 {
+                    continue;
+                }
+                confident += 1;
+                let bound = clip
+                    .tracks
+                    .iter()
+                    .position(|track| &track.target == target)
+                    .and_then(|index| binding.node_for_track(index));
+                if bound != Some(*best_node) {
+                    violations.push(format!(
+                        "{target}->{}({:.1}deg) bound={}",
+                        node_name(model, Some(*best_node)),
+                        best_angle,
+                        node_name(model, bound),
+                    ));
+                }
+            }
+
+            let skinned = model.has_skinning();
+            let zup = model.source_orientation == BaseOrientation::Zup;
+            let character = skinned && zup && placeholder_source.eq_ignore_ascii_case("Dummy");
+            let offset = curve0_node.and_then(|id| track_of(model, id));
+            let hidden = (0..model.meshes.len())
+                .filter(|index| model.mesh_is_hidden(*index))
+                .count();
+            let row = format!(
+                "{agr_name} | {model_name} | hxd={} v{} clips={} nodes={} meshes={} hidden={} skinned={} zup={} | placeholder={}({}) wraps={} | tracks={} bound={}/{} offset={} contract={} | conf={} viol={} {}",
+                if hxd.is_some() { "yes" } else { "no" },
+                file.variant,
+                file.clip_count(),
+                model.nodes.len(),
+                model.meshes.len(),
+                hidden,
+                skinned,
+                zup,
+                node_name(model, placeholder),
+                placeholder_source,
+                wrappers_before,
+                clip.tracks.len(),
+                binding.bound_count(),
+                binding.total_count(),
+                offset.map_or("-".to_string(), |value| format!("+{value}")),
+                if contract_match { "match" } else { "MISMATCH" },
+                confident,
+                violations.len(),
+                violations.join(" "),
+            );
+            if character {
+                character_rows.push(row.clone());
+                if let Some(offset) = offset {
+                    character_offsets.entry(offset).or_default().push(agr_name.clone());
+                }
+            }
+            rows.push(row);
+        }
+
+        let mut report = String::new();
+        report.push_str(&format!(
+            "AGR corpus audit — {total} .agr entries, {paired} paired, {failed} unpaired/failed\n"
+        ));
+        report.push_str(&format!(
+            "character-shaped pairs (skinned+Zup+Dummy placeholder): {}\n",
+            character_rows.len()
+        ));
+        for (offset, names) in &character_offsets {
+            report.push_str(&format!(
+                "  offset +{offset}: {} pair(s): {}\n",
+                names.len(),
+                names.join(", ")
+            ));
+        }
+        report.push_str("\n== character-shaped rows ==\n");
+        for row in &character_rows {
+            report.push_str(row);
+            report.push('\n');
+        }
+        report.push_str("\n== all rows ==\n");
+        for row in &rows {
+            report.push_str(row);
+            report.push('\n');
+        }
+        std::fs::write("target/agr-corpus-audit.txt", &report).expect("write audit report");
+        println!("{report}");
     }
 
     #[test]
@@ -3534,6 +3821,68 @@ mod tests {
         assert!(scene.meshes[1].indices.is_empty());
         assert!(scene.meshes[2].indices.is_empty());
         assert_eq!(scene.total_triangles(), model.meshes[0].indices.len() / 3);
+    }
+
+    /// Regression (2026-09-15): the helper-mesh suppression hid any mesh
+    /// named `Editable Poly`, but the wrapper-heavy ped NIFs use that 3ds Max
+    /// default name for their body (a skinned 32-joint mesh), so the whole
+    /// `+2`/`+3` class rendered empty until the rule narrowed to unskinned
+    /// editor objects. This pins a `+2` pedestrian: body visible, stream
+    /// skipping the placeholder, and every curve bound at `+2`.
+    #[test]
+    fn wrapper_ped_body_stays_visible_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let (Some(agr_bytes), Some(nif_bytes)) = (
+            world_entry(stream, "IDLE_DOUT_A.agr"),
+            world_entry(stream, "DOH3a_Gurney.nif"),
+        ) else {
+            return;
+        };
+
+        let mut nif = NifFile::parse(&nif_bytes).expect("Gurney NIF parses");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "Gurney", "Gurney").expect("Gurney model builds");
+        let file = parse_agr(&agr_bytes).expect("IDLE_DOUT_A.agr parses");
+        let library = to_library(&file, "IDLE_DOUT_A.agr");
+        let calibration =
+            crate::inspector::animation::binding::calibrate_bindings(&model, &library);
+        let clip = library.clips.first().expect("idle clip");
+        let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
+            &model, clip, &calibration,
+        );
+
+        let root = model.root_motion_node.expect("Gurney motion root");
+        assert_eq!(model.source_name(root), Some("Dummy"));
+        assert_eq!(
+            model.node(root).map(|node| node.name.as_str()),
+            Some("track_001")
+        );
+        let body = model.mesh_node(0).expect("Gurney body node");
+        assert_eq!(model.source_name(body), Some("Editable Poly"));
+        assert!(
+            !model.mesh_is_hidden(0),
+            "the skinned `Editable Poly` body must stay visible"
+        );
+        assert_eq!(binding.bound_count(), clip.tracks.len());
+        for (track_index, track) in clip.tracks.iter().enumerate() {
+            let curve = track
+                .target
+                .strip_prefix("track_")
+                .and_then(|value| value.parse::<u32>().ok())
+                .expect("numeric AGR target");
+            let expected = model
+                .node_by_name(&format!("track_{:03}", curve + 2))
+                .map(|node| node.id);
+            assert_eq!(
+                binding.node_for_track(track_index),
+                expected,
+                "Gurney curve {} must bind two nodes below the Dummy placeholder",
+                track.target
+            );
+        }
     }
 
     /// Regression (2026-09-15): a generalized wrapper offset bound the
