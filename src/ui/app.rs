@@ -8082,6 +8082,10 @@ impl App {
                 ),
                 Message::CompareWithList,
             )),
+            Item::new(menu_button(
+                "Load .agr animation file…".to_string(),
+                Message::PickAgrFile,
+            )),
         ])
         .max_width(220.0);
 
@@ -8209,10 +8213,6 @@ impl App {
                 } else {
                     Message::AnimationDemoStart
                 },
-            )),
-            Item::new(menu_button(
-                "Load .agr animation file…".to_string(),
-                Message::PickAgrFile,
             )),
         ])
         .max_width(220.0);

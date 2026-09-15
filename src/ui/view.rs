@@ -1044,46 +1044,6 @@ impl App {
             .spacing(6)
             .align_y(Alignment::Center);
 
-        let mut header = Row::new().spacing(8).align_y(Alignment::Center);
-        header = header.push(icons::animation().size(15));
-        header = header.push(fonts::header(if demo {
-            "Animation demo"
-        } else {
-            "Animation"
-        }));
-        if demo {
-            header = header.push(muted_caption(
-                "synthetic fixtures — no game data".to_string(),
-            ));
-        }
-        header = header.push(Space::new().width(Length::Fill));
-        header = header.push(loop_toggle);
-        header = header.push(speed_row);
-        if demo {
-            header = header.push(
-                button(
-                    w::icon_label(icons::close().size(13), fonts::caption("Exit demo"))
-                        .height(Length::Fill),
-                )
-                .on_press(Message::AnimationDemoExit)
-                .height(Length::Fixed(28.0))
-                .padding([0.0, 10.0])
-                .style(animation_subtle_button_style),
-            );
-        }
-
-        let clip_names: Vec<String> = data.clips.iter().map(|(_, name)| name.clone()).collect();
-        let clip_map: std::collections::HashMap<String, ClipId> = data
-            .clips
-            .iter()
-            .map(|(id, name)| (name.clone(), *id))
-            .collect();
-        let clip_map = std::sync::Arc::new(clip_map);
-        let clip_picker = pick_list(clip_names, data.current.clone(), move |name| {
-            Message::AnimationSelectClip(clip_map[&name])
-        })
-        .text_size(12.0);
-
         let capability_badge = container(fonts::caption(data.capability.clone()))
             .padding([2, 6])
             .style(move |theme| {
@@ -1122,6 +1082,54 @@ impl App {
             .into(),
             None => Space::new().width(Length::Fixed(0.0)).into(),
         };
+
+        let mut header = Row::new().spacing(8).align_y(Alignment::Center);
+        header = header.push(icons::animation().size(15));
+        header = header.push(fonts::header(if demo {
+            "Animation demo"
+        } else {
+            "Animation"
+        }));
+        if demo {
+            header = header.push(muted_caption(
+                "synthetic fixtures — no game data".to_string(),
+            ));
+        }
+        // Binding badge and event marker live here so the transport row
+        // keeps enough width for its readout without reflowing.
+        header = header.push(capability_badge);
+        header = header.push(marker_chip);
+        header = header.push(Space::new().width(Length::Fill));
+        header = header.push(loop_toggle);
+        header = header.push(speed_row);
+        if demo {
+            header = header.push(
+                button(
+                    w::icon_label(icons::close().size(13), fonts::caption("Exit demo"))
+                        .height(Length::Fill),
+                )
+                .on_press(Message::AnimationDemoExit)
+                .height(Length::Fixed(28.0))
+                .padding([0.0, 10.0])
+                .style(animation_subtle_button_style),
+            );
+        }
+
+        let clip_names: Vec<String> = data.clips.iter().map(|(_, name)| name.clone()).collect();
+        let clip_map: std::collections::HashMap<String, ClipId> = data
+            .clips
+            .iter()
+            .map(|(id, name)| (name.clone(), *id))
+            .collect();
+        let clip_map = std::sync::Arc::new(clip_map);
+        let clip_picker = pick_list(clip_names, data.current.clone(), move |name| {
+            Message::AnimationSelectClip(clip_map[&name])
+        })
+        .text_size(12.0)
+        // Clip libraries run into the hundreds of entries; cap the dropdown
+        // so it scrolls instead of covering the whole viewer.
+        .menu_height(Length::Fixed(360.0))
+        .width(Length::Fill);
 
         // Compact model picker: re-play the retained AGR clip set on another
         // catalog-associated model. Icon + name only (with a tooltip) so it
@@ -1164,6 +1172,7 @@ impl App {
                     Message::AnimationSelectModel(model_map[&name])
                 })
                 .text_size(12.0)
+                .menu_height(Length::Fixed(360.0))
                 .width(Length::Fixed(170.0));
                 Some(
                     w::styled_tooltip(
@@ -1179,11 +1188,12 @@ impl App {
         };
 
         let mut clip_row = row![
-            icons::film().size(13),
-            fonts::caption("Clip"),
+            w::styled_tooltip(
+                icons::film().size(13),
+                fonts::caption("Clip"),
+                tooltip::Position::Top,
+            ),
             clip_picker,
-            capability_badge,
-            marker_chip,
         ]
         .spacing(8)
         .align_y(Alignment::Center);
@@ -1263,17 +1273,48 @@ impl App {
         } else {
             format!("{:.0} fps preview", data.step_rate)
         };
-        let readout = row![
-            iced::widget::text(format!("{:.2} / {:.2} s", data.shown, data.duration))
-                .size(12.0)
-                .font(iced::Font::MONOSPACE),
-            muted_caption(format!(
-                "frame {}/{} · {}",
-                data.frame, data.total_frames, rate
-            )),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center);
+        // Fixed-width, padded monospace readout: ticking digits must never
+        // reflow the transport row, so both lines keep a constant character
+        // count and the column reserves its widest case.
+        let time_width = format!("{:.2}", data.duration).len();
+        let frame_width = data.total_frames.to_string().len();
+        let readout = w::styled_tooltip(
+            column![
+                iced::widget::text(format!(
+                    "{:>width$.2}/{:.2}s",
+                    data.shown,
+                    data.duration,
+                    width = time_width
+                ))
+                .size(11.0)
+                .font(iced::Font::MONOSPACE)
+                .wrapping(iced::widget::text::Wrapping::None),
+                container(
+                    iced::widget::text(format!(
+                        "{:0>width$}/{} · {:.0}fps",
+                        data.frame,
+                        data.total_frames,
+                        data.step_rate,
+                        width = frame_width
+                    ))
+                    .size(11.0)
+                    .font(iced::Font::MONOSPACE)
+                    .wrapping(iced::widget::text::Wrapping::None),
+                )
+                .style(|theme: &iced::Theme| {
+                    let design = crate::ui::design::design_for_theme(theme);
+                    container::Style {
+                        text_color: Some(design.text_muted()),
+                        ..Default::default()
+                    }
+                }),
+            ]
+            .spacing(1)
+            .width(Length::Fixed(104.0))
+            .align_x(Alignment::End),
+            fonts::caption(rate),
+            tooltip::Position::Top,
+        );
 
         let transport_row = row![
             clip_row,
