@@ -414,6 +414,30 @@ for predecessor, time and quaternion bits only; they do not contain root
 translation. A future channel-2 discovery must be independently validated
 before it is treated as scale, visibility, material or any other property.
 
+### 4.6 Single-frame held-pose stubs
+
+Compound files can contain short chunks that are not animations in the
+practical sense, and they should be recognized by shape rather than treated
+as parse or naming failures. The `Area_GirlsDorm` AGR shows the pattern
+(2026-09-15 probe of all 15 chunks):
+
+- The six uncovered chunks (5, 10-14) are each ~628 bytes: the declared
+  stream holds exactly two keys per curve, at `t = 0.000` and
+  `t = 0.033 s` — one frame at the game's 30 fps — so every curve is a
+  held value.
+- They are distinct poses, not byte duplicates: pairwise diffs run 80-124
+  u32 words, so each stub freezes a different pose (seated, lying, tool-in-
+  hand variants and similar placeholders).
+- The catalog omits them because nothing moves; the nine named rows in
+  `MAINPED.HXD` cover only the authored actions.
+
+Recognition rules distilled from this case: a chunk whose duration is
+exactly one frame and whose curves carry a single hold pair is a static
+pose stub. It plays correctly as a frozen frame, legitimately has no
+catalog name, and must keep the positional `clip_NN` label rather than a
+guessed one. `Area_GirlsDorm` clip 5 and clips 10-14 are the reference
+examples.
+
 ## 5. HXD and `hxds.dat`: association and naming
 
 AGR has no useful embedded model name in the observed corpus. The association
@@ -826,6 +850,8 @@ The core test names that encode the latest lessons are:
 - `ordinary_character_rig_keeps_the_exported_order_when_available`;
 - `wrapper_rig_stream_skips_the_placeholder`;
 - `wrapper_ped_body_stays_visible_when_available`;
+- `compound_resource_partial_naming_when_available`;
+- `partial_coverage_names_only_matched_clips`;
 - `numeric_recovery_requires_the_verified_dummy_identity`;
 - `stepping_never_stalls_at_grid_rounding`;
 - `focus_loss_cancels_an_active_drag`;
@@ -964,6 +990,25 @@ predecessor validity, HXD row alignment or model pairing. Add synthetic cases
 for truncation, zero records, terminal identity keys, forward links, duplicate
 times and absurd counts. A successful normal-file probe is not a safety test.
 
+### Model partial coverage explicitly; all-or-nothing hides real data
+
+The compound-catalog alignment originally required every AGR chunk to match a
+catalog row, so `Area_GirlsDorm` (9 named rows for 15 chunks) showed no names
+at all and looked like a parser failure. The corrected rule is a monotonic,
+size-keyed alignment with an explicit skip cost for unmatched clips and rows:
+covered clips take their catalog names and everything else keeps the
+positional `clip_NN` fallback. Two lessons generalize beyond naming:
+
+- A catalog that covers less than the file is normal, not an error; dropping
+  every result for the whole file is strictly worse than a labeled partial
+  result. When designing a matcher, make the unmatched case a first-class
+  branch with an honest output, never a global bail-out.
+- Before blaming a parse, inspect the unmatched content. The six uncovered
+  `Area_GirlsDorm` chunks turned out to be legitimate one-frame held-pose
+  stubs (see §4.6) — files can contain engine-generated filler that no
+  catalog should name, and recognizing that shape is cheaper than debugging
+  a resolver that was working correctly.
+
 ### Keep external tools as oracles, not dependencies
 
 Local Python parsers, independent packages and executable disassembly are
@@ -1003,6 +1048,10 @@ In priority order:
    PS2, PSP, mobile or other Bully resource dialects.
 8. Consider GPU skinning only after profiling large real models and keeping the
    CPU path as the numerical reference.
+9. Optionally label single-frame held-pose stubs (§4.6) in the clip list (for
+   example `clip_05 (held pose)`) once a second compound file confirms the
+   duration-1/30 + two-keys-per-curve shape; recognize them by that shape,
+   never by absence from a catalog, and never name them from a catalog row.
 
 Editing/serialization remains a separate decision. Playback success is not
 proof that an AGR can be safely rewritten.
