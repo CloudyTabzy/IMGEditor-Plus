@@ -45,7 +45,9 @@ imgeditor-panic.log
 stderr.txt
 
 # Local-only research docs (kept on disk, never published)
+/docs/animation-viewer-infrastructure-plan.md
 /docs/asset-compatibility-engine.md
+/docs/bully-agr-cat-lip-lur-roadmap.md
 /docs/bullyfury-adaptation-notes.md
 /docs/gta-img-platform-variants.md
 /docs/gta-img-reference-audit.md
