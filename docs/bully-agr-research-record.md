@@ -832,6 +832,17 @@ selection. Invalid clips are rejected before sampling. Invalid model
 transforms, malformed skin records, non-finite values and unsafe counted
 arrays fail closed rather than reaching the renderer.
 
+Animated scenes carry each mesh's diffuse texture name from the AGR model
+build (`bully::model_from_nif*` reads the shape's `NiTexturingProperty`,
+falling back to the NIF-wide first texture) and the loader resolves pixels
+through the static preview's three-tier resolver (NFT catalog → archive
+texture → loose file), so `Textured` and `Alpha blend` behave identically
+in both viewer paths. The animation dock's **Model** picker re-plays a
+retained AGR request on any catalog-associated archive model (loose HXD
+stems + `hxds.dat` + `MAINPED` resources resolved to NIF entries) and
+recomputes the binding badge per selection; stale loads are dropped by a
+monotonic serial and an archive generation/name guard.
+
 ## 8. Validation record
 
 The current implementation has both synthetic and local-corpus coverage.

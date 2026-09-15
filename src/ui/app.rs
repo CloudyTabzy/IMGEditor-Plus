@@ -126,6 +126,73 @@ pub(crate) fn find_agr_model_entry(
         })
 }
 
+/// Shared three-tier diffuse texture resolver for NIF-backed scenes: the
+/// archive's NFT catalog for the model, then direct archive texture entries,
+/// then loose files under the game root. Used by both the static 3D preview
+/// and AGR animation playback so textured rendering behaves identically.
+fn nif_texture_resolver(
+    archive_texture_index: crate::inspector::texture::ArchiveTextureIndex,
+    ide_map: Option<Arc<crate::inspector::texture::IdeMap>>,
+    nif_basename: &str,
+) -> impl Fn(&str) -> Option<SceneTexture> {
+    let nft_catalog = ide_map
+        .as_deref()
+        .and_then(|map| crate::inspector::texture::resolve_textures_for_nif(nif_basename, map))
+        .or_else(|| {
+            archive_texture_index.resolve_textures_for_nif(nif_basename, ide_map.as_deref())
+        });
+    move |name: &str| {
+        nft_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.get_pixels(name))
+            .and_then(SceneTexture::from_tga)
+            .or_else(|| {
+                archive_texture_index
+                    .read(name)
+                    .and_then(|bytes| SceneTexture::from_tga(&bytes))
+            })
+            .or_else(|| {
+                ide_map
+                    .as_deref()
+                    .and_then(|map| map.locate_external_texture(name))
+                    .and_then(|path| std::fs::read(path).ok())
+                    .and_then(|bytes| SceneTexture::from_tga(&bytes))
+            })
+    }
+}
+
+/// Retained AGR playback request so the animation dock can re-play the same
+/// clip set on a different model without the user re-selecting the entry.
+#[derive(Debug, Clone)]
+pub(crate) struct AgrPlayback {
+    pub archive_index: usize,
+    /// Archive file name; stable identity even when tabs reindex.
+    pub archive_name: String,
+    /// Archive generation at dispatch time; a mismatch voids the request.
+    pub archive_generation: u64,
+    pub agr_entry: Option<usize>,
+    pub agr_path: Option<PathBuf>,
+    pub hxd_record: Option<crate::inspector::animation::hxd::HxdRecord>,
+    pub hxd_source: String,
+    pub model_entry: usize,
+    /// Catalog-associated NIF candidates `(entry index, file name)`.
+    pub models: Vec<(usize, String)>,
+    /// The selected clip's name, restored after a model switch when present.
+    pub last_clip_name: Option<String>,
+}
+
+/// Success payload of an AGR load (initial or model-switch re-load).
+#[derive(Debug, Clone)]
+pub struct AgrLoadOutcome {
+    pub model: Arc<crate::inspector::animation::ModelAsset>,
+    pub library: Arc<crate::inspector::animation::AnimationLibrary>,
+    pub summary: String,
+    /// Catalog-associated NIF candidates `(entry index, file name)`.
+    pub models: Vec<(usize, String)>,
+    /// Freshly built `IdeMap` for memoization, when this load built one.
+    pub ide_map: Option<BuiltIdeMap>,
+}
+
 pub const ANIM_PROGRESS: crate::ui::animator::AnimationId = 1;
 pub const ANIM_TOAST_OPACITY: crate::ui::animator::AnimationId = 2;
 pub const ANIM_ENTRY_FEEDBACK: crate::ui::animator::AnimationId = 3;
@@ -525,6 +592,8 @@ pub enum Message {
     /// Result of the loose AGR file picker.
     AgrFileChosen(Option<std::path::PathBuf>),
     AnimationSelectClip(crate::inspector::animation::ClipId),
+    /// Re-play the retained AGR clip set on another archive model.
+    AnimationSelectModel(usize),
     AnimationTogglePlay,
     AnimationStop,
     AnimationSeek(f64),
@@ -765,16 +834,12 @@ pub enum Message {
         /// stale catalog entries safely.
         hxd_record: Option<crate::inspector::animation::hxd::HxdRecord>,
         hxd_source: String,
+        /// Monotonic dispatch id; stale completions are dropped.
+        serial: u64,
     },
     ViewerAgrLoadCompleted {
-        result: Result<
-            (
-                Arc<crate::inspector::animation::ModelAsset>,
-                Arc<crate::inspector::animation::AnimationLibrary>,
-                String,
-            ),
-            String,
-        >,
+        serial: u64,
+        result: Result<AgrLoadOutcome, String>,
     },
     Viewer3dLoadCompleted {
         archive_index: usize,
@@ -1343,6 +1408,10 @@ pub struct App {
     autoscroll_notice_shown: bool,
     pub modifiers: Modifiers,
     viewer_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>>,
+    /// Retained AGR playback request for the dock's model picker.
+    pub(crate) agr_playback: Option<AgrPlayback>,
+    /// Monotonic AGR load id; completions carrying an older id are dropped.
+    agr_serial: u64,
     pub animator: Animator,
     prev_tick: Option<std::time::Instant>,
     last_pointer_position: Option<Point>,
@@ -1522,6 +1591,8 @@ impl App {
             autoscroll_notice_shown: false,
             modifiers: Modifiers::default(),
             viewer_rxs: Vec::new(),
+            agr_playback: None,
+            agr_serial: 0,
             animator: Animator::new(),
             prev_tick: None,
             last_pointer_position: None,
@@ -2665,6 +2736,7 @@ impl App {
         }
         self.active_viewer_entry = None;
         self.viewer3d_handle.clear();
+        self.agr_playback = None;
         self.begin_viewer_load(target, entry_name);
         Task::done(Message::Viewer3dRequestLoad {
             archive_index,
@@ -2730,6 +2802,7 @@ impl App {
             " (HXD catalog found)".to_string()
         };
         self.toast = Some(format!("Loading {agr_name} on {model_name}…{named}"));
+        self.agr_serial += 1;
         Task::done(Message::ViewerAgrLoadRequest {
             archive_index,
             agr_entry: Some(entry_index),
@@ -2737,6 +2810,7 @@ impl App {
             model_entry,
             hxd_record: hxd,
             hxd_source: stem.to_string(),
+            serial: self.agr_serial,
         })
     }
 
@@ -2785,6 +2859,7 @@ impl App {
             " (HXD catalog found)".to_string()
         };
         self.toast = Some(format!("Loading {agr_name} on {model_name}…{named}"));
+        self.agr_serial += 1;
         Task::done(Message::ViewerAgrLoadRequest {
             archive_index,
             agr_entry: None,
@@ -2792,6 +2867,7 @@ impl App {
             model_entry,
             hxd_record: hxd,
             hxd_source: stem.to_string(),
+            serial: self.agr_serial,
         })
     }
 
@@ -2880,6 +2956,7 @@ impl App {
         self.active_viewer_entry = None;
         self.clear_viewer_load();
         self.viewer3d_handle.clear();
+        self.agr_playback = None;
         if let Some((name, generation)) = closing {
             self.drop_scene_cache_for_archive(&name);
             self.drop_in_flight_placeholder(&name, generation, in_flight, index);
@@ -3076,6 +3153,7 @@ impl App {
                 self.active_viewer_entry = None;
                 self.clear_viewer_load();
                 self.viewer3d_handle.clear();
+                self.agr_playback = None;
                 Task::none()
             }
 
@@ -4242,6 +4320,7 @@ impl App {
                 self.active_viewer_entry = None;
                 self.clear_viewer_load();
                 self.viewer3d_handle.clear();
+                self.agr_playback = None;
                 let task = self.refresh_inspection();
                 Task::batch(vec![task, Task::none()])
             }
@@ -4823,6 +4902,7 @@ impl App {
                 self.active_viewer_entry = None;
                 self.clear_viewer_load();
                 self.viewer3d_handle.clear();
+                self.agr_playback = None;
                 Task::none()
             }
             Message::DeleteSelected => {
@@ -5523,6 +5603,7 @@ impl App {
             Message::AgrFileChosen(None) => Task::none(),
             Message::AnimationDemoExit => {
                 self.viewer3d_handle.clear();
+                self.agr_playback = None;
                 self.selected_inspector_tab = InspectorTab::Model3D;
                 self.toast = Some("Animation demo closed.".into());
                 Task::none()
@@ -5530,7 +5611,50 @@ impl App {
             Message::AnimationSelectClip(id) => {
                 self.viewer3d_handle
                     .with_animation_session_mut(|session| session.select_clip(id, Instant::now()));
+                let name = self
+                    .viewer3d_handle
+                    .animation_session(|session| session.clip_name().map(str::to_string))
+                    .flatten();
+                if let Some(playback) = &mut self.agr_playback {
+                    playback.last_clip_name = name;
+                }
                 Task::none()
+            }
+            Message::AnimationSelectModel(model_entry) => {
+                let Some(playback) = self.agr_playback.clone() else {
+                    return Task::none();
+                };
+                let Some(archive) = self.editor.archives().get(playback.archive_index) else {
+                    self.agr_playback = None;
+                    return Task::none();
+                };
+                if archive.generation() != playback.archive_generation
+                    || archive.file_name != playback.archive_name
+                    || model_entry == playback.model_entry
+                    || archive.entries.get(model_entry).is_none()
+                {
+                    return Task::none();
+                }
+                let last_clip_name = self
+                    .viewer3d_handle
+                    .animation_session(|session| session.clip_name().map(str::to_string))
+                    .flatten()
+                    .or_else(|| playback.last_clip_name.clone());
+                self.agr_serial += 1;
+                if let Some(playback) = &mut self.agr_playback {
+                    playback.model_entry = model_entry;
+                    playback.last_clip_name = last_clip_name;
+                }
+                self.toast = Some("Replaying animation on model…".into());
+                Task::done(Message::ViewerAgrLoadRequest {
+                    archive_index: playback.archive_index,
+                    agr_entry: playback.agr_entry,
+                    agr_path: playback.agr_path,
+                    model_entry,
+                    hxd_record: playback.hxd_record,
+                    hxd_source: playback.hxd_source,
+                    serial: self.agr_serial,
+                })
             }
             Message::AnimationTogglePlay => {
                 let now = Instant::now();
@@ -6364,8 +6488,16 @@ impl App {
                 model_entry,
                 hxd_record,
                 hxd_source,
+                serial,
             } => {
-                let (agr_entry_data, model_entry_data, archive_path) = {
+                let (
+                    agr_entry_data,
+                    model_entry_data,
+                    archive_path,
+                    archive_entries,
+                    archive_generation,
+                    archive_name,
+                ) = {
                     let Some(archive) = self.editor.archives().get(archive_index) else {
                         return Task::none();
                     };
@@ -6376,8 +6508,51 @@ impl App {
                         Some(agr_entry) => archive.entries.get(agr_entry).cloned(),
                         None => None,
                     };
-                    (agr, model.clone(), archive.path.clone())
+                    (
+                        agr,
+                        model.clone(),
+                        archive.path.clone(),
+                        archive.entries.clone(),
+                        archive.generation(),
+                        archive.file_name.clone(),
+                    )
                 };
+                // Retain the request so the dock's model picker can re-play
+                // the same clip set on another model. A re-dispatch for the
+                // same AGR keeps the candidate list and the selected clip.
+                let previous = self.agr_playback.take();
+                let (models, last_clip_name) = match previous {
+                    Some(previous)
+                        if previous.archive_index == archive_index
+                            && previous.agr_entry == agr_entry
+                            && previous.agr_path == agr_path =>
+                    {
+                        (previous.models, previous.last_clip_name)
+                    }
+                    _ => (Vec::new(), None),
+                };
+                self.agr_playback = Some(AgrPlayback {
+                    archive_index,
+                    archive_name,
+                    archive_generation,
+                    agr_entry,
+                    agr_path: agr_path.clone(),
+                    hxd_record: hxd_record.clone(),
+                    hxd_source: hxd_source.clone(),
+                    model_entry,
+                    models,
+                    last_clip_name,
+                });
+                // Reuse a memoized IdeMap for this game root when one has
+                // already been built; otherwise the task builds one and
+                // hands it back for memoization.
+                let game_root = archive_path
+                    .as_deref()
+                    .and_then(|p| p.parent().and_then(|stream| stream.parent()))
+                    .map(|p| p.to_path_buf());
+                let ide_map_hit: Option<BuiltIdeMap> = game_root
+                    .as_ref()
+                    .and_then(|root| self.ide_maps.get(root).map(|map| (root.clone(), Arc::clone(map))));
                 let agr_display = agr_path
                     .as_ref()
                     .and_then(|path| {
@@ -6412,12 +6587,54 @@ impl App {
                             let mut nif = crate::inspector::nif::NifFile::parse(&model_bytes)
                                 .map_err(|e| format!("NIF parse: {e:?}"))?;
                             nif.resolve_string_indices();
-                            let model = crate::inspector::animation::bully::model_from_nif(
+                            let mut model = crate::inspector::animation::bully::model_from_nif(
                                 &nif,
                                 model_display.as_str(),
                                 model_display.as_str(),
                             )
                             .map_err(|e| format!("model: {e}"))?;
+                            // Textured playback: resolve each mesh's diffuse
+                            // through the same three-tier resolver the static
+                            // preview uses (one decode per texture name).
+                            let (ide_map, ide_map_new): (
+                                Option<Arc<crate::inspector::texture::IdeMap>>,
+                                Option<BuiltIdeMap>,
+                            ) = match ide_map_hit {
+                                Some((_, map)) => (Some(map), None),
+                                None => match &game_root {
+                                    Some(root) => {
+                                        let map = Arc::new(
+                                            crate::inspector::texture::IdeMap::build(root),
+                                        );
+                                        (Some(Arc::clone(&map)), Some((root.clone(), map)))
+                                    }
+                                    None => (None, None),
+                                },
+                            };
+                            if model.meshes.iter().any(|mesh| mesh.texture_name.is_some()) {
+                                let resolver = nif_texture_resolver(
+                                    crate::inspector::texture::ArchiveTextureIndex::from_entries(
+                                        &archive_entries,
+                                        archive_path.as_deref(),
+                                    ),
+                                    ide_map.clone(),
+                                    model_display.as_str(),
+                                );
+                                let mut resolved: std::collections::HashMap<
+                                    String,
+                                    Option<SceneTexture>,
+                                > = std::collections::HashMap::new();
+                                for mesh in &mut model.meshes {
+                                    let Some(name) = mesh.texture_name.clone() else {
+                                        continue;
+                                    };
+                                    let texture = resolved
+                                        .entry(name.clone())
+                                        .or_insert_with(|| resolver(&name))
+                                        .clone();
+                                    mesh.diffuse = texture;
+                                }
+                            }
                             let file = crate::inspector::animation::bully::parse_agr(&agr_bytes)
                                 .map_err(|e| format!("AGR: {e}"))?;
                             let clip_names = hxd_record
@@ -6455,12 +6672,26 @@ impl App {
                                     library.clips.len()
                                 )
                             };
-                            Ok((Arc::new(model), Arc::new(library), summary))
+                            let models = crate::inspector::animation::hxd::candidate_models(
+                                crate::inspector::animation::hxd::anim_dir_for_archive(
+                                    archive_path.as_deref(),
+                                )
+                                .as_deref(),
+                                &archive_entries,
+                            );
+                            Ok(AgrLoadOutcome {
+                                model: Arc::new(model),
+                                library: Arc::new(library),
+                                summary,
+                                models,
+                                ide_map: ide_map_new,
+                            })
                         })
                         .await;
                         match joined {
-                            Ok(result) => Message::ViewerAgrLoadCompleted { result },
+                            Ok(result) => Message::ViewerAgrLoadCompleted { serial, result },
                             Err(error) => Message::ViewerAgrLoadCompleted {
+                                serial,
                                 result: Err(format!("task: {error}")),
                             },
                         }
@@ -6468,26 +6699,58 @@ impl App {
                     |message| message,
                 )
             }
-            Message::ViewerAgrLoadCompleted { result } => {
+            Message::ViewerAgrLoadCompleted { serial, result } => {
+                // A newer load or model switch supersedes older completions.
+                if serial != self.agr_serial {
+                    return Task::none();
+                }
                 match result {
-                    Ok((model, library, summary)) => {
-                        // Open on the most substantial clip: object groups
-                        // often lead with a one-frame reference pose.
-                        let best = library
-                            .clips
-                            .iter()
-                            .max_by(|a, b| a.duration.total_cmp(&b.duration))
+                    Ok(outcome) => {
+                        let AgrLoadOutcome {
+                            model,
+                            library,
+                            summary,
+                            models,
+                            ide_map,
+                        } = outcome;
+                        if let Some((root, map)) = ide_map {
+                            self.ide_maps.insert(root, map);
+                        }
+                        // Restore the previously selected clip when the
+                        // re-play uses the same library, else open on the
+                        // most substantial clip: object groups often lead
+                        // with a one-frame reference pose.
+                        let selected = self
+                            .agr_playback
+                            .as_ref()
+                            .and_then(|playback| playback.last_clip_name.clone())
+                            .and_then(|name| {
+                                library.clips.iter().find(|clip| clip.name == name)
+                            })
+                            .or_else(|| {
+                                library
+                                    .clips
+                                    .iter()
+                                    .max_by(|a, b| a.duration.total_cmp(&b.duration))
+                            })
                             .map(|clip| clip.id);
+                        let selected_name = selected
+                            .and_then(|id| library.clips.iter().find(|clip| clip.id == id))
+                            .map(|clip| clip.name.clone());
                         self.viewer3d_handle.install_animation_session(
                             model,
                             library,
                             false,
                             Instant::now(),
                         );
-                        if let Some(best) = best {
+                        if let Some(best) = selected {
                             self.viewer3d_handle.with_animation_session_mut(|session| {
                                 session.select_clip(best, Instant::now());
                             });
+                        }
+                        if let Some(playback) = &mut self.agr_playback {
+                            playback.models = models;
+                            playback.last_clip_name = selected_name;
                         }
                         self.selected_inspector_tab = InspectorTab::Model3D;
                         self.active_viewer_entry = None;
@@ -6495,6 +6758,7 @@ impl App {
                         dev_logger::breadcrumb(&format!("AGR load ok: {summary}"));
                     }
                     Err(error) => {
+                        self.agr_playback = None;
                         dev_logger::breadcrumb(&format!("AGR load failed: {error}"));
                         self.toast = Some(format!("Animation load failed: {error}"));
                     }
@@ -6505,6 +6769,8 @@ impl App {
                 archive_index,
                 entry_index,
             } => {
+                // A static preview replaces any animation playback session.
+                self.agr_playback = None;
                 let (entry_clone, archive_path, archive_entries, cache_key) = {
                     let Some(archive) = self.editor.archives().get(archive_index) else {
                         return Task::none();
@@ -6804,6 +7070,7 @@ impl App {
                 self.active_viewer_entry = None;
                 self.clear_viewer_load();
                 self.viewer3d_handle.clear();
+                self.agr_playback = None;
                 Task::none()
             }
             Message::Viewer3dReset => {
@@ -7134,6 +7401,7 @@ impl App {
                 self.active_viewer_entry = None;
                 self.clear_viewer_load();
                 self.viewer3d_handle.clear();
+                self.agr_playback = None;
                 self.reset_texture_preview_state();
             } else {
                 let shift = valid_indices

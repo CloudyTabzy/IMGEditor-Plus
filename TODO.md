@@ -217,6 +217,28 @@ remain pending.
     Honest leftovers: 2-track weapon AGRs (0/2), `V_*` vehicle mission
     groups (~12/35) and nonsensical heuristic pairs — association work, not
     binding work.
+  - [x] Textured AGR playback and a dock model picker: AGR meshes carry
+    their NIF diffuse texture names and the loader resolves them through the
+    static preview's three-tier resolver (so Textured/Alpha blend work in
+    the animated path); the animation dock lists the catalog-associated
+    models and re-plays the retained AGR clip set on another model with the
+    binding badge recomputed per selection.
+  - [ ] **Low priority — resolve the 22 partial-bound pairs** (from the
+    corpus audit; these are association problems, not binding defects):
+    - ~14 mission groups mispaired onto same-named props via the stem
+      heuristic (`W_Camera`→`WCamera.nif`, `W_FlashLight`, `NPC_Love`,
+      `Gift`, `Try_Clothes`, `ErrandCrab`, `ARC3D`, `Area_Asylum`,
+      `Area_Infirmary`, `Px_Garb`, `Px_Tree`, `2_S02/S04CharSheets`,
+      `2_06MovieTickets`; `1_07_Sk8Board` is the documented honest case) —
+      their real target is `PLAYER.nif`/an actor; fix by preferring the
+      MAINPED resource target or by LUR-script actor mining, and consider
+      refusing absurd pairs outright.
+    - 3 vehicle mission groups (`V_Bike` 12/35, `V_COPBIKE` 9/35,
+      `V_SCOOTER` 12/35): ped-on-vehicle groups bind only the vehicle
+      subset; revisit with the vehicle-side binding evidence.
+    - 6 tiny prop edges: `BATON`/`BROCKETL`/`Slingsh` (0/2 — the rest-angle
+      admission finds no rest passage in 2-track object clips) and
+      `AtcPlank` (24/26). Revisit only if these props matter in practice.
 
 AV0–AV7 establish the shared player; AV8 is not a prerequisite for real-file
 work. Bully E0–E4 may proceed alongside it; E5 consumes the verified runtime.

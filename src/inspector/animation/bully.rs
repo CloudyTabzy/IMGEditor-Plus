@@ -1816,6 +1816,9 @@ pub fn model_from_nif_with_mapping(
     let mut node_ids: std::collections::HashMap<i32, NodeId> = std::collections::HashMap::new();
     let mut pending_skins: Vec<PendingSkin> = Vec::new();
     let mut source_names: Vec<Option<String>> = Vec::new();
+    // NIF-wide diffuse fallback for shapes without their own texturing
+    // properties (resolved to pixels later by the caller, never here).
+    let nif_diffuse = crate::inspector::viewer3d::find_diffuse_texture(nif);
 
     for &root in &nif.footer.roots {
         visit_nif_block(
@@ -1831,6 +1834,7 @@ pub fn model_from_nif_with_mapping(
             &mut node_ids,
             &mut pending_skins,
             &mut source_names,
+            nif_diffuse.as_deref(),
         );
     }
     if nodes.is_empty() {
@@ -1993,6 +1997,7 @@ fn visit_nif_block(
     node_ids: &mut std::collections::HashMap<i32, NodeId>,
     pending_skins: &mut Vec<PendingSkin>,
     source_names: &mut Vec<Option<String>>,
+    nif_diffuse: Option<&str>,
 ) -> Option<NodeId> {
     if block_index < 0 || !visited.insert(block_index) {
         return None;
@@ -2007,11 +2012,17 @@ fn visit_nif_block(
             data.children.clone(),
         ),
         BlockPayload::NiTriShape(data) => {
+            let texture_name = crate::inspector::viewer3d::diffuse_texture_for_properties(
+                nif,
+                &data.properties,
+            )
+            .or_else(|| nif_diffuse.map(str::to_owned));
             let mesh_index = build_mesh_from_shape(
                 nif,
                 data.data_ref,
                 data.skin_instance_ref,
                 data.name.as_deref().unwrap_or(&block.type_name),
+                texture_name,
                 meshes,
                 diagnostics,
                 pending_skins,
@@ -2023,11 +2034,17 @@ fn visit_nif_block(
             )
         }
         BlockPayload::NiTriStrips(data) => {
+            let texture_name = crate::inspector::viewer3d::diffuse_texture_for_properties(
+                nif,
+                &data.base.properties,
+            )
+            .or_else(|| nif_diffuse.map(str::to_owned));
             let mesh_index = build_mesh_from_shape(
                 nif,
                 data.base.data_ref,
                 data.base.skin_instance_ref,
                 data.base.name.as_deref().unwrap_or(&block.type_name),
+                texture_name,
                 meshes,
                 diagnostics,
                 pending_skins,
@@ -2099,6 +2116,7 @@ fn visit_nif_block(
             node_ids,
             pending_skins,
             source_names,
+            nif_diffuse,
         );
     }
     Some(id)
@@ -2134,6 +2152,7 @@ fn build_mesh_from_shape(
     data_ref: i32,
     skin_instance_ref: i32,
     name: &str,
+    texture_name: Option<String>,
     meshes: &mut Vec<MeshAsset>,
     diagnostics: &mut Vec<String>,
     pending_skins: &mut Vec<PendingSkin>,
@@ -2176,7 +2195,7 @@ fn build_mesh_from_shape(
     let index = meshes.len();
     meshes.push(MeshAsset {
         name: name.to_string(),
-        texture_name: None,
+        texture_name,
         vertices,
         indices,
         diffuse: None,
@@ -2932,6 +2951,157 @@ mod tests {
         }
         std::fs::write("target/agr-corpus-audit.txt", &report).expect("write audit report");
         println!("{report}");
+    }
+
+    /// The AGR model build must read each shape's diffuse texture name —
+    /// its own `NiTexturingProperty`, else the NIF-wide fallback — so the
+    /// loader can resolve pixels and animated scenes render textured.
+    #[test]
+    fn model_build_reads_diffuse_texture_names() {
+        use crate::inspector::nif::{
+            BlockMeta, BlockPayload, Endian, Footer, NiNodeData, NiSourceTextureData,
+            NiTexturingPropertyData, NiTriShapeData, NiTriShapeDataPayload, TexDesc, Triangle,
+            Vector3,
+        };
+
+        let blocks: Vec<BlockMeta> = (0..5)
+            .map(|_| BlockMeta {
+                type_index: 0,
+                type_name: String::new(),
+                size: 0,
+                offset: 0,
+            })
+            .collect();
+        let shape = |properties: Vec<i32>| {
+            Some(BlockPayload::NiTriShape(NiTriShapeData {
+                properties,
+                data_ref: 3,
+                skin_instance_ref: -1,
+                rotation: crate::inspector::nif::Matrix33::identity(),
+                scale: 1.0,
+                ..Default::default()
+            }))
+        };
+        let payloads = vec![
+            Some(BlockPayload::NiNode(NiNodeData {
+                children: vec![1],
+                rotation: crate::inspector::nif::Matrix33::identity(),
+                scale: 1.0,
+                ..Default::default()
+            })),
+            shape(vec![2]),
+            Some(BlockPayload::NiTexturingProperty(NiTexturingPropertyData {
+                base: Some(TexDesc {
+                    source_ref: 4,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            Some(BlockPayload::NiTriShapeData(NiTriShapeDataPayload {
+                vertices: vec![
+                    Vector3 {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    Vector3 {
+                        x: 1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    Vector3 {
+                        x: 0.0,
+                        y: 1.0,
+                        z: 0.0,
+                    },
+                ],
+                triangles: vec![Triangle {
+                    v0: 0,
+                    v1: 1,
+                    v2: 2,
+                }],
+                ..Default::default()
+            })),
+            Some(BlockPayload::NiSourceTexture(NiSourceTextureData {
+                file_name: Some("models/chair_d.tga".to_string()),
+                ..Default::default()
+            })),
+        ];
+        let nif = NifFile {
+            header_line: String::new(),
+            version: crate::inspector::nif::BULLY_NIF_VERSION,
+            endian: Endian::Little,
+            user_version: 0,
+            strings: Vec::new(),
+            block_types: Vec::new(),
+            blocks,
+            payloads,
+            footer: Footer { roots: vec![0] },
+        };
+        let model = model_from_nif(&nif, "textured", "textured").expect("model builds");
+        assert_eq!(model.meshes.len(), 1);
+        assert_eq!(
+            model.meshes[0].texture_name.as_deref(),
+            Some("models/chair_d.tga")
+        );
+
+        // NIF-wide fallback: the same layout without the shape's own
+        // texturing property still picks up the orphan source texture.
+        let mut fallback = nif;
+        fallback.payloads[1] = shape(Vec::new());
+        let model = model_from_nif(&fallback, "fallback", "fallback").expect("model builds");
+        assert_eq!(
+            model.meshes[0].texture_name.as_deref(),
+            Some("models/chair_d.tga")
+        );
+    }
+
+    /// The model picker's candidate list must resolve the retail catalogs to
+    /// archive NIF entries (players, peds, props) instead of exposing raw
+    /// model names.
+    #[test]
+    fn catalog_model_candidates_resolve_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let Ok(dir_bytes) = std::fs::read(stream.join("World.dir")) else {
+            return;
+        };
+        let entries: Vec<crate::archive::EntryInfo> = dir_bytes
+            .chunks_exact(32)
+            .map(|record| {
+                let end = record[8..].iter().position(|byte| *byte == 0).unwrap_or(24);
+                crate::archive::EntryInfo::new(
+                    String::from_utf8_lossy(&record[8..8 + end]).into_owned(),
+                )
+            })
+            .collect();
+        let anim = stream.parent().expect("game root").join("Anim");
+        let candidates =
+            crate::inspector::animation::hxd::candidate_models(Some(&anim), &entries);
+        assert!(
+            candidates.len() > 50,
+            "expected a catalog-sized candidate list, got {}",
+            candidates.len()
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|(_, name)| name.eq_ignore_ascii_case("PLAYER.nif")),
+            "the player model must be selectable, got: {:?}",
+            candidates
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .take(20)
+                .collect::<Vec<_>>()
+        );
+        for (index, name) in &candidates {
+            assert!(
+                entries.get(*index).is_some(),
+                "candidate {name} must map to an archive entry"
+            );
+        }
     }
 
     #[test]
@@ -3942,6 +4112,11 @@ mod tests {
         assert!(
             !model.mesh_is_hidden(0),
             "the skinned `Editable Poly` body must stay visible"
+        );
+        assert!(
+            model.meshes[0].texture_name.is_some(),
+            "the body mesh must carry its diffuse texture name, got {:?}",
+            model.meshes[0].texture_name
         );
         assert_eq!(binding.bound_count(), clip.tracks.len());
         for (track_index, track) in clip.tracks.iter().enumerate() {

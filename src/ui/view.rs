@@ -1226,6 +1226,61 @@ impl App {
         .spacing(10)
         .align_y(Alignment::Center);
 
+        // Model picker: re-play the retained AGR clip set on another
+        // catalog-associated model. Hidden for the synthetic demo and until
+        // a load has produced its candidate list.
+        let model_row: Option<Element<'_, Message>> = if demo {
+            None
+        } else {
+            self.agr_playback.as_ref().and_then(|playback| {
+                if playback.models.is_empty() {
+                    return None;
+                }
+                let mut models = playback.models.clone();
+                if !models.iter().any(|(entry, _)| *entry == playback.model_entry)
+                    && let Some(entry) = self
+                        .editor
+                        .archives()
+                        .get(playback.archive_index)
+                        .and_then(|archive| archive.entries.get(playback.model_entry))
+                {
+                    models.push((playback.model_entry, entry.file_name.to_string()));
+                    models.sort_by(|left, right| {
+                        left.1
+                            .to_ascii_lowercase()
+                            .cmp(&right.1.to_ascii_lowercase())
+                    });
+                }
+                let names: Vec<String> =
+                    models.iter().map(|(_, name)| name.clone()).collect();
+                let current = models
+                    .iter()
+                    .find(|(entry, _)| *entry == playback.model_entry)
+                    .map(|(_, name)| name.clone());
+                let model_map = std::sync::Arc::new(
+                    models
+                        .iter()
+                        .map(|(entry, name)| (name.clone(), *entry))
+                        .collect::<std::collections::HashMap<String, usize>>(),
+                );
+                let picker = pick_list(names, current, move |name| {
+                    Message::AnimationSelectModel(model_map[&name])
+                })
+                .text_size(12.0);
+                Some(
+                    row![
+                        icons::person().size(13),
+                        fonts::caption("Model"),
+                        picker,
+                        muted_caption("re-play on another model".to_string()),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .into(),
+                )
+            })
+        };
+
         let frame_button = |label: &'static str, message: Message, tip: &'static str| {
             w::styled_tooltip(
                 button(
@@ -1337,9 +1392,11 @@ impl App {
 
         let timeline = crate::ui::animation_timeline::timeline(self.viewer3d_handle.clone());
 
-        let dock = column![header, transport_row, timeline, bottom_row]
-            .spacing(10)
-            .padding([10, 12]);
+        let mut dock = column![header, transport_row];
+        if let Some(model_row) = model_row {
+            dock = dock.push(model_row);
+        }
+        let dock = dock.push(timeline).push(bottom_row).spacing(10).padding([10, 12]);
 
         container(dock)
             .width(Length::Fill)

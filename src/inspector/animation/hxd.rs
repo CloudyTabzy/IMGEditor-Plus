@@ -635,6 +635,59 @@ pub fn find_model_entry(entries: &[crate::archive::EntryInfo], model: &str) -> O
     })
 }
 
+/// Catalog-associated NIF candidates for the animation model picker: every
+/// model referenced by the `Anim/` catalogs (loose `<MODEL>.HXD` stems,
+/// `hxds.dat` records and `MAINPED.HXD` resources) that resolves to an
+/// archive entry. Returned as `(entry index, file name)`, sorted by name —
+/// this is the set of models that can legitimately carry animation clips.
+pub fn candidate_models(
+    anim_dir: Option<&Path>,
+    entries: &[crate::archive::EntryInfo],
+) -> Vec<(usize, String)> {
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    if let Some(anim) = anim_dir {
+        if let Ok(dir) = std::fs::read_dir(anim) {
+            for entry in dir.flatten() {
+                let file_name = entry.file_name();
+                let file_name = file_name.to_string_lossy();
+                if file_name.to_ascii_lowercase().ends_with(".hxd") {
+                    names.insert(file_name[..file_name.len() - 4].to_ascii_lowercase());
+                }
+            }
+        }
+        if let Ok(bytes) = std::fs::read(anim.join("hxds.dat")) {
+            for record in parse_hxds(&bytes) {
+                names.insert(record.model.to_ascii_lowercase());
+            }
+        }
+        if let Ok(bytes) = std::fs::read(anim.join("MAINPED.HXD")) {
+            let record = parse_record(&bytes, "MAINPED");
+            names.insert(record.model.to_ascii_lowercase());
+            for resource in &record.resources {
+                names.insert(resource.model.to_ascii_lowercase());
+            }
+        }
+    }
+    let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut candidates: Vec<(usize, String)> = Vec::new();
+    for name in &names {
+        if name.is_empty() {
+            continue;
+        }
+        if let Some(index) = find_model_entry(entries, name)
+            && seen.insert(index)
+        {
+            candidates.push((index, entries[index].file_name.to_string()));
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.1
+            .to_ascii_lowercase()
+            .cmp(&right.1.to_ascii_lowercase())
+    });
+    candidates
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

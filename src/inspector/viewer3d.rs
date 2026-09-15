@@ -825,7 +825,7 @@ fn looks_like_diffuse_texture(name: &str) -> bool {
     )
 }
 
-fn diffuse_texture_for_properties(nif: &NifFile, properties: &[i32]) -> Option<String> {
+pub(crate) fn diffuse_texture_for_properties(nif: &NifFile, properties: &[i32]) -> Option<String> {
     let mut detail_fallback = None;
     for &property_ref in properties.iter().rev() {
         let Some(property_idx) = usize::try_from(property_ref).ok() else {
