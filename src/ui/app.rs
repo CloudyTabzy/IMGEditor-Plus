@@ -1912,7 +1912,13 @@ impl App {
                     as f32
                     * crate::ui::view::ROW_HEIGHT;
                 let max_y = (content_height - self.entry_table_viewport_height).max(0.0);
-                requested_y.min(max_y)
+                // Reveal the picked row mid-viewport so the surrounding
+                // archive context stays visible on both sides. Clamping to
+                // [0, max_y] keeps rows near the list edges flush with the
+                // top/bottom instead of showing empty space.
+                let centered = requested_y
+                    - (self.entry_table_viewport_height - crate::ui::view::ROW_HEIGHT) / 2.0;
+                centered.clamp(0.0, max_y)
             } else {
                 requested_y
             }
@@ -10466,6 +10472,57 @@ mod tests {
             display_row as f32 * crate::ui::view::ROW_HEIGHT
         );
         assert!(!app.predictions_open(), "dropdown closes after commit");
+    }
+
+    #[test]
+    fn prediction_reveal_centers_the_row_in_the_viewport() {
+        let mut app = test_app_with_entries();
+        {
+            let archive = app.editor.archives_mut().first_mut().unwrap();
+            for index in 0..40 {
+                archive
+                    .entries
+                    .push(EntryInfo::new(&format!("entry{index:03}.dff")));
+            }
+            archive.update_selected_list("", false);
+        }
+        let viewport_height = 320.0;
+        let _ = app.update(Message::ScrollOffsetChanged {
+            y: 0.0,
+            max_y: 2000.0,
+            viewport_height,
+        });
+
+        let commit = |app: &mut App, query: &str, prediction: usize| {
+            let _ = app.update(Message::SearchChanged(query.to_string()));
+            let _ = app.update(Message::DebounceTick);
+            let _ = app.update(Message::SearchPredictPick(prediction));
+            let archive = &app.editor.archives()[0];
+            archive
+                .display_row_of(app.editor.selected_entry().unwrap())
+                .unwrap()
+        };
+
+        // A row deep enough to center: the reveal offset pulls the target
+        // row (viewport - row) / 2 below the top of the viewport.
+        let row = commit(&mut app, "entry020", 0);
+        let requested = row as f32 * crate::ui::view::ROW_HEIGHT;
+        let expected = requested - (viewport_height - crate::ui::view::ROW_HEIGHT) / 2.0;
+        assert_eq!(app.scroll_y, expected);
+        assert!(app.scroll_y < requested, "reveal scrolls past the row");
+
+        // Near the list start the reveal clamps to the top.
+        let row = commit(&mut app, "entry000", 0);
+        assert_eq!(row, 0);
+        assert_eq!(app.scroll_y, 0.0);
+
+        // Near the list end the reveal clamps to the bottom of the list.
+        let row = commit(&mut app, "entry039", 0);
+        let content_height = app.editor.archives()[0].selected_indices.len() as f32
+            * crate::ui::view::ROW_HEIGHT;
+        let max_y = (content_height - viewport_height).max(0.0);
+        assert!(row as f32 * crate::ui::view::ROW_HEIGHT > max_y, "clamp engages");
+        assert_eq!(app.scroll_y, max_y);
     }
 
     #[test]
