@@ -572,6 +572,7 @@ mod tests {
                     EncodeOptions {
                         dxt_quality: *quality,
                         dither: false,
+                        ..Default::default()
                     },
                 )
                 .expect("encode");

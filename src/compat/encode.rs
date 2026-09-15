@@ -201,13 +201,28 @@ pub enum DxtQuality {
     High,
 }
 
-/// Options that trade encode time for quality.
-#[derive(Debug, Clone, Copy, Default)]
+/// Options that trade encode time for quality, plus planning extras.
+#[derive(Debug, Clone, Copy)]
 pub struct EncodeOptions {
     /// DXT encoder effort (ignored by non-DXT formats).
     pub dxt_quality: DxtQuality,
     /// Optional Bayer 4x4 dithering for palette quantization.
     pub dither: bool,
+    /// Build the decoded-result preview into conversion plans. Only the
+    /// bulk planner turns this off: nobody renders those previews, and
+    /// skipping it saves one full decode plus an RGBA-sized buffer per
+    /// planned texture.
+    pub preview: bool,
+}
+
+impl Default for EncodeOptions {
+    fn default() -> Self {
+        Self {
+            dxt_quality: DxtQuality::default(),
+            dither: false,
+            preview: true,
+        }
+    }
 }
 
 /// An encoded native texture ready for the TXD writer.

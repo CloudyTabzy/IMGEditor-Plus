@@ -100,60 +100,117 @@ pub fn replace_texture(
     index: usize,
     texture: NativeTexture,
 ) -> Result<Vec<u8>, String> {
-    let parsed = crate::parser::txd::parse_txd(bytes)?;
-    if index >= parsed.textures.len() {
-        return Err(format!(
-            "texture index {index} is out of range (the dictionary has {})",
-            parsed.textures.len()
-        ));
-    }
-    let splices = crate::parser::txd::native_splices(bytes);
-    let Some(splice) = splices.get(index).copied() else {
-        return Err("this dictionary's texture layout cannot be edited in place".to_string());
-    };
+    replace_textures(bytes, &[(index, texture)])
+}
 
-    let (start, end, replacement) = match splice {
-        NativeSplice::Struct {
-            start,
-            end,
-            version,
-            ..
-        } => {
-            let old = &parsed.textures[index];
-            let body = bytes.get(start + 12..end).unwrap_or_default();
-            (
+/// Replace several textures in one pass: a single parse, a single output
+/// buffer, and per-section size patches. Indices must be unique and in
+/// range. Same preservation guarantees as [`replace_texture`].
+pub fn replace_textures(
+    bytes: &[u8],
+    replacements: &[(usize, NativeTexture)],
+) -> Result<Vec<u8>, String> {
+    if replacements.is_empty() {
+        return Ok(bytes.to_vec());
+    }
+    let parsed = crate::parser::txd::parse_txd(bytes)?;
+    let splices = crate::parser::txd::native_splices(bytes);
+
+    struct SpliceEdit {
+        start: usize,
+        end: usize,
+        replacement: Vec<u8>,
+        delta: i64,
+        /// Enclosing native-header offset for a STRUCT splice, whose size
+        /// word must absorb the same delta.
+        native_header: Option<usize>,
+        native_size: u32,
+    }
+
+    let mut edits: Vec<SpliceEdit> = Vec::with_capacity(replacements.len());
+    let mut total_delta: i64 = 0;
+    for (index, texture) in replacements {
+        if *index >= parsed.textures.len() {
+            return Err(format!(
+                "texture index {index} is out of range (the dictionary has {})",
+                parsed.textures.len()
+            ));
+        }
+        let Some(splice) = splices.get(*index).copied() else {
+            return Err("this dictionary's texture layout cannot be edited in place".to_string());
+        };
+        let (start, end, replacement, native_header, native_size) = match splice {
+            NativeSplice::Struct {
                 start,
                 end,
-                section(rw::STRUCT, version, &spliced_struct_body(body, old, &texture)),
-            )
-        }
-        NativeSplice::Native { start, end } => {
-            let version = read_u32(bytes, start + 8).unwrap_or(RW_VERSION_DEFAULT);
-            (start, end, write_native_ver(&texture, version))
-        }
-    };
-    let delta = replacement.len() as i64 - (end - start) as i64;
-    let mut out = Vec::with_capacity((bytes.len() as i64 + delta).max(0) as usize);
-    out.extend_from_slice(&bytes[..start]);
-    out.extend_from_slice(&replacement);
-    out.extend_from_slice(&bytes[end..]);
+                version,
+                native_header,
+                ..
+            } => {
+                let old = &parsed.textures[*index];
+                let body = bytes.get(start + 12..end).unwrap_or_default();
+                let replacement = section(
+                    rw::STRUCT,
+                    version,
+                    &spliced_struct_body(body, old, texture),
+                );
+                let native_size =
+                    read_u32(bytes, native_header + 4).ok_or("missing native size")?;
+                (
+                    start,
+                    end,
+                    replacement,
+                    Some(native_header),
+                    native_size,
+                )
+            }
+            NativeSplice::Native { start, end } => {
+                let version = read_u32(bytes, start + 8).unwrap_or(RW_VERSION_DEFAULT);
+                (start, end, write_native_ver(texture, version), None, 0)
+            }
+        };
+        let delta = replacement.len() as i64 - (end - start) as i64;
+        total_delta += delta;
+        edits.push(SpliceEdit {
+            start,
+            end,
+            replacement,
+            delta,
+            native_header,
+            native_size,
+        });
+    }
+    edits.sort_by_key(|edit| edit.start);
+    if let Some(pair) = edits.windows(2).find(|pair| pair[1].start < pair[0].end) {
+        return Err(format!(
+            "texture layouts overlap ({}..{} and {}..{}); cannot edit in place",
+            pair[0].start, pair[0].end, pair[1].start, pair[1].end
+        ));
+    }
 
-    // Patch the enclosing section sizes: the top dictionary always, and
-    // the native header when only its STRUCT child was replaced.
+    let mut out = Vec::with_capacity((bytes.len() as i64 + total_delta).max(0) as usize);
+    let mut cursor = 0usize;
+    for edit in &edits {
+        out.extend_from_slice(&bytes[cursor..edit.start]);
+        out.extend_from_slice(&edit.replacement);
+        cursor = edit.end;
+    }
+    out.extend_from_slice(&bytes[cursor..]);
+
+    // Patch the enclosing section sizes: the top dictionary absorbs the
+    // sum of all deltas (its size word sits before every edit, so its
+    // offset never shifts), and each STRUCT splice's native header its
+    // own delta — at that header's shifted output position, since edits
+    // earlier in the file have already moved it.
     let top_size = read_u32(bytes, 4).ok_or("missing dictionary size")?;
-    write_u32(
-        &mut out,
-        4,
-        (top_size as i64 + delta) as u32,
-    )?;
-    if let NativeSplice::Struct { native_header, .. } = splice {
-        let native_size =
-            read_u32(bytes, native_header + 4).ok_or("missing native size")?;
-        write_u32(
-            &mut out,
-            native_header + 4,
-            (native_size as i64 + delta) as u32,
-        )?;
+    write_u32(&mut out, 4, (top_size as i64 + total_delta) as u32)?;
+    let mut shift: i64 = 0;
+    for edit in &edits {
+        if let Some(header) = edit.native_header {
+            let out_offset = (header as i64 + shift) as usize;
+            write_u32(&mut out, out_offset + 4, (edit.native_size as i64 + edit.delta) as u32)?;
+        }
+        shift += edit.delta;
     }
 
     Ok(out)
@@ -357,6 +414,46 @@ mod tests {
         );
 
         assert!(replace_texture(&bytes, 9, parsed.textures[0].clone()).is_err());
+    }
+
+    #[test]
+    fn batch_replacement_matches_sequential_splices() {
+        let first = native_from_encoded(&encoded_sample(EncodeFormat::Pal8, 8), 8, "keepme", "");
+        let second = native_from_encoded(&encoded_sample(EncodeFormat::Rgb565, 8), 8, "editme", "");
+        let bytes = write_txd(&TxdFile {
+            device_id: 1,
+            texture_count: 2,
+            rw_version: RW_VERSION_DEFAULT,
+            textures: vec![first, second],
+        });
+
+        let edit0 = native_from_encoded(&encoded_sample(EncodeFormat::Argb8888, 8), 8, "edited0", "");
+        let edit1 = native_from_encoded(&encoded_sample(EncodeFormat::Dxt1, 9), 9, "edited1", "");
+
+        // One pass, with deliberately unsorted indices.
+        let batch = replace_textures(&bytes, &[(1, edit1.clone()), (0, edit0.clone())])
+            .expect("batch replace");
+        let parsed = crate::parser::txd::parse_txd(&batch)
+            .unwrap_or_else(|error| panic!("parse failed: {error}"));
+        assert_eq!(parsed.textures.len(), 2);
+        // Splices edit pixels and raster fields; names survive by contract.
+        assert_eq!(parsed.textures[0].diffuse_name, "keepme");
+        assert_eq!(parsed.textures[0].format_name(), "8888 ARGB");
+        assert_eq!(parsed.textures[1].diffuse_name, "editme");
+        assert_eq!(parsed.textures[1].platform_id, 9);
+        assert_eq!(parsed.textures[1].d3d_format, edit1.d3d_format);
+
+        // The batch result must be byte-identical to two sequential
+        // single splices (same preservation guarantees, one pass).
+        let sequential = replace_texture(&bytes, 0, edit0)
+            .and_then(|bytes| replace_texture(&bytes, 1, edit1))
+            .expect("sequential replace");
+        assert_eq!(batch, sequential);
+
+        // Duplicate and out-of-range indices are rejected.
+        let ok = native_from_encoded(&encoded_sample(EncodeFormat::Dxt1, 9), 9, "ok", "");
+        assert!(replace_textures(&bytes, &[(0, ok.clone()), (0, ok.clone())]).is_err());
+        assert!(replace_textures(&bytes, &[(5, ok)]).is_err());
     }
 
     /// Retail exports are the fidelity gate: parse -> write must be

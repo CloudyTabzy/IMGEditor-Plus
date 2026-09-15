@@ -386,7 +386,11 @@ pub fn plan_import(
         ));
     }
 
-    let preview_rgba = decode_encoded(&encoded, platform)?;
+    let preview_rgba = if options.preview {
+        decode_encoded(&encoded, platform)?
+    } else {
+        Vec::new()
+    };
     let output_bytes = encoded.palette.len()
         + encoded
             .mipmaps
@@ -423,6 +427,24 @@ pub fn plan_conversion(
         .textures
         .get(texture_index)
         .ok_or_else(|| format!("texture index {texture_index} is out of range"))?;
+    let mut plan = plan_conversion_for_texture(texture, target, archive_file_name, format_override, options)?;
+    // The single-texture dialog shows the encoded result; bulk planning
+    // uses [`plan_conversion_for_texture`] directly and skips this decode.
+    plan.preview_rgba = decode_encoded(&plan.encoded, plan.platform_id)?;
+    Ok(plan)
+}
+
+/// Plan converting one already-parsed TXD texture. No encoded-result
+/// preview is generated (`preview_rgba` stays empty) — the bulk planner
+/// uses this so large selections don't decode + hold an RGBA copy per
+/// texture just for a preview nobody renders.
+pub fn plan_conversion_for_texture(
+    texture: &NativeTexture,
+    target: &GameProfile,
+    archive_file_name: &str,
+    format_override: Option<EncodeFormat>,
+    options: EncodeOptions,
+) -> Result<ConversionPlan, String> {
     let rgba = texture.decode_rgba().map_err(|error| {
         format!(
             "'{}' cannot be decoded ({error}); conversion needs readable pixels",
@@ -456,6 +478,32 @@ pub fn plan_conversion(
     plan_import(&image, target, archive_file_name, format_override, options)
 }
 
+/// Apply several replace plans to an existing TXD in one pass: a single
+/// parse for the original names and a single splice/serialize per entry
+/// instead of one per texture.
+pub fn apply_replaces(
+    txd_bytes: &[u8],
+    plans: &[(usize, &ConversionPlan)],
+) -> Result<Vec<u8>, String> {
+    let parsed = parse_txd(txd_bytes)?;
+    let mut replacements = Vec::with_capacity(plans.len());
+    for (index, plan) in plans {
+        let old = parsed.textures.get(*index).ok_or_else(|| {
+            format!("texture index {index} is out of range")
+        })?;
+        replacements.push((
+            *index,
+            txd_writer::native_from_encoded(
+                &plan.encoded,
+                plan.platform_id,
+                &old.diffuse_name,
+                &old.alpha_name,
+            ),
+        ));
+    }
+    txd_writer::replace_textures(txd_bytes, &replacements)
+}
+
 /// Apply a replace plan to an existing TXD entry. The texture's name
 /// and every other texture are preserved.
 pub fn apply_replace(
@@ -463,18 +511,7 @@ pub fn apply_replace(
     texture_index: usize,
     plan: &ConversionPlan,
 ) -> Result<Vec<u8>, String> {
-    let parsed = parse_txd(txd_bytes)?;
-    let old = parsed
-        .textures
-        .get(texture_index)
-        .ok_or_else(|| format!("texture index {texture_index} is out of range"))?;
-    let native = txd_writer::native_from_encoded(
-        &plan.encoded,
-        plan.platform_id,
-        &old.diffuse_name,
-        &old.alpha_name,
-    );
-    txd_writer::replace_texture(txd_bytes, texture_index, native)
+    apply_replaces(txd_bytes, &[(texture_index, plan)])
 }
 
 /// Build a brand-new single-texture TXD from an import plan.
@@ -797,6 +834,7 @@ mod tests {
                 EncodeOptions {
                     dxt_quality: DxtQuality::High,
                     dither: false,
+                    ..Default::default()
                 },
             ),
             (

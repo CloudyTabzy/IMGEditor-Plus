@@ -1240,6 +1240,11 @@ pub struct BulkPlanReady {
     pub source_label: String,
     pub source_path: Option<PathBuf>,
     pub entries: Vec<BulkEntryPlan>,
+    /// How many entries went into the plan (even when empty), so an empty
+    /// result can explain itself.
+    pub selected_count: usize,
+    /// Selected entries skipped because they aren't TXD containers.
+    pub ignored_non_txd: usize,
 }
 
 impl std::fmt::Debug for BulkPlanReady {
@@ -1260,6 +1265,9 @@ pub struct BulkConvertState {
     pub source_label: String,
     pub source_path: Option<PathBuf>,
     pub entries: Vec<BulkEntryPlan>,
+    /// Selected entries skipped because they aren't TXD containers; shown
+    /// in the dialog so the scope of the conversion is never a surprise.
+    pub ignored_non_txd: usize,
 }
 
 pub struct App {
@@ -4116,8 +4124,15 @@ impl App {
                     return Task::none();
                 }
                 if ready.entries.is_empty() {
-                    self.toast =
-                        Some("Every selected texture is already native for the target.".into());
+                    self.toast = Some(
+                        if ready.ignored_non_txd == ready.selected_count
+                            && ready.selected_count > 0
+                        {
+                            "Only TXD entries can be converted - none of the selected entries are TXD texture containers.".into()
+                        } else {
+                            "Every selected texture is already native for the target.".into()
+                        },
+                    );
                     return Task::none();
                 }
                 self.pending_bulk = Some(BulkConvertState {
@@ -4126,6 +4141,7 @@ impl App {
                     source_label: ready.source_label,
                     source_path: ready.source_path,
                     entries: ready.entries,
+                    ignored_non_txd: ready.ignored_non_txd,
                 });
                 self.toast = None;
                 Task::none()
@@ -8640,6 +8656,7 @@ fn replace_encode_options(high_quality: bool) -> crate::compat::encode::EncodeOp
             crate::compat::encode::DxtQuality::Standard
         },
         dither: false,
+        ..Default::default()
     }
 }
 
@@ -8724,10 +8741,12 @@ fn plan_txd_import(
 }
 
 /// Plan converting every texture of the selected entries to the target
-/// dialect, off the UI thread. Textures already native are skipped.
+/// dialect, off the UI thread. Textures already native are skipped; selected
+/// entries that aren't TXD containers are counted, not converted.
 ///
 /// Receives only the selected entries (with their indices) plus the source
-/// accessors, so the task never needs a full archive clone.
+/// accessors, so the task never needs a full archive clone. Each entry's
+/// TXD is parsed once — classification, planning, and apply all reuse it.
 fn plan_bulk_convert(
     archive_index: usize,
     archive_generation: u64,
@@ -8741,8 +8760,10 @@ fn plan_bulk_convert(
     use crate::compat::raster::RasterProfile;
 
     let mut entries = Vec::new();
+    let mut ignored_non_txd = 0usize;
     for (index, entry) in selected {
         if !entry.file_name_lower.ends_with(".txd") {
+            ignored_non_txd += 1;
             continue;
         }
         let Ok(bytes) =
@@ -8762,13 +8783,17 @@ fn plan_bulk_convert(
                 skipped_native += 1;
                 continue;
             }
-            match crate::compat::convert::plan_conversion(
-                &bytes,
-                texture_index,
+            match crate::compat::convert::plan_conversion_for_texture(
+                texture,
                 target,
                 &source_label,
                 None,
-                crate::compat::encode::EncodeOptions::default(),
+                crate::compat::encode::EncodeOptions {
+                    // The bulk dialog lists counts, not pixels; skipping the
+                    // preview decode keeps big selections cheap.
+                    preview: false,
+                    ..Default::default()
+                },
             ) {
                 Ok(plan) => textures.push((
                     texture_index,
@@ -8795,6 +8820,8 @@ fn plan_bulk_convert(
         source_label,
         source_path: archive_path,
         entries,
+        selected_count: selected.len(),
+        ignored_non_txd,
     })
 }
 
@@ -8802,7 +8829,8 @@ fn plan_bulk_convert(
 type BulkPatches = Vec<(usize, Arc<Vec<u8>>)>;
 
 /// Execute a bulk-conversion plan off the UI thread, reading each planned
-/// entry from its snapshot instead of the live archive.
+/// entry from its snapshot instead of the live archive. All of an entry's
+/// planned textures are spliced in one pass.
 fn convert_bulk_entries(
     entries: &[BulkEntryPlan],
     archive_path: Option<&std::path::Path>,
@@ -8816,9 +8844,12 @@ fn convert_bulk_entries(
             source_mmap,
         )
         .map_err(|error| error.to_string())?;
-        for (texture_index, _, plan) in &entry_plan.textures {
-            bytes = crate::compat::convert::apply_replace(&bytes, *texture_index, &plan.0)?;
-        }
+        let plans: Vec<(usize, &crate::compat::convert::ConversionPlan)> = entry_plan
+            .textures
+            .iter()
+            .map(|(texture_index, _, plan)| (*texture_index, plan.0.as_ref()))
+            .collect();
+        bytes = crate::compat::convert::apply_replaces(&bytes, &plans)?;
         patches.push((entry_plan.entry_index, Arc::new(bytes)));
     }
     Ok(patches)
@@ -9020,7 +9051,8 @@ mod tests {
             Some("Select the entries to convert first.")
         );
 
-        // A selection that excludes the TXD plans nothing from it.
+        // A DFF-only selection explains itself instead of claiming the
+        // textures are "already native".
         app.editor.select_entry(0, false, false);
         let messages = drain_task(app.update(Message::BulkConvertRequested));
         let [Message::BulkConvertPlanned(planned)] = messages.as_slice() else {
@@ -9029,12 +9061,20 @@ mod tests {
         let Ok(ready) = &**planned else {
             panic!("planning failed: {:?}", planned.as_ref().as_ref().err());
         };
-        assert!(ready.entries.is_empty(), "unselected TXD must not convert");
+        assert!(ready.entries.is_empty());
+        assert_eq!(ready.ignored_non_txd, 1);
+        assert_eq!(ready.selected_count, 1);
         let _ = app.update(messages.into_iter().next().unwrap());
+        assert_eq!(
+            app.toast.as_deref(),
+            Some(
+                "Only TXD entries can be converted - none of the selected entries are TXD texture containers."
+            )
+        );
         assert!(app.pending_bulk.is_none());
 
-        // Selecting the TXD plans exactly its one non-native texture.
-        app.editor.select_entry(1, false, false);
+        // A mixed selection converts the TXD and reports the ignored DFF.
+        app.editor.select_entry(1, false, true);
         let messages = drain_task(app.update(Message::BulkConvertRequested));
         let [Message::BulkConvertPlanned(planned)] = messages.as_slice() else {
             panic!("expected one planned message, got {messages:?}");
@@ -9044,8 +9084,11 @@ mod tests {
         };
         assert_eq!(ready.entries.len(), 1);
         assert_eq!(ready.entries[0].textures.len(), 1);
+        assert_eq!(ready.ignored_non_txd, 1);
         let _ = app.update(messages.into_iter().next().unwrap());
-        assert!(app.pending_bulk.is_some());
+        let state = app.pending_bulk.as_ref().expect("dialog opens");
+        assert_eq!(state.entries.len(), 1);
+        assert_eq!(state.ignored_non_txd, 1);
     }
 
     /// Run a task's side effects and collect the follow-up messages it
@@ -10136,6 +10179,8 @@ mod tests {
                 skipped_native: 2,
                 failed: 0,
             }],
+            selected_count: 1,
+            ignored_non_txd: 0,
         };
         let _ = app.update(Message::BulkConvertPlanned(Box::new(Ok(ready))));
         assert!(app.pending_bulk.is_some(), "the dialog must open");
@@ -10153,6 +10198,8 @@ mod tests {
             source_label: archive.file_name.clone(),
             source_path: archive.path.clone(),
             entries: Vec::new(),
+            selected_count: 1,
+            ignored_non_txd: 0,
         };
         app.editor.archives_mut()[0].invalidate_entry_caches();
 

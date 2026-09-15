@@ -3209,6 +3209,13 @@ fn build_bulk_dialog(app: &App) -> Option<Element<'_, Message>> {
             "{skipped} already native (skipped), {failed} unreadable (skipped)."
         )));
     }
+    if state.ignored_non_txd > 0 {
+        body = body.push(fonts::caption_wrapped(format!(
+            "{} of the selected entries {} not TXD containers and stay untouched.",
+            state.ignored_non_txd,
+            if state.ignored_non_txd == 1 { "is" } else { "are" }
+        )));
+    }
     body = body.push(
         Scrollable::new(list)
             .height(Length::Fixed(150.0))
