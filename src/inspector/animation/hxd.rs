@@ -99,8 +99,10 @@ impl HxdRecord {
     /// Ordinary HXD records use the historical exact-count mapping. Compound
     /// catalogs such as `MAINPED.HXD` first select rows by their resource
     /// index, then align them to AGR chunks by the duplicated encoded size.
-    /// The latter intentionally tolerates stale catalog-only rows but returns
-    /// no names unless every AGR chunk has an ordered match.
+    /// The alignment tolerates stale catalog-only rows and partial coverage:
+    /// clips without an ordered size match keep an empty name so the caller
+    /// falls back to the positional `clip_NN` label (`Area_GirlsDorm` has
+    /// six single-frame filler chunks beyond its nine named sequences).
     pub fn sequence_names_for_agr(&self, source: &str, clips: &[HxdClipSignature]) -> Vec<String> {
         let source_index = self
             .resources
@@ -119,15 +121,18 @@ impl HxdRecord {
             .iter()
             .filter(|sequence| sequence.source_index == Some(source_index as u32))
             .collect();
-        if clips.len() > candidates.len() {
+        if candidates.is_empty() || clips.is_empty() {
             return Vec::new();
         }
 
-        // Minimum-cost ordered subsequence alignment. Encoded size is the
-        // admission key; duration only breaks ties when repeated chunk sizes
-        // make more than one mapping possible.
+        // Minimum-cost ordered alignment. Encoded size is the admission key;
+        // duration only breaks ties when repeated chunk sizes make more than
+        // one mapping possible. Skipping a clip or a catalog row costs a
+        // fixed penalty, so covered runs still name correctly when the
+        // resource lists fewer rows than the AGR has chunks.
         const MAX_FINAL_PADDING: u32 = 64;
         const MAX_ALIGNMENT_CELLS: usize = 4_000_000;
+        const SKIP_COST: f64 = 25.0;
         let rows = clips.len() + 1;
         let columns = candidates.len() + 1;
         let Some(cells) = rows
@@ -137,14 +142,28 @@ impl HxdRecord {
             return Vec::new();
         };
         let mut costs = vec![f64::INFINITY; cells];
-        let mut take = vec![false; cells];
+        let mut choices = vec![0_u8; cells];
         for column in 0..columns {
             costs[clips.len() * columns + column] = 0.0;
+        }
+        // The boundary column (every catalog row consumed) can still skip
+        // the remaining clips at the fixed penalty, so a tail match after
+        // the last row stays reachable.
+        for row in 0..clips.len() {
+            costs[row * columns + candidates.len()] = (clips.len() - row) as f64 * SKIP_COST;
         }
         for row in (0..clips.len()).rev() {
             for column in (0..candidates.len()).rev() {
                 let cell = row * columns + column;
-                costs[cell] = costs[cell + 1];
+                // Skip this catalog row.
+                let mut best = costs[cell + 1];
+                let mut choice = 2_u8;
+                // Skip this clip when no catalog row fits it.
+                let skip_clip = costs[(row + 1) * columns + column] + SKIP_COST;
+                if skip_clip < best {
+                    best = skip_clip;
+                    choice = 1;
+                }
                 let expected_size = clips[row]
                     .source_size
                     .checked_add(4)
@@ -165,15 +184,19 @@ impl HxdRecord {
                         let duration_delta = f64::from(
                             (candidates[column].duration_s - clips[row].duration_s).abs(),
                         );
-                        // Exact sizes always beat a final-padding fallback;
-                        // duration then disambiguates equal-size rows.
-                        let matched = remainder + f64::from(size_delta) * 1_000.0 + duration_delta;
-                        if matched <= costs[cell] {
-                            costs[cell] = matched;
-                            take[cell] = true;
+                        // Exact sizes always beat the bounded final-padding
+                        // fallback (kept small so padding never loses to a
+                        // skip); duration then disambiguates equal-size rows.
+                        let padding_cost = if size_delta == 0 { 0.0 } else { 0.5 };
+                        let matched = remainder + padding_cost + duration_delta;
+                        if matched <= best {
+                            best = matched;
+                            choice = 0;
                         }
                     }
                 }
+                costs[cell] = best;
+                choices[cell] = choice;
             }
         }
         if !costs[0].is_finite() {
@@ -182,15 +205,24 @@ impl HxdRecord {
 
         let mut names = Vec::with_capacity(clips.len());
         let (mut row, mut column) = (0usize, 0usize);
-        while row < clips.len() && column < candidates.len() {
-            if take[row * columns + column] {
-                names.push(candidates[column].leaf_name().to_string());
+        while row < clips.len() {
+            if column >= candidates.len() {
+                names.push(String::new());
                 row += 1;
+                continue;
             }
-            column += 1;
-        }
-        if row != clips.len() {
-            return Vec::new();
+            match choices[row * columns + column] {
+                0 => {
+                    names.push(candidates[column].leaf_name().to_string());
+                    row += 1;
+                    column += 1;
+                }
+                1 => {
+                    names.push(String::new());
+                    row += 1;
+                }
+                _ => column += 1,
+            }
         }
         names
     }
@@ -661,6 +693,50 @@ mod tests {
             ["RUN", "IDLE"]
         );
         assert!(record.sequence_names_for_agr("missing", &clips).is_empty());
+    }
+
+    #[test]
+    fn partial_coverage_names_only_matched_clips() {
+        let sequence = |name: &str, encoded_size| HxdSequence {
+            name: name.into(),
+            duration_s: 1.0,
+            weight: 0.3,
+            encoded_size: Some(encoded_size),
+            source_index: Some(0),
+        };
+        let record = HxdRecord {
+            model: "PLAYER".into(),
+            joints: Vec::new(),
+            sequences: vec![
+                sequence("C_PLAYER\\RUN", 104),
+                sequence("C_PLAYER\\IDLE", 204),
+            ],
+            resources: vec![HxdResource {
+                name: "C_Player".into(),
+                encoded_size: 0,
+                model: "player.mxd".into(),
+            }],
+        };
+        let signature = |source_size, duration_s| HxdClipSignature {
+            source_size,
+            duration_s,
+        };
+
+        // Clip 1 has no size-compatible row: the covered run still names
+        // around it and the unmatched clip keeps an empty (positional) name.
+        let names = record.sequence_names_for_agr(
+            "C_Player",
+            &[signature(100, 1.0), signature(400, 1.0), signature(200, 1.0)],
+        );
+        assert_eq!(names, ["RUN", "", "IDLE"]);
+
+        // Catalog rows may also outnumber the clips.
+        let names = record.sequence_names_for_agr("C_Player", &[signature(200, 1.0)]);
+        assert_eq!(names, ["IDLE"]);
+
+        // Unrelated sizes name nothing rather than guessing.
+        let names = record.sequence_names_for_agr("C_Player", &[signature(999, 1.0)]);
+        assert_eq!(names, [""]);
     }
 
     #[test]

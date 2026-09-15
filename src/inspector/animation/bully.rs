@@ -1433,15 +1433,23 @@ pub fn apply_hxd_names(
     apply_clip_names(library, &record.sequence_names())
 }
 
-/// [`apply_hxd_names`] for a pre-extracted name list.
+/// [`apply_hxd_names`] for a pre-extracted name list. Names are aligned by
+/// index; empty entries leave the positional `clip_NN` fallback in place
+/// (compound catalogs may cover only part of an AGR). Returns the number of
+/// clips actually renamed.
 pub fn apply_clip_names(library: &mut AnimationLibrary, names: &[String]) -> usize {
     if library.clips.len() != names.len() {
         return 0;
     }
+    let mut renamed = 0;
     for (clip, name) in library.clips.iter_mut().zip(names) {
+        if name.is_empty() {
+            continue;
+        }
         clip.name = name.clone();
+        renamed += 1;
     }
-    library.clips.len()
+    renamed
 }
 
 /// How NIF scene nodes are named for AGR track binding.
@@ -3883,6 +3891,59 @@ mod tests {
                 track.target
             );
         }
+    }
+
+    /// Compound-resource naming may cover only part of an AGR: the
+    /// `Area_GirlsDorm` resource lists nine sequences while the AGR carries
+    /// fifteen chunks (six single-frame filler clips). Covered clips take
+    /// their catalog names by ordered size alignment; the rest keep the
+    /// positional `clip_NN` fallback instead of losing every name.
+    #[test]
+    fn compound_resource_partial_naming_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let anim = stream.parent().expect("game root").join("Anim");
+        let Some(record) =
+            crate::inspector::animation::hxd::find_for_agr(&anim, "Area_GirlsDorm")
+        else {
+            return;
+        };
+        let Some(agr_bytes) = world_entry(stream, "Area_GirlsDorm.agr") else {
+            return;
+        };
+        let file = parse_agr(&agr_bytes).expect("Area_GirlsDorm.agr parses");
+        assert_eq!(file.clip_count(), 15);
+        let signatures: Vec<_> = file
+            .clips
+            .iter()
+            .map(|clip| crate::inspector::animation::hxd::HxdClipSignature {
+                source_size: clip.source_size,
+                duration_s: clip.duration_s,
+            })
+            .collect();
+        let names = record.sequence_names_for_agr("Area_GirlsDorm", &signatures);
+        assert_eq!(names.len(), 15);
+        assert_eq!(names[0], "STUDY_OUT");
+        assert_eq!(names[4], "STUDY_IN");
+        assert_eq!(names[6], "FM_INTOBED_LEFT");
+        assert_eq!(names[7], "FM_INTOBED_RIGHT");
+        assert_eq!(names[8], "FM_OUTOFBED_LEFT");
+        assert_eq!(names[9], "FM_OUTOFBED_RIGHT");
+        assert!(
+            names[5].is_empty() && names[10..].iter().all(String::is_empty),
+            "single-frame filler clips stay unnamed: {names:?}"
+        );
+
+        let mut library = to_library(&file, "Area_GirlsDorm.agr");
+        assert_eq!(
+            crate::inspector::animation::bully::apply_clip_names(&mut library, &names),
+            9
+        );
+        assert_eq!(library.clips[0].name, "STUDY_OUT");
+        assert_eq!(library.clips[5].name, "clip_05");
+        assert_eq!(library.clips[14].name, "clip_14");
     }
 
     /// Regression (2026-09-15): a generalized wrapper offset bound the

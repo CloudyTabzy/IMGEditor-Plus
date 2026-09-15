@@ -111,10 +111,6 @@ pub struct SceneHandleInner {
     pub dirty: bool,
     pub gpu_error: Option<String>,
     pub session: Option<AnimationSession>,
-    /// Cursor is over the 3D viewport this frame (playback shortcut gate).
-    pub(crate) pointer_over_viewport: bool,
-    /// Cursor is over the timeline dock this frame (playback shortcut gate).
-    pub(crate) timeline_hover: bool,
     /// A camera drag owns the pointer; suppress root-follow while true.
     pub(crate) camera_user_manipulating: bool,
 }
@@ -135,8 +131,6 @@ impl Default for SceneHandleInner {
             dirty: false,
             gpu_error: None,
             session: None,
-            pointer_over_viewport: false,
-            timeline_hover: false,
             camera_user_manipulating: false,
         }
     }
@@ -386,10 +380,6 @@ impl SceneHandle {
                 inner.dirty = true;
             }
         });
-    }
-
-    pub(crate) fn set_timeline_hover(&self, hover: bool) {
-        self.with_mut(|inner| inner.timeline_hover = hover);
     }
 }
 
@@ -666,7 +656,6 @@ where
         state.cursor_inside = cursor_inside;
         let mut dirty = false;
         self.handle.with_mut(|inner| {
-            inner.pointer_over_viewport = cursor_inside;
             let navigation_visible = inner.flags.contains(RenderFlags::SHOW_NAVIGATION);
             let hit = navigation_visible
                 .then(|| {

@@ -147,7 +147,6 @@ impl canvas::Program<Message> for TimelineProgram {
         let window = window_for(state.view, view.duration);
         let width = bounds.width;
         let inside = cursor.position_in(bounds).is_some();
-        self.handle.set_timeline_hover(inside);
 
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {

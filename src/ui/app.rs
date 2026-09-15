@@ -2054,24 +2054,16 @@ impl App {
             .unwrap_or(false)
     }
 
-    /// Playback keyboard shortcuts act only with viewport/timeline focus
-    /// (or while already playing), and never behind a modal or text field.
+    /// Playback keyboard shortcuts act while the 3D viewer is the active
+    /// inspector tab with an animation loaded, and never behind a modal or
+    /// text field. The active panel — not the pointer position — is the
+    /// focus contract, so Space/arrow/Home/End work wherever the cursor is.
     pub(crate) fn animation_keyboard_active(&self) -> bool {
-        if self.modal_open() || self.search_focused || self.rename_focused {
-            return false;
-        }
-        if self.selected_inspector_tab != InspectorTab::Model3D {
-            return false;
-        }
-        if !self.viewer3d_handle.has_animation_session() {
-            return false;
-        }
-        self.viewer3d_handle
-            .with(|inner| inner.pointer_over_viewport || inner.timeline_hover)
-            || self
-                .viewer3d_handle
-                .animation_session(|session| session.is_playing())
-                .unwrap_or(false)
+        !self.modal_open()
+            && !self.search_focused
+            && !self.rename_focused
+            && self.selected_inspector_tab == InspectorTab::Model3D
+            && self.viewer3d_handle.has_animation_session()
     }
 
     /// One redraw frame while a session exists. Advancing the transport

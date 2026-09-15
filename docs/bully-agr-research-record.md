@@ -461,6 +461,11 @@ Compound `MAINPED.HXD` records are different:
 4. Allow only the bounded, four-byte-aligned final padding discrepancy found
    in the retail catalog.
 5. Reject malformed/stale rows instead of guessing a name.
+6. Accept partial coverage: a resource may list fewer rows than the AGR has
+   chunks, and the aligned run still names its covered clips while the rest
+   keep the positional `clip_NN` label (`Area_GirlsDorm` names 9 of its 15
+   chunks — the six single-frame filler clips have no catalog rows — where
+   the earlier all-or-nothing rule dropped every name for the whole file).
 
 This guarded alignment names all 439 `C_Player.agr` clips and all 59 `Grap`
 clips. Namespace matching alone is insufficient because one AGR can contain
