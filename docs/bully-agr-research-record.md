@@ -273,11 +273,14 @@ The declared stream convention observed across the character corpus is:
 4. The viewer exposes each remaining curve as numeric track
    `root_index - 1` and emits rotation channel 0.
 
-The auxiliary tail is not animation data. Its size depends on runtime/model
-state and cannot be reconstructed from the header alone. Tail records can look
-like valid packed keys; including them creates phantom curves and corrupts
-track binding. The Rust reader counts and reports the tail but excludes it
-from the curve graph.
+The auxiliary tail is not currently admitted as animation data. Its size
+depends on runtime/model state and cannot be reconstructed from the header
+alone. Tail records can look like valid packed keys; including them creates
+phantom curves and corrupts track binding. The Rust reader counts the tail,
+preserves each logical 8-byte record in `AgrClip::auxiliary_tail`, and excludes
+it from the curve graph. The bytes are intentionally opaque: preservation is
+useful for diagnostics and future lossless tooling, but does not establish
+their runtime lookup semantics.
 
 Corpus evidence includes 507 normal loose 1002 chunks with 37 roots (default,
 35 character curves, sentinel), special one-curve 1002 groups, and mission
@@ -607,6 +610,33 @@ to propagate into the legs and arms. If any check fails, the generic
 calibration remains in place and the track stays honestly partial. This is a
 Bully importer invariant, not a general-purpose numeric retargeter.
 
+#### Wrapper-heavy character rigs: Mandy
+
+`1_08_MandPuke.agr` paired with `JKGirl_Mandy.nif` exposed a second, easily
+missed hierarchy shape. The visible character is accompanied by wrapper nodes,
+while the actual AGR skeleton begins at a source node named `Dummy`. The
+relevant source-name associations are:
+
+~~~text
+visible wrapper path:   JKGirl_Mandy → __NDL_MultiMtl_Node → body shape
+animation path:         Dummy → Root → Root Pelvis → legs, spine and arms
+preview helper path:    ARROW → Editable Poly
+~~~
+
+The normalized NIF names put `Dummy` at `track_002`, so this rig uses
+`AGR track_i → NIF track_(i + 2)`; the original player rig uses `+1`. The
+calibrator now derives the offset from the adapter-designated semantic root,
+requires a complete contiguous run of unique skin-derived non-mesh nodes, and
+rejects the mapping if curve 0 would not drive that root. This keeps wrapper
+nodes from becoming a plausible-but-wrong root and avoids a whole-character
+twist. The real Mandy regression binds all 35 rotation curves and all 36
+property tracks, including the right arm.
+
+The NIF also contains axis/arrow helper meshes. They remain in the hierarchy
+for skin and binding validation, but are marked preview-only: they do not draw,
+do not contribute to posed bounds or floor placement, and retain an empty
+scene index list so the animated mesh-cache order remains stable.
+
 ### 6.4 Cross-rig 1004 binding evidence
 
 The object/prop side now has a separate acceptance gate from the player
@@ -639,11 +669,24 @@ actor separately. `MOT_CTRL.agr` is a 1004 object-transform group and does not
 index-match `C_Player.agr` as a hidden player root-motion source.
 
 The viewer therefore keeps source rotation semantics and offers a presentation
-policy that samples a clip at uniform times, finds its lowest deformed vertex,
-and applies one constant grounding offset for the whole clip. A per-frame
-offset was rejected because it causes visible bobbing/yanking during falls and
-transitions. This policy makes prone clips inspectable without claiming to
-reproduce the game's actor-placement code.
+policy that samples a clip at bounded, dense uniform times, finds its lowest
+visible deformed vertex, and applies one constant grounding offset for the
+whole clip. The measurement converts posed viewer-space vertices back into
+source space before projecting onto the source ground normal, then transforms
+the correction back into viewer space. This is important for Z-up Bully assets:
+applying a source-space Z correction directly to the Y-up viewer previously
+shifted the character along depth. The correction is measured together with
+the rest-pose centering offset, so a centered prone clip is both centered and
+planted. Changing the viewer's centered/world origin mode re-samples the same
+clip in the new display frame, so the toggle cannot reintroduce that shift.
+Initial camera framing uses the grounded clip envelope rather than only the
+standing rest bounds.
+
+A per-frame offset was rejected because it causes visible bobbing/yanking
+during falls and transitions. This policy makes prone clips inspectable
+without claiming to reproduce the game's actor-placement code. Helper meshes
+such as the Mandy axis/arrow geometry are excluded from both the lowest-point
+measurement and the rendered scene.
 
 ## 7. Runtime implementation map
 
@@ -656,7 +699,7 @@ The format adapter and shared player are intentionally separate:
 | [`src/inspector/animation/clip.rs`](../src/inspector/animation/clip.rs) | normalized tracks, key validation, sampling |
 | [`src/inspector/animation/binding.rs`](../src/inspector/animation/binding.rs) | exact binding, ordered calibration, guarded Bully action-only recovery |
 | [`src/inspector/animation/model.rs`](../src/inspector/animation/model.rs) | validated hierarchy, bind pose, skin assets and node transforms |
-| [`src/inspector/animation/pose.rs`](../src/inspector/animation/pose.rs) | hierarchy evaluation, CPU skinning and constant clip grounding |
+| [`src/inspector/animation/pose.rs`](../src/inspector/animation/pose.rs) | hierarchy evaluation, CPU skinning, helper suppression and source/view-space clip grounding |
 | [`src/ui/viewer_session.rs`](../src/ui/viewer_session.rs) | persistent animation session, calibration lifetime, transport, crossfade and pose revisions |
 | `src/ui/view.rs` / `src/ui/app.rs` | clip dock, loading/pairing actions, diagnostics and user controls |
 | `src/inspector/scene3d/headless.rs` | deterministic headless render/probe path for pose regressions |
@@ -696,6 +739,9 @@ The current implementation has both synthetic and local-corpus coverage.
   ground-state pose checks and rest-bridge agreement.
 - `Hang_Workout.agr` + `PLAYER.nif`: action-only root recovery, including
   push-up root/torso propagation and the leg/hand binding regression.
+- `1_08_MandPuke.agr` + `JKGirl_Mandy.nif`: wrapper-aware `+2` binding from
+  semantic `Dummy`, helper-mesh suppression, source/view floor conversion,
+  grounded framing and right-arm deformation coverage.
 
 The latest rendering and binding coverage also includes the full-float 1000
 and compact 1001 streams from C_Player.agr, plus same-stem 1004 binding across
@@ -709,7 +755,9 @@ The core test names that encode the latest lessons are:
 - `stepping_never_stalls_at_grid_rounding`;
 - `focus_loss_cancels_an_active_drag`;
 - `invalid_clips_are_never_sampled`; and
-- `non_finite_or_degenerate_node_transforms_are_rejected`.
+- `non_finite_or_degenerate_node_transforms_are_rejected`;
+- `ground_offset_projects_view_pose_back_into_source_space`; and
+- `mandy_puke_grounding_and_right_arm_when_available`.
 
 The new decoder and cross-rig gates are:
 
@@ -866,8 +914,10 @@ In priority order:
    pose validation. Do not infer them from 1002/1004.
 2. [completed] Broaden the guarded AGR-to-NIF binding evidence across additional matching
    character/prop rigs. Keep the current fallback narrow and diagnostics-rich.
-3. Investigate the runtime inputs and purpose of the 1002 auxiliary tail only
-   if authoring, lossless round-trip or gameplay-accurate export requires it.
+3. [partial] Preserve the 1002 auxiliary tail as opaque records (the reader now
+   does this) while excluding it from playback; investigate its runtime inputs
+   and purpose only if authoring, lossless round-trip or gameplay-accurate
+   export requires it.
 4. Build a CAT structural reader and evidence-labelled CAT → AGR relationship
    resolver; do not execute action nodes.
 5. Add the deferred LIP structural inspector and `Speech.bin` association

@@ -171,6 +171,10 @@ pub struct AgrClip {
     /// Post-key records recognized by the decoder: runtime auxiliary records
     /// for variant 1002, or sparse translation records for variants 1000/1001.
     pub auxiliary_records: usize,
+    /// Raw 8-byte records after the declared stream of a 1002 chunk. Their
+    /// runtime lookup semantics are not established, so they are preserved
+    /// for diagnostics/future lossless tooling but never treated as keys.
+    pub auxiliary_tail: Vec<[u8; 8]>,
     pub tracks: Vec<AgrTrack>,
     /// Parse notes: dropped out-of-order or duplicate keys, undecoded
     /// variants, trailer, etc.
@@ -394,6 +398,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
             record_size: 0,
             duration_s: duration,
             auxiliary_records: 0,
+            auxiliary_tail: Vec::new(),
             tracks: Vec::new(),
             diagnostics: vec![format!(
                 "variant {variant} chunk ({count} records): record layout not yet decoded"
@@ -414,6 +419,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
         logical_source_size,
         metadata_start,
         metadata_end,
+        auxiliary_tail,
     ) = if variant != 1002 {
         let available = end.saturating_sub(data_start);
         let required = count
@@ -446,6 +452,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
                 metadata_end.saturating_sub(start),
                 metadata_start,
                 metadata_end,
+                Vec::new(),
             )
         } else {
             let trailing = available - required;
@@ -464,6 +471,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
                 CHUNK_HEADER_BYTES + required,
                 metadata_start,
                 metadata_start,
+                Vec::new(),
             )
         }
     } else {
@@ -531,12 +539,21 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
                 "ignored {auxiliary_records} auxiliary 1002 record(s) after the declared stream"
             ));
         }
+        let auxiliary_tail = bytes[minimum_end..data_start + data_bytes]
+            .chunks_exact(record_size)
+            .map(|record| {
+                let mut raw = [0_u8; 8];
+                raw.copy_from_slice(record);
+                raw
+            })
+            .collect();
         (
             auxiliary_records,
             data_start + data_bytes,
             data_end.saturating_sub(start),
             data_start + data_bytes,
             data_start + data_bytes,
+            auxiliary_tail,
         )
     };
     let body = &bytes[data_start..body_end];
@@ -568,6 +585,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
                 record_size,
                 duration_s: duration,
                 auxiliary_records,
+                auxiliary_tail,
                 tracks: Vec::new(),
                 diagnostics: vec![format!(
                     "variant {variant} chunk ({count} records of {record_size} B): \
@@ -583,6 +601,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
         record_size,
         duration_s: duration,
         auxiliary_records,
+        auxiliary_tail,
         tracks,
         diagnostics,
     })
@@ -1788,6 +1807,7 @@ pub fn model_from_nif_with_mapping(
     let mut track_counter = 0u32;
     let mut node_ids: std::collections::HashMap<i32, NodeId> = std::collections::HashMap::new();
     let mut pending_skins: Vec<PendingSkin> = Vec::new();
+    let mut source_names: Vec<Option<String>> = Vec::new();
 
     for &root in &nif.footer.roots {
         visit_nif_block(
@@ -1802,6 +1822,7 @@ pub fn model_from_nif_with_mapping(
             &mut track_counter,
             &mut node_ids,
             &mut pending_skins,
+            &mut source_names,
         );
     }
     if nodes.is_empty() {
@@ -1883,9 +1904,61 @@ pub fn model_from_nif_with_mapping(
         meshes,
         BaseOrientation::Zup.to_yup_matrix(),
         BaseOrientation::Zup,
-        Some(NodeId(0)),
+        None,
     )
     .map_err(|error| format!("model admission: {error}"))?;
+    asset.set_source_names(source_names);
+
+    // The NIF footer root is a scene container, not the actor's motion root.
+    // Bully character exports identify the actual transform carrier as
+    // `Dummy`; wrappers may appear before it and an `ARROW` attachment may
+    // appear after the skeleton. Preserve a conservative root fallback for
+    // non-character/older files without letting those helpers drive motion.
+    asset.root_motion_node = asset
+        .nodes
+        .iter()
+        .find(|node| {
+            asset
+                .source_name(node.id)
+                .is_some_and(|name| name.eq_ignore_ascii_case("Dummy"))
+        })
+        .map(|node| node.id)
+        .or_else(|| {
+            asset
+                .nodes
+                .iter()
+                .find(|node| {
+                    node.parent.is_some()
+                        && node.mesh.is_none()
+                        && !asset
+                            .source_name(node.id)
+                            .is_some_and(|name| name.eq_ignore_ascii_case("Scene Root"))
+                })
+                .map(|node| node.id)
+        })
+        .or(Some(NodeId(0)));
+
+    let hidden_meshes = asset
+        .meshes
+        .iter()
+        .enumerate()
+        .map(|(mesh_index, mesh)| {
+            let Some(node_id) = asset.mesh_node(mesh_index) else {
+                return false;
+            };
+            let source_name = asset.source_name(node_id).unwrap_or_default();
+            let parent_is_arrow = asset
+                .node(node_id)
+                .and_then(|node| node.parent)
+                .and_then(|parent| asset.source_name(parent))
+                .is_some_and(|name| name.eq_ignore_ascii_case("ARROW"));
+            let axis_helper = source_name.eq_ignore_ascii_case("Mesh")
+                && mesh.vertices.len() == 6
+                && mesh.indices.len() == 24;
+            source_name.eq_ignore_ascii_case("Editable Poly") || parent_is_arrow || axis_helper
+        })
+        .collect();
+    asset.set_hidden_meshes(hidden_meshes);
     asset.diagnostics.extend(diagnostics);
     Ok(asset)
 }
@@ -1903,6 +1976,7 @@ fn visit_nif_block(
     track_counter: &mut u32,
     node_ids: &mut std::collections::HashMap<i32, NodeId>,
     pending_skins: &mut Vec<PendingSkin>,
+    source_names: &mut Vec<Option<String>>,
 ) -> Option<NodeId> {
     if block_index < 0 || !visited.insert(block_index) {
         return None;
@@ -1993,6 +2067,7 @@ fn visit_nif_block(
         local,
         mesh,
     });
+    source_names.push(original_name);
     node_ids.insert(block_index, id);
     for child in children {
         visit_nif_block(
@@ -2007,6 +2082,7 @@ fn visit_nif_block(
             track_counter,
             node_ids,
             pending_skins,
+            source_names,
         );
     }
     Some(id)
@@ -2195,6 +2271,13 @@ mod tests {
         assert_eq!(file.clip_count(), 1);
         let clip = &file.clips[0];
         assert_eq!(clip.auxiliary_records, 2);
+        assert_eq!(clip.auxiliary_tail.len(), 2);
+        assert_eq!(clip.auxiliary_tail[0], [0; 8]);
+        assert_eq!(
+            clip.auxiliary_tail[1],
+            [1, 248, 15, 0, 0, 0, 0, 0],
+            "1002 tail records must be preserved byte-for-byte"
+        );
         assert!((clip.duration_s - 1.0).abs() < 1e-6);
         let rotation = clip
             .tracks
@@ -2521,6 +2604,11 @@ mod tests {
                 let first = file.clips.first().expect("C_Player first clip");
                 assert_eq!(first.tracks.len(), 35, "C_Player packed curve count");
                 assert!(first.auxiliary_records > 0);
+                assert_eq!(
+                    first.auxiliary_tail.len(),
+                    first.auxiliary_records,
+                    "1002 tail count must match preserved records"
+                );
                 assert!(first.tracks.iter().all(|track| track.channel == 0));
             }
             let library = to_library(&file, name);
@@ -3241,6 +3329,187 @@ mod tests {
             checked_assets > 0 && checked_clips > 0,
             "matching 1004 AGR/NIF corpus pairs were not available"
         );
+    }
+
+    /// Real-corpus regression for the wrapper-heavy Mandy rig. The AGR
+    /// curves start at the NIF `Dummy` node rather than the first visible
+    /// wrapper, and the NIF also contains two editor helper meshes. This
+    /// verifies the complete admission path: right-side curves reach the
+    /// skinned body, helpers do not affect the scene, and the grounded
+    /// centered pose touches the viewer floor without moving along depth.
+    #[test]
+    fn mandy_puke_grounding_and_right_arm_when_available() {
+        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+            return;
+        };
+        let stream = std::path::Path::new(&stream);
+        let (Some(agr_bytes), Some(nif_bytes)) = (
+            world_entry(stream, "1_08_MandPuke.agr"),
+            world_entry(stream, "JKGirl_Mandy.nif"),
+        ) else {
+            return;
+        };
+
+        let mut nif = NifFile::parse(&nif_bytes).expect("Mandy NIF parses");
+        nif.resolve_string_indices();
+        let model = model_from_nif(&nif, "Mandy", "Mandy").expect("Mandy model builds");
+        let file = parse_agr(&agr_bytes).expect("Mandy AGR parses");
+        let library = to_library(&file, "1_08_MandPuke.agr");
+        let calibration = crate::inspector::animation::binding::calibrate_bindings(
+            &model, &library,
+        );
+
+        let root = model.root_motion_node.expect("Mandy has a motion root");
+        assert_eq!(model.source_name(root), Some("Dummy"));
+        assert!(model.mesh_is_hidden(1), "NIF axis helper must be hidden");
+        assert!(model.mesh_is_hidden(2), "NIF arrow helper must be hidden");
+
+        let clip = library
+            .clips
+            .iter()
+            .find(|clip| clip.name == "clip_02")
+            .expect("Mandy loop clip");
+        let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
+            &model,
+            clip,
+            &calibration,
+        );
+        assert_eq!(binding.bound_count(), clip.tracks.len());
+
+        // The wrapper and body branches mean the AGR curve index is not the
+        // normalized NIF node index. Every curve, including the right arm,
+        // must use the validated +2 run discovered by calibration.
+        for (track_index, track) in clip.tracks.iter().enumerate() {
+            let curve = track
+                .target
+                .strip_prefix("track_")
+                .and_then(|value| value.parse::<u32>().ok())
+                .expect("numeric AGR target");
+            let expected = model
+                .node_by_name(&format!("track_{:03}", curve + 2))
+                .expect("Mandy calibrated node")
+                .id;
+            assert_eq!(
+                binding
+                    .node_for_track(track_index)
+                    .expect("curve is bound"),
+                expected,
+                "AGR {} must bind to the wrapper-adjusted NIF node",
+                track.target
+            );
+        }
+
+        let rest = crate::inspector::animation::pose::rest_scene(&model);
+        let display_offset = -Vec3::from_array(rest.aabb.center());
+        let mut ground_buffers = crate::inspector::animation::pose::PoseBuffers::new(&model);
+        let ground = crate::inspector::animation::pose::clip_ground_offset_with_display_offset(
+            &model,
+            clip,
+            &binding,
+            128,
+            display_offset,
+            &mut ground_buffers,
+        );
+        let view_offset = display_offset + model.source_to_view.transform_vector3(ground);
+        let mut buffers = crate::inspector::animation::pose::PoseBuffers::new(&model);
+        let mut lowest = f32::INFINITY;
+        for step in 0..128 {
+            let time = clip.duration * step as f32 / 127.0;
+            crate::inspector::animation::pose::sample_locals(
+                clip,
+                &binding,
+                &model,
+                time,
+                &mut buffers.locals,
+            );
+            crate::inspector::animation::pose::evaluate_pose(
+                &model,
+                crate::inspector::animation::pose::RootMotionPolicy::Source,
+                view_offset,
+                &mut buffers,
+            );
+            let bounds = buffers.posed_bounds.expect("visible Mandy body bounds");
+            lowest = lowest.min(bounds.min[1]);
+            assert!(
+                bounds.min[1] >= -1e-3,
+                "grounded pose must not pass below the floor: {:?}",
+                bounds
+            );
+        }
+        assert!(
+            lowest <= 1e-3,
+            "grounded clip must reach the floor, lowest viewer Y was {lowest}"
+        );
+
+        let right_nodes: std::collections::HashSet<_> = (29..=36)
+            .filter_map(|index| model.node_by_name(&format!("track_{index:03}")))
+            .map(|node| node.id)
+            .collect();
+        let skin = model.meshes[0].skin.as_ref().expect("Mandy body skin");
+        let right_slots: std::collections::HashSet<usize> = skin
+            .joints
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| right_nodes.contains(node))
+            .map(|(slot, _)| slot)
+            .collect();
+        assert!(!right_slots.is_empty(), "Mandy skin includes right arm joints");
+
+        let right_arm = model.node_by_name("track_030").expect("right upper arm").id;
+        let right_hand = model.node_by_name("track_032").expect("right hand").id;
+        let mut sample_at = |time: f32| {
+            crate::inspector::animation::pose::sample_locals(
+                clip,
+                &binding,
+                &model,
+                time,
+                &mut buffers.locals,
+            );
+            crate::inspector::animation::pose::evaluate_pose(
+                &model,
+                crate::inspector::animation::pose::RootMotionPolicy::Source,
+                view_offset,
+                &mut buffers,
+            );
+            (
+                buffers.node_positions_view[right_arm.0 as usize],
+                buffers.node_positions_view[right_hand.0 as usize],
+                buffers.out_vertices[0]
+                    .iter()
+                    .map(|vertex| Vec3::from_array(vertex.position))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let (upper_start, hand_start, vertices_start) = sample_at(0.0);
+        let (upper_mid, hand_mid, vertices_mid) = sample_at(clip.duration * 0.5);
+        assert!(
+            upper_start.distance(upper_mid) > 1e-3
+                || hand_start.distance(hand_mid) > 1e-3,
+            "right arm nodes must respond to MANDY_PUKE_LOOP"
+        );
+        let mut affected = 0usize;
+        let mut moved = 0usize;
+        for (index, (start, mid)) in vertices_start.iter().zip(vertices_mid.iter()).enumerate() {
+            if skin.weights[index]
+                .iter()
+                .any(|(slot, weight)| *weight > 1e-3 && right_slots.contains(&(*slot as usize)))
+            {
+                affected += 1;
+                if start.distance(*mid) > 1e-4 {
+                    moved += 1;
+                }
+            }
+        }
+        assert!(affected > 0, "right arm has weighted body vertices");
+        assert!(
+            moved > 0,
+            "right arm weighted vertices must deform with its AGR curves"
+        );
+
+        let scene = crate::inspector::animation::pose::scene_from_pose(&model, &buffers);
+        assert!(scene.meshes[1].indices.is_empty());
+        assert!(scene.meshes[2].indices.is_empty());
+        assert_eq!(scene.total_triangles(), model.meshes[0].indices.len() / 3);
     }
 
     /// Regression: index-based track naming binds AGR curves to neighbor

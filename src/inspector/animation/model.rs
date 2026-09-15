@@ -161,7 +161,7 @@ pub enum ModelError {
         "node {node} has a non-finite translation/scale or a degenerate rotation; such a transform propagates NaN into every posed vertex"
     )]
     InvalidNodeTransform { node: u32 },
-    #[error("the source_to_view display transform contains non-finite values")]
+    #[error("the source_to_view display transform is non-finite or non-invertible")]
     InvalidDisplayTransform,
 }
 
@@ -182,6 +182,14 @@ pub struct ModelAsset {
     pub source_orientation: BaseOrientation,
     /// Node whose translation carries root motion (adapter-designated).
     pub root_motion_node: Option<NodeId>,
+    /// Original source names retained by format adapters that need semantic
+    /// hierarchy decisions after node naming has been normalized for runtime
+    /// binding. Entries are parallel to `nodes`; flattened scenes leave them
+    /// empty.
+    source_names: Vec<Option<String>>,
+    /// Preview-only helper meshes that remain in the model for hierarchy and
+    /// skin validation but must not contribute geometry or floor placement.
+    hidden_meshes: Vec<bool>,
     /// Non-fatal admissions (e.g. renormalized weights).
     pub diagnostics: Vec<String>,
 }
@@ -198,6 +206,8 @@ impl ModelAsset {
         source_orientation: BaseOrientation,
         root_motion_node: Option<NodeId>,
     ) -> Result<Self, ModelError> {
+        let node_count = nodes.len();
+        let mesh_count = meshes.len();
         let mut asset = Self {
             name,
             source_identity,
@@ -207,6 +217,8 @@ impl ModelAsset {
             source_to_view,
             source_orientation,
             root_motion_node,
+            source_names: vec![None; node_count],
+            hidden_meshes: vec![false; mesh_count],
             diagnostics: Vec::new(),
         };
         asset.eval_order = asset.compute_eval_order()?;
@@ -223,6 +235,37 @@ impl ModelAsset {
 
     pub fn node_by_name(&self, name: &str) -> Option<&SceneNode> {
         self.nodes.iter().find(|node| node.name == name)
+    }
+
+    /// Original source identity for one normalized node, when the adapter
+    /// preserved it. This is deliberately separate from `SceneNode::name`:
+    /// generated names such as `track_002` are the stable animation target,
+    /// while source names identify wrappers, skeleton roots and helpers.
+    pub fn source_name(&self, id: NodeId) -> Option<&str> {
+        self.source_names
+            .get(id.0 as usize)
+            .and_then(|name| name.as_deref())
+    }
+
+    /// Whether a mesh is retained only as a non-rendering preview helper.
+    pub fn mesh_is_hidden(&self, mesh: usize) -> bool {
+        self.hidden_meshes.get(mesh).copied().unwrap_or(false)
+    }
+
+    /// Attach adapter provenance after the validated hierarchy has been
+    /// admitted. Keeping this optional preserves the constructor contract for
+    /// synthetic and flattened scenes.
+    pub(crate) fn set_source_names(&mut self, source_names: Vec<Option<String>>) {
+        if source_names.len() == self.nodes.len() {
+            self.source_names = source_names;
+        }
+    }
+
+    /// Mark helper meshes after adapter-specific source-name inspection.
+    pub(crate) fn set_hidden_meshes(&mut self, hidden_meshes: Vec<bool>) {
+        if hidden_meshes.len() == self.meshes.len() {
+            self.hidden_meshes = hidden_meshes;
+        }
     }
 
     /// All nodes carrying `name` (sources can reuse names; the binder
@@ -248,12 +291,13 @@ impl ModelAsset {
     /// matrix would turn every posed vertex into NaN. Node transforms and
     /// vertex data are validated separately.
     fn validate_display_transform(&self) -> Result<(), ModelError> {
-        if self
+        let finite = self
             .source_to_view
             .to_cols_array()
             .iter()
-            .all(|value| value.is_finite())
-        {
+            .all(|value| value.is_finite());
+        let determinant = self.source_to_view.determinant();
+        if finite && determinant.is_finite() && determinant.abs() > 1e-8 {
             Ok(())
         } else {
             Err(ModelError::InvalidDisplayTransform)
@@ -678,6 +722,17 @@ mod tests {
             None,
         );
         assert!(ok.is_ok());
+
+        let singular = ModelAsset::new(
+            "m".into(),
+            "test".into(),
+            simple_nodes(),
+            Vec::new(),
+            Mat4::from_scale(Vec3::ZERO),
+            BaseOrientation::Yup,
+            None,
+        );
+        assert!(matches!(singular, Err(ModelError::InvalidDisplayTransform)));
     }
 
     #[test]

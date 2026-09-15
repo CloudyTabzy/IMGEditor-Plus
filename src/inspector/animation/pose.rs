@@ -226,17 +226,19 @@ pub fn evaluate_pose(
                 }
             }
         }
-        for vertex in out.iter() {
-            bounds = Some(match bounds {
-                Some(bounds) => bounds.merged(Aabb {
-                    min: vertex.position,
-                    max: vertex.position,
-                }),
-                None => Aabb {
-                    min: vertex.position,
-                    max: vertex.position,
-                },
-            });
+        if !model.mesh_is_hidden(mesh_index) {
+            for vertex in out.iter() {
+                bounds = Some(match bounds {
+                    Some(bounds) => bounds.merged(Aabb {
+                        min: vertex.position,
+                        max: vertex.position,
+                    }),
+                    None => Aabb {
+                        min: vertex.position,
+                        max: vertex.position,
+                    },
+                });
+            }
         }
     }
     buffers.posed_bounds = bounds;
@@ -355,14 +357,21 @@ pub fn scene_from_pose(model: &ModelAsset, buffers: &PoseBuffers) -> Scene {
     let mut meshes = Vec::with_capacity(model.meshes.len());
     for (mesh_index, mesh) in model.meshes.iter().enumerate() {
         let vertices = buffers.out_vertices[mesh_index].clone();
+        let hidden = model.mesh_is_hidden(mesh_index);
         let positions: Vec<[f32; 3]> = vertices.iter().map(|v| v.position).collect();
         meshes.push(crate::inspector::scene3d::mesh::SceneMesh {
             name: mesh.name.clone(),
             texture_name: mesh.texture_name.clone(),
             vertices,
-            indices: mesh.indices.clone(),
+            // Preserve one scene/cache slot per model mesh so animated GPU
+            // uploads stay index-aligned, but suppress helper draw calls.
+            indices: if hidden { Vec::new() } else { mesh.indices.clone() },
             diffuse: mesh.diffuse.clone(),
-            aabb: Aabb::from_points(&positions).unwrap_or_default(),
+            aabb: if hidden {
+                Aabb::default()
+            } else {
+                Aabb::from_points(&positions).unwrap_or_default()
+            },
         });
     }
     let mut scene = Scene::empty(model.source_orientation);
@@ -373,12 +382,13 @@ pub fn scene_from_pose(model: &ModelAsset, buffers: &PoseBuffers) -> Scene {
 
 /// Constant grounding offset for one clip: the negated lowest excursion of
 /// any deformed vertex along the model ground normal, sampled uniformly over
-/// the clip. Character clips are authored rotation-only; prone and lying
-/// clips then pivot at standing height and the contact points (hands, feet)
-/// hang in the air. Planting the clip's lowest excursion on the floor
-/// mirrors the runtime's actor grounding, is a sub-centimetre no-op for
-/// standing clips, and - being one constant per clip - cannot bob between
-/// frames the way per-frame grounding would.
+/// the clip. The returned vector is in model/source space. Character clips
+/// are authored rotation-only; prone and lying clips then pivot at standing
+/// height and the contact points (hands, feet) hang in the air. Planting the
+/// clip's lowest excursion on the floor mirrors the runtime's actor
+/// grounding, is a sub-centimetre no-op for standing clips, and - being one
+/// constant per clip - cannot bob between frames the way per-frame grounding
+/// would.
 pub fn clip_ground_offset(
     model: &ModelAsset,
     clip: &AnimationClip,
@@ -386,17 +396,52 @@ pub fn clip_ground_offset(
     samples: usize,
     buffers: &mut PoseBuffers,
 ) -> Vec3 {
+    clip_ground_offset_with_display_offset(
+        model,
+        clip,
+        binding,
+        samples,
+        Vec3::ZERO,
+        buffers,
+    )
+}
+
+/// As [`clip_ground_offset`], but measures the clip after applying the
+/// viewer-space presentation offset. This matters for centered previews:
+/// the recentering translation is in Y-up view space while the ground normal
+/// and returned correction are in the source/model space. Keeping the
+/// correction in model space makes it safe to reuse with root-motion and
+/// source-orientation policies; the session converts it back to view space
+/// only when evaluating the pose.
+pub fn clip_ground_offset_with_display_offset(
+    model: &ModelAsset,
+    clip: &AnimationClip,
+    binding: &ClipBinding,
+    samples: usize,
+    display_offset: Vec3,
+    buffers: &mut PoseBuffers,
+) -> Vec3 {
     let up = model.ground_normal_model();
+    let view_to_source = model.source_to_view.inverse();
     let mut lowest = f32::INFINITY;
     let samples = samples.max(2);
     for step in 0..samples {
         let time = clip.duration * step as f32 / (samples - 1) as f32;
         sample_locals(clip, binding, model, time, &mut buffers.locals);
-        evaluate_pose(model, RootMotionPolicy::Source, Vec3::ZERO, buffers);
-        for mesh_vertices in &buffers.out_vertices {
+        evaluate_pose(model, RootMotionPolicy::Source, display_offset, buffers);
+        for (mesh_index, mesh_vertices) in buffers.out_vertices.iter().enumerate() {
+            if model.mesh_is_hidden(mesh_index) {
+                continue;
+            }
             for vertex in mesh_vertices {
-                let position = Vec3::from_array(vertex.position);
-                lowest = lowest.min(position.dot(up));
+                // `out_vertices` are already in viewer coordinates. Convert
+                // the posed point back before projecting onto the source
+                // ground normal; dotting a Y-up point with a Z-up normal was
+                // the cause of character clips being shifted along depth.
+                let position = view_to_source.transform_point3(Vec3::from_array(vertex.position));
+                if position.is_finite() {
+                    lowest = lowest.min(position.dot(up));
+                }
             }
         }
     }
@@ -452,6 +497,7 @@ mod tests {
     use crate::inspector::animation::binding::bind_clip;
     use crate::inspector::animation::clip::{Interpolation, PropertyTrack, TrackChannel};
     use crate::inspector::animation::fixtures;
+    use crate::inspector::scene3d::camera::BaseOrientation;
 
     fn approx_vec3(a: Vec3, b: Vec3) -> bool {
         a.abs_diff_eq(b, 1e-4)
@@ -601,6 +647,74 @@ mod tests {
         assert!(
             approx_vec3(position, Vec3::new(0.0, 2.0, 0.0)),
             "Z-up source height must become view Y, got {position:?}"
+        );
+    }
+
+    #[test]
+    fn ground_offset_projects_view_pose_back_into_source_space() {
+        let model = ModelAsset::new(
+            "grounding".into(),
+            "synthetic:grounding".into(),
+            vec![crate::inspector::animation::model::SceneNode {
+                id: crate::inspector::animation::NodeId(0),
+                parent: None,
+                name: "root".into(),
+                local: NodeTransform::IDENTITY,
+                mesh: Some(0),
+            }],
+            vec![crate::inspector::animation::model::MeshAsset {
+                name: "contact".into(),
+                texture_name: None,
+                vertices: vec![Vertex {
+                    // The source is Z-up, so this point is two units below
+                    // the ground plane and becomes viewer Y = -2.
+                    position: [0.0, 0.0, -2.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [0.0, 0.0],
+                }],
+                indices: vec![0, 0, 0],
+                diffuse: None,
+                skin: None,
+            }],
+            BaseOrientation::Zup.to_yup_matrix(),
+            BaseOrientation::Zup,
+            None,
+        )
+        .expect("grounding model must validate");
+        let clip = AnimationClip {
+            id: ClipId(0),
+            name: "grounding".into(),
+            duration: 1.0,
+            tracks: Vec::new(),
+            source_rate: None,
+            markers: Vec::new(),
+            provenance: "synthetic grounding".into(),
+        };
+        let binding = ClipBinding {
+            clip: clip.id,
+            tracks: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let mut buffers = PoseBuffers::new(&model);
+        assert!(
+            clip_ground_offset(&model, &clip, &binding, 2, &mut buffers)
+                .abs_diff_eq(Vec3::new(0.0, 0.0, 2.0), 1e-5),
+            "ground offset must be returned in source Z-up space"
+        );
+        // A +5 viewer-Y recentering moves the source point to +3 along its
+        // ground axis, so the source correction must be -3, not a viewer-Y
+        // value interpreted as source Z.
+        assert!(
+            clip_ground_offset_with_display_offset(
+                &model,
+                &clip,
+                &binding,
+                2,
+                Vec3::new(0.0, 5.0, 0.0),
+                &mut buffers,
+            )
+            .abs_diff_eq(Vec3::new(0.0, 0.0, -3.0), 1e-5),
+            "ground offset must include the viewer recentering in source space"
         );
     }
 

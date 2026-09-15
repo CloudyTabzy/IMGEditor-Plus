@@ -38,41 +38,69 @@ fn bully_numeric_track_offset(
         return None;
     }
 
-    let scene_root = model.node_by_name("Scene Root")?.id;
-    let dummy = model.node_by_name("track_000")?.id;
-    if model.node(dummy)?.parent != Some(scene_root) {
-        return None;
-    }
     let candidate_ids: std::collections::HashSet<NodeId> =
         candidates.iter().map(|(_, id)| *id).collect();
-    let mut used = std::collections::HashSet::with_capacity(targets.len());
-    let mut mapping = std::collections::HashMap::with_capacity(targets.len());
 
-    for (curve_index, (target, _)) in targets.iter().enumerate() {
-        let expected_target = format!("track_{curve_index:03}");
-        if target != &expected_target {
-            return None;
-        }
-
-        let expected_node = format!("track_{:03}", curve_index + 1);
-        let node_matches = model.nodes_named(&expected_node);
-        let [node] = node_matches.as_slice() else {
-            return None;
-        };
-        let node = *node;
-        if !candidate_ids.contains(&node)
-            || model.node(node).is_none_or(|scene_node| scene_node.mesh.is_some())
-            || !used.insert(node)
-        {
-            return None;
-        }
-        if curve_index == 0 && model.node(node)?.parent != Some(dummy) {
-            return None;
-        }
-        mapping.insert(target.clone(), node);
+    // The AGR curve stream starts at the adapter-designated character root,
+    // not necessarily at the first normalized NIF node. Derive the offset
+    // from that semantic root instead of guessing from the first candidate:
+    // wrapper nodes can themselves be skin-derived ancestors, and choosing
+    // one of them would rotate the whole body under an apparently valid
+    // contiguous mapping.
+    let root_motion = model.root_motion_node?;
+    let root_node = model.node(root_motion)?;
+    if root_node.parent.is_none()
+        || root_node.mesh.is_some()
+        || !candidate_ids.contains(&root_motion)
+    {
+        return None;
     }
+    let root_number = root_node
+        .name
+        .strip_prefix("track_")
+        .and_then(|number| number.parse::<u32>().ok())?;
+    let offsets = [root_number];
 
-    Some(mapping)
+    for offset in offsets {
+        let mut used = std::collections::HashSet::with_capacity(targets.len());
+        let mut mapping = std::collections::HashMap::with_capacity(targets.len());
+        let mut valid = true;
+        for (curve_index, (target, _)) in targets.iter().enumerate() {
+            let expected_target = format!("track_{curve_index:03}");
+            if target != &expected_target {
+                valid = false;
+                break;
+            }
+
+            let Some(node_number) = offset.checked_add(curve_index as u32) else {
+                valid = false;
+                break;
+            };
+            let expected_node = format!("track_{node_number:03}");
+            let node_matches = model.nodes_named(&expected_node);
+            let [node] = node_matches.as_slice() else {
+                valid = false;
+                break;
+            };
+            let node = *node;
+            if !candidate_ids.contains(&node)
+                || model.node(node).is_none_or(|scene_node| scene_node.mesh.is_some())
+                || !used.insert(node)
+            {
+                valid = false;
+                break;
+            }
+            if curve_index == 0 && node != root_motion {
+                valid = false;
+                break;
+            }
+            mapping.insert(target.clone(), node);
+        }
+        if valid {
+            return Some(mapping);
+        }
+    }
+    None
 }
 
 /// Resolution status of one track.
@@ -502,7 +530,12 @@ pub fn calibrate_bindings(
         let agrees_with_calibration = assignments
             .iter()
             .all(|(target, node)| numeric.get(target) == Some(node));
-        if agrees_with_calibration {
+        // A wrapper-heavy character can make the pose matcher bind a few
+        // sibling bones by chance while rejecting the actual root/limb run.
+        // A complete structural run is stronger than that partial result;
+        // use it when it recovers additional targets, while retaining the
+        // old agreement guard for equally-sized ambiguous assignments.
+        if agrees_with_calibration || numeric.len() > assignments.len() {
             assignments = numeric;
         }
     }

@@ -263,8 +263,11 @@ impl SceneHandle {
         self.with_mut(|inner| inner.gpu_error = None);
     }
 
-    /// Install an animated session: build the rest scene, frame the
-    /// camera on it, and select the first clip (paused at its start).
+    /// Install an animated session: build the rest scene, select the first
+    /// valid clip (paused at its start), and frame the sampled clip envelope
+    /// when one is available. Framing the active envelope keeps grounded
+    /// prone/action clips inside the initial view instead of fitting only the
+    /// standing rest pose.
     pub fn install_animation_session(
         &self,
         asset: Arc<ModelAsset>,
@@ -276,9 +279,6 @@ impl SceneHandle {
         let mut inner = self.inner.lock().expect("scene handle mutex");
         inner.camera.base_orientation = rest.base_orientation;
         let offset = scene_display_offset(&rest, inner.origin_mode);
-        inner
-            .camera
-            .reset_to_aabb(&translated_aabb(rest.aabb, offset));
         let session = AnimationSession::new(
             asset,
             library,
@@ -286,6 +286,10 @@ impl SceneHandle {
             demo,
             now,
         );
+        let frame = session
+            .clip_motion_bounds()
+            .unwrap_or_else(|| translated_aabb(rest.aabb, offset));
+        inner.camera.reset_to_aabb(&frame);
         inner.scene = Some(Arc::new(rest));
         inner.session = Some(session);
         inner.gpu_error = None;

@@ -18,7 +18,8 @@ use crate::inspector::animation::binding::{
 use crate::inspector::animation::clip::{AnimationClip, AnimationLibrary, ClipMarker};
 use crate::inspector::animation::model::{ModelAsset, NodeTransform};
 use crate::inspector::animation::pose::{
-    PoseBuffers, RootMotionPolicy, blend_locals, clip_envelope, evaluate_pose, sample_locals,
+    PoseBuffers, RootMotionPolicy, blend_locals, clip_envelope,
+    clip_ground_offset_with_display_offset, evaluate_pose, sample_locals,
 };
 use crate::inspector::animation::transport::{LoopMode, PlaybackState, Transport};
 use crate::inspector::animation::{ClipId, PlaybackCapability};
@@ -54,6 +55,11 @@ impl Default for AnimationPanel {
 /// Fixed viewer-preview crossfade length. This is not a claimed game
 /// transition; it only blends two compatible clips for inspection.
 pub const CROSSFADE_DURATION: Duration = Duration::from_millis(150);
+
+/// Grounding is computed from a dense preview of the selected clip rather
+/// than the coarse framing sample. 128 samples covers the 30 fps Bully
+/// clips at roughly frame spacing while keeping clip changes bounded.
+const GROUNDING_SAMPLES: usize = 128;
 
 /// A running clip crossfade. Captures the outgoing local pose at the
 /// switch instant so seeking or repeated selection can never read an
@@ -209,16 +215,7 @@ impl AnimationSession {
         // standing height and their contact points hang in the air. Plant
         // the clip's lowest excursion on the floor with one constant offset
         // (a no-op for standing clips, no per-frame bobbing).
-        {
-            let mut scratch = PoseBuffers::new(&self.asset);
-            self.ground_offset = crate::inspector::animation::pose::clip_ground_offset(
-                &self.asset,
-                clip,
-                &binding,
-                12,
-                &mut scratch,
-            );
-        }
+        self.ground_offset = self.ground_offset_for(clip, &binding);
         self.capability = capability_for(&self.asset, &self.library, Some(clip), Some(&binding));
         self.clip = Some(id);
         self.binding = Some(binding);
@@ -283,14 +280,32 @@ impl AnimationSession {
         );
     }
 
-    /// Presentation offset actually applied to the pose: the recentering
-    /// offset plus the clip grounding offset when the panel enables it.
+    /// Presentation offset actually applied to the pose in viewer space. The
+    /// recentering value is already viewer-space; the clip correction is
+    /// stored in model/source space and must pass through the source-to-view
+    /// orientation before being added.
     pub(crate) fn effective_display_offset(&self) -> Vec3 {
         if self.panel.ground_clip {
-            self.display_offset + self.ground_offset
+            self.display_offset + self.asset.source_to_view.transform_vector3(self.ground_offset)
         } else {
             self.display_offset
         }
+    }
+
+    /// Recompute the selected clip's constant grounding correction after its
+    /// viewer-space recentering changes. Origin-mode toggles can replace the
+    /// offset without changing the clip or binding, so reusing the old sample
+    /// would mix two coordinate frames.
+    fn ground_offset_for(&self, clip: &AnimationClip, binding: &ClipBinding) -> Vec3 {
+        let mut scratch = PoseBuffers::new(&self.asset);
+        clip_ground_offset_with_display_offset(
+            &self.asset,
+            clip,
+            binding,
+            GROUNDING_SAMPLES,
+            self.display_offset,
+            &mut scratch,
+        )
     }
 
     /// Progress of a running crossfade in `0..=1`, or `None` when no fade
@@ -439,6 +454,10 @@ impl AnimationSession {
             return;
         }
         self.display_offset = offset;
+        self.ground_offset = match (self.clip(), self.binding.as_ref()) {
+            (Some(clip), Some(binding)) => self.ground_offset_for(clip, binding),
+            _ => Vec3::ZERO,
+        };
         self.motion_path = None;
         self.evaluate();
     }
@@ -462,7 +481,7 @@ impl AnimationSession {
             (range.0 as f32, range.1 as f32),
             48,
             self.root_policy,
-            self.display_offset,
+            self.effective_display_offset(),
         )
     }
 
@@ -501,7 +520,7 @@ impl AnimationSession {
             evaluate_pose(
                 &self.asset,
                 self.root_policy,
-                self.display_offset,
+                self.effective_display_offset(),
                 &mut buffers,
             );
             out.push(buffers.node_positions_view[root.0 as usize]);
@@ -646,6 +665,30 @@ mod tests {
         let session = demo_session();
         assert!(session.clip_motion_bounds().is_some());
         assert!(session.current_pose_bounds().is_some());
+    }
+
+    #[test]
+    fn changing_display_offset_recomputes_clip_grounding() {
+        let mut session = demo_session();
+        let offset = Vec3::new(0.0, 3.0, 0.0);
+        session.set_display_offset(offset);
+
+        let clip = session.clip().expect("demo session has a clip");
+        let binding = session.binding.as_ref().expect("demo clip is bound");
+        let mut scratch = PoseBuffers::new(&session.asset);
+        let expected = clip_ground_offset_with_display_offset(
+            &session.asset,
+            clip,
+            binding,
+            GROUNDING_SAMPLES,
+            offset,
+            &mut scratch,
+        );
+        assert!(
+            session.ground_offset.abs_diff_eq(expected, 1e-6),
+            "origin changes must resample grounding in the new coordinate frame"
+        );
+        assert!(pose_matches_displayed_time(&session));
     }
 
     #[test]

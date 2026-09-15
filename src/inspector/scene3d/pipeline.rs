@@ -274,9 +274,18 @@ impl GpuMesh {
             contents: bytemuck::cast_slice(vertices),
             usage: vertex_usage,
         });
+        // Hidden helper meshes still retain a scene/cache slot so animated
+        // vertex uploads stay index-aligned, but their index list is empty.
+        // wgpu rejects zero-sized buffers, so mirror the wire-index
+        // placeholder below while preserving an index count of zero.
+        let index_contents: &[u32] = if mesh.indices.is_empty() {
+            &[0]
+        } else {
+            &mesh.indices
+        };
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("imgeditor-scene3d/index"),
-            contents: bytemuck::cast_slice(&mesh.indices),
+            contents: bytemuck::cast_slice(index_contents),
             usage: wgpu::BufferUsages::INDEX,
         });
         let wire_indices = build_wire_indices(&mesh.indices);
