@@ -656,6 +656,11 @@ rotation curves and all 36 property tracks, including the right arm, and the
 gate now asserts the `+3` run plus the facial-chain, `Root` and `ARROW`
 anchors.
 
+**Milestone (2026-09-15, GUI-validated):** with the corrected stream the
+`MANDY_PUKE_LOOP` clip renders as a coherent puke loop with floor contact in
+the app — the wrapper case is closed, and the same run keeps the player
+family and `RAT_PED` at their verified `+1` order.
+
 The NIF also contains axis/arrow helper meshes. They remain in the hierarchy
 for skin and binding validation, but are marked preview-only: they do not draw,
 do not contribute to posed bounds or floor placement, and retain an empty
@@ -763,9 +768,10 @@ The current implementation has both synthetic and local-corpus coverage.
   ground-state pose checks and rest-bridge agreement.
 - `Hang_Workout.agr` + `PLAYER.nif`: action-only root recovery, including
   push-up root/torso propagation and the leg/hand binding regression.
-- `1_08_MandPuke.agr` + `JKGirl_Mandy.nif`: wrapper-aware `+2` binding from
-  semantic `Dummy`, helper-mesh suppression, source/view floor conversion,
-  grounded framing and right-arm deformation coverage.
+- `1_08_MandPuke.agr` + `JKGirl_Mandy.nif`: wrapper-aware `+3` binding that
+  skips the `Dummy` placeholder, helper-mesh suppression, source/view floor
+  conversion, grounded framing and right-arm deformation coverage; the
+  `MANDY_PUKE_LOOP` render was GUI-validated on 2026-09-15.
 - `RAT_PED.agr` + `rat_ped.nif`: ordinary character rig keeping the exported
   one-node offset (`curve i → track_(i + 1)`), never binding the `Dummy`
   placeholder.

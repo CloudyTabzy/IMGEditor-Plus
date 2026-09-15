@@ -192,8 +192,9 @@ remain pending.
     covered by synthetic and retail C_Player tests.
   - [x] Calibrate character AGR curves across the clip library and recover the
     guarded player `track_i → track_(i + 1)` importer offset for action-only
-    root/torso clips (`0308bf9`, `ed06dbe`, `75ea7f6`), plus wrapper-aware
-    offsets derived from the semantic character root.
+    root/torso clips (`0308bf9`, `ed06dbe`, `75ea7f6`); the stream never
+    animates the `Dummy` placeholder, so wrapper-heavy rigs shift by their
+    wrapper count (`JKGirl_Mandy` `+3`; fixes `f349d21`, `40bedff`).
   - [x] Establish that observed character 1002 clips are rotation-only and
     keep floor placement as an explicit constant per-clip viewer policy
     (`43f5660`).
@@ -205,7 +206,9 @@ remain pending.
   - [x] Harden wrapper-heavy character previews: choose the semantic `Dummy`
     root, suppress axis/arrow helper meshes from rendering and floor bounds,
     convert grounding between source/view spaces, frame the grounded motion
-    envelope, and cover Mandy's right-arm deformation with a real-corpus gate.
+    envelope, cover Mandy's right-arm deformation with a real-corpus gate,
+    and bind her full `+3` stream (placeholder skipped) with the
+    `MANDY_PUKE_LOOP` render GUI-validated 2026-09-15.
 
 AV0–AV7 establish the shared player; AV8 is not a prerequisite for real-file
 work. Bully E0–E4 may proceed alongside it; E5 consumes the verified runtime.
