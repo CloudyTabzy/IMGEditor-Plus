@@ -3114,6 +3114,8 @@ fn build_texture_fullscreen(app: &App) -> Option<Element<'_, Message>> {
         .spacing(8)
         .width(Length::Fill)
         .height(Length::Fill)
+        .max_width(900.0)
+        .align_x(Alignment::Center)
         .padding(12),
     )
     .width(Length::Fill)

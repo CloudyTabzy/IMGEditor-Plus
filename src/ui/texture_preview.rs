@@ -778,6 +778,27 @@ mod tests {
             .is_none()
         );
         assert!(state.cursor_grabbed_at.is_none());
+
+        // The middle button grabs and pans exactly like the left one, so
+        // the same navigation works in every viewport instance.
+        let middle_press =
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle));
+        assert!(
+            <TextureViewport as canvas::Program<()>>::update(
+                &viewport, &mut state, &middle_press, bounds, cursor,
+            )
+            .is_none()
+        );
+        assert!(state.cursor_grabbed_at.is_some());
+        let middle_release =
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Middle));
+        assert!(
+            <TextureViewport as canvas::Program<()>>::update(
+                &viewport, &mut state, &middle_release, bounds, cursor,
+            )
+            .is_none()
+        );
+        assert!(state.cursor_grabbed_at.is_none());
     }
 
     #[test]
