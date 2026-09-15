@@ -1941,6 +1941,7 @@ impl App {
             .handle
             .get_or_init(|| image::Handle::from_rgba(tex.width, tex.height, tex.rgba.clone()))
             .clone();
+        let fullscreen_handle = handle.clone();
         let image_viewport = crate::ui::texture_preview::TextureViewport {
             handle,
             image_width: tex.width,
@@ -1964,10 +1965,45 @@ impl App {
         let overlay_layer = canvas::Canvas::new(overlay_viewport)
             .width(Length::Fill)
             .height(Length::Fill);
-        let preview: Element<'_, Message> = stack(vec![image_layer.into(), overlay_layer.into()])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into();
+        // Fullscreen escape hatch, matching the converter dialogs: the
+        // overlay layer shows the same pixels with the texture tab's
+        // pan/zoom, at full resolution.
+        let expand_layer = container(
+            w::styled_tooltip(
+                button(
+                    icons::expand()
+                        .size(14)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .center(),
+                )
+                .on_press(Message::OpenTextureFullscreen(TextureSnapshot {
+                    handle: fullscreen_handle,
+                    width: tex.width,
+                    height: tex.height,
+                    label: tex.name.clone(),
+                }))
+                .width(Length::Fixed(28.0))
+                .height(Length::Fixed(28.0))
+                .padding(0.0)
+                .style(animation_subtle_button_style),
+                fonts::caption("View fullscreen (full quality)"),
+                tooltip::Position::Left,
+            ),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::End)
+        .align_y(Alignment::Start)
+        .padding(6);
+        let preview: Element<'_, Message> = stack(vec![
+            image_layer.into(),
+            overlay_layer.into(),
+            expand_layer.into(),
+        ])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
         col = col.push(preview);
         col.into()
     }
