@@ -247,6 +247,21 @@ impl TokenColor {
 pub fn design_for_theme(theme: &iced::Theme) -> Design {
     // Detect light vs dark by reading the palette's `is_dark()`.
     let is_dark = theme.extended_palette().is_dark;
+    // Custom themes carry their own token sets, matched by name so the
+    // style closures agree with `App::design()` instead of falling back
+    // to the generic dark tokens.
+    match theme.to_string().as_str() {
+        "Everforest" if is_dark => {
+            return Design::from_tokens(ThemeTokens::everforest(), true);
+        }
+        "GitHub Dark" if is_dark => {
+            return Design::from_tokens(ThemeTokens::github_dark(), true);
+        }
+        "Ayu Dark" if is_dark => {
+            return Design::from_tokens(ThemeTokens::ayu_dark(), true);
+        }
+        _ => {}
+    }
     if is_dark {
         Design::dark()
     } else {
@@ -292,5 +307,25 @@ mod tests {
         assert!((iced.g - 0x66 as f32 / 255.0).abs() < 0.01);
         assert!((iced.b - 1.0).abs() < 0.01);
         assert!((iced.a - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn custom_themes_resolve_their_own_tokens() {
+        let ayu = crate::ui::theme::resolve_theme(crate::config::ThemeMode::DarkAyu);
+        let design = design_for_theme(&ayu);
+        // The accent is the Ayu terracotta-orange, not the generic dark
+        // primary, and the page background is the Ayu near-black navy.
+        assert!((design.accent().r - 0xF2 as f32 / 255.0).abs() < 0.01);
+        assert!((design.accent().g - 0x9A as f32 / 255.0).abs() < 0.01);
+        assert!((design.accent().b - 0x4B as f32 / 255.0).abs() < 0.01);
+        assert!(design.page().r < 0.06);
+        assert!(design.page().b > design.page().g, "navy tint");
+
+        // The existing custom themes resolve their own tokens too.
+        let everforest = design_for_theme(&crate::ui::theme::everforest_theme());
+        assert!((everforest.accent().r - 0xB6 as f32 / 255.0).abs() < 0.01);
+        assert!((everforest.accent().g - 0xCC as f32 / 255.0).abs() < 0.01);
+        let github = design_for_theme(&crate::ui::theme::github_dark_theme());
+        assert!((github.accent().b - 0xF7 as f32 / 255.0).abs() < 0.01);
     }
 }

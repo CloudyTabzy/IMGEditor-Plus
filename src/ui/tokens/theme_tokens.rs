@@ -250,6 +250,107 @@ impl ThemeTokens {
         t
     }
 
+    /// Ayu Dark (ayutheme.com) adjusted toward a deep terracotta accent on a
+    /// near-black navy canvas: bg #0B0E14, panel #131722, border #1E2430,
+    /// fg #E9EAEE with warm-grey muted #8A919E, accent #F29A4B (Ayu's
+    /// #FF9940 pulled slightly earthier), Ayu greens/yellows/reds/cyans for
+    /// the semantic scales.
+    pub fn ayu_dark() -> Self {
+        let mut t = Self::light();
+        t.colors.neutral = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x0B0E14), // s50: page (Ayu bg)
+            crate::ui::tokens::color::Color::from_hex(0x0F1219), // s100: chrome
+            crate::ui::tokens::color::Color::from_hex(0x131722), // s200: surface (panel)
+            crate::ui::tokens::color::Color::from_hex(0x1E2430), // s300 (border)
+            crate::ui::tokens::color::Color::from_hex(0x2A3140), // s400
+            crate::ui::tokens::color::Color::from_hex(0x565F6E), // s500
+            crate::ui::tokens::color::Color::from_hex(0x8A919E), // s600 (muted fg)
+            crate::ui::tokens::color::Color::from_hex(0xA9AFBA), // s700
+            crate::ui::tokens::color::Color::from_hex(0xC6CAD3), // s800
+            crate::ui::tokens::color::Color::from_hex(0xE9EAEE), // s900: text
+        );
+        t.colors.primary = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x33200D),
+            crate::ui::tokens::color::Color::from_hex(0x55361A),
+            crate::ui::tokens::color::Color::from_hex(0x7A4C22),
+            crate::ui::tokens::color::Color::from_hex(0xB06A2E),
+            crate::ui::tokens::color::Color::from_hex(0xE0863C), // s400
+            crate::ui::tokens::color::Color::from_hex(0xF29A4B), // s500: accent
+            crate::ui::tokens::color::Color::from_hex(0xFFAB60), // s600 (hover)
+            crate::ui::tokens::color::Color::from_hex(0xFFB878), // s700 (pressed)
+            crate::ui::tokens::color::Color::from_hex(0xFFCD9F),
+            crate::ui::tokens::color::Color::from_hex(0xFFE3C7),
+        );
+        t.colors.semantic.success = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x1E2A12),
+            crate::ui::tokens::color::Color::from_hex(0x2B3B19),
+            crate::ui::tokens::color::Color::from_hex(0x3B501F),
+            crate::ui::tokens::color::Color::from_hex(0x77A433),
+            crate::ui::tokens::color::Color::from_hex(0x97C53F),
+            crate::ui::tokens::color::Color::from_hex(0xAAD94C), // s500: Ayu green
+            crate::ui::tokens::color::Color::from_hex(0xBCE272),
+            crate::ui::tokens::color::Color::from_hex(0xCDEA97),
+            crate::ui::tokens::color::Color::from_hex(0xDEF1BD),
+            crate::ui::tokens::color::Color::from_hex(0xF0F8E2),
+        );
+        t.colors.semantic.warning = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x2C2410),
+            crate::ui::tokens::color::Color::from_hex(0x3E3317),
+            crate::ui::tokens::color::Color::from_hex(0x55451D),
+            crate::ui::tokens::color::Color::from_hex(0x9C7B2C),
+            crate::ui::tokens::color::Color::from_hex(0xC99C3D),
+            crate::ui::tokens::color::Color::from_hex(0xE6B450), // s500: Ayu yellow
+            crate::ui::tokens::color::Color::from_hex(0xEDC46E),
+            crate::ui::tokens::color::Color::from_hex(0xF3D28B),
+            crate::ui::tokens::color::Color::from_hex(0xF9E2A9),
+            crate::ui::tokens::color::Color::from_hex(0xFDF1C8),
+        );
+        t.colors.semantic.destructive = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x2E1417),
+            crate::ui::tokens::color::Color::from_hex(0x411A1E),
+            crate::ui::tokens::color::Color::from_hex(0x592226),
+            crate::ui::tokens::color::Color::from_hex(0xA53E44),
+            crate::ui::tokens::color::Color::from_hex(0xD95F65),
+            crate::ui::tokens::color::Color::from_hex(0xF07178), // s500: Ayu red
+            crate::ui::tokens::color::Color::from_hex(0xF48B91),
+            crate::ui::tokens::color::Color::from_hex(0xF7A5AB),
+            crate::ui::tokens::color::Color::from_hex(0xFBBFC4),
+            crate::ui::tokens::color::Color::from_hex(0xFED9DD),
+        );
+        t.colors.semantic.info = crate::ui::tokens::color::ColorScale::new(
+            crate::ui::tokens::color::Color::from_hex(0x0F2430),
+            crate::ui::tokens::color::Color::from_hex(0x153341),
+            crate::ui::tokens::color::Color::from_hex(0x1B4556),
+            crate::ui::tokens::color::Color::from_hex(0x27799A),
+            crate::ui::tokens::color::Color::from_hex(0x2FA2C8),
+            crate::ui::tokens::color::Color::from_hex(0x39BAE6), // s500: Ayu cyan
+            crate::ui::tokens::color::Color::from_hex(0x5FC9EC),
+            crate::ui::tokens::color::Color::from_hex(0x86D7F2),
+            crate::ui::tokens::color::Color::from_hex(0xACE5F7),
+            crate::ui::tokens::color::Color::from_hex(0xD2F2FB),
+        );
+        t.elevation = {
+            let strong = crate::ui::tokens::color::Color::new(0.0, 0.0, 0.0, 0.5);
+            let soft = crate::ui::tokens::color::Color::new(0.0, 0.0, 0.0, 0.3);
+            crate::ui::tokens::elevation::ElevationScale {
+                flat: crate::ui::tokens::elevation::Elevation::FLAT,
+                raised: crate::ui::tokens::elevation::Elevation::new(
+                    crate::ui::tokens::elevation::Shadow::new(0.0, 1.0, 3.0, 0.0, soft),
+                ),
+                overlay: crate::ui::tokens::elevation::Elevation::new(
+                    crate::ui::tokens::elevation::Shadow::new(0.0, 4.0, 6.0, -1.0, soft),
+                ),
+                floating: crate::ui::tokens::elevation::Elevation::new(
+                    crate::ui::tokens::elevation::Shadow::new(0.0, 10.0, 15.0, -3.0, strong),
+                ),
+                modal: crate::ui::tokens::elevation::Elevation::new(
+                    crate::ui::tokens::elevation::Shadow::new(0.0, 25.0, 50.0, -12.0, strong),
+                ),
+            }
+        };
+        t
+    }
+
     #[inline]
     pub fn colors(&self) -> &ColorPalette {
         &self.colors

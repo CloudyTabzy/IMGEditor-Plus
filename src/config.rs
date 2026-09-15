@@ -140,6 +140,7 @@ pub enum ThemeMode {
     DarkGruvbox,
     DarkEverforest,
     DarkGithub,
+    DarkAyu,
 }
 
 impl ThemeMode {
@@ -152,6 +153,7 @@ impl ThemeMode {
             ThemeMode::DarkGruvbox => "Gruvbox",
             ThemeMode::DarkEverforest => "Everforest",
             ThemeMode::DarkGithub => "GitHub Dark",
+            ThemeMode::DarkAyu => "Ayu Dark",
         }
     }
 
@@ -159,7 +161,7 @@ impl ThemeMode {
         !matches!(self, ThemeMode::Light)
     }
 
-    pub const ALL: [ThemeMode; 7] = [
+    pub const ALL: [ThemeMode; 8] = [
         ThemeMode::System,
         ThemeMode::Light,
         ThemeMode::DarkCatppuccin,
@@ -167,6 +169,7 @@ impl ThemeMode {
         ThemeMode::DarkGruvbox,
         ThemeMode::DarkEverforest,
         ThemeMode::DarkGithub,
+        ThemeMode::DarkAyu,
     ];
 }
 
@@ -183,6 +186,7 @@ impl FromStr for ThemeMode {
             "Gruvbox" => Ok(ThemeMode::DarkGruvbox),
             "Everforest" => Ok(ThemeMode::DarkEverforest),
             "GitHub Dark" | "GitHub" => Ok(ThemeMode::DarkGithub),
+            "Ayu Dark" | "Ayu" => Ok(ThemeMode::DarkAyu),
             _ => Err(()),
         }
     }
@@ -1143,6 +1147,12 @@ mod tests {
             "GitHub Dark".parse::<ThemeMode>().unwrap(),
             ThemeMode::DarkGithub
         );
+        assert_eq!(
+            "Ayu Dark".parse::<ThemeMode>().unwrap(),
+            ThemeMode::DarkAyu
+        );
+        assert_eq!("Ayu".parse::<ThemeMode>().unwrap(), ThemeMode::DarkAyu);
+        assert_eq!(ThemeMode::DarkAyu.as_str(), "Ayu Dark");
     }
 
     #[test]

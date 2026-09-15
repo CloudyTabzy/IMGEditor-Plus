@@ -1767,6 +1767,8 @@ impl App {
             crate::ui::tokens::ThemeTokens::everforest()
         } else if matches!(self.config.theme, ThemeMode::DarkGithub) {
             crate::ui::tokens::ThemeTokens::github_dark()
+        } else if matches!(self.config.theme, ThemeMode::DarkAyu) {
+            crate::ui::tokens::ThemeTokens::ayu_dark()
         } else if self.theme().extended_palette().is_dark {
             crate::ui::tokens::ThemeTokens::dark()
         } else {

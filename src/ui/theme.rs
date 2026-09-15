@@ -32,6 +32,18 @@ const GITHUB_DARK_PALETTE: iced::theme::Palette = iced::theme::Palette {
     danger: iced::color!(0xF85149),
 };
 
+// Ayu Dark (ayutheme.com) tuned toward a deep terracotta-orange accent:
+// near-black navy canvas #0B0E14, panel #131722, warm-grey fg, and the
+// signature orange pulled slightly earthier (#F29A4B vs. #FF9940).
+const AYU_DARK_PALETTE: iced::theme::Palette = iced::theme::Palette {
+    background: iced::color!(0x0B0E14),
+    text: iced::color!(0xC3C6CE),
+    primary: iced::color!(0xF29A4B),
+    success: iced::color!(0xAAD94C),
+    warning: iced::color!(0xE6B450),
+    danger: iced::color!(0xF07178),
+};
+
 pub fn light_theme() -> Theme {
     Theme::custom("Light", LIGHT_OCEAN_PALETTE)
 }
@@ -44,6 +56,10 @@ pub fn github_dark_theme() -> Theme {
     Theme::custom("GitHub Dark", GITHUB_DARK_PALETTE)
 }
 
+pub fn ayu_dark_theme() -> Theme {
+    Theme::custom("Ayu Dark", AYU_DARK_PALETTE)
+}
+
 pub fn resolve_theme(mode: ThemeMode) -> Theme {
     match mode {
         ThemeMode::System => Theme::Dark,
@@ -53,6 +69,7 @@ pub fn resolve_theme(mode: ThemeMode) -> Theme {
         ThemeMode::DarkGruvbox => Theme::GruvboxDark,
         ThemeMode::DarkEverforest => everforest_theme(),
         ThemeMode::DarkGithub => github_dark_theme(),
+        ThemeMode::DarkAyu => ayu_dark_theme(),
     }
 }
 
@@ -81,6 +98,10 @@ mod tests {
         ));
         assert!(matches!(
             resolve_theme(ThemeMode::DarkGithub),
+            Theme::Custom(_)
+        ));
+        assert!(matches!(
+            resolve_theme(ThemeMode::DarkAyu),
             Theme::Custom(_)
         ));
     }
