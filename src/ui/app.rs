@@ -241,17 +241,22 @@ pub const ABOUT_TEXT: &str = concat!(
 
 /// Short, session-stable tips shown in the empty workspace. These point to
 /// useful features that are easy to miss without opening an archive first.
-pub(crate) const EMPTY_STATE_PRO_TIPS: [&str; 10] = [
+pub(crate) const EMPTY_STATE_PRO_TIPS: [&str; 15] = [
     "Press Ctrl+F to focus Search, then use Up/Down and Enter to jump to a match.",
     "Search predictions reveal a match in its archive context; View → Search selection context enables isolated results.",
     "Right-click an entry for 3D view, textures, export, rename, and other actions.",
-    "Middle-click the entry list for Firefox-style autoscroll; optional momentum is under View.",
+    "Middle-click the entry list for Browser-style autoscroll; optional momentum is under View.",
     "Press 1, 2, or 3 to switch to Export, 3D view, or Texture.",
     "Middle-click an archive tab to close it quickly.",
     "Texture UV overlays are available when the selected model supplies matching geometry.",
     "In 3D view, Wire overlay exposes triangle edges and Grid floor helps judge scale.",
     "Use Ctrl+S for a quick save and Ctrl+Shift+S to save an archive under a new name.",
     "Exported textures use unique filenames automatically, so batch exports never overwrite one another.",
+    "Edit → Load .agr animation file plays an animation in the 3D view; Space toggles playback and ←/→ step frames.",
+    "While an animation plays, the dock's Model picker re-plays it on any compatible model in the archive.",
+    "The expand icon on an import or replace preview opens it fullscreen: scroll to zoom, drag to pan, Esc to close.",
+    "Convert selection to target dialect bulk re-encodes the selected TXDs — pick the game in Validate textures first.",
+    "Ctrl+L exports an entry list and Ctrl+P compares one against the archive to spot missing names.",
 ];
 
 fn empty_state_tip_index() -> usize {
