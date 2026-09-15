@@ -46,6 +46,16 @@ pub fn close<'a>() -> Text<'a> {
     lucide::x()
 }
 
+/// Texture preview: open the fullscreen image view.
+pub fn expand<'a>() -> Text<'a> {
+    lucide::expand()
+}
+
+/// Fullscreen image view: close it again.
+pub fn shrink<'a>() -> Text<'a> {
+    lucide::shrink()
+}
+
 pub fn check<'a>() -> Text<'a> {
     lucide::check()
 }

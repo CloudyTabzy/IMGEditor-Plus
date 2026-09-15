@@ -13,7 +13,7 @@ use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::tasks::FolderDuplicatePolicy;
 use crate::ui::app::{
-    ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget,
+    ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget, TextureSnapshot,
     is_animation_group_name, renderable_model_kind,
 };
 use crate::ui::design::Design;
@@ -2811,6 +2811,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
         build_replace_dialog(app),
         build_new_txd_dialog(app),
         build_bulk_dialog(app),
+        build_texture_fullscreen(app),
         build_quit_fade(app),
     ]
     .into_iter()
@@ -2998,33 +2999,97 @@ fn plan_warnings(warnings: &[String]) -> Element<'_, Message> {
 }
 
 fn preview_column(title: &str, handle: image::Handle) -> Element<'static, Message> {
+    let snapshot = crate::ui::app::TextureSnapshot {
+        handle: handle.clone(),
+        label: title.to_string(),
+    };
+    let expand = w::styled_tooltip(
+        button(icons::expand().size(13))
+            .on_press(Message::OpenTextureFullscreen(snapshot))
+            .width(Length::Fixed(26.0))
+            .height(Length::Fixed(26.0))
+            .padding(0.0)
+            .style(animation_subtle_button_style),
+        fonts::caption("View at full quality"),
+        tooltip::Position::Left,
+    );
+    let framed = container(
+        stack![
+            image(handle)
+                .content_fit(iced::ContentFit::Contain)
+                .width(Length::Fill)
+                .height(Length::Fixed(180.0)),
+            container(expand)
+                .width(Length::Fill)
+                .height(Length::Fixed(180.0))
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start)
+                .padding(4),
+        ],
+    )
+    .width(Length::Fixed(180.0))
+    .height(Length::Fixed(180.0))
+    .style(|theme: &iced::Theme| container::Style {
+        background: Some(iced::Background::Color(
+            theme.extended_palette().background.weak.color,
+        )),
+        border: Border {
+            color: theme.extended_palette().background.strong.color,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    });
     container(
-        column![
-            fonts::caption(title.to_string()),
-            container(
-                image(handle)
-                    .content_fit(iced::ContentFit::Contain)
-                    .width(Length::Fixed(180.0))
-                    .height(Length::Fixed(180.0)),
-            )
-            .width(Length::Fixed(180.0))
-            .height(Length::Fixed(180.0))
-            .style(|theme: &iced::Theme| container::Style {
-                background: Some(iced::Background::Color(
-                    theme.extended_palette().background.weak.color,
-                )),
-                border: Border {
-                    color: theme.extended_palette().background.strong.color,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..Default::default()
-            }),
-        ]
-        .spacing(4)
-        .width(Length::Fixed(180.0)),
+        column![fonts::caption(title.to_string()), framed]
+            .spacing(4)
+            .width(Length::Fixed(180.0)),
     )
     .into()
+}
+
+/// Fullscreen texture preview opened from a converter dialog: the untouched
+/// full-resolution pixels, centered on a dark backdrop. Any click closes it.
+fn build_texture_fullscreen(app: &App) -> Option<Element<'_, Message>> {
+    let snapshot = app.texture_fullscreen.as_ref()?;
+    let layer = container(
+        column![
+            row![
+                fonts::caption(format!("{} — full quality", snapshot.label)),
+                Space::new().width(Length::Fill),
+                button(icons::shrink().size(14))
+                    .on_press(Message::CloseTextureFullscreen)
+                    .width(Length::Fixed(28.0))
+                    .height(Length::Fixed(28.0))
+                    .padding(0.0)
+                    .style(animation_subtle_button_style),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+            container(
+                image(snapshot.handle.clone())
+                    .content_fit(iced::ContentFit::Contain)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center),
+            fonts::caption("Click anywhere to close"),
+        ]
+        .spacing(8)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(12),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(|_theme: &iced::Theme| iced::widget::container::Style {
+        background: Some(iced::Background::Color(Color::from_rgb8(10, 10, 12))),
+        ..Default::default()
+    });
+    Some(opaque(mouse_area(layer).on_press(Message::CloseTextureFullscreen)))
 }
 
 /// Replace-texture dialog: format picker, warnings, before/after.
@@ -3142,7 +3207,54 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
                 .on_toggle(Message::NewTxdHighQualityToggled),
         );
     }
-    body = body.push(preview_column("Texture", state.after_handle.clone()));
+    // Centered inline preview (a cheap downscaled copy) with a fullscreen
+    // button; the fullscreen layer shows the untouched full-resolution
+    // pixels straight from the dialog state.
+    let expand = w::styled_tooltip(
+        button(icons::expand().size(14))
+            .on_press(Message::OpenTextureFullscreen(TextureSnapshot {
+                handle: state.after_handle.clone(),
+                label: format!(
+                    "{} ({}x{})",
+                    state.source_name, state.plan.0.width, state.plan.0.height
+                ),
+            }))
+            .width(Length::Fixed(28.0))
+            .height(Length::Fixed(28.0))
+            .padding(0.0)
+            .style(animation_subtle_button_style),
+        fonts::caption("View at full quality"),
+        tooltip::Position::Left,
+    );
+    body = body.push(
+        container(
+            stack![
+                image(state.preview_handle.clone())
+                    .content_fit(iced::ContentFit::Contain)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(220.0)),
+                container(expand)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(220.0))
+                    .align_x(Alignment::End)
+                    .align_y(Alignment::Start)
+                    .padding(6),
+            ],
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(220.0))
+        .style(|theme: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(
+                theme.extended_palette().background.weak.color,
+            )),
+            border: Border {
+                color: theme.extended_palette().background.strong.color,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        }),
+    );
     body = body.push(plan_warnings(&state.plan.0.warnings));
     body = body.push(Space::new().height(Length::Fixed(8.0)));
     let confirm: Element<'_, Message> = if state.planning {

@@ -751,6 +751,11 @@ pub enum Message {
     },
     /// Dismiss the bulk-convert dialog.
     BulkConvertCancelled,
+    /// Open a fullscreen full-quality texture preview from a converter
+    /// dialog. The snapshot shares the dialog state's pixels (Arc-cheap).
+    OpenTextureFullscreen(TextureSnapshot),
+    /// Close the fullscreen texture preview.
+    CloseTextureFullscreen,
     /// Background header repair finished; apply the patches and save.
     SaveFixesReady {
         index: usize,
@@ -1202,8 +1207,30 @@ pub struct NewTxdState {
     /// High-quality DXT (iterative cluster fit) for this plan.
     pub high_quality: bool,
     pub plan: CompactPlan,
+    /// Downscaled inline preview for the dialog.
+    pub preview_handle: iced::widget::image::Handle,
+    /// Full-resolution encoded-result pixels for the fullscreen view.
     pub after_handle: iced::widget::image::Handle,
     pub planning: bool,
+}
+
+/// Largest dimension of the inline (non-fullscreen) dialog preview. The
+/// fullscreen view always shows the untouched full-resolution pixels.
+const INLINE_PREVIEW_MAX_DIM: u32 = 512;
+
+/// A fullscreen texture preview: the dialog state owns the full-resolution
+/// pixels, this snapshot only borrows them for the overlay (an `Arc`-cheap
+/// handle clone), so closing the dialog releases everything at once.
+#[derive(Clone)]
+pub struct TextureSnapshot {
+    pub handle: iced::widget::image::Handle,
+    pub label: String,
+}
+
+impl std::fmt::Debug for TextureSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TextureSnapshot({:?})", self.label)
+    }
 }
 
 /// One entry's bulk-conversion plan.
@@ -1330,6 +1357,10 @@ pub struct App {
     pub pending_new_txd: Option<NewTxdState>,
     /// Open bulk-convert dialog state (Phase B).
     pub pending_bulk: Option<BulkConvertState>,
+    /// Fullscreen texture preview opened from a converter dialog. The
+    /// snapshot shares the dialog's full-resolution pixels; it is cleared
+    /// together with the dialog so nothing outlives it.
+    pub texture_fullscreen: Option<TextureSnapshot>,
     /// Close/quit waiting on the unsaved-changes guard.
     pub pending_close: Option<PendingClose>,
     /// After a successful save of this archive index, close it (the
@@ -1657,6 +1688,7 @@ impl App {
             replace_plan_in_flight: false,
             pending_replace: None,
             pending_new_txd: None,
+            texture_fullscreen: None,
             pending_bulk: None,
             pending_close: None,
             close_after_save: None,
@@ -2201,6 +2233,7 @@ impl App {
             || self.show_sort_manager
             || self.compare_state.is_some()
             || self.validator_popup_open
+            || self.texture_fullscreen.is_some()
     }
 
     pub(crate) fn animation_demo_active(&self) -> bool {
@@ -3713,6 +3746,7 @@ impl App {
                 };
                 // Invalidate any re-plan still in flight.
                 self.replace_attempt = self.replace_attempt.wrapping_add(1);
+                self.texture_fullscreen = None;
                 let archive_index = state.archive_index;
                 let entry_index = state.entry_index;
                 let texture_index = state.texture_index;
@@ -3774,6 +3808,7 @@ impl App {
             Message::ReplaceCancelled => {
                 self.replace_attempt = self.replace_attempt.wrapping_add(1);
                 self.pending_replace = None;
+                self.texture_fullscreen = None;
                 Task::none()
             }
             Message::ImportImageAsTxdRequested => {
@@ -3875,10 +3910,27 @@ impl App {
                     .pending_new_txd
                     .as_ref()
                     .is_some_and(|state| state.high_quality);
+                // The fullscreen view reuses the full-resolution pixels; the
+                // inline dialog preview is a cheap 2x2-box downscale of the
+                // same encoded result. The plan keeps its own copy behind
+                // the Arc, so only the downscale costs extra work here.
+                let rgba = ready.plan.0.preview_rgba.clone();
+                let (preview_width, preview_height, preview_rgba) =
+                    crate::ui::texture_preview::downscaled_rgba(
+                        &rgba,
+                        ready.plan.0.width,
+                        ready.plan.0.height,
+                        INLINE_PREVIEW_MAX_DIM,
+                    );
+                let preview_handle = iced::widget::image::Handle::from_rgba(
+                    preview_width,
+                    preview_height,
+                    preview_rgba,
+                );
                 let after_handle = iced::widget::image::Handle::from_rgba(
                     ready.plan.0.width,
                     ready.plan.0.height,
-                    ready.plan.0.preview_rgba.clone(),
+                    rgba,
                 );
                 self.pending_new_txd = Some(NewTxdState {
                     archive_index: ready.archive_index,
@@ -3889,6 +3941,7 @@ impl App {
                     chooser: ready.plan.0.format,
                     high_quality,
                     plan: ready.plan,
+                    preview_handle,
                     after_handle,
                     planning: false,
                 });
@@ -4010,6 +4063,7 @@ impl App {
                 // The entry is in: invalidate any plan still in flight so
                 // it cannot re-open the dialog.
                 self.new_txd_attempt = self.new_txd_attempt.wrapping_add(1);
+                self.texture_fullscreen = None;
                 let mut entry = crate::archive::EntryInfo::new(&name);
                 entry.imported = true;
                 entry.sector = (crate::parser::sector_rounded_size(bytes.len() as u64)
@@ -4037,6 +4091,7 @@ impl App {
             Message::NewTxdCancelled => {
                 self.new_txd_attempt = self.new_txd_attempt.wrapping_add(1);
                 self.pending_new_txd = None;
+                self.texture_fullscreen = None;
                 Task::none()
             }
             Message::BulkConvertRequested => {
@@ -4445,6 +4500,14 @@ impl App {
                 } else {
                     Task::none()
                 }
+            }
+            Message::OpenTextureFullscreen(snapshot) => {
+                self.texture_fullscreen = Some(snapshot);
+                Task::none()
+            }
+            Message::CloseTextureFullscreen => {
+                self.texture_fullscreen = None;
+                Task::none()
             }
             Message::QuitWindowHidden => {
                 if let Some(window) = self.quitting.take() {
@@ -5033,10 +5096,12 @@ impl App {
                 }
                 if self.pending_replace.is_some() {
                     self.pending_replace = None;
+                    self.texture_fullscreen = None;
                     return Task::none();
                 }
                 if self.pending_new_txd.is_some() {
                     self.pending_new_txd = None;
+                    self.texture_fullscreen = None;
                     return Task::none();
                 }
                 if self.pending_bulk.is_some() {
@@ -9091,6 +9156,44 @@ mod tests {
         assert_eq!(state.ignored_non_txd, 1);
     }
 
+    #[test]
+    fn texture_fullscreen_closes_with_the_dialog() {
+        let mut app = test_app();
+        app.editor.new_archive();
+        app.pending_new_txd = Some(NewTxdState {
+            archive_index: 0,
+            source_path: PathBuf::from("C:/tmp/x.dds"),
+            source_name: "x.dds".to_string(),
+            texture_name: "x".to_string(),
+            target: &crate::compat::games::GTA3,
+            chooser: crate::compat::encode::EncodeFormat::Rgb888,
+            high_quality: false,
+            plan: tiny_plan(&crate::compat::games::GTA3),
+            preview_handle: iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]),
+            after_handle: iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]),
+            planning: false,
+        });
+
+        let _ = app.update(Message::OpenTextureFullscreen(TextureSnapshot {
+            handle: app.pending_new_txd.as_ref().unwrap().after_handle.clone(),
+            label: "x.dds (4x4)".to_string(),
+        }));
+        assert!(app.texture_fullscreen.is_some());
+
+        let _ = app.update(Message::CloseTextureFullscreen);
+        assert!(app.texture_fullscreen.is_none());
+
+        // Closing the dialog closes a still-open fullscreen view too, so
+        // the full-resolution pixels never outlive the dialog state.
+        let _ = app.update(Message::OpenTextureFullscreen(TextureSnapshot {
+            handle: app.pending_new_txd.as_ref().unwrap().after_handle.clone(),
+            label: "x.dds (4x4)".to_string(),
+        }));
+        let _ = app.update(Message::NewTxdCancelled);
+        assert!(app.pending_new_txd.is_none());
+        assert!(app.texture_fullscreen.is_none());
+    }
+
     /// Run a task's side effects and collect the follow-up messages it
     /// would feed back into the runtime (mirrors what the real event loop
     /// does with `Task::done` values).
@@ -9911,6 +10014,7 @@ mod tests {
             chooser: plan.0.format,
             high_quality: false,
             plan: plan.clone(),
+            preview_handle: iced::widget::image::Handle::from_rgba(4, 4, vec![0, 0, 0, 0]),
             after_handle: iced::widget::image::Handle::from_rgba(4, 4, vec![0, 0, 0, 0]),
             planning: false,
         };
@@ -10095,6 +10199,7 @@ mod tests {
             chooser: crate::compat::encode::EncodeFormat::Rgb888,
             high_quality: false,
             plan: tiny_plan(&crate::compat::games::GTA3),
+            preview_handle: iced::widget::image::Handle::from_rgba(4, 4, vec![0, 0, 0, 0]),
             after_handle: iced::widget::image::Handle::from_rgba(4, 4, vec![0, 0, 0, 0]),
             planning: true,
         });

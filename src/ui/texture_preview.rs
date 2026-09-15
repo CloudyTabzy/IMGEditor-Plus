@@ -375,6 +375,49 @@ fn grid_line_offsets(length: f32, divisions: u32) -> Vec<(f32, bool)> {
         .collect()
 }
 
+/// Halve an RGBA image with 2x2 box averaging until its largest side fits
+/// `max_dim`. Clamps at the right/bottom edge so odd dimensions stay
+/// correct. Used for the inline dialog previews; the fullscreen view shows
+/// the untouched full-resolution pixels.
+pub fn downscaled_rgba(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    max_dim: u32,
+) -> (u32, u32, Vec<u8>) {
+    if width == 0 || height == 0 || rgba.len() < (width as usize * height as usize * 4) {
+        return (0, 0, Vec::new());
+    }
+    let max_dim = max_dim.max(1);
+    let mut current = (width, height, rgba.to_vec());
+    while current.0.max(current.1) > max_dim {
+        let (w, h, data) = &current;
+        let (new_w, new_h) = ((w / 2).max(1), (h / 2).max(1));
+        let mut out = vec![0u8; (new_w * new_h * 4) as usize];
+        for y in 0..new_h {
+            for x in 0..new_w {
+                let mut acc = [0u32; 4];
+                for dy in 0..2u32 {
+                    for dx in 0..2u32 {
+                        let sx = (x * 2 + dx).min(w - 1);
+                        let sy = (y * 2 + dy).min(h - 1);
+                        let px = ((sy * w + sx) * 4) as usize;
+                        for channel in 0..4 {
+                            acc[channel] += data[px + channel] as u32;
+                        }
+                    }
+                }
+                let di = ((y * new_w + x) * 4) as usize;
+                for channel in 0..4 {
+                    out[di + channel] = (acc[channel] / 4) as u8;
+                }
+            }
+        }
+        current = (new_w, new_h, out);
+    }
+    current
+}
+
 /// Compute the same centered `Contain` rectangle used by the plain Iced image
 /// widget. UV v-coordinates are kept in their existing NIF convention: the
 /// current Bully renderer passes them directly to the texture sampler, so
@@ -842,5 +885,37 @@ mod tests {
         assert!(grid_line_offsets(-5.0, 8).is_empty());
         // divisions clamped to at least 1 → no interior lines.
         assert!(grid_line_offsets(100.0, 0).is_empty());
+    }
+
+    #[test]
+    fn downscaled_rgba_boxes_and_stops_at_the_cap() {
+        // 4x2 red/green halves: one halve -> 2x1 with averaged columns.
+        let mut rgba = vec![0u8; 4 * 2 * 4];
+        for x in 0..4u32 {
+            for y in 0..2u32 {
+                let px = ((y * 4 + x) * 4) as usize;
+                let (r, g, b) = if x < 2 { (255, 0, 20) } else { (0, 255, 60) };
+                rgba[px] = r;
+                rgba[px + 1] = g;
+                rgba[px + 2] = b;
+                rgba[px + 3] = 255;
+            }
+        }
+        let (w, h, out) = downscaled_rgba(&rgba, 4, 2, 2);
+        assert_eq!((w, h), (2, 1));
+        // Output pixel 0 averages the four red pixels.
+        assert_eq!(&out[0..4], &[255, 0, 20, 255]);
+        // Output pixel 1 averages the four green pixels.
+        assert_eq!(&out[4..8], &[0, 255, 60, 255]);
+
+        // Already small images pass through unchanged.
+        let (w, h, passthrough) = downscaled_rgba(&rgba, 4, 2, 8);
+        assert_eq!((w, h), (4, 2));
+        assert_eq!(passthrough.len(), rgba.len());
+
+        // Degenerate sizes never loop forever.
+        assert_eq!(downscaled_rgba(&rgba, 0, 0, 1), (0, 0, Vec::new()));
+        let (w, h, _) = downscaled_rgba(&rgba, 4, 2, 0);
+        assert_eq!((w, h), (1, 1));
     }
 }
