@@ -170,7 +170,7 @@ for the engineering story.
 - ✅ **Copy entry details** to clipboard
 
 ### 🏗️ Design & UX
-- ✅ **6 theme modes** — Dark, Light, Catppuccin Mocha, Tokyo Night, Gruvbox, **Everforest**
+- ✅ **7 theme modes** — Dark, Light, Catppuccin Mocha, Tokyo Night, Gruvbox, Everforest, **GitHub Dark**
 - ✅ **Design token system** — Tailwind-inspired color/spacing/radius/elevation scales, vendored in-tree
 - ✅ **Smooth animation engine** — 26 easing curves, animated progress bar, animated status-bar pulse
 - ✅ **Inter + Bricolage + Lucide icon fonts** — clean, modern typography
@@ -222,6 +222,14 @@ A comfortable green-based dark theme designed to be warm and soft.
 
 ![Everforest theme](asset/themes-images/Everforest.png)
 *Muted sage greens and creamy text — the newest addition for users who want a natural, forest-inspired workspace.*
+
+### GitHub Dark
+GitHub's own dark look: a near-black blue-tinted canvas with the familiar blue accent.
+
+<!-- Screenshot pending: add asset/themes-images/GitHub_Dark.png, then uncomment:
+![GitHub Dark theme](asset/themes-images/GitHub_Dark.png)
+*Canvas #0D1117, subtle #161B22 surfaces, and the classic GitHub blue — perfect for a developer's toolbox.*
+-->
 
 </details>
 
