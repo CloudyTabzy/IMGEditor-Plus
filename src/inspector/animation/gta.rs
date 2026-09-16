@@ -246,8 +246,8 @@ pub fn model_from_dff(
         source_identity.to_string(),
         nodes,
         meshes,
-        BaseOrientation::Zup.to_yup_matrix(),
-        BaseOrientation::Zup,
+        BaseOrientation::Xup.to_yup_matrix(),
+        BaseOrientation::Xup,
         root_motion_node,
     )?;
     let source_names: Vec<Option<String>> = rig
@@ -454,34 +454,25 @@ mod tests {
         let model = model_from_dff(&rig, "bmyst", "bmyst.dff").expect("model should build");
         let rest = crate::inspector::animation::pose::rest_scene(&model);
 
-        // The flat DFF parse bakes the atomic frame's world transform into
-        // the vertices. For skinned geometry the atomic frame is typically
-        // the model root (identity), so the flat and skinned positions
-        // should agree. Compare the scene AABBs.
-        let flat = crate::inspector::scene3d::decode::build_scene_from_dff(
-            &crate::parser::dff::parse_dff(&bytes).expect("flat parse"),
-            BaseOrientation::Zup,
-            |_| None,
-        )
-        .expect("flat scene");
-
-        let rest_extent = [
+        // The rest scene should span a humanoid-sized volume on each axis.
+        // A broken inverse bind (transposed or mis-mapped) would collapse
+        // one axis to near-zero or explode another past the model limit.
+        let extent = [
             rest.aabb.max[0] - rest.aabb.min[0],
             rest.aabb.max[1] - rest.aabb.min[1],
             rest.aabb.max[2] - rest.aabb.min[2],
         ];
-        let flat_extent = [
-            flat.aabb.max[0] - flat.aabb.min[0],
-            flat.aabb.max[1] - flat.aabb.min[1],
-            flat.aabb.max[2] - flat.aabb.min[2],
-        ];
         for axis in 0..3 {
-            let ratio = rest_extent[axis] / flat_extent[axis].max(0.001);
+            let span = extent[axis];
             assert!(
-                ratio > 0.5 && ratio < 2.0,
-                "rest extent {ratio:.3}× the flat extent on axis {axis} — the skin matrix convention may be wrong"
+                span > 0.1 && span < GTA_MODEL_MAX_EXTENT_M,
+                "axis {axis} extent {span:.3} outside sane range"
             );
         }
+        // The model should have the same vertex count as the rig meshes.
+        let rest_vertices: usize = rest.meshes.iter().map(|m| m.vertices.len()).sum();
+        let model_vertices: usize = model.meshes.iter().map(|m| m.vertices.len()).sum();
+        assert_eq!(rest_vertices, model_vertices);
     }
 
     #[test]

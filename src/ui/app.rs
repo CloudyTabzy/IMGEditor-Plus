@@ -2968,7 +2968,6 @@ impl App {
         };
 
         let archive_path = archive.path.clone();
-        let source_mmap = archive.source_mmap.clone();
         let ifp_entry = ifp_entry.clone();
         let dff_entry = dff_entry.clone();
         let model_name = dff_entry.file_name.to_string();
@@ -7396,7 +7395,7 @@ impl App {
                                         renderware_textures.get(&key).cloned()
                                     };
                                     let base =
-                                        crate::inspector::scene3d::camera::BaseOrientation::Zup;
+                                        crate::inspector::scene3d::camera::BaseOrientation::Xup;
                                     return crate::inspector::scene3d::decode::build_scene_from_dff(
                                         &dff_meshes,
                                         base,
@@ -7439,7 +7438,7 @@ impl App {
                                         })
                                 };
                                 let base =
-                                    crate::inspector::scene3d::camera::BaseOrientation::Zup;
+                                    crate::inspector::scene3d::camera::BaseOrientation::Xup;
                                 crate::inspector::scene3d::decode::parse_and_build_scene(
                                     &bytes, base, resolver,
                                 )
