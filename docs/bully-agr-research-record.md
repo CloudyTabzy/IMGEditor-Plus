@@ -1128,6 +1128,90 @@ came from a retail PC asset, a mission group, a synthetic fixture or a modified
 community archive. It also prevents a mislabeled/incomplete archive from being
 used as a platform specification.
 
+## 10a. Lessons learned from GTA DFF/IFP format research (2026-09-16)
+
+These are the lessons from implementing the GTA DFF skin/HAnim parser and
+IFP animation playback — recorded because they differ from Bully's
+Gamebryo formats and from common RenderWare assumptions.
+
+### GTA ped DFFs are Y-up, not Z-up
+
+Props, buildings, and Bully NIF models are Z-up (the character stands along
+source Z). GTA SA ped DFFs are **Y-up** (the character stands along source
+Y — the 3ds Max biped convention). Using `Zup.to_yup_matrix()` renders the
+character lying face-up; `Xup` renders it on its side. Only `Yup.to_yup_matrix()`
+(which is the identity matrix) stands it upright. The orientation must be
+auto-detected per DFF — `has_hanim()` scans for HAnimPLG data and selects
+Yup for skinned characters, Zup for everything else.
+
+### SkinPLG matrices are NOT RenderWare-transformed
+
+The SkinPLG bone matrices are stored as 16 f32 in a plain row-major layout
+with translation in the bottom row (elements [12], [13], [14]). This means
+feeding the stored rows directly as glam columns (`from_cols_array_2d`)
+produces the correct column-vector affine matrix — no manual transpose
+needed. The translation ends up in the last column, and the 3×3 linear part
+is the rotation with rows-as-columns (which is the correct convention for
+`from_cols_array_2d`).
+
+### SkinPLG vertex data is two contiguous blocks, NOT interleaved
+
+The per-vertex data is laid out as: a contiguous block of 4 × `vertices`
+bytes (bone indices), followed by a contiguous block of 16 × `vertices`
+bytes (f32 weights). DragonFF reads them as two separate arrays — NOT
+interleaved per vertex. Interleaving them garbles every weight (the "weight"
+floats read from index bytes produce denormals like 8.8e-50).
+
+### SkinPLG header has a pad byte
+
+The header is `3×u8` (num_bones, num_used_bones, max_weights_per_vertex)
+followed by a **pad byte**. The pad must be skipped before reading the
+used-bones array. Skipping it shifts the entire skin data by one byte,
+producing garbage weights.
+
+### IFP section headers are 8 bytes, not 12
+
+IFP sections have a 2-field header: magic (4 bytes) + size (4 bytes). No
+version word, no flags. This is fundamentally different from RenderWare's
+12-byte header (kind + size + version). The alignment is also 4-byte
+absolute (relative to the section start), applied after each section.
+
+### ANP3 key sizes: type 3 = 10 bytes, type 4 = 16 bytes
+
+The ANP3 compressed keyframe types map as: type 3 (CHILD) = 5 × i16 =
+quat(4×i16/4096) + time(1×i16/30) = **10 bytes**; type 4 (ROOT) = 8 × i16 =
+quat(4×i16/4096) + pos(3×i16/1024) + time(1×i16/30) = **16 bytes**. This
+differs from rwfury's source order (which lists type 3 as 16 and type 4 as
+10) — the mapping was empirically verified against `frame_data_size` for
+all 294 animations in SA ped.ifp.
+
+### ANPK object layout: bone_id at +24, key_count at +28, 12-byte tail
+
+The ANIM section body starts with a 24-byte object name, then bone_id
+(i32), then key_count (u32), then 12 bytes of zeros (flags/pointers that
+don't affect decoding). The KR00/KRT0/KRTS section follows as a sibling
+chunk (not nested inside ANIM).
+
+### GTA ped DFFs and IFPs share bone names by design — no model matching needed
+
+GTA has no "model → animation" mapping. All ped DFFs use the same biped
+bone naming convention from 3ds Max, and all ped IFPs animate those same
+bone names. Any ped IFP can play on any ped DFF via name-identity binding.
+The game's association data (animgrp.dat) controls which animations are
+available, not which models they work with. Played clips may legitimately
+show a character's back because clips are authored relative to the game's
+actor node (the Dummy placeholder the stream never animates), not the DFF's
+bind pose.
+
+### Python heredocs on Windows: always write to a file
+
+Inline `python -c "..."` scripts containing heredoc syntax (`<<EOF`) hang
+indefinitely on Windows Git Bash. Even simple `python -` with a heredoc
+hangs. The reliable pattern is to write the script to a temp file
+(`$TEMP/script.py`) and invoke it by path. Backticks in double-quoted
+strings are also interpreted as command substitution by bash before the
+script even sees them.
+
 ## 11. Recommended future work
 
 In priority order:
