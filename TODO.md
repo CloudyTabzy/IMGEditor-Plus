@@ -1,9 +1,9 @@
 # IMGEditor-rs — Next Objectives
 
-Last tagged release: **v4.6.0** (Bully AGR playback, HXD naming, CPU skinning,
-and the shared animation dock). Local `master` also contains subsequent AGR
-binding, parser-hardening, and full-variant decoding commits; those are documented in
-[`docs/bully-agr-research-record.md`](docs/bully-agr-research-record.md).
+Last tagged release: **v4.11.0** (shipped 2026-09-16: the complete Bully
+AGR animation pipeline — all variants, all-rig binding, textured playback,
+model picker, load caching — plus fullscreen texture previews, the
+bulk-converter hardening, entry-list comparison, and the Ayu Dark theme).
 
 Next phase: **Bully AGR completion and CAT/LIP/LUR inspection**, followed by
 separate GTA animation adapters. The remaining
