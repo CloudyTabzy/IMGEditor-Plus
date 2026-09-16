@@ -5,6 +5,11 @@
 //! positions, normals, UVs, triangle records, and the diffuse names carried
 //! by the material list. Console-native geometry remains an explicit
 //! unsupported case instead of being mistaken for ordinary vertex data.
+//!
+//! A second, rig-preserving entry point ([`parse_dff_rig`]) keeps the frame
+//! hierarchy, frame names, HAnimPLG bone data, and SkinPLG skin weights so
+//! the animation adapter can build a deformable model. The flat path bakes
+//! frame transforms into vertices and remains the viewer/export default.
 
 use std::collections::BTreeMap;
 
@@ -13,11 +18,18 @@ const GEOMETRY: u32 = 0x0F;
 const GEOMETRY_LIST: u32 = 0x1A;
 const STRUCT: u32 = 0x01;
 const STRING: u32 = 0x02;
+const EXTENSION: u32 = 0x03;
 const MATERIAL: u32 = 0x07;
 const MATERIAL_LIST: u32 = 0x08;
 const FRAME_LIST: u32 = 0x0E;
 const TEXTURE: u32 = 0x06;
 const ATOMIC: u32 = 0x14;
+
+const HANIM_PLG: u32 = 0x011E;
+const SKIN_PLG: u32 = 0x0116;
+/// The Frame List's per-frame node-name plugin (a bare null-terminated
+/// string), used by every skinned GTA export.
+const NODE_NAME_PLG: u32 = 0x0253_F2FE;
 
 const FLAG_TRI_STRIP: u32 = 0x0000_0001;
 const FLAG_TEXTURED: u32 = 0x0000_0004;
@@ -68,6 +80,9 @@ struct GeometryData {
     uvs: Vec<[f32; 2]>,
     triangles: Vec<Triangle>,
     material_textures: Vec<Option<String>>,
+    /// Raw SKIN PLG body stashed during the section walk; the modern
+    /// (geometry-level) variant is parsed once the vertex count is known.
+    skin_body: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -78,15 +93,20 @@ struct FrameData {
     parent: i32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct AtomicData {
     frame: usize,
     geometry: Option<usize>,
+    /// Raw SKIN PLG body from the atomic's extension (the legacy,
+    /// atomic-level skin variant of old RenderWare versions).
+    skin_body: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Default)]
 struct ClumpData {
     frames: Vec<FrameData>,
+    frame_names: Vec<Option<String>>,
+    frame_hanims: Vec<Option<DffHAnim>>,
     geometries: Vec<GeometryData>,
     atomics: Vec<AtomicData>,
 }
@@ -294,6 +314,7 @@ fn parse_clump_contents(
 fn parse_frame_list(bytes: &[u8], section: Section, clump: &mut ClumpData) -> Result<(), String> {
     let mut position = section.start;
     let mut parsed_struct = false;
+    let mut frame_index = 0usize;
     while position < section.end {
         if section.end - position < 12 {
             break;
@@ -313,9 +334,19 @@ fn parse_frame_list(bytes: &[u8], section: Section, clump: &mut ClumpData) -> Re
             let frame_data = &body[4..4 + frame_bytes];
             let mut frame_cursor = Cursor::new(frame_data);
             clump.frames.reserve(frame_count);
+            clump.frame_names.reserve(frame_count);
+            clump.frame_hanims.reserve(frame_count);
             for _ in 0..frame_count {
-                clump.frames.push(parse_frame(&mut frame_cursor)?);
+                let frame = parse_frame(&mut frame_cursor)?;
+                clump.frames.push(frame);
+                clump.frame_names.push(None);
+                clump.frame_hanims.push(None);
             }
+        } else if parsed_struct && clump.frames.len() > frame_index {
+            // After the STRUCT, the Frame List carries one EXTENSION section
+            // per frame in frame order (node names, HAnimPLG, user data...).
+            parse_frame_extension(bytes, child, frame_index, clump)?;
+            frame_index += 1;
         }
         position = child.end;
     }
@@ -375,6 +406,7 @@ fn parse_atomic(bytes: &[u8], section: Section, clump: &mut ClumpData) -> Result
     let mut position = section.start;
     let mut frame = 0usize;
     let mut geometry = None;
+    let mut skin_body = None;
     let mut parsed_struct = false;
     while position < section.end {
         if section.end - position < 12 {
@@ -405,6 +437,21 @@ fn parse_atomic(bytes: &[u8], section: Section, clump: &mut ClumpData) -> Result
                 push_geometry(clump, parse_geometry_section(bytes, child)?)?;
                 geometry = Some(index);
             }
+            EXTENSION => {
+                // The legacy atomic-level skin lives in the extension.
+                let mut position = child.start;
+                while position < child.end {
+                    if child.end - position < 12 {
+                        break;
+                    }
+                    let plugin = read_section(bytes, position, child.end)?;
+                    if plugin.kind == SKIN_PLG {
+                        skin_body =
+                            Some(bytes[plugin.start..plugin.end].to_vec());
+                    }
+                    position = plugin.end;
+                }
+            }
             _ => {}
         }
         position = child.end;
@@ -413,7 +460,11 @@ fn parse_atomic(bytes: &[u8], section: Section, clump: &mut ClumpData) -> Result
         if clump.atomics.len() >= MAX_ATOMICS {
             return Err(format!("atomics exceed viewer limit {MAX_ATOMICS}"));
         }
-        clump.atomics.push(AtomicData { frame, geometry });
+        clump.atomics.push(AtomicData {
+            frame,
+            geometry,
+            skin_body,
+        });
     }
     Ok(())
 }
@@ -424,6 +475,446 @@ fn push_geometry(clump: &mut ClumpData, geometry: GeometryData) -> Result<(), St
     }
     clump.geometries.push(geometry);
     Ok(())
+}
+
+// ---- Rig-preserving parse (frames, names, HAnim, Skin) ------------------
+
+/// HAnimPLG payload on one frame: the skeleton identity of a bone.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DffHAnim {
+    pub version: i32,
+    pub bone_id: i32,
+    pub bone_count: i32,
+    /// `(bone id, frame index, node type)` triples; empty for non-root
+    /// bone frames, which carry only the header.
+    pub bones: Vec<DffBone>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DffBone {
+    pub id: i32,
+    pub index: i32,
+    pub kind: i32,
+}
+
+/// SkinPLG payload: per-vertex bone influences plus the per-bone bind
+/// matrices. Both the modern geometry-level variant (used by every GTA
+/// PC ped/player) and the legacy atomic-level variant are preserved.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DffSkin {
+    pub num_bones: usize,
+    /// Modern variant only: the bones this mesh actually uses; per-vertex
+    /// indices reference this array. The values are frame indices.
+    pub used_bones: Vec<u8>,
+    pub vertex_indices: Vec<[u8; 4]>,
+    pub vertex_weights: Vec<[f32; 4]>,
+    /// Bind matrices, stored row-major as 16 f32 each.
+    pub bone_matrices: Vec<[[f32; 4]; 4]>,
+    /// Legacy variant only: explicit per-bone records (id, frame index, type).
+    pub bones: Vec<DffBone>,
+    pub legacy: bool,
+}
+
+/// One frame of the preserved hierarchy.
+#[derive(Debug, Clone)]
+pub struct DffFrame {
+    pub name: Option<String>,
+    /// Local basis stored as right, up, and at rows.
+    pub basis: [[f32; 3]; 3],
+    pub position: [f32; 3],
+    pub parent: i32,
+    pub hanim: Option<DffHAnim>,
+}
+
+/// A material-split mesh in **local (unbaked) space**, attached to its
+/// atomic's frame, with the geometry's skin when present.
+#[derive(Debug, Clone)]
+pub struct DffRigMesh {
+    pub frame: usize,
+    pub mesh: DffMesh,
+    pub skin: Option<DffSkin>,
+}
+
+/// The rig-preserving counterpart of [`parse_dff`]'s flat output.
+#[derive(Debug, Clone)]
+pub struct DffRig {
+    pub frames: Vec<DffFrame>,
+    pub meshes: Vec<DffRigMesh>,
+}
+
+/// Parse a DFF while preserving everything an animation adapter needs:
+/// the frame hierarchy with names and HAnim data, atomics wired to their
+/// frames, geometry left in local space, and SkinPLG payloads (modern and
+/// legacy variants). Frame transforms are NOT baked into the vertices.
+pub fn parse_dff_rig(bytes: &[u8]) -> Result<DffRig, String> {
+    let top = read_section(bytes, 0, bytes.len())?;
+    if top.kind != CLUMP {
+        return Err(format!(
+            "expected CLUMP section (0x10), got 0x{:02X}",
+            top.kind
+        ));
+    }
+
+    let mut clump = ClumpData::default();
+    parse_clump_contents(bytes, top, &mut clump)?;
+    if clump.frames.is_empty() {
+        return Err("DFF has no frame list; cannot build a rig".to_string());
+    }
+
+    let mut frames: Vec<DffFrame> = clump
+        .frames
+        .iter()
+        .enumerate()
+        .map(|(index, frame)| DffFrame {
+            name: clump.frame_names.get(index).cloned().flatten(),
+            basis: frame.basis,
+            position: frame.position,
+            parent: frame.parent,
+            hanim: clump.frame_hanims.get(index).cloned().flatten(),
+        })
+        .collect();
+
+    // Attach per-material split meshes to their atomic frames. Geometry
+    // stays in local space; skinning supplies the transforms at runtime.
+    let mut meshes: Vec<DffRigMesh> = Vec::new();
+    let mut valid_atomics = 0usize;
+    for atomic in &clump.atomics {
+        let Some(geometry_index) = atomic.geometry else {
+            continue;
+        };
+        let Some(geometry) = clump.geometries.get(geometry_index) else {
+            continue;
+        };
+        valid_atomics += 1;
+        let skin = atomic
+            .skin_body
+            .as_deref()
+            .map(|body| parse_legacy_skin(body, geometry.positions.len()))
+            .or_else(|| {
+                geometry
+                    .skin_body
+                    .as_deref()
+                    .map(|body| parse_modern_skin(body, geometry.positions.len()))
+            })
+            .transpose()?;
+        append_rig_meshes(
+            geometry,
+            geometry_index,
+            atomic.frame,
+            skin,
+            &mut meshes,
+        );
+    }
+    if valid_atomics == 0 {
+        // Old exports without atomics: hang every geometry on frame 0 so
+        // the rig still validates.
+        for (geometry_index, geometry) in clump.geometries.iter().enumerate() {
+            let skin = geometry
+                .skin_body
+                .as_deref()
+                .map(|body| parse_modern_skin(body, geometry.positions.len()))
+                .transpose()?;
+            append_rig_meshes(geometry, geometry_index, 0, skin, &mut meshes);
+        }
+    }
+
+    if meshes.is_empty() {
+        return Err("no renderable geometry found in DFF".to_string());
+    }
+
+    Ok(DffRig { frames, meshes })
+}
+
+fn append_rig_meshes(
+    geometry: &GeometryData,
+    geometry_index: usize,
+    frame: usize,
+    skin: Option<DffSkin>,
+    meshes: &mut Vec<DffRigMesh>,
+) {
+    if geometry.positions.is_empty() {
+        return;
+    }
+    let has_any_texture = geometry.material_textures.iter().any(Option::is_some);
+    let mut groups: BTreeMap<u16, Vec<u32>> = BTreeMap::new();
+    for triangle in &geometry.triangles {
+        if triangle.a as usize >= geometry.positions.len()
+            || triangle.b as usize >= geometry.positions.len()
+            || triangle.c as usize >= geometry.positions.len()
+            || triangle.a == triangle.b
+            || triangle.a == triangle.c
+            || triangle.b == triangle.c
+        {
+            continue;
+        }
+        let group = if has_any_texture {
+            triangle.material
+        } else {
+            0
+        };
+        groups.entry(group).or_default().extend_from_slice(&[
+            triangle.a as u32,
+            triangle.b as u32,
+            triangle.c as u32,
+        ]);
+    }
+    for (material, indices) in groups {
+        if indices.is_empty() {
+            continue;
+        }
+        let texture_name = geometry
+            .material_textures
+            .get(material as usize)
+            .and_then(Clone::clone);
+        let name = if has_any_texture {
+            format!("geometry-{geometry_index}-material-{material}")
+        } else {
+            format!("geometry-{geometry_index}")
+        };
+        meshes.push(DffRigMesh {
+            frame,
+            mesh: DffMesh {
+                name,
+                positions: geometry.positions.clone(),
+                normals: geometry.normals.clone(),
+                uvs: geometry.uvs.clone(),
+                indices,
+                material_name: None,
+                texture_name,
+            },
+            skin: skin.clone(),
+        });
+    }
+}
+
+/// Parse a frame's extension chunks in frame order: the Frame List places
+/// each frame's plugins (node name, HAnimPLG, user data, ...) sequentially
+/// after the STRUCT, one EXTENSION section per frame.
+fn parse_frame_extension(
+    bytes: &[u8],
+    section: Section,
+    frame_index: usize,
+    clump: &mut ClumpData,
+) -> Result<(), String> {
+    let Some(frame) = clump.frames.get(frame_index) else {
+        return Ok(());
+    };
+    let _ = frame;
+    let mut position = section.start;
+    while position < section.end {
+        if section.end - position < 12 {
+            break;
+        }
+        let child = read_section(bytes, position, section.end)?;
+        match child.kind {
+            NODE_NAME_PLG => {
+                let body = &bytes[child.start..child.end];
+                let name = read_renderware_string(body);
+                if let Some(slot) = clump.frame_names.get_mut(frame_index) {
+                    *slot = (!name.is_empty()).then_some(name);
+                }
+            }
+            HANIM_PLG => {
+                let hanim = parse_hanim_plg(&bytes[child.start..child.end])?;
+                if let Some(slot) = clump.frame_hanims.get_mut(frame_index) {
+                    *slot = Some(hanim);
+                }
+            }
+            _ => {}
+        }
+        position = child.end;
+    }
+    Ok(())
+}
+
+fn parse_hanim_plg(body: &[u8]) -> Result<DffHAnim, String> {
+    let mut cursor = Cursor::new(body);
+    let version = cursor.i32("HAnim version")?;
+    let bone_id = cursor.i32("HAnim bone id")?;
+    let bone_count = bounded_count(
+        cursor.i32("HAnim bone count")?.max(0) as u32,
+        MAX_FRAMES,
+        "HAnim bones",
+    )?;
+    // Non-root bone frames carry only the 12-byte header. The root frame's
+    // bone array is preceded by keyframe size and flag words (offset 20).
+    let mut bones = Vec::new();
+    if bone_count > 0 {
+        cursor.skip(8, "HAnim keyframe header")?;
+        for _ in 0..bone_count {
+            bones.push(DffBone {
+                id: cursor.i32("HAnim bone id")?,
+                index: cursor.i32("HAnim bone frame index")?,
+                kind: cursor.i32("HAnim bone type")?,
+            });
+        }
+    }
+    Ok(DffHAnim {
+        version,
+        bone_id,
+        bone_count: bone_count as i32,
+        bones,
+    })
+}
+
+/// Modern geometry-level SKIN PLG (DragonFF `SkinPLG.from_mem(geometry)`):
+/// `3×u8 header`, `used_bones[num_used]`, per-vertex `4×u8 + 4×f32`,
+/// then `num_bones × 4×4 f32` matrices (optionally 12 bytes of skin-split
+/// data that we do not need).
+fn parse_modern_skin(body: &[u8], vertex_count: usize) -> Result<DffSkin, String> {
+    let mut cursor = Cursor::new(body);
+    let num_bones = cursor.take(1, "skin bone count")?[0] as usize;
+    let num_used_bones = cursor.take(1, "skin used-bone count")?[0] as usize;
+    let _max_weights = cursor.take(1, "skin max weights")?[0] as usize;
+    cursor.skip(1, "skin header pad");
+    if num_bones > MAX_FRAMES {
+        return Err(format!("skin bone count {num_bones} exceeds viewer limit"));
+    }
+
+    let oldver = num_used_bones == 0;
+    // DragonFF reads the influences as two contiguous blocks: 4 bytes of
+    // bone indices per vertex (the whole array first), then 4 f32 weights
+    // per vertex. Interleaving the two blocks garbles every weight.
+    let index_bytes = vertex_count
+        .checked_mul(4)
+        .ok_or_else(|| "skin index size overflowed".to_string())?;
+    let weight_bytes = vertex_count
+        .checked_mul(16)
+        .ok_or_else(|| "skin weight size overflowed".to_string())?;
+    let (used_bones, vertex_indices, vertex_weights, bone_matrices) = if oldver {
+        // Old RW versions omit the used-bone array entirely: per-vertex
+        // indices point straight at the bone list, and each matrix is
+        // preceded by a 0xDEADDEAD marker.
+        let mut indices_flat = Vec::with_capacity(vertex_count * 4);
+        for _ in 0..index_bytes {
+            indices_flat.push(cursor.take(1, "skin vertex bone index")?[0]);
+        }
+        let mut vertex_weights = Vec::with_capacity(vertex_count);
+        for _ in 0..vertex_count {
+            let mut weights = [0.0f32; 4];
+            for weight in weights.iter_mut() {
+                *weight = cursor.f32("skin vertex weight")?;
+            }
+            vertex_weights.push(weights);
+        }
+        let mut bone_matrices = Vec::with_capacity(num_bones);
+        for _ in 0..num_bones {
+            cursor.skip(4, "skin matrix marker")?;
+            bone_matrices.push(read_skin_matrix(&mut cursor)?);
+        }
+        let vertex_indices = flat_to_vertex_indices(indices_flat, vertex_count);
+        (Vec::new(), vertex_indices, vertex_weights, bone_matrices)
+    } else {
+        let mut used_bones = Vec::with_capacity(num_used_bones);
+        for _ in 0..num_used_bones {
+            used_bones.push(cursor.take(1, "skin used bone")?[0]);
+        }
+        let mut indices_flat = Vec::with_capacity(vertex_count * 4);
+        for _ in 0..index_bytes {
+            indices_flat.push(cursor.take(1, "skin vertex bone index")?[0]);
+        }
+        let mut vertex_weights = Vec::with_capacity(vertex_count);
+        for _ in 0..vertex_count {
+            let mut weights = [0.0f32; 4];
+            for weight in weights.iter_mut() {
+                *weight = cursor.f32("skin vertex weight")?;
+            }
+            vertex_weights.push(weights);
+        }
+        let mut bone_matrices = Vec::with_capacity(num_bones);
+        for _ in 0..num_bones {
+            bone_matrices.push(read_skin_matrix(&mut cursor)?);
+        }
+        let vertex_indices = flat_to_vertex_indices(indices_flat, vertex_count);
+        (used_bones, vertex_indices, vertex_weights, bone_matrices)
+    };
+
+    Ok(DffSkin {
+        num_bones,
+        used_bones,
+        vertex_indices,
+        vertex_weights,
+        bone_matrices,
+        bones: Vec::new(),
+        legacy: false,
+    })
+}
+
+fn read_skin_matrix(cursor: &mut Cursor<'_>) -> Result<[[f32; 4]; 4], String> {
+    let mut matrix = [[0.0f32; 4]; 4];
+    for row in matrix.iter_mut() {
+        for value in row.iter_mut() {
+            *value = cursor.f32("skin matrix")?;
+        }
+    }
+    Ok(matrix)
+}
+
+/// Reshape the contiguous `4 × vertices` index block into per-vertex
+/// four-slot arrays.
+fn flat_to_vertex_indices(flat: Vec<u8>, vertex_count: usize) -> Vec<[u8; 4]> {
+    let mut vertex_indices = Vec::with_capacity(vertex_count);
+    for vertex in 0..vertex_count {
+        let base = vertex * 4;
+        vertex_indices.push([
+            flat[base],
+            flat.get(base + 1).copied().unwrap_or(0),
+            flat.get(base + 2).copied().unwrap_or(0),
+            flat.get(base + 3).copied().unwrap_or(0),
+        ]);
+    }
+    vertex_indices
+}
+
+/// Legacy atomic-level SKIN PLG (DragonFF `from_mem(data, geometry, frame)`):
+/// `2×u32 header (num_bones, vertices)`, per-vertex `4×u8 + 4×f32`, then
+/// per bone a 12-byte record plus its bind matrix.
+fn parse_legacy_skin(body: &[u8], vertex_count_hint: usize) -> Result<DffSkin, String> {
+    let mut cursor = Cursor::new(body);
+    let num_bones = bounded_count(cursor.u32("legacy skin bone count")?, MAX_FRAMES, "bones")?;
+    let vertex_count = bounded_count(
+        cursor.u32("legacy skin vertex count")?,
+        MAX_GEOMETRY_VERTICES,
+        "vertices",
+    )?;
+    if vertex_count != vertex_count_hint {
+        return Err(format!(
+            "legacy skin covers {vertex_count} vertices but the geometry has {vertex_count_hint}"
+        ));
+    }
+    // Same contiguous index/weight blocks as the modern variant.
+    let mut indices_flat = Vec::with_capacity(vertex_count * 4);
+    for _ in 0..vertex_count * 4 {
+        indices_flat.push(cursor.take(1, "skin vertex bone index")?[0]);
+    }
+    let mut vertex_weights = Vec::with_capacity(vertex_count);
+    for _ in 0..vertex_count {
+        let mut weights = [0.0f32; 4];
+        for weight in weights.iter_mut() {
+            *weight = cursor.f32("skin vertex weight")?;
+        }
+        vertex_weights.push(weights);
+    }
+    let vertex_indices = flat_to_vertex_indices(indices_flat, vertex_count);
+    let mut bones = Vec::with_capacity(num_bones);
+    let mut bone_matrices = Vec::with_capacity(num_bones);
+    for _ in 0..num_bones {
+        bones.push(DffBone {
+            id: cursor.i32("legacy skin bone id")?,
+            index: cursor.i32("legacy skin bone frame index")?,
+            kind: cursor.i32("legacy skin bone type")? & 0x3,
+        });
+        bone_matrices.push(read_skin_matrix(&mut cursor)?);
+    }
+    Ok(DffSkin {
+        num_bones,
+        used_bones: Vec::new(),
+        vertex_indices,
+        vertex_weights,
+        bone_matrices,
+        bones,
+        legacy: true,
+    })
 }
 
 fn resolve_frame_transforms(frames: &[FrameData]) -> Vec<AffineTransform> {
@@ -468,6 +959,7 @@ fn parse_geometry_section(bytes: &[u8], section: Section) -> Result<GeometryData
     let mut position = section.start;
     let mut geometry = None;
     let mut material_textures = Vec::new();
+    let mut skin_body = None;
 
     while position < section.end {
         if section.end - position < 12 {
@@ -488,6 +980,22 @@ fn parse_geometry_section(bytes: &[u8], section: Section) -> Result<GeometryData
             MATERIAL_LIST => {
                 material_textures = parse_material_list(bytes, child)?;
             }
+            EXTENSION => {
+                // Plugin chunks (e.g. the geometry-level SkinPLG) live
+                // inside the extension wrapper.
+                let mut position = child.start;
+                while position < child.end {
+                    if child.end - position < 12 {
+                        break;
+                    }
+                    let plugin = read_section(bytes, position, child.end)?;
+                    if plugin.kind == SKIN_PLG {
+                        skin_body =
+                            Some(bytes[plugin.start..plugin.end].to_vec());
+                    }
+                    position = plugin.end;
+                }
+            }
             _ => {}
         }
         position = child.end;
@@ -495,6 +1003,7 @@ fn parse_geometry_section(bytes: &[u8], section: Section) -> Result<GeometryData
 
     let mut geometry = geometry.ok_or_else(|| "GEOMETRY has no STRUCT section".to_string())?;
     geometry.material_textures = material_textures;
+    geometry.skin_body = skin_body;
     Ok(geometry)
 }
 
@@ -629,6 +1138,7 @@ fn parse_geometry_struct(bytes: &[u8], library_id: u32) -> Result<GeometryData, 
         uvs,
         triangles,
         material_textures: Vec::new(),
+        skin_body: None,
     })
 }
 
@@ -961,6 +1471,298 @@ mod tests {
     #[test]
     fn decodes_renderware_library_version() {
         assert_eq!(decode_library_version(0x1803_FFFF), 0x0003_6003);
+    }
+
+    // ---- Rig-preserving parse ------------------------------------------
+
+    fn frame_record(parent: i32, position: [f32; 3]) -> Vec<u8> {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&1.0_f32.to_le_bytes());
+        frame.extend_from_slice(&0.0_f32.to_le_bytes());
+        frame.extend_from_slice(&0.0_f32.to_le_bytes());
+        frame.extend_from_slice(&0.0_f32.to_le_bytes());
+        frame.extend_from_slice(&1.0_f32.to_le_bytes());
+        frame.extend_from_slice(&0.0_f32.to_le_bytes());
+        frame.extend_from_slice(&0.0_f32.to_le_bytes());
+        frame.extend_from_slice(&0.0_f32.to_le_bytes());
+        frame.extend_from_slice(&1.0_f32.to_le_bytes());
+        for value in position {
+            frame.extend_from_slice(&value.to_le_bytes());
+        }
+        frame.extend_from_slice(&parent.to_le_bytes());
+        frame.extend_from_slice(&0_u32.to_le_bytes());
+        frame
+    }
+
+    fn skin_matrix(translation: [f32; 3]) -> Vec<u8> {
+        let mut matrix = Vec::new();
+        matrix.extend_from_slice(&1.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&0.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&0.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&0.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&0.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&1.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&0.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&0.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&0.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&0.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&1.0_f32.to_le_bytes());
+        matrix.extend_from_slice(&0.0_f32.to_le_bytes());
+        for value in translation {
+            matrix.extend_from_slice(&value.to_le_bytes());
+        }
+        matrix.extend_from_slice(&1.0_f32.to_le_bytes());
+        matrix
+    }
+
+    /// Three frames ("Normal" root, "BoneA", "BoneB" with an HAnim root
+    /// header), one textured geometry carrying a modern SkinPLG, and an
+    /// atomic binding the geometry to frame 1.
+    fn skinned_rig_fixture() -> Vec<u8> {
+        let mut frames_struct = Vec::new();
+        frames_struct.extend_from_slice(&3_u32.to_le_bytes());
+        frames_struct.extend_from_slice(&frame_record(-1, [0.0, 0.0, 0.0]));
+        frames_struct.extend_from_slice(&frame_record(0, [5.0, 0.0, 0.0]));
+        frames_struct.extend_from_slice(&frame_record(0, [0.0, 3.0, 0.0]));
+
+        let mut normal_name = section(NODE_NAME_PLG, 0, b"Normal\0");
+        let mut hanim_body = Vec::new();
+        hanim_body.extend_from_slice(&0x0000_0100_i32.to_le_bytes());
+        hanim_body.extend_from_slice(&0_i32.to_le_bytes());
+        hanim_body.extend_from_slice(&2_i32.to_le_bytes());
+        hanim_body.extend_from_slice(&0_u32.to_le_bytes());
+        hanim_body.extend_from_slice(&36_u32.to_le_bytes());
+        hanim_body.extend_from_slice(&1_i32.to_le_bytes());
+        hanim_body.extend_from_slice(&1_i32.to_le_bytes());
+        hanim_body.extend_from_slice(&2_i32.to_le_bytes());
+        hanim_body.extend_from_slice(&2_i32.to_le_bytes());
+        hanim_body.extend_from_slice(&2_i32.to_le_bytes());
+        hanim_body.extend_from_slice(&4_i32.to_le_bytes());
+        let hanim_chunk = section(HANIM_PLG, 0, &hanim_body);
+        // Frame 0's extension groups its node name and the root HAnim;
+        // each remaining frame gets one extension with its node name.
+        let normal_ext = section(EXTENSION, 0, &{
+            let mut chunks = normal_name;
+            chunks.extend_from_slice(&hanim_chunk);
+            chunks
+        });
+        let mut bonea_ext = section(NODE_NAME_PLG, 0, b"BoneA\0");
+        bonea_ext = section(EXTENSION, 0, &bonea_ext);
+        let mut boneb_ext = section(NODE_NAME_PLG, 0, b"BoneB\0");
+        boneb_ext = section(EXTENSION, 0, &boneb_ext);
+
+        let mut frame_list_body = section(STRUCT, 0x1803_FFFF, &frames_struct);
+        frame_list_body.extend_from_slice(&normal_ext);
+        frame_list_body.extend_from_slice(&bonea_ext);
+        frame_list_body.extend_from_slice(&boneb_ext);
+        let frame_list = section(FRAME_LIST, 0x1803_FFFF, &frame_list_body);
+
+        let mut geometry_struct = Vec::new();
+        geometry_struct.extend_from_slice(&0x0000_0034_u32.to_le_bytes());
+        geometry_struct.extend_from_slice(&1_u32.to_le_bytes());
+        geometry_struct.extend_from_slice(&3_u32.to_le_bytes());
+        geometry_struct.extend_from_slice(&1_u32.to_le_bytes());
+        for uv in [[0.0_f32, 0.0], [1.0, 0.0], [0.0, 1.0]] {
+            geometry_struct.extend_from_slice(&uv[0].to_le_bytes());
+            geometry_struct.extend_from_slice(&uv[1].to_le_bytes());
+        }
+        geometry_struct.extend_from_slice(&1_u16.to_le_bytes());
+        geometry_struct.extend_from_slice(&0_u16.to_le_bytes());
+        geometry_struct.extend_from_slice(&0_u16.to_le_bytes());
+        geometry_struct.extend_from_slice(&2_u16.to_le_bytes());
+        geometry_struct.extend_from_slice(&[0_u8; 16]);
+        geometry_struct.extend_from_slice(&1_u32.to_le_bytes());
+        geometry_struct.extend_from_slice(&1_u32.to_le_bytes());
+        for point in [[0.0_f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+            for value in point {
+                geometry_struct.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        for _ in 0..3 {
+            for value in [0.0_f32, 0.0, 1.0] {
+                geometry_struct.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+
+        let mut skin = Vec::new();
+        skin.push(2_u8);
+        skin.push(2_u8);
+        skin.push(4_u8);
+        skin.push(0_u8); // header pad ("<3Bx")
+        skin.extend_from_slice(&[1_u8, 2_u8]);
+        // Contiguous index block (4 bytes per vertex), then the weight
+        // block (16 bytes per vertex) — DragonFF's two-array layout.
+        let vertex_data: [([u8; 4], [f32; 4]); 3] = [
+            ([0, 1, 0, 0], [0.5, 0.5, 0.0, 0.0]),
+            ([1, 1, 1, 1], [1.0, 0.0, 0.0, 0.0]),
+            ([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]),
+        ];
+        for (indices, _) in vertex_data {
+            skin.extend_from_slice(&indices);
+        }
+        for (_, weights) in vertex_data {
+            for weight in weights {
+                skin.extend_from_slice(&weight.to_le_bytes());
+            }
+        }
+        skin.extend_from_slice(&skin_matrix([-1.0, 0.0, 0.0]));
+        skin.extend_from_slice(&skin_matrix([0.0, -2.0, 0.0]));
+        let skin_ext = section(EXTENSION, 0, &section(SKIN_PLG, 0, &skin));
+
+        let material = section(MATERIAL, 0, &section(STRUCT, 0, &[0; 28]));
+        let mut material_list_body = section(STRUCT, 0, &[1, 0, 0, 0, 0, 0, 0, 0]);
+        material_list_body.extend_from_slice(&material);
+        let mut geometry_body = section(STRUCT, 0x1803_FFFF, &geometry_struct);
+        geometry_body.extend_from_slice(&section(MATERIAL_LIST, 0, &material_list_body));
+        geometry_body.extend_from_slice(&skin_ext);
+        let geometry = section(GEOMETRY, 0x1803_FFFF, &geometry_body);
+        let mut geometry_list_body = section(STRUCT, 0, &[1, 0, 0, 0]);
+        geometry_list_body.extend_from_slice(&geometry);
+        let geometry_list = section(GEOMETRY_LIST, 0x1803_FFFF, &geometry_list_body);
+
+        let atomic = section(
+            ATOMIC,
+            0x1803_FFFF,
+            &section(STRUCT, 0x1803_FFFF, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        );
+
+        let mut clump_body = section(STRUCT, 0, &[0; 12]);
+        clump_body.extend_from_slice(&frame_list);
+        clump_body.extend_from_slice(&geometry_list);
+        clump_body.extend_from_slice(&atomic);
+        section(CLUMP, 0x1803_FFFF, &clump_body)
+    }
+
+    #[test]
+    fn rig_parse_preserves_frames_names_hanim_and_skin() {
+        let rig = parse_dff_rig(&skinned_rig_fixture()).expect("skinned fixture should parse");
+        assert_eq!(rig.frames.len(), 3);
+        assert_eq!(rig.frames[0].name.as_deref(), Some("Normal"));
+        assert_eq!(rig.frames[1].name.as_deref(), Some("BoneA"));
+        assert_eq!(rig.frames[2].name.as_deref(), Some("BoneB"));
+        assert_eq!(rig.frames[0].parent, -1);
+        assert_eq!(rig.frames[1].parent, 0);
+
+        // The root frame carries the HAnim bone list; frame 1 has the
+        // offset [5, 0, 0] that must NOT be baked into the local vertices.
+        let hanim = rig.frames[0].hanim.as_ref().expect("root HAnim");
+        assert_eq!(hanim.bone_count, 2);
+        assert_eq!(hanim.bones.len(), 2);
+        assert_eq!(hanim.bones[0].id, 1);
+        assert_eq!(hanim.bones[0].index, 1);
+        assert_eq!(rig.frames[1].position, [5.0, 0.0, 0.0]);
+
+        assert_eq!(rig.meshes.len(), 1);
+        assert_eq!(rig.meshes[0].frame, 1);
+        assert_eq!(rig.meshes[0].mesh.positions[0], [0.0, 0.0, 0.0]);
+        assert_eq!(rig.meshes[0].mesh.indices, vec![0, 1, 2]);
+
+        let skin = rig.meshes[0].skin.as_ref().expect("geometry skin");
+        assert!(!skin.legacy);
+        assert_eq!(skin.num_bones, 2);
+        assert_eq!(skin.used_bones, vec![1, 2]);
+        assert_eq!(skin.vertex_weights[0], [0.5, 0.5, 0.0, 0.0]);
+        assert_eq!(skin.bone_matrices.len(), 2);
+        // The second matrix's stored translation row.
+        assert_eq!(skin.bone_matrices[1][3][1], -2.0);
+    }
+
+    #[test]
+    fn rig_parse_rejects_files_without_frames() {
+        let result = parse_dff_rig(&actual_layout_fixture());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn gta_dff_rig_parses_when_available() {
+        let Some(root) = crate::test_paths::gta3_exports() else {
+            return;
+        };
+        let mut total_checked = 0usize;
+        for name in ["player.dff", "bmyst.dff"] {
+            let path = root.as_path().join(name);
+            if !path.is_file() {
+                continue;
+            }
+            let bytes = std::fs::read(&path).expect("fixture path was checked above");
+            let rig = parse_dff_rig(&bytes)
+                .unwrap_or_else(|error| panic!("{} should parse as a rig: {error}", path.display()));
+            assert!(
+                rig.frames.len() >= 20,
+                "{} should carry a full skeleton (got {} frames)",
+                path.display(),
+                rig.frames.len()
+            );
+            assert!(
+                rig.frames.iter().any(|frame| frame.name.is_some()),
+                "{} frames should carry node names",
+                path.display()
+            );
+            let hanim_roots = rig
+                .frames
+                .iter()
+                .filter(|frame| frame.hanim.as_ref().is_some_and(|h| !h.bones.is_empty()))
+                .count();
+            assert_eq!(
+                hanim_roots, 1,
+                "{} should have exactly one HAnim root listing the bones",
+                path.display()
+            );
+            let skinned = rig
+                .meshes
+                .iter()
+                .filter(|mesh| mesh.skin.is_some())
+                .count();
+            assert!(
+                skinned > 0,
+                "{} should carry at least one skinned mesh",
+                path.display()
+            );
+            for mesh in rig.meshes.iter().filter(|mesh| mesh.skin.is_some()) {
+                let skin = mesh.skin.as_ref().unwrap();
+                assert_eq!(skin.vertex_indices.len(), mesh.mesh.positions.len());
+                assert_eq!(skin.vertex_weights.len(), mesh.mesh.positions.len());
+                if skin.legacy {
+                    assert_eq!(skin.bones.len(), skin.num_bones);
+                } else {
+                    // Used bones are skeleton frame indices; the matrix
+                    // palette covers the whole skeleton.
+                    assert!(
+                        skin.used_bones
+                            .iter()
+                            .all(|&bone| (bone as usize) < skin.num_bones),
+                        "used bones must index the skeleton"
+                    );
+                }
+                assert_eq!(skin.bone_matrices.len(), skin.num_bones);
+                // Referenced vertices carry positive weights summing to ~1;
+                // stub geometries (like player.dff's placeholder) may be
+                // entirely zero-weight, and unreferenced padding vertices
+                // may be zero too.
+                let referenced: std::collections::BTreeSet<u32> =
+                    mesh.mesh.indices.iter().copied().collect();
+                for &vertex in referenced.iter().take(64) {
+                    let weights = &skin.vertex_weights[vertex as usize];
+                    let sum: f32 = weights.iter().sum();
+                    if sum <= 0.0 {
+                        continue;
+                    }
+                    assert!(
+                        (sum - 1.0).abs() < 0.05,
+                        "[{name}] vertex {vertex} weights should sum to ~1 (got {sum})"
+                    );
+                    assert!(
+                        weights.iter().all(|w| *w >= 0.0),
+                        "weights must be non-negative"
+                    );
+                    total_checked += 1;
+                }
+            }
+        }
+        assert!(
+            total_checked > 0,
+            "at least one skinned mesh should carry positive-sum weights"
+        );
     }
 
     #[test]
