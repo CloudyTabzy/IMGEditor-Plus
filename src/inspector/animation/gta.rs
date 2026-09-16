@@ -419,6 +419,69 @@ mod tests {
             posed_model_is_sane(&rest),
             "rest scene should stay within the sane envelope"
         );
+        // The rest scene must have actual vertex data (not collapsed).
+        let rest_vertices: usize = rest.meshes.iter().map(|m| m.vertices.len()).sum();
+        assert!(
+            rest_vertices > 100,
+            "rest scene should carry real vertex data (got {rest_vertices})"
+        );
+        // The AABB should span a humanoid-sized volume (~1-4 units per axis),
+        // not be collapsed or exploded. This validates the inverse binds:
+        // at bind pose, World * Offset = Identity, so the rest render equals
+        // the raw DFF vertex data.
+        let aabb = &rest.aabb;
+        for axis in 0..3 {
+            let span = aabb.max[axis] - aabb.min[axis];
+            assert!(
+                span > 0.1 && span < 10.0,
+                "axis {axis} span {span:.3} outside sane humanoid range"
+            );
+        }
+    }
+
+    /// The critical convention check: the SkinPLG stored matrices must be
+    /// the inverse binds (mesh bind space → bone local). At rest pose, the
+    /// runtime's skinning formula `Σ w * World(joint) * inverse_bind * v`
+    /// should reproduce the DFF's bind-pose vertex positions. If the
+    /// convention is wrong (transposed, mis-mapped, or sign-flipped), the
+    /// vertices explode or collapse.
+    #[test]
+    fn gta_dff_rest_pose_matches_bind_when_available() {
+        let Some(bytes) = skinned_ped_dff() else {
+            return;
+        };
+        let rig = crate::parser::dff::parse_dff_rig(&bytes).expect("rig should parse");
+        let model = model_from_dff(&rig, "bmyst", "bmyst.dff").expect("model should build");
+        let rest = crate::inspector::animation::pose::rest_scene(&model);
+
+        // The flat DFF parse bakes the atomic frame's world transform into
+        // the vertices. For skinned geometry the atomic frame is typically
+        // the model root (identity), so the flat and skinned positions
+        // should agree. Compare the scene AABBs.
+        let flat = crate::inspector::scene3d::decode::build_scene_from_dff(
+            &crate::parser::dff::parse_dff(&bytes).expect("flat parse"),
+            BaseOrientation::Zup,
+            |_| None,
+        )
+        .expect("flat scene");
+
+        let rest_extent = [
+            rest.aabb.max[0] - rest.aabb.min[0],
+            rest.aabb.max[1] - rest.aabb.min[1],
+            rest.aabb.max[2] - rest.aabb.min[2],
+        ];
+        let flat_extent = [
+            flat.aabb.max[0] - flat.aabb.min[0],
+            flat.aabb.max[1] - flat.aabb.min[1],
+            flat.aabb.max[2] - flat.aabb.min[2],
+        ];
+        for axis in 0..3 {
+            let ratio = rest_extent[axis] / flat_extent[axis].max(0.001);
+            assert!(
+                ratio > 0.5 && ratio < 2.0,
+                "rest extent {ratio:.3}× the flat extent on axis {axis} — the skin matrix convention may be wrong"
+            );
+        }
     }
 
     #[test]
