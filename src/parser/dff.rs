@@ -219,6 +219,54 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// Quick scan: does this DFF carry HAnimPLG data (i.e. is it a skinned
+/// character rather than a prop or building)? Used to auto-detect the
+/// display orientation — skinned GTA characters are Y-up while props and
+/// buildings are Z-up.
+pub fn has_hanim(bytes: &[u8]) -> bool {
+    fn walk(data: &[u8], pos: usize, end: usize, depth: usize) -> bool {
+        if depth > 6 {
+            return false;
+        }
+        let mut position = pos;
+        while position + 12 <= end {
+            let kind = u32::from_le_bytes(
+                data[position..position + 4].try_into().unwrap_or_default(),
+            );
+            let size = u32::from_le_bytes(
+                data[position + 4..position + 8]
+                    .try_into()
+                    .unwrap_or_default(),
+            ) as usize;
+            let body_start = position + 12;
+            let body_end = body_start.saturating_add(size);
+            if body_end > end {
+                return false;
+            }
+            if kind == HANIM_PLG {
+                return true;
+            }
+            if matches!(
+                kind,
+                CLUMP | GEOMETRY_LIST | FRAME_LIST | ATOMIC | GEOMETRY | EXTENSION
+            ) && walk(data, body_start, body_end, depth + 1)
+            {
+                return true;
+            }
+            position = body_end;
+        }
+        false
+    }
+    if bytes.len() < 12 {
+        return false;
+    }
+    let top = u32::from_le_bytes(bytes[0..4].try_into().unwrap_or_default());
+    if top != CLUMP {
+        return false;
+    }
+    walk(bytes, 12, bytes.len(), 0)
+}
+
 /// Parse a DFF file and return all meshes found.
 pub fn parse_dff(bytes: &[u8]) -> Result<Vec<DffMesh>, String> {
     let top = read_section(bytes, 0, bytes.len())?;

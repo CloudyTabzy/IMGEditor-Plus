@@ -2945,22 +2945,20 @@ impl App {
             return Task::none();
         }
 
-        // Pairing: the most recently viewed DFF entry in this archive, or
-        // the first .dff entry as a fallback.
+        // Pairing: only the DFF that was previously loaded in the 3D view.
+        // GTA IFP packs like ped.ifp animate many models — auto-picking a
+        // random .dff from the archive produces nonsense pairings (a bat
+        // model for a ped animation). The user must open a skinned DFF
+        // in the 3D view first, then load an IFP on it.
         let dff_entry_index = self
             .active_viewer_entry
             .filter(|(idx, _)| *idx == archive_index)
-            .and_then(|(_, entry)| Some(entry))
-            .or_else(|| {
-                archive.entries.iter().position(|entry| {
-                    entry
-                        .file_name_lower
-                        .ends_with(".dff")
-                })
-            });
+            .and_then(|(_, entry)| Some(entry));
         let Some(dff_entry_index) = dff_entry_index else {
-            self.toast =
-                Some("No DFF model found in this archive to animate.".into());
+            self.toast = Some(
+                "Open a skinned DFF model in the 3D view first, then load an IFP on it."
+                    .into(),
+            );
             return Task::none();
         };
         let Some(dff_entry) = archive.entries.get(dff_entry_index) else {
@@ -7394,8 +7392,11 @@ impl App {
                                             crate::inspector::texture::texture_key(name);
                                         renderware_textures.get(&key).cloned()
                                     };
-                                    let base =
-                                        crate::inspector::scene3d::camera::BaseOrientation::Xup;
+                                    let base = if crate::parser::dff::has_hanim(&bytes) {
+                                        crate::inspector::scene3d::camera::BaseOrientation::Yup
+                                    } else {
+                                        crate::inspector::scene3d::camera::BaseOrientation::Zup
+                                    };
                                     return crate::inspector::scene3d::decode::build_scene_from_dff(
                                         &dff_meshes,
                                         base,
@@ -7437,8 +7438,11 @@ impl App {
                                                 })
                                         })
                                 };
-                                let base =
-                                    crate::inspector::scene3d::camera::BaseOrientation::Xup;
+                                let base = if crate::parser::dff::has_hanim(&bytes) {
+                                    crate::inspector::scene3d::camera::BaseOrientation::Yup
+                                } else {
+                                    crate::inspector::scene3d::camera::BaseOrientation::Zup
+                                };
                                 crate::inspector::scene3d::decode::parse_and_build_scene(
                                     &bytes, base, resolver,
                                 )

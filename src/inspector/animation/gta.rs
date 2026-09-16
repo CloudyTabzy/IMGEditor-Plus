@@ -241,13 +241,22 @@ pub fn model_from_dff(
     }
 
     let root_motion_node = root_motion_frame(rig).map(|frame| NodeId(frame as u32));
+    // GTA ped DFFs store the character standing along the Y axis (Y-up,
+    // the 3ds Max convention for biped rigs). Props and buildings use
+    // Z-up, but skinned characters use Y-up — so the adapter picks the
+    // orientation based on whether the rig carries HAnim data.
+    let orientation = if rig.frames.iter().any(|frame| frame.hanim.is_some()) {
+        BaseOrientation::Yup
+    } else {
+        BaseOrientation::Zup
+    };
     let mut asset = ModelAsset::new(
         name.to_string(),
         source_identity.to_string(),
         nodes,
         meshes,
-        BaseOrientation::Xup.to_yup_matrix(),
-        BaseOrientation::Xup,
+        orientation.to_yup_matrix(),
+        orientation,
         root_motion_node,
     )?;
     let source_names: Vec<Option<String>> = rig
