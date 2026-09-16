@@ -76,6 +76,12 @@ pub(crate) fn is_animation_group_name(name: &str) -> bool {
     name.to_ascii_lowercase().ends_with(".agr")
 }
 
+/// GTA IFP animation entries. Loading one pairs with the currently
+/// selected skinned DFF and installs an animated viewer session.
+pub(crate) fn is_ifp_animation_name(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".ifp")
+}
+
 /// Name heuristic pairing an AGR with its model inside one archive: exact
 /// stem first (`PLAYER.agr` -> `PLAYER.nif`), then the stem suffix after the
 /// last underscore (`C_Player.agr` -> `Player.nif`).
@@ -1025,6 +1031,7 @@ pub enum EntryAction {
     RenderExternal,
     ViewTextures,
     ExportEmbeddedTextures,
+    ViewIfpAnimation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2916,6 +2923,126 @@ impl App {
     /// name heuristic: exact stem first (`PLAYER.agr` -> `PLAYER.nif`),
     /// then the stem suffix after the last underscore (`C_Player.agr` ->
     /// `Player.nif`).
+    /// Load a GTA IFP animation and play it on the currently selected
+    /// skinned DFF entry. The DFF must already be open in the 3D viewer or
+    /// selected in the table; the IFP entry is the one the user right-
+    /// clicked.
+    fn load_ifp_animation(&mut self) -> Task<Message> {
+        let Some(archive_index) = self.editor.selected_archive() else {
+            return Task::none();
+        };
+        let Some(ifp_entry_index) = self.editor.selected_entry() else {
+            return Task::none();
+        };
+        let Some(archive) = self.editor.archives().get(archive_index) else {
+            return Task::none();
+        };
+        let Some(ifp_entry) = archive.entries.get(ifp_entry_index) else {
+            return Task::none();
+        };
+        if !crate::ui::app::is_ifp_animation_name(&ifp_entry.file_name) {
+            self.toast = Some("Select an .ifp entry first.".into());
+            return Task::none();
+        }
+
+        // Pairing: the most recently viewed DFF entry in this archive, or
+        // the first .dff entry as a fallback.
+        let dff_entry_index = self
+            .active_viewer_entry
+            .filter(|(idx, _)| *idx == archive_index)
+            .and_then(|(_, entry)| Some(entry))
+            .or_else(|| {
+                archive.entries.iter().position(|entry| {
+                    entry
+                        .file_name_lower
+                        .ends_with(".dff")
+                })
+            });
+        let Some(dff_entry_index) = dff_entry_index else {
+            self.toast =
+                Some("No DFF model found in this archive to animate.".into());
+            return Task::none();
+        };
+        let Some(dff_entry) = archive.entries.get(dff_entry_index) else {
+            return Task::none();
+        };
+
+        let archive_path = archive.path.clone();
+        let source_mmap = archive.source_mmap.clone();
+        let ifp_entry = ifp_entry.clone();
+        let dff_entry = dff_entry.clone();
+        let model_name = dff_entry.file_name.to_string();
+        let ifp_name = ifp_entry.file_name.to_string();
+        // The IFP load goes through the same completion path as AGR loads,
+        // so the serial and playback state must be set up here.
+        self.agr_serial += 1;
+        let serial = self.agr_serial;
+        self.agr_playback = Some(AgrPlayback {
+            archive_index,
+            archive_name: archive.file_name.clone(),
+            archive_generation: archive.generation(),
+            agr_entry: Some(ifp_entry_index),
+            agr_path: None,
+            hxd_record: None,
+            hxd_source: String::new(),
+            model_entry: dff_entry_index,
+            models: Vec::new(),
+            last_clip_name: None,
+            pending: true,
+            pending_label: format!("{ifp_name} on {model_name}"),
+        });
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || -> Result<AgrLoadOutcome, String> {
+                    let ifp_bytes = crate::parser::read_entry_data_from_source(
+                        &ifp_entry,
+                        archive_path.as_deref(),
+                    )
+                    .map_err(|error| format!("IFP read: {error}"))?;
+                    let dff_bytes = crate::parser::read_entry_data_from_source(
+                        &dff_entry,
+                        archive_path.as_deref(),
+                    )
+                    .map_err(|error| format!("DFF read: {error}"))?;
+
+                    let ifp_file = crate::parser::ifp::parse_ifp(&ifp_bytes)
+                        .map_err(|error| format!("IFP parse: {error}"))?;
+                    let rig = crate::parser::dff::parse_dff_rig(&dff_bytes)
+                        .map_err(|error| format!("DFF rig: {error}"))?;
+                    let model = crate::inspector::animation::gta::model_from_dff(
+                        &rig,
+                        &model_name,
+                        &model_name,
+                    )
+                    .map_err(|error| format!("model: {error}"))?;
+                    let library = crate::inspector::animation::gta::library_from_ifp(
+                        &ifp_file,
+                        &ifp_name,
+                    );
+                    let summary = format!(
+                        "{ifp_name} on {model_name} ({} clips, GTA IFP)",
+                        library.clips.len()
+                    );
+                    Ok(AgrLoadOutcome {
+                        model: Arc::new(model),
+                        library: Arc::new(library),
+                        summary,
+                        models: Vec::new(),
+                        ide_map: None,
+                    })
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+            },
+            move |result| {
+                Message::ViewerAgrLoadCompleted {
+                    serial,
+                    result,
+                }
+            },
+        )
+    }
+
     fn load_selected_agr(
         &mut self,
         archive_index: usize,
@@ -5466,6 +5593,7 @@ impl App {
                             nif_basename,
                         })
                     }
+                    EntryAction::ViewIfpAnimation => self.load_ifp_animation(),
                     EntryAction::Render => {
                         dev_logger::breadcrumb("user: open in 3D viewer (in-app)");
                         self.load_selected_model(InspectorTab::Model3D)

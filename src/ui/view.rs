@@ -4529,6 +4529,15 @@ fn build_context_menu(
     let mut items: Vec<Element<'_, Message>> = vec![header.into(), w::hairline(divider)];
 
     let lower = entry.file_name.to_lowercase();
+    if crate::ui::app::is_ifp_animation_name(&entry.file_name) {
+        items.push(
+            context_button(
+                "Play animation",
+                Message::EntryContextAction(EntryAction::ViewIfpAnimation),
+            )
+            .into(),
+        );
+    }
     if renderable_model_kind(&entry.file_name).is_some()
         || is_animation_group_name(&entry.file_name)
     {
@@ -4860,6 +4869,7 @@ fn context_icon(message: &Message) -> Element<'static, Message> {
             EntryAction::Export => icons::export(),
             EntryAction::Render => icons::model(),
             EntryAction::RenderExternal => icons::external_viewer(),
+            EntryAction::ViewIfpAnimation => icons::animation(),
             EntryAction::ViewTextures => icons::texture(),
             EntryAction::ExportEmbeddedTextures => icons::export(),
         },
