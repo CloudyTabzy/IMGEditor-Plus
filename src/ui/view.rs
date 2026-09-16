@@ -1182,6 +1182,56 @@ impl App {
         .menu_height(clip_menu_height)
         .width(Length::Fixed(250.0));
 
+        // IFP pack picker: lets the user swap animation packs while the
+        // model stays loaded. Only shown for GTA IFP playback where the
+        // archive carries multiple .ifp entries.
+        let ifp_picker: Option<Element<'_, Message>> =
+            self.agr_playback.as_ref().and_then(|playback| {
+                if playback.available_ifps.len() < 2 {
+                    return None;
+                }
+                let current = playback
+                    .agr_entry
+                    .and_then(|idx| {
+                        playback
+                            .available_ifps
+                            .iter()
+                            .find(|(entry, _)| *entry == idx)
+                            .map(|(_, name)| name.clone())
+                    });
+                let ifp_map: std::collections::HashMap<String, usize> = playback
+                    .available_ifps
+                    .iter()
+                    .map(|(entry, name)| (name.clone(), *entry))
+                    .collect();
+                let ifp_map = std::sync::Arc::new(ifp_map);
+                let names: Vec<String> = playback
+                    .available_ifps
+                    .iter()
+                    .map(|(_, name)| name.clone())
+                    .collect();
+                let picker = pick_list(names, current, move |name| {
+                    if let Some(&entry) = ifp_map.get(&name) {
+                        Message::AnimationSelectIfp(entry)
+                    } else {
+                        Message::Noop
+                    }
+                })
+                .text_size(12.0)
+                .menu_height(Length::Fixed(360.0))
+                .width(Length::Fixed(140.0));
+                Some(
+                    w::styled_tooltip(
+                        row![icons::film().size(13), picker]
+                            .spacing(4)
+                            .align_y(Alignment::Center),
+                        fonts::caption("Animation pack"),
+                        tooltip::Position::Bottom,
+                    )
+                    .into(),
+                )
+            });
+
         // Compact model picker: re-play the retained AGR clip set on another
         // catalog-associated model. Icon + name only (with a tooltip) so it
         // rides inside the clip row instead of taking its own line.
@@ -1258,6 +1308,9 @@ impl App {
         ]
         .spacing(8)
         .align_y(Alignment::Center);
+        if let Some(ifp_picker) = ifp_picker {
+            clip_row = clip_row.push(ifp_picker);
+        }
         if let Some(model_picker) = model_picker {
             clip_row = clip_row.push(model_picker);
         }

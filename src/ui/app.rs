@@ -190,6 +190,10 @@ pub(crate) struct AgrPlayback {
     pub pending: bool,
     /// `"<agr> on <model>"` label shown while [`Self::pending`].
     pub pending_label: String,
+    /// All `.ifp` entries in the archive, scanned after the first
+    /// successful GTA IFP load. Lets the dock offer an IFP picker so the
+    /// user can swap animation packs without re-selecting a DFF.
+    pub available_ifps: Vec<(usize, String)>,
 }
 
 /// Success payload of an AGR load (initial or model-switch re-load).
@@ -608,6 +612,8 @@ pub enum Message {
     /// Result of the loose AGR file picker.
     AgrFileChosen(Option<std::path::PathBuf>),
     AnimationSelectClip(crate::inspector::animation::ClipId),
+    /// Pick a different IFP pack from the dock (GTA IFP playback).
+    AnimationSelectIfp(usize),
     /// Re-play the retained AGR clip set on another archive model.
     AnimationSelectModel(usize),
     AnimationTogglePlay,
@@ -2923,15 +2929,11 @@ impl App {
     /// name heuristic: exact stem first (`PLAYER.agr` -> `PLAYER.nif`),
     /// then the stem suffix after the last underscore (`C_Player.agr` ->
     /// `Player.nif`).
-    /// Load a GTA IFP animation and play it on the currently selected
-    /// skinned DFF entry. The DFF must already be open in the 3D viewer or
-    /// selected in the table; the IFP entry is the one the user right-
-    /// clicked.
-    fn load_ifp_animation(&mut self) -> Task<Message> {
+    /// Load a GTA IFP animation and play it on a skinned DFF entry.
+    /// After a successful load, the archive is scanned for all `.ifp`
+    /// entries so the dock can offer an IFP picker for subsequent swaps.
+    fn load_ifp_animation(&mut self, ifp_entry_index: usize) -> Task<Message> {
         let Some(archive_index) = self.editor.selected_archive() else {
-            return Task::none();
-        };
-        let Some(ifp_entry_index) = self.editor.selected_entry() else {
             return Task::none();
         };
         let Some(archive) = self.editor.archives().get(archive_index) else {
@@ -2945,20 +2947,39 @@ impl App {
             return Task::none();
         }
 
-        // Pairing: only the DFF that was previously loaded in the 3D view.
-        // GTA IFP packs like ped.ifp animate many models — auto-picking a
-        // random .dff from the archive produces nonsense pairings (a bat
-        // model for a ped animation). The user must open a skinned DFF
-        // in the 3D view first, then load an IFP on it.
+        // Scan the archive for all .ifp entries so the dock can offer a
+        // picker for subsequent swaps.
+        let available_ifps: Vec<(usize, String)> = archive
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                crate::ui::app::is_ifp_animation_name(&entry.file_name)
+            })
+            .map(|(index, entry)| (index, entry.file_name.to_string()))
+            .collect();
+
+        // Pairing: the DFF from the retained playback (so an IFP swap keeps
+        // the same model), or the previously viewed DFF, or the first .dff.
         let dff_entry_index = self
-            .active_viewer_entry
-            .filter(|(idx, _)| *idx == archive_index)
-            .and_then(|(_, entry)| Some(entry));
+            .agr_playback
+            .as_ref()
+            .filter(|p| p.archive_index == archive_index && p.model_entry < archive.entries.len())
+            .map(|p| p.model_entry)
+            .or_else(|| {
+                self.active_viewer_entry
+                    .filter(|(idx, _)| *idx == archive_index)
+                    .and_then(|(_, entry)| Some(entry))
+            })
+            .or_else(|| {
+                archive
+                    .entries
+                    .iter()
+                    .position(|entry| entry.file_name_lower.ends_with(".dff"))
+            });
         let Some(dff_entry_index) = dff_entry_index else {
-            self.toast = Some(
-                "Open a skinned DFF model in the 3D view first, then load an IFP on it."
-                    .into(),
-            );
+            self.toast =
+                Some("No DFF model found in this archive to animate.".into());
             return Task::none();
         };
         let Some(dff_entry) = archive.entries.get(dff_entry_index) else {
@@ -2987,6 +3008,7 @@ impl App {
             last_clip_name: None,
             pending: true,
             pending_label: format!("{ifp_name} on {model_name}"),
+            available_ifps,
         });
         Task::perform(
             async move {
@@ -5590,7 +5612,12 @@ impl App {
                             nif_basename,
                         })
                     }
-                    EntryAction::ViewIfpAnimation => self.load_ifp_animation(),
+                    EntryAction::ViewIfpAnimation => {
+                        let Some(ifp_entry) = self.editor.selected_entry() else {
+                            return Task::none();
+                        };
+                        self.load_ifp_animation(ifp_entry)
+                    }
                     EntryAction::Render => {
                         dev_logger::breadcrumb("user: open in 3D viewer (in-app)");
                         self.load_selected_model(InspectorTab::Model3D)
@@ -5972,6 +5999,9 @@ impl App {
                 self.selected_inspector_tab = InspectorTab::Model3D;
                 self.toast = Some("Animation demo closed.".into());
                 Task::none()
+            }
+            Message::AnimationSelectIfp(ifp_entry_index) => {
+                self.load_ifp_animation(ifp_entry_index)
             }
             Message::AnimationSelectClip(id) => {
                 self.viewer3d_handle
@@ -6943,6 +6973,7 @@ impl App {
                     last_clip_name,
                     pending: true,
                     pending_label: format!("{agr_display} on {model_display}"),
+                    available_ifps: Vec::new(),
                 });
                 // Mirror the static viewer load: reset the animation clock so
                 // the first spinner frame never skips ahead.
@@ -9128,6 +9159,7 @@ mod tests {
             last_clip_name: None,
             pending: false,
             pending_label: String::new(),
+            available_ifps: Vec::new(),
         });
 
         // The played model stands in for the animation row ...
