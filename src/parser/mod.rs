@@ -9,6 +9,7 @@ use crate::archive::{ArchiveInfo, EntryInfo};
 pub mod col;
 pub mod db;
 pub mod dff;
+pub mod ifp;
 pub mod inspector;
 pub mod iparser;
 pub mod pc_v1;

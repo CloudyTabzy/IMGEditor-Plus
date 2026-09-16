@@ -24,6 +24,7 @@ pub mod binding;
 pub mod bully;
 pub mod clip;
 pub mod fixtures;
+pub mod gta;
 pub mod hxd;
 pub mod model;
 pub mod pose;

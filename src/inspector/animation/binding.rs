@@ -8,16 +8,32 @@ use crate::inspector::animation::clip::AnimationClip;
 use crate::inspector::animation::model::ModelAsset;
 use crate::inspector::animation::{ClipId, NodeId};
 
-/// How a verified numeric run relates the AGR curve space to the imported
-/// node order.
-///
-/// One shape is verified across the retail corpus: the character stream
-/// lists the semantic root's descendants in imported order, starting at the
-/// root's first child. The `Dummy` placeholder is never an animation target;
-/// sibling wrappers (`JKGirl_Mandy`, `MAINPED` body branches) only shift the
-/// normalized numbering (`PLAYER` and `RAT_PED`: `track_i -> track_(i + 1)`;
-/// the wrapper-heavy `JKGirl_Mandy`: `track_i -> track_(i + 3)`).
-///
+/// GTA IFP calibration: bind each track target to the node whose name
+/// matches after trimming whitespace and case-folding. IFP object names
+/// mirror DFF frame names (sometimes with case/whitespace noise), so this
+/// is a direct identity match — ambiguous or missing targets stay unbound.
+fn gta_ifp_name_calibration(
+    model: &ModelAsset,
+    targets: &[(String, Vec<crate::inspector::animation::clip::TrackChannel>)],
+) -> std::collections::HashMap<String, NodeId> {
+    let mut lookup: std::collections::HashMap<String, Vec<NodeId>> =
+        std::collections::HashMap::new();
+    for node in &model.nodes {
+        let key = node.name.trim().to_ascii_lowercase();
+        lookup.entry(key).or_default().push(node.id);
+    }
+    let mut assignments = std::collections::HashMap::new();
+    for (target, _) in targets {
+        let key = target.trim().to_ascii_lowercase();
+        if let Some(ids) = lookup.get(&key)
+            && ids.len() == 1
+        {
+            assignments.insert(target.clone(), ids[0]);
+        }
+    }
+    assignments
+}
+
 /// Recover the fixed source/export ordering used by Bully's character AGR
 /// tracks when bind-pose scoring cannot admit an action-only track. The
 /// regular calibrator deliberately rejects a curve that never approaches a
@@ -25,13 +41,13 @@ use crate::inspector::animation::{ClipId, NodeId};
 /// contained action library can legitimately keep the root and torso far
 /// from rest for every clip.
 ///
+/// One shape is verified across the retail corpus: the character stream
+/// lists the semantic root's descendants in imported order, starting at the
+/// root's first child. The `Dummy` placeholder is never an animation target;
+/// sibling wrappers only shift the normalized numbering.
+///
 /// This is intentionally a narrow adapter contract, not a general numeric
-/// retargeter. It is admitted only with its full structural signature: the
-/// semantic root is the preserved `Dummy` node under `Scene Root`, targets
-/// form a contiguous `track_000...` run, the covered prefix selects unique
-/// non-mesh skin candidates, and the first curve targets the placeholder's
-/// first child. Anything else returns `None` and leaves the pose calibration
-/// in charge.
+/// retargeter.
 fn bully_numeric_track_offset(
     model: &ModelAsset,
     library: &crate::inspector::animation::clip::AnimationLibrary,
@@ -592,6 +608,13 @@ pub fn calibrate_bindings(
     // leaves the generic calibration intact.
     if let Some(numeric) = bully_numeric_track_offset(model, library, &targets, &candidates) {
         assignments = numeric;
+    }
+
+    // GTA IFP libraries bind by identity: the IFP object names mirror the
+    // DFF frame names (sometimes with case/whitespace noise), so a trimmed
+    // case-insensitive match replaces the pose-based calibration entirely.
+    if library.provenance == "GTA IFP" {
+        assignments = gta_ifp_name_calibration(model, &targets);
     }
 
     let diagnostics = targets
