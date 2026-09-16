@@ -7,9 +7,9 @@ shared animation runtime in IMGEditor Plus
 
 This document consolidates the important AGR discoveries made during the local
 reverse-engineering work. The raw probe output remains in
-[`bully-probe/FINDINGS.md`](../../bully-probe/FINDINGS.md), and the
+[`bully-probe/FINDINGS.md`](../../notes/bully-probe/FINDINGS.md), and the
 handoff/checkpoint remains in
-[`bully-probe/CHECKPOINT.md`](../../bully-probe/CHECKPOINT.md).
+[`bully-probe/CHECKPOINT.md`](../../notes/bully-probe/CHECKPOINT.md).
 
 The evidence in this record comes from the locally available Bully PC corpus,
 small synthetic fixtures, the local retail executable audit, and rendered pose
@@ -1247,9 +1247,9 @@ proof that an AGR can be safely rewritten.
 
 Primary raw evidence:
 
-- [`../../bully-probe/FINDINGS.md`](../../bully-probe/FINDINGS.md) — probes,
+- [`../../notes/bully-probe/FINDINGS.md`](../../notes/bully-probe/FINDINGS.md) — probes,
   byte layouts, corpus tables and retired hypotheses;
-- [`../../bully-probe/CHECKPOINT.md`](../../bully-probe/CHECKPOINT.md) — prior
+- [`../../notes/bully-probe/CHECKPOINT.md`](../../notes/bully-probe/CHECKPOINT.md) — prior
   implementation handoff and reproduction commands;
 - [`bully-agr-cat-lip-lur-roadmap.md`](bully-agr-cat-lip-lur-roadmap.md) —
   broader CAT/LIP/LUR plan;
@@ -1260,7 +1260,7 @@ Primary raw evidence:
 The local probe suite is outside the authoritative Rust repository:
 
 ~~~text
-C:\Dev\IMGEditor-master\bully-probe\
+C:\Dev\IMGEditor-master\notes\bully-probe\
 ~~~
 
 Its generated JSON, extracted game data, executable dumps and exploratory

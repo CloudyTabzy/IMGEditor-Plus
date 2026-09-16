@@ -2,13 +2,17 @@
 //!
 //! Tests that need real game data read their root from an environment
 //! variable, so no developer machine layout lives in the source. Tests
-//! skip when the variable is unset or the path does not exist.
+//! skip when the variable is unset or the path does not exist — a skipped
+//! gate is silent and looks identical to a passing one, so confirm a gate
+//! really ran before trusting a green suite.
 //!
-//! Set locally (see AGENTS.md) to run these suites:
-//! `IMGEDITOR_BULLY_STREAM`, `IMGEDITOR_BULLY_NIF`,
-//! `IMGEDITOR_BULLY_NIF_TOOLS`, `IMGEDITOR_GTA3_EXPORTS`.
-//! Set `IMGEDITOR_CORPUS_ROOT` to run the optional supplied GTA/Bully corpus
-//! validation tests.
+//! Set these to run the optional suites: `IMGEDITOR_BULLY_STREAM`,
+//! `IMGEDITOR_BULLY_NIF`, `IMGEDITOR_BULLY_NIF_TOOLS`,
+//! `IMGEDITOR_GTA3_EXPORTS`, and `IMGEDITOR_CORPUS_ROOT` for the supplied
+//! GTA/Bully corpus validation tests.
+//!
+//! The corpus sub-folder names are load-bearing: gates join them as string
+//! literals, so renaming one makes that gate skip rather than fail.
 
 use std::path::PathBuf;
 
@@ -32,14 +36,16 @@ pub fn bully_nif_tools() -> Option<PathBuf> {
     root("IMGEDITOR_BULLY_NIF_TOOLS")
 }
 
-/// Exported GTA III assets used by DFF/decoder fixtures.
+/// Exported GTA III assets used by DFF/decoder fixtures (the folder holding
+/// the extracted `.dff`/`.txd` files).
 pub fn gta3_exports() -> Option<PathBuf> {
     root("IMGEDITOR_GTA3_EXPORTS")
 }
 
 /// Root directory holding the retail corpora (`Gta_3_img\models`,
-/// `Grand Theft Auto Vice City\models`, `GTA San Andreas\models`, and
-/// the Bully install). Tests walk the known archive layout under it.
+/// `Grand Theft Auto Vice City\models`, `GTA San Andreas\models`,
+/// `Bully script img xbox 360\Scripts.img`, and the Bully install).
+/// Tests walk the known archive layout under it.
 pub fn corpus_root() -> Option<PathBuf> {
     root("IMGEDITOR_CORPUS_ROOT")
 }

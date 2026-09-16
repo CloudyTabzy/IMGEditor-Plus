@@ -22,7 +22,8 @@ above opens the dialog there - that is the incompatible case.
 Usage:
     python tools/gen_preflight_fixtures.py [output_dir]
 
-Default output: ../preflight-fixtures next to the repository root.
+Default output: ../fixtures/preflight-fixtures (the workspace scratch bucket
+beside the repository root); save-test archives land beside it.
 """
 
 import os
@@ -164,7 +165,9 @@ def rgba_palette(seed):
 
 
 def main():
-    default_dir = os.path.join(os.path.dirname(__file__), "..", "..", "preflight-fixtures")
+    default_dir = os.path.join(
+        os.path.dirname(__file__), "..", "..", "fixtures", "preflight-fixtures"
+    )
     out_dir = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else default_dir)
     os.makedirs(out_dir, exist_ok=True)
 

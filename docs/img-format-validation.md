@@ -279,9 +279,9 @@ the retained pair is necessary for faithful v2 round trips.
 
 ## Supplied corpus results
 
-The following files were present under `C:\Dev\IMGEditor-master` on
-2026-09-12. The sizes and entry counts were collected read-only; the archives
-are not copied into this repository.
+The following files were present under the supplied-corpus root (the folder
+`IMGEDITOR_CORPUS_ROOT` points at) on 2026-09-12. The sizes and entry counts
+were collected read-only; the archives are not copied into this repository.
 
 | Corpus | IMG form | IMG bytes | DIR bytes | Entries | Observed extensions |
 |---|---|---:|---:|---:|---|
@@ -308,7 +308,7 @@ survives a format-aware save/reopen.
 Run the local corpus checks with:
 
 ```powershell
-$env:IMGEDITOR_CORPUS_ROOT = 'C:\Dev\IMGEditor-master'
+$env:IMGEDITOR_CORPUS_ROOT = 'C:\Dev\IMGEditor-master\corpus'
 cargo test -j 2
 ```
 
