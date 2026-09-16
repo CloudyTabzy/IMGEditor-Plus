@@ -347,8 +347,6 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 - **Command Code, OpenCode & Codex agents** — AI pair programming across the Rust port
 - **Iced team** — the reactive GUI framework this is built on
 
-> AI agents & contributors: agent work is credited in this section, not in git metadata — please don't add `Co-authored-by:` (or similar) trailers to commits.
-
 ---
 
 ## 📄 License
