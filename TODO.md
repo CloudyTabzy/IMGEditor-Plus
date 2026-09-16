@@ -132,8 +132,12 @@ Recommended future adaptations, each gated by representative fixtures:
   outside the repository.
 - [ ] Decode native PS2, Xbox, GameCube, and PSP geometry/texture streams
   instead of treating them as PC vertex data.
-- [ ] Add DFF skin/bone/HAnim data, IFP animation discovery, and optional pose
-  playback in the viewer.
+- [x] Add DFF skin/bone/HAnim data, IFP animation discovery, and optional pose
+  playback in the viewer (initial adapter: `parse_dff_rig` preserves frame
+  hierarchy + HAnimPLG + SkinPLG; `gta.rs` adapter builds ModelAsset +
+  AnimationLibrary; name-based binding via GTA calibration contract;
+  context action + dock IFP picker for pack swapping; corpus gates on
+  SA ped.ifp + bmyst.dff; DFF texture resolution deferred).
 - [ ] Preserve and preview additional UV sets, prelit vertex colors, multiple
   material properties, and material-split geometry where the source needs it.
 - [ ] Support common RenderWare effects such as MatFX, dual/environment
