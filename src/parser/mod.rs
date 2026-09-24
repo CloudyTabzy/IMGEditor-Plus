@@ -293,33 +293,38 @@ pub fn read_entry_header_standalone(
     source_mmap: Option<&Mmap>,
     max_bytes: usize,
 ) -> anyhow::Result<Vec<u8>> {
+    // Pending edits (texture replacement, save-time fixes) are what the
+    // next save writes, so the header must come from them.
+    if let Some(bytes) = &entry.override_bytes {
+        return Ok(bytes[..bytes.len().min(max_bytes)].to_vec());
+    }
     if entry.imported {
         let source = entry
             .source_path
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
-        let mut file = std::fs::File::open(source)?;
-        let mut data = vec![0u8; max_bytes];
-        let read = file.read(&mut data)?;
-        data.truncate(read);
+        let mut data = Vec::new();
+        std::fs::File::open(source)?
+            .take(max_bytes as u64)
+            .read_to_end(&mut data)?;
         return Ok(data);
     }
 
     let source = archive_path.ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
     let offset = u64::from(entry.offset) * SECTOR_SIZE;
+    let len = (u64::from(entry.sector) * SECTOR_SIZE).min(max_bytes as u64);
 
     if let Some(mmap) = source_mmap {
         let mmap_len = mmap.len() as u64;
         let start = offset.min(mmap_len) as usize;
-        let end = (offset + max_bytes as u64).min(mmap_len) as usize;
+        let end = offset.saturating_add(len).min(mmap_len) as usize;
         return Ok(mmap[start..end].to_vec());
     }
 
     let mut file = std::fs::File::open(source)?;
     file.seek(SeekFrom::Start(offset))?;
-    let mut data = vec![0u8; max_bytes];
-    let read = file.read(&mut data)?;
-    data.truncate(read);
+    let mut data = Vec::new();
+    file.take(len).read_to_end(&mut data)?;
     Ok(data)
 }
 
@@ -388,10 +393,13 @@ pub(crate) fn entry_data_size(
 
 /// Streams one entry's data to `out`, reading straight from the source memory
 /// map when available instead of materializing a per-entry `Vec`. Writes
-/// exactly `entry_data_size(entry, source_mmap)` bytes.
+/// exactly `layout_size` bytes, the value `entry_data_size` reported during
+/// the layout pass, or fails: the directory is written from that layout, so
+/// any other length would shift every later entry.
 pub(crate) fn stream_entry_data(
     out: &mut impl Write,
     entry: &EntryInfo,
+    layout_size: u64,
     source_path: Option<&Path>,
     source_mmap: Option<&Mmap>,
     source_file: &mut Option<BufReader<std::fs::File>>,
@@ -410,10 +418,22 @@ pub(crate) fn stream_entry_data(
             .source_path
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
-        let actual = std::fs::metadata(source)?.len();
-        let mut file = std::fs::File::open(source)?;
-        std::io::copy(&mut file, out)?;
-        let pad = sector_rounded_size(actual) - actual;
+        let file = std::fs::File::open(source)?;
+        let actual = file.metadata()?.len();
+        if sector_rounded_size(actual) != layout_size {
+            anyhow::bail!(
+                "imported file {} changed size during save",
+                source.display()
+            );
+        }
+        let copied = std::io::copy(&mut file.take(actual), out)?;
+        if copied != actual {
+            anyhow::bail!(
+                "imported file {} was truncated during save",
+                source.display()
+            );
+        }
+        let pad = layout_size - actual;
         if pad > 0 {
             out.write_all(&ZERO_SECTOR[..pad as usize])?;
         }
@@ -669,6 +689,43 @@ mod tests {
         entry.sector = 1;
         let error = checked_source_entry_range(&entry, SECTOR_SIZE as usize).unwrap_err();
         assert!(error.to_string().contains("exceeds source size"));
+    }
+
+    #[test]
+    fn streaming_rejects_an_imported_file_that_changed_after_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("grown.txd");
+        std::fs::write(&source, [1u8; 10]).unwrap();
+        let mut entry = EntryInfo::new("grown.txd");
+        entry.imported = true;
+        entry.source_path = Some(source.clone());
+        let layout_size = entry_data_size(&entry, None).unwrap();
+
+        std::fs::write(&source, vec![2u8; SECTOR_SIZE as usize + 1]).unwrap();
+        let mut out = Vec::new();
+        let error = stream_entry_data(&mut out, &entry, layout_size, None, None, &mut None)
+            .unwrap_err();
+        assert!(error.to_string().contains("changed size during save"));
+    }
+
+    #[test]
+    fn header_reads_prefer_pending_edits_and_stop_at_the_entry_end() {
+        let mut edited = EntryInfo::new("edited.txd");
+        edited.override_bytes = Some(std::sync::Arc::new(b"PATCHED".to_vec()));
+        let header = read_entry_header_standalone(&edited, None, None, 5).unwrap();
+        assert_eq!(header, b"PATCH");
+
+        let dir = tempfile::tempdir().unwrap();
+        let archive_path = dir.path().join("two.img");
+        let mut bytes = vec![b'A'; SECTOR_SIZE as usize];
+        bytes.extend(vec![b'B'; SECTOR_SIZE as usize]);
+        std::fs::write(&archive_path, &bytes).unwrap();
+        let mut first = EntryInfo::new("first.dff");
+        first.sector = 1;
+        let header =
+            read_entry_header_standalone(&first, Some(&archive_path), None, 8192).unwrap();
+        assert_eq!(header.len(), SECTOR_SIZE as usize);
+        assert!(header.iter().all(|&byte| byte == b'A'));
     }
 
     #[test]

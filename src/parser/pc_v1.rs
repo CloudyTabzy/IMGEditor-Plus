@@ -194,7 +194,9 @@ impl PcV1Parser {
         // map the file that was actually written.
         archive.source_mmap = None;
 
-        let _ = std::fs::remove_file(&output_path);
+        // `rename` replaces the destination in one step, so the old
+        // archive stays intact until its replacement is in place.
+        std::fs::rename(&temp_img, &output_path).context("failed to write archive file")?;
         std::fs::rename(&temp_dir, &dir_path).context("failed to write directory file")?;
 
         if remove_existing
@@ -203,8 +205,6 @@ impl PcV1Parser {
         {
             let _ = std::fs::remove_file(src);
         }
-
-        std::fs::rename(&temp_img, &output_path).context("failed to write archive file")?;
 
         archive.path = Some(output_path.clone());
         archive.file_name = output_path
@@ -277,6 +277,7 @@ impl PcV1Parser {
             crate::parser::stream_entry_data(
                 &mut img_out,
                 entry,
+                size,
                 source_path.as_deref(),
                 source_mmap.as_deref(),
                 &mut source_file,
@@ -534,6 +535,40 @@ mod tests {
             .unwrap();
         let exported = std::fs::read(&output).unwrap();
         assert_eq!(&exported[..data.len()], data.as_slice());
+    }
+
+    #[test]
+    fn save_in_place_while_another_copy_maps_the_source() {
+        // The UI keeps its own clone (and memory map) of the archive while
+        // the save task rewrites the same path.
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = create_v1_archive(dir.path(), "test", &[("entry.dff", b"old")]);
+        let ui_copy = ArchiveInfo::open(&img_path).unwrap();
+        let mut archive = ui_copy.clone();
+        archive.entries[0].override_bytes = Some(Arc::new(b"new".to_vec()));
+
+        PcV1Parser.save(&mut archive, &img_path, false).unwrap();
+
+        let reopened = ArchiveInfo::open(&img_path).unwrap();
+        assert!(read_entry_data(&reopened, &reopened.entries[0])
+            .unwrap()
+            .starts_with(b"new"));
+        drop(ui_copy);
+    }
+
+    #[test]
+    fn save_to_a_new_path_keeps_the_source_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = create_v1_archive(dir.path(), "source", &[("entry.dff", b"data")]);
+        let mut archive = ArchiveInfo::open(&img_path).unwrap();
+
+        PcV1Parser
+            .save(&mut archive, &dir.path().join("copy.img"), false)
+            .unwrap();
+
+        assert!(img_path.exists());
+        assert!(dir.path().join("source.dir").exists());
+        assert_eq!(ArchiveInfo::open(&img_path).unwrap().entries.len(), 1);
     }
 
     #[test]

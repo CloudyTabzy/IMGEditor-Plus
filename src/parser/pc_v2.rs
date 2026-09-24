@@ -163,14 +163,14 @@ impl ImgParser for PcV2Parser {
         // map the file that was actually written.
         archive.source_mmap = None;
 
+        std::fs::rename(&temp_path, output_path).context("failed to write archive file")?;
+
         if remove_existing
             && let Some(ref src) = source_path
             && src != output_path
         {
             let _ = std::fs::remove_file(src);
         }
-
-        std::fs::rename(&temp_path, output_path).context("failed to write archive file")?;
 
         archive.path = Some(output_path.to_path_buf());
         archive.file_name = output_path
@@ -367,7 +367,9 @@ impl PcV2Parser {
             out.seek(SeekFrom::Start(data_start))?;
         }
         let mut source_file = None;
-        for (index, entry) in archive.entries.iter().enumerate() {
+        for (index, (entry, layout_entry)) in
+            archive.entries.iter().zip(layout.iter()).enumerate()
+        {
             if archive.progress.is_cancelled() {
                 archive.progress.finish();
                 anyhow::bail!("Rebuild cancelled");
@@ -375,6 +377,7 @@ impl PcV2Parser {
             crate::parser::stream_entry_data(
                 &mut out,
                 entry,
+                layout_entry.data_size,
                 source_path.as_deref(),
                 source_mmap.as_deref(),
                 &mut source_file,

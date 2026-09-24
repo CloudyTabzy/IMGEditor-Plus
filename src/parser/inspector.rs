@@ -101,7 +101,9 @@ pub fn inspect_entry_standalone(
 }
 
 fn actual_file_size(entry: &EntryInfo) -> u64 {
-    if entry.imported {
+    if let Some(bytes) = &entry.override_bytes {
+        bytes.len() as u64
+    } else if entry.imported {
         entry
             .source_path
             .as_ref()
