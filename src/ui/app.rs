@@ -35,6 +35,7 @@ use crate::ui::fonts;
 use crate::ui::icons;
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
 use crate::ui::theme::resolve_theme;
+use crate::ui::title_bar::{self, ChromeMessage, TitleDrag};
 use crate::ui::tokens::motion::DurationPreset;
 use crate::ui::widgets as w;
 use crate::updater::{UpdateResult, UpdateState, check_updates_future};
@@ -783,6 +784,8 @@ pub enum Message {
     },
     /// Window close button pressed; may open the unsaved-changes guard.
     WindowCloseRequested(iced::window::Id),
+    /// Custom title bar: move, resize, and caption buttons.
+    WindowChrome(ChromeMessage),
     /// Save from the unsaved-changes guard (then close).
     CloseGuardSave,
     /// Discard from the unsaved-changes guard.
@@ -1481,6 +1484,10 @@ pub struct App {
     pub animator: Animator,
     prev_tick: Option<std::time::Instant>,
     last_pointer_position: Option<Point>,
+    /// Whether the frameless window is maximized: swaps the caption
+    /// button icon and hides the resize edges.
+    window_maximized: bool,
+    title_drag: TitleDrag,
     entry_feedback_target: Option<(usize, usize)>,
     archive_tab_feedback_target: Option<usize>,
     inspector_tab_feedback_target: Option<InspectorTab>,
@@ -1741,6 +1748,8 @@ impl App {
             animator: Animator::new(),
             prev_tick: None,
             last_pointer_position: None,
+            window_maximized: false,
+            title_drag: TitleDrag::default(),
             entry_feedback_target: None,
             archive_tab_feedback_target: None,
             inspector_tab_feedback_target: None,
@@ -3248,6 +3257,79 @@ impl App {
         }
     }
 
+    /// Window title (taskbar, Alt+Tab, and the custom title bar): the
+    /// selected archive, labelled like its tab.
+    pub(crate) fn window_maximized(&self) -> bool {
+        self.window_maximized
+    }
+
+    /// Whether the window controls are lifted above an open modal.
+    pub(crate) fn modal_controls_visible(&self) -> bool {
+        self.modal_open() && self.quitting.is_none()
+    }
+
+    pub fn window_title(&self) -> String {
+        let archives = self.editor.archives();
+        match self
+            .editor
+            .selected_archive()
+            .and_then(|index| archives.get(index))
+        {
+            Some(archive) => {
+                let label = crate::ui::view::archive_tab_label(archive, archives);
+                let dirty = if archive.dirty { "● " } else { "" };
+                format!("{dirty}{label} — IMG Editor Plus")
+            }
+            None => "IMG Editor Plus".to_string(),
+        }
+    }
+
+    fn update_window_chrome(&mut self, message: ChromeMessage) -> Task<Message> {
+        use iced::window;
+        match message {
+            ChromeMessage::TitleHovered(position) => {
+                if self.title_drag.hover(position) {
+                    window::latest().and_then(window::drag::<Message>)
+                } else {
+                    Task::none()
+                }
+            }
+            ChromeMessage::TitlePressed => {
+                self.title_drag.press();
+                Task::none()
+            }
+            ChromeMessage::TitleReleased => {
+                self.title_drag.release();
+                Task::none()
+            }
+            ChromeMessage::TitleDoubleClicked | ChromeMessage::ToggleMaximize => {
+                self.title_drag.release();
+                window::latest().and_then(window::toggle_maximize::<Message>)
+            }
+            ChromeMessage::TitleRightClicked => {
+                window::latest().and_then(window::show_system_menu::<Message>)
+            }
+            ChromeMessage::Minimize => {
+                window::latest().and_then(|id| window::minimize::<Message>(id, true))
+            }
+            // Same path as the native close request, so the unsaved-changes
+            // guard still runs.
+            ChromeMessage::Close => {
+                window::latest().and_then(|id| Task::done(Message::WindowCloseRequested(id)))
+            }
+            ChromeMessage::ResizeStart(direction) => {
+                window::latest().and_then(move |id| window::drag_resize::<Message>(id, direction))
+            }
+            ChromeMessage::Resized => window::latest()
+                .and_then(window::is_maximized)
+                .map(|maximized| Message::WindowChrome(ChromeMessage::MaximizedChanged(maximized))),
+            ChromeMessage::MaximizedChanged(maximized) => {
+                self.window_maximized = maximized;
+                Task::none()
+            }
+        }
+    }
+
     /// Close an archive tab, guarded: a dirty archive opens the
     /// unsaved-changes dialog instead of dropping the edits silently.
     fn request_archive_close(&mut self, index: usize) -> Task<Message> {
@@ -4590,6 +4672,7 @@ impl App {
                 self.request_archive_close(index)
             }
             Message::CloseArchiveTab(index) => self.request_archive_close(index),
+            Message::WindowChrome(message) => self.update_window_chrome(message),
             Message::WindowCloseRequested(window) => {
                 if self.editor.archives().iter().any(|archive| archive.dirty) {
                     self.pending_close = Some(PendingClose::Window(window));
@@ -8339,6 +8422,7 @@ impl App {
         let window = iced::window::events().map(|(id, event)| match event {
             iced::window::Event::FileDropped(path) => Message::FilesDropped(path),
             iced::window::Event::CloseRequested => Message::WindowCloseRequested(id),
+            iced::window::Event::Resized(_) => Message::WindowChrome(ChromeMessage::Resized),
             _ => Message::Noop,
         });
 
@@ -8694,8 +8778,14 @@ impl App {
         ])
         .max_width(220.0);
 
+        // Root labels fill the bar height so dropdowns open flush with its
+        // bottom edge.
         fn menu_label(label: &'static str) -> iced::Element<'static, Message> {
-            container(fonts::header(label)).padding([4, 12]).into()
+            container(fonts::header(label))
+                .padding([0, 12])
+                .height(iced::Length::Fill)
+                .align_y(iced::Alignment::Center)
+                .into()
         }
 
         let bar = MenuBar::new(vec![
@@ -8705,13 +8795,40 @@ impl App {
             Item::with_menu(menu_label("View"), view_menu),
             Item::with_menu(menu_label("Themes"), option_menu),
             Item::with_menu(menu_label("Help"), help_menu),
-        ]);
+        ])
+        .height(iced::Length::Fill)
+        // The bar sits on the title-bar gradient; iced_aw's default rounded
+        // bar background would show as a pill under themes whose base color
+        // differs from the gradient.
+        .style(|theme, status| iced_aw::style::menu_bar::Style {
+            bar_background: iced::Color::TRANSPARENT.into(),
+            bar_border: iced::Border::default(),
+            bar_shadow: iced::Shadow::default(),
+            ..iced_aw::style::menu_bar::primary(theme, status)
+        });
 
         let design = self.design();
         let (top, bottom) = design.menubar_gradient();
         let border = design.border();
-        iced::widget::Container::new(bar)
+        let bar_height = iced::Length::Fixed(title_bar::TITLE_BAR_HEIGHT);
+        let chrome = iced::widget::row![
+            title_bar::logo(),
+            bar,
+            title_bar::title_area(&design, self.window_title(), Message::WindowChrome),
+            if self.modal_controls_visible() {
+                // `title_bar::modal_controls` draws them above the modal.
+                iced::widget::Space::new()
+                    .width(iced::Length::Fixed(title_bar::CAPTION_BUTTONS_WIDTH))
+                    .into()
+            } else {
+                title_bar::caption_buttons(&design, self.window_maximized, Message::WindowChrome)
+            },
+        ]
+        .height(bar_height)
+        .align_y(iced::Alignment::Center);
+        iced::widget::Container::new(chrome)
             .width(iced::Length::Fill)
+            .height(bar_height)
             .style(move |_| iced::widget::container::Style {
                 background: Some(iced::Background::Gradient(iced::Gradient::Linear(
                     iced::gradient::Linear::new(0.0)
@@ -8860,7 +8977,7 @@ pub fn run_app(config: Config) -> iced::Result {
         App::update,
         App::view,
     )
-    .title(|_: &App| "IMG Editor Plus".to_string())
+    .title(App::window_title)
     .theme(|state: &App| -> Option<Theme> { Some(state.theme()) })
     .subscription(App::subscription)
     .settings(iced::Settings {
@@ -8877,6 +8994,13 @@ pub fn run_app(config: Config) -> iced::Result {
         // an "unsaved changes" confirmation, and only then do we close
         // the window ourselves.
         exit_on_close_request: false,
+        // The menu bar doubles as the title bar (see `ui::title_bar`).
+        decorations: false,
+        #[cfg(target_os = "windows")]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            undecorated_shadow: true,
+            ..Default::default()
+        },
         ..iced::window::Settings::default()
     })
     .default_font(crate::ui::fonts::INTER)

@@ -13,6 +13,7 @@ pub mod loading_indicator;
 pub mod sort_manager;
 pub mod texture_preview;
 pub mod theme;
+pub mod title_bar;
 pub mod tokens;
 pub mod view;
 pub mod viewer3d_widget;

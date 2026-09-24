@@ -2441,7 +2441,7 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
 /// file name (III, VC and SA all ship `gta3.img`), the last two parent
 /// folders are appended so the tabs stay distinguishable; the tooltip
 /// carries the full path.
-fn archive_tab_label(
+pub(crate) fn archive_tab_label(
     archive: &crate::archive::ArchiveInfo,
     archives: &[crate::archive::ArchiveInfo],
 ) -> String {
@@ -2931,6 +2931,18 @@ pub fn build(app: &App) -> Element<'_, Message> {
             .into(),
     ];
     layers.extend(overlays);
+    if app.modal_controls_visible() {
+        layers.push(crate::ui::title_bar::modal_controls(
+            &design,
+            app.window_maximized(),
+            Message::WindowChrome,
+        ));
+    }
+    // Topmost so dialogs never block resizing; a maximized window has no
+    // edges to drag.
+    if !app.window_maximized() {
+        layers.push(crate::ui::title_bar::resize_edges(Message::WindowChrome));
+    }
     stack(layers)
         .width(Length::Fill)
         .height(Length::Fill)
