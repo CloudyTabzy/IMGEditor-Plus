@@ -8563,14 +8563,6 @@ impl App {
                 format!("Open… ({})", shortcut_display(Shortcut::Open)),
                 Message::OpenArchive,
             )),
-            Item::with_menu(
-                menu_button_with_icon(
-                    "Open Recent".to_string(),
-                    icons::open_archive().size(16).into(),
-                    Message::Noop,
-                ),
-                recent_menu,
-            ),
             Item::new(menu_button(
                 format!("Save ({})", shortcut_display(Shortcut::Save)),
                 Message::SaveArchive,
@@ -8789,8 +8781,20 @@ impl App {
                 .into()
         }
 
+        // Keep every menu one level deep: no `Item::with_menu` inside a
+        // `Menu`. iced_aw 0.14.1's overlay `operate` indexes a submenu's state
+        // tree even while that submenu is closed (the tree only exists while
+        // it is open), so any widget operation that runs while its parent
+        // menu is open panics. Every keyboard shortcut runs one (the focus
+        // check in `begin_shortcut_focus_check`), as do `scroll_to` calls, so
+        // a nested "Open Recent" crashed the app on Esc/Ctrl+O with File open.
+        // That is why Recent is a root menu. Root menus are safe: their tree
+        // exists whenever they are open. Before adding a submenu, check that
+        // the iced_aw release in use fixed this (menu_bar_overlay.rs,
+        // `operate`), then open the parent menu and press Esc to verify.
         let bar = MenuBar::new(vec![
             Item::with_menu(menu_label("File"), file_menu),
+            Item::with_menu(menu_label("Recent"), recent_menu),
             Item::with_menu(menu_label("Edit"), edit_menu),
             Item::with_menu(menu_label("Selection"), selection_menu),
             Item::with_menu(menu_label("View"), view_menu),
