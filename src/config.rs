@@ -29,8 +29,40 @@ impl RecentFile {
     }
 
     /// Directory containing the file, for the menu's secondary line.
-    pub fn display_dir(&self) -> &str {
-        self.path.parent().and_then(|p| p.to_str()).unwrap_or("")
+    /// `canonicalize` returns Windows verbatim paths (`\\?\C:\...`); the
+    /// prefix is dropped here for display only.
+    pub fn display_dir(&self) -> std::borrow::Cow<'_, str> {
+        let dir = self.path.parent().and_then(|p| p.to_str()).unwrap_or("");
+        if let Some(share) = dir.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{share}").into()
+        } else {
+            dir.strip_prefix(r"\\?\").unwrap_or(dir).into()
+        }
+    }
+
+    /// Compact menu label `"{number}. {dir} / {name}"`, trimming the front
+    /// of the directory when the line would exceed `max_chars`. Lengths are
+    /// counted in characters so non-ASCII folder names never split a glyph.
+    pub fn menu_label(&self, number: usize, max_chars: usize) -> String {
+        let name = self.display_name();
+        let dir = self.display_dir();
+        let prefix = format!("{number}. ");
+        let available =
+            max_chars.saturating_sub(prefix.chars().count() + name.chars().count() + 3);
+        let dir_chars = dir.chars().count();
+        let trimmed = if dir_chars <= available {
+            dir.to_string()
+        } else if available > 1 {
+            let tail: String = dir.chars().skip(dir_chars - (available - 1)).collect();
+            format!("…{tail}")
+        } else {
+            String::new()
+        };
+        if trimmed.is_empty() {
+            format!("{prefix}{name}")
+        } else {
+            format!("{prefix}{trimmed} / {name}")
+        }
     }
 }
 
@@ -96,37 +128,6 @@ impl RecentFiles {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
-    }
-
-    /// Build a compact display label for the menu, trimming the
-    /// directory when it would push the line over `max_chars`.
-    pub fn menu_label(&self, index: usize, max_chars: usize) -> String {
-        let Some((_, entry)) = self.entries.iter().enumerate().nth(index) else {
-            return String::new();
-        };
-        let name = entry.display_name();
-        let dir = entry.display_dir();
-        let prefix = format!("{}. ", index + 1);
-        let available = max_chars.saturating_sub(prefix.len() + name.len() + 3);
-        if dir.is_empty() || available == 0 {
-            format!("{prefix}{name}")
-        } else {
-            let trimmed = if dir.len() > available {
-                let take = available.saturating_sub(1);
-                if take == 0 {
-                    String::new()
-                } else {
-                    format!("…{}", &dir[dir.len() - take..])
-                }
-            } else {
-                dir.to_string()
-            };
-            if trimmed.is_empty() {
-                format!("{prefix}{name}")
-            } else {
-                format!("{prefix}{trimmed} / {name}")
-            }
-        }
     }
 }
 
@@ -1059,11 +1060,34 @@ mod tests {
         r.touch(
             "/very/long/path/that/exceeds/the/typical/width/allowed/for/menu/items/cool_game.img",
         );
-        let label = r.menu_label(0, 30);
+        let (_, entry) = r.iter().next().unwrap();
+        let label = entry.menu_label(1, 30);
         // Must contain the filename
         assert!(label.contains("cool_game.img"));
         // And be no longer than the cap + a small fudge for the prefix
-        assert!(label.len() <= 35, "label too long: {label:?}");
+        assert!(label.chars().count() <= 35, "label too long: {label:?}");
+    }
+
+    #[test]
+    fn recent_files_menu_label_trims_non_ascii_dirs_by_character() {
+        // Byte-based trimming panicked when the cut landed inside a
+        // multi-byte character, crashing every menu-bar render.
+        let entry = RecentFile::new(PathBuf::from(
+            r"C:\Users\José Ñúñez\Документы\モッド\ゲーム\gta3.img",
+        ));
+        for max_chars in 0..80 {
+            let label = entry.menu_label(3, max_chars);
+            assert!(label.starts_with("3. "), "{label:?}");
+            assert!(label.ends_with("gta3.img"), "{label:?}");
+        }
+    }
+
+    #[test]
+    fn recent_files_hide_the_windows_verbatim_prefix() {
+        let local = RecentFile::new(PathBuf::from(r"\\?\C:\Games\gta3.img"));
+        assert_eq!(local.display_dir(), r"C:\Games");
+        let unc = RecentFile::new(PathBuf::from(r"\\?\UNC\server\share\mods\gta3.img"));
+        assert_eq!(unc.display_dir(), r"\\server\share\mods");
     }
 
     #[test]

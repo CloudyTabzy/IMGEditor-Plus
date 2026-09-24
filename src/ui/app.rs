@@ -8543,9 +8543,10 @@ impl App {
             } else {
                 self.config
                     .recent_files
-                    .iter()
-                    .map(|(index, entry)| {
-                        let label = self.config.recent_files.menu_label(index, 60);
+                    .iter_existing()
+                    .enumerate()
+                    .map(|(position, (_, entry))| {
+                        let label = entry.menu_label(position + 1, 60);
                         let path = entry.path.clone();
                         Item::new(menu_button(label, Message::OpenRecent(path)))
                     })
