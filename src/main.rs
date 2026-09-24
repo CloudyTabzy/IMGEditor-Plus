@@ -4,7 +4,11 @@ fn main() -> anyhow::Result<()> {
     imgeditor::dev_logger::init_dev_log();
     install_panic_hook();
 
-    let args: Vec<String> = std::env::args().collect();
+    // `args_os`: `args` panics on a path that is not valid Unicode, and
+    // Explorer passes the double-clicked file here.
+    let args: Vec<String> = std::env::args_os()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
     if args.len() > 1 {
         match args[1].as_str() {
             "--scan-corpus" => {
@@ -13,7 +17,7 @@ fn main() -> anyhow::Result<()> {
             }
             "-h" | "--help" => {
                 println!("IMGEditor {}", env!("CARGO_PKG_VERSION"));
-                println!("Usage: imgeditor [OPTIONS]");
+                println!("Usage: imgeditor [OPTIONS] [archive.img|archive.dir]");
                 println!();
                 println!("Options:");
                 println!("  --scan-corpus <archive.img|archive.dir> [--target gta3|vc|sa|bully] [--colors]");
@@ -22,6 +26,8 @@ fn main() -> anyhow::Result<()> {
                 println!("              --colors also decodes pixels to test palette");
                 println!("              reconstructibility (slower).");
                 println!("  -h, --help    Print help");
+                println!();
+                println!("An archive path opens that archive on startup.");
                 return Ok(());
             }
             _ => {}
@@ -33,8 +39,13 @@ fn main() -> anyhow::Result<()> {
 
     clean_temp_preview();
 
+    let startup_file = std::env::args_os()
+        .nth(1)
+        .filter(|arg| !arg.to_string_lossy().starts_with('-'))
+        .map(std::path::PathBuf::from);
+
     let config = imgeditor::config::Config::load();
-    imgeditor::ui::run_app(config).map_err(|err| anyhow::anyhow!("{err}"))?;
+    imgeditor::ui::run_app(config, startup_file).map_err(|err| anyhow::anyhow!("{err}"))?;
     Ok(())
 }
 

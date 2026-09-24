@@ -2202,6 +2202,7 @@ dependencies = [
  "ureq",
  "webbrowser",
  "wgpu",
+ "winreg",
 ]
 
 [[package]]

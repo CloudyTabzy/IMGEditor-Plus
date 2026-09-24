@@ -35,6 +35,7 @@ use crate::ui::fonts;
 use crate::ui::icons;
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
 use crate::ui::theme::resolve_theme;
+use crate::file_association::AssociationState;
 use crate::ui::title_bar::{self, ChromeMessage, TitleDrag};
 use crate::ui::tokens::motion::DurationPreset;
 use crate::ui::widgets as w;
@@ -828,6 +829,11 @@ pub enum Message {
     SetNavigationGizmoVisible(bool),
     ToggleAutoscrollMomentum(bool),
     ToggleMotionEffects(bool),
+    /// View ▸ Open .img/.dir from Explorer: register or remove the per-user
+    /// file association (see `file_association`).
+    SetFileAssociation(bool),
+    /// An archive path passed on the command line (Explorer's "Open").
+    OpenFromCommandLine(PathBuf),
     ToggleSelectionPulse(bool),
     ToggleClickRipple(bool),
     ToggleIconMicroMotion(bool),
@@ -1494,6 +1500,8 @@ pub struct App {
     /// button icon and hides the resize edges.
     window_maximized: bool,
     title_drag: TitleDrag,
+    /// Read once at startup and after each toggle, never per frame.
+    file_association: AssociationState,
     entry_feedback_target: Option<(usize, usize)>,
     archive_tab_feedback_target: Option<usize>,
     inspector_tab_feedback_target: Option<InspectorTab>,
@@ -1756,6 +1764,7 @@ impl App {
             last_pointer_position: None,
             window_maximized: false,
             title_drag: TitleDrag::default(),
+            file_association: crate::file_association::state(),
             entry_feedback_target: None,
             archive_tab_feedback_target: None,
             inspector_tab_feedback_target: None,
@@ -1810,8 +1819,11 @@ impl App {
         Design::from_tokens(tokens, self.theme().extended_palette().is_dark)
     }
 
-    pub fn startup_task(config: &Config) -> Task<Message> {
+    pub fn startup_task(config: &Config, startup_file: Option<PathBuf>) -> Task<Message> {
         let mut tasks = vec![iced::font::load(LUCIDE_FONT_BYTES).map(|_| Message::Noop)];
+        if let Some(path) = startup_file {
+            tasks.push(Task::done(Message::OpenFromCommandLine(path)));
+        }
         if config.update_check_enabled {
             tasks.push(Task::perform(
                 check_updates_future(
@@ -6876,6 +6888,32 @@ impl App {
                 self.save_config();
                 Task::none()
             }
+            Message::SetFileAssociation(enable) => {
+                let result = if enable {
+                    crate::file_association::register()
+                } else {
+                    crate::file_association::unregister()
+                };
+                self.file_association = crate::file_association::state();
+                self.toast = Some(match (enable, result) {
+                    (true, Ok(())) => {
+                        crate::file_association::open_default_apps_settings();
+                        "IMG Editor Plus is now in Explorer's \"Open with\" for .img/.dir.                          To make it the default, pick it in the Settings page that opened."
+                            .into()
+                    }
+                    (false, Ok(())) => "Removed the .img/.dir association.".into(),
+                    (_, Err(error)) => format!("File association failed: {error}"),
+                });
+                Task::none()
+            }
+            Message::OpenFromCommandLine(path) => {
+                if path.exists() {
+                    self.open_archive_path(path)
+                } else {
+                    self.toast = Some(format!("File not found: {}", path.display()));
+                    Task::none()
+                }
+            }
             Message::ToggleMotionEffects(enabled) => {
                 self.config.motion_enabled = enabled;
                 if !enabled {
@@ -8734,7 +8772,7 @@ impl App {
 
         // The View menu contains application-wide interaction preferences.
         let view_toggle = |on: bool| if on { "● " } else { "○ " };
-        let view_menu = Menu::new(vec![
+        let mut view_items = vec![
             Item::new(menu_button(
                 format!(
                     "{}Navigation gizmo",
@@ -8817,8 +8855,15 @@ impl App {
                     Message::AnimationDemoStart
                 },
             )),
-        ])
-        .max_width(220.0);
+        ];
+        if self.file_association != AssociationState::Unsupported {
+            let associated = self.file_association == AssociationState::Registered;
+            view_items.push(Item::new(menu_button(
+                format!("{}Open .img/.dir from Explorer", view_toggle(associated)),
+                Message::SetFileAssociation(!associated),
+            )));
+        }
+        let view_menu = Menu::new(view_items).max_width(220.0);
 
         let help_menu = Menu::new(vec![
             Item::new(menu_button(
@@ -9034,7 +9079,9 @@ fn menu_icon(message: &Message) -> Element<'static, Message> {
     icon.size(16).into()
 }
 
-pub fn run_app(config: Config) -> iced::Result {
+/// Runs the editor; `startup_file` (a path from the command line, e.g.
+/// Explorer's "Open") is opened once the window is up.
+pub fn run_app(config: Config, startup_file: Option<PathBuf>) -> iced::Result {
     let size: iced::Size = config.window.size.unwrap_or([1100.0, 720.0]).into();
 
     let boot_config = Arc::new(config);
@@ -9043,7 +9090,7 @@ pub fn run_app(config: Config) -> iced::Result {
     iced::application(
         move || {
             let cfg = (*boot_config_for_boot).clone();
-            (App::new(cfg.clone()), App::startup_task(&cfg))
+            (App::new(cfg.clone()), App::startup_task(&cfg, startup_file.clone()))
         },
         App::update,
         App::view,
@@ -11266,6 +11313,16 @@ mod tests {
             .expect("imported entry must gain a verdict");
         assert_eq!(merged.textures, 1);
         assert_eq!(merged.worst, crate::compat::games::Verdict::Native);
+    }
+
+    #[test]
+    fn a_missing_command_line_file_reports_instead_of_opening() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("gone.img");
+        let mut app = test_app();
+        let _ = app.update(Message::OpenFromCommandLine(missing));
+        assert!(app.toast.as_deref().is_some_and(|toast| toast.starts_with("File not found")));
+        assert!(app.editor.archives().is_empty());
     }
 
     #[test]

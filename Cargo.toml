@@ -56,6 +56,11 @@ quick_cache = { version = "0.7.0", features = ["stats"] }
 texpresso = { version = "2.0.2", features = ["rayon"] }
 quantette = { version = "0.6.0", default-features = false, features = ["kmeans", "threads"] }
 
+# Per-user Explorer file associations (src/file_association.rs); already
+# in the dependency graph through dark-light.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 [dev-dependencies]
 tempfile = "3"
 iced_runtime = "0.14"
