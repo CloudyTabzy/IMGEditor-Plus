@@ -3556,7 +3556,9 @@ impl App {
                     self.toast = Some("No archive selected.".into());
                     return Task::none();
                 };
-                self.begin_save(archive, choice.path, choice.version, true)
+                // "Save as" writes a copy and keeps the source archive,
+                // matching the original editor's `SaveArchiveAs`.
+                self.begin_save(archive, choice.path, choice.version, false)
             }
             Message::SaveArchiveAsResult(None) => Task::none(),
 
