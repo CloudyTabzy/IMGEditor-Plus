@@ -122,6 +122,30 @@ pub fn import_folder() -> Task<Option<PathBuf>> {
     Task::none()
 }
 
+/// Pick the game folder used to resolve an archive's companion files,
+/// starting at the folder currently in use.
+#[cfg(feature = "native-dialogs")]
+pub fn pick_game_folder(current: Option<PathBuf>) -> Task<Option<PathBuf>> {
+    Task::perform(
+        async move {
+            let mut dialog = rfd::AsyncFileDialog::new().set_title("Select the game folder");
+            if let Some(current) = current.filter(|path| path.is_dir()) {
+                dialog = dialog.set_directory(current);
+            }
+            dialog
+                .pick_folder()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        },
+        |folder| folder,
+    )
+}
+
+#[cfg(not(feature = "native-dialogs"))]
+pub fn pick_game_folder(_current: Option<PathBuf>) -> Task<Option<PathBuf>> {
+    Task::none()
+}
+
 #[cfg(not(feature = "native-dialogs"))]
 pub fn import_files() -> Task<Vec<PathBuf>> {
     Task::none()

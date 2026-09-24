@@ -716,9 +716,22 @@ impl App {
             progress_bar(0.0..=1.0, display_progress).into()
         };
 
+        // Where companion files (IDE, textures, animations) are resolved
+        // from; File > Set game folder… overrides the automatic guess.
+        let game_folder = match archive.path.as_deref() {
+            Some(path) => match self.config.archive_game_root(path) {
+                Some(root) => root.display().to_string(),
+                None => crate::config::automatic_game_root(path)
+                    .map(|root| format!("{} (automatic)", root.display()))
+                    .unwrap_or_else(|| "none".to_string()),
+            },
+            None => "none (unsaved archive)".to_string(),
+        };
+
         let mut col = column![
             label_value_owned("Format", version_text.to_string()),
             label_value("Entries", format!("{total} (visible: {visible})")),
+            label_value("Game folder", game_folder),
             w::hairline(design.divider()),
             label_value(progress_label, percent_text),
             progress_widget,

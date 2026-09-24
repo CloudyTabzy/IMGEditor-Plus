@@ -278,6 +278,10 @@ pub struct Config {
     /// Keyed by the canonical archive path so the choice survives
     /// restarts without sidecar files next to the game.
     pub archive_targets: Vec<(PathBuf, String)>,
+    /// Per-archive game folder overrides (archive, game root), most
+    /// recently used first. Archives without one fall back to
+    /// [`automatic_game_root`].
+    pub archive_game_roots: Vec<(PathBuf, PathBuf)>,
     /// Width of an archive tab in logical pixels, adjustable by dragging
     /// the divider after the tab strip.
     pub archive_tab_width: f32,
@@ -300,7 +304,53 @@ pub fn clamp_archive_tab_width(width: f32) -> f32 {
 /// How many archive targets are remembered before the oldest is dropped.
 pub const ARCHIVE_TARGETS_MAX: usize = 64;
 
+/// How many per-archive game folder overrides are remembered.
+pub const ARCHIVE_GAME_ROOTS_MAX: usize = 64;
+
+/// The game folder guessed from an archive's location: two levels up, as
+/// retail installs keep archives one folder deep (`models\gta3.img`,
+/// `Stream\World.img`).
+pub fn automatic_game_root(archive: &Path) -> Option<PathBuf> {
+    archive.parent()?.parent().map(Path::to_path_buf)
+}
+
+fn canonical_or_given(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
 impl Config {
+    /// The game folder the user chose for an archive, if any.
+    pub fn archive_game_root(&self, archive: &Path) -> Option<&Path> {
+        let canonical = canonical_or_given(archive);
+        self.archive_game_roots
+            .iter()
+            .find(|(saved, _)| saved == &canonical)
+            .map(|(_, root)| root.as_path())
+    }
+
+    /// Remember the game folder for an archive (MRU order).
+    pub fn set_archive_game_root(&mut self, archive: &Path, root: &Path) {
+        let canonical = canonical_or_given(archive);
+        self.archive_game_roots.retain(|(saved, _)| saved != &canonical);
+        self.archive_game_roots
+            .insert(0, (canonical, root.to_path_buf()));
+        self.archive_game_roots.truncate(ARCHIVE_GAME_ROOTS_MAX);
+    }
+
+    /// Forget an archive's game folder so the automatic guess applies again.
+    pub fn clear_archive_game_root(&mut self, archive: &Path) {
+        let canonical = canonical_or_given(archive);
+        self.archive_game_roots.retain(|(saved, _)| saved != &canonical);
+    }
+
+    /// The game folder used for an archive: the user's choice, otherwise
+    /// the automatic guess.
+    pub fn game_root_for(&self, archive: &Path) -> Option<PathBuf> {
+        self.archive_game_root(archive)
+            .map(Path::to_path_buf)
+            .or_else(|| automatic_game_root(archive))
+    }
+
     /// The saved validator target for an archive path, if any.
     pub fn archive_target(&self, path: &Path) -> Option<&str> {
         let canonical = path
@@ -362,6 +412,7 @@ impl Default for Config {
             literal_file_types: false,
             context_selection_accumulates: true,
             archive_targets: Vec::new(),
+            archive_game_roots: Vec::new(),
             archive_tab_width: ARCHIVE_TAB_WIDTH_DEFAULT,
         }
     }
@@ -385,6 +436,8 @@ impl Config {
         let mut pending_recent: std::collections::BTreeMap<usize, PathBuf> =
             std::collections::BTreeMap::new();
         let mut pending_archive_targets: std::collections::BTreeMap<usize, (PathBuf, String)> =
+            std::collections::BTreeMap::new();
+        let mut pending_game_roots: std::collections::BTreeMap<usize, (PathBuf, PathBuf)> =
             std::collections::BTreeMap::new();
         let mut pending_sort_priorities: Vec<SortPriority> = Vec::new();
         for line in contents.lines() {
@@ -456,6 +509,20 @@ impl Config {
                     {
                         pending_archive_targets
                             .insert(index, (PathBuf::from(archive), game.to_string()));
+                    }
+                }
+                key if key.starts_with("archive_game_root_") => {
+                    // `archive_game_root_N=<archive path>|<game folder>`;
+                    // Windows paths cannot contain '|'.
+                    if let Some(index) = key
+                        .strip_prefix("archive_game_root_")
+                        .and_then(|n| n.parse::<usize>().ok())
+                        && let Some((archive, root)) = value.split_once('|')
+                        && !archive.is_empty()
+                        && !root.is_empty()
+                    {
+                        pending_game_roots
+                            .insert(index, (PathBuf::from(archive), PathBuf::from(root)));
                     }
                 }
                 key if key.starts_with("sort_prio_") => {
@@ -589,6 +656,7 @@ impl Config {
         config.default_sort_chain = SortChain::new(pending_sort_priorities);
         // Archive targets are stored in MRU order already; keep file order.
         config.archive_targets = pending_archive_targets.into_values().collect();
+        config.archive_game_roots = pending_game_roots.into_values().collect();
         config
     }
 
@@ -640,6 +708,15 @@ impl Config {
         }
         for (index, (path, game)) in self.archive_targets.iter().enumerate() {
             writeln!(file, "archive_target_{}={}|{}", index, path.display(), game)?;
+        }
+        for (index, (archive, root)) in self.archive_game_roots.iter().enumerate() {
+            writeln!(
+                file,
+                "archive_game_root_{}={}|{}",
+                index,
+                archive.display(),
+                root.display()
+            )?;
         }
         writeln!(file, "archive_tab_width={:.1}", self.archive_tab_width)?;
         for (index, prio) in self.default_sort_chain.iter().enumerate() {
@@ -882,6 +959,7 @@ mod tests {
             literal_file_types: true,
             context_selection_accumulates: false,
             archive_targets: Vec::new(),
+            archive_game_roots: Vec::new(),
             archive_tab_width: 220.0,
         };
         let archive_a = temp.path().join("a.img");
@@ -1242,5 +1320,40 @@ mod tests {
             config.set_archive_target(&dir.path().join(format!("a{i}.img")), "sa");
         }
         assert_eq!(config.archive_targets.len(), ARCHIVE_TARGETS_MAX);
+    }
+
+    #[test]
+    fn game_root_defaults_to_two_levels_up_and_honors_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.ini");
+        let models = dir.path().join("GTA San Andreas").join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        let archive = models.join("gta3.img");
+        std::fs::write(&archive, b"fake").unwrap();
+        let chosen = dir.path().join("elsewhere");
+
+        let mut config = Config::default();
+        assert_eq!(
+            config.game_root_for(&archive),
+            Some(dir.path().join("GTA San Andreas"))
+        );
+
+        config.set_archive_game_root(&archive, &chosen);
+        config.save_to_path(&settings).unwrap();
+        let mut loaded = Config::load_from_path(&settings);
+        assert_eq!(loaded.archive_game_root(&archive), Some(chosen.as_path()));
+        assert_eq!(loaded.game_root_for(&archive), Some(chosen.clone()));
+
+        loaded.clear_archive_game_root(&archive);
+        assert_eq!(loaded.archive_game_root(&archive), None);
+        assert_eq!(
+            loaded.game_root_for(&archive),
+            Some(dir.path().join("GTA San Andreas"))
+        );
+
+        for i in 0..(ARCHIVE_GAME_ROOTS_MAX + 3) {
+            loaded.set_archive_game_root(&dir.path().join(format!("a{i}.img")), &chosen);
+        }
+        assert_eq!(loaded.archive_game_roots.len(), ARCHIVE_GAME_ROOTS_MAX);
     }
 }

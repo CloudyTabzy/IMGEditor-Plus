@@ -507,6 +507,12 @@ pub enum Message {
     },
     ImportFolder,
     ImportFolderResult(Option<PathBuf>),
+    /// File ▸ Set game folder…: pick the folder used to resolve the
+    /// selected archive's companion files (IDE, textures, animations).
+    PickGameFolder,
+    GameFolderPicked(Option<PathBuf>),
+    /// File ▸ Reset game folder: back to the automatic guess.
+    ResetGameFolder,
     FolderScanCompleted {
         index: usize,
         result: Result<FolderImportPlan, String>,
@@ -3330,6 +3336,60 @@ impl App {
         }
     }
 
+    /// Set (`Some`) or clear (`None`) the selected archive's game folder,
+    /// then drop everything resolved through the old one: cached scenes,
+    /// AGR pairings and companion textures. A model from this archive that
+    /// is on screen reloads straight away.
+    fn apply_game_folder(&mut self, root: Option<PathBuf>) -> Task<Message> {
+        let Some(index) = self.editor.selected_archive() else {
+            self.toast = Some("No archive selected.".into());
+            return Task::none();
+        };
+        let Some((path, name)) = self
+            .editor
+            .archives()
+            .get(index)
+            .and_then(|archive| Some((archive.path.clone()?, archive.file_name.clone())))
+        else {
+            self.toast = Some("Save the archive first; the game folder is stored per archive file.".into());
+            return Task::none();
+        };
+        match &root {
+            Some(root) => self.config.set_archive_game_root(&path, root),
+            None => self.config.clear_archive_game_root(&path),
+        }
+        self.save_config();
+        self.drop_scene_cache_for_archive(&name);
+        self.drop_agr_cache_for_archive(&name);
+        if let Some(archive) = self.editor.archives_mut().get_mut(index) {
+            archive.texture_cache.clear();
+        }
+        self.toast = Some(match self.config.game_root_for(&path) {
+            Some(resolved) if root.is_some() => {
+                format!("Game folder for {name}: {}", resolved.display())
+            }
+            Some(resolved) => format!("Game folder for {name}: {} (automatic)", resolved.display()),
+            None => format!("{name} has no game folder."),
+        });
+
+        let showing_this_archive = self
+            .active_viewer_entry
+            .is_some_and(|(archive_index, _)| archive_index == index);
+        if showing_this_archive {
+            self.active_viewer_entry = None;
+            self.clear_viewer_load();
+            self.viewer3d_handle.clear();
+            self.agr_playback = None;
+            if matches!(
+                self.selected_inspector_tab,
+                InspectorTab::Model3D | InspectorTab::Texture
+            ) {
+                return self.load_selected_model(self.selected_inspector_tab);
+            }
+        }
+        Task::none()
+    }
+
     /// Close an archive tab, guarded: a dirty archive opens the
     /// unsaved-changes dialog instead of dropping the edits silently.
     fn request_archive_close(&mut self, index: usize) -> Task<Message> {
@@ -4889,6 +4949,18 @@ impl App {
                 Self::scan_import_folder_task(index, archive, folder)
             }
             Message::ImportFolderResult(None) => Task::none(),
+            Message::PickGameFolder => {
+                let current = self
+                    .editor
+                    .selected_archive()
+                    .and_then(|index| self.editor.archives().get(index))
+                    .and_then(|archive| archive.path.as_deref())
+                    .and_then(|path| self.config.game_root_for(path));
+                dialogs::pick_game_folder(current).map(Message::GameFolderPicked)
+            }
+            Message::GameFolderPicked(Some(root)) => self.apply_game_folder(Some(root)),
+            Message::GameFolderPicked(None) => Task::none(),
+            Message::ResetGameFolder => self.apply_game_folder(None),
             Message::FolderScanCompleted { index, result } => {
                 match result {
                     Ok(plan) if plan.files.is_empty() => {
@@ -5747,9 +5819,8 @@ impl App {
                             self.viewer_rxs.push(rx);
                         } else {
                             let game_root = archive_path
-                                .as_ref()
-                                .and_then(|p| p.parent().and_then(|stream| stream.parent()))
-                                .map(|p| p.to_path_buf());
+                    .as_deref()
+                    .and_then(|p| self.config.game_root_for(p));
                             let rx = viewer3d::spawn_render_window(data, name.clone(), game_root);
                             self.viewer_rxs.push(rx);
                         }
@@ -6907,8 +6978,7 @@ impl App {
                     .and_then(|a| a.path.clone());
                 let game_root = archive_path
                     .as_deref()
-                    .and_then(|p| p.parent().and_then(|stream| stream.parent()))
-                    .map(|p| p.to_path_buf());
+                    .and_then(|p| self.config.game_root_for(p));
                 let Some(game_root) = game_root else {
                     self.toast =
                         Some("Could not determine game root from archive path".to_string());
@@ -7086,8 +7156,7 @@ impl App {
                 // hands it back for memoization.
                 let game_root = archive_path
                     .as_deref()
-                    .and_then(|p| p.parent().and_then(|stream| stream.parent()))
-                    .map(|p| p.to_path_buf());
+                    .and_then(|p| self.config.game_root_for(p));
                 let ide_map_hit: Option<BuiltIdeMap> = game_root
                     .as_ref()
                     .and_then(|root| self.ide_maps.get(root).map(|map| (root.clone(), Arc::clone(map))));
@@ -7411,21 +7480,15 @@ impl App {
                 // Reuse a memoized IdeMap for this game root when one has
                 // already been built; otherwise the background task builds
                 // one and hands it back for memoization.
-                let ide_map_hit: Option<BuiltIdeMap> = {
-                    if model_kind == Some(RenderableModelKind::Col) {
-                        None
-                    } else {
-                        let game_root = archive_path
-                            .as_deref()
-                            .and_then(|p| p.parent().and_then(|stream| stream.parent()))
-                            .map(|p| p.to_path_buf());
-                        match game_root {
-                            Some(root) => {
-                                self.ide_maps.get(&root).map(|map| (root, Arc::clone(map)))
-                            }
-                            None => None,
-                        }
-                    }
+                let game_root = archive_path
+                    .as_deref()
+                    .and_then(|p| self.config.game_root_for(p));
+                let ide_map_hit: Option<BuiltIdeMap> = if model_kind == Some(RenderableModelKind::Col) {
+                    None
+                } else {
+                    game_root
+                        .as_ref()
+                        .and_then(|root| self.ide_maps.get(root).map(|map| (root.clone(), Arc::clone(map))))
                 };
                 let scene_cache = Arc::clone(&self.scene_cache);
                 Task::perform(
@@ -7450,13 +7513,7 @@ impl App {
                                         } else {
                                             match ide_map_hit {
                                                 Some((_, map)) => (Some(map), None),
-                                                None => match archive_path
-                                                    .as_deref()
-                                                    .and_then(|p| {
-                                                        p.parent().and_then(|stream| stream.parent())
-                                                    })
-                                                    .map(|p| p.to_path_buf())
-                                                {
+                                                None => match game_root {
                                                     Some(root) => {
                                                         let map = Arc::new(
                                                             crate::inspector::texture::IdeMap::build(
@@ -8531,7 +8588,7 @@ impl App {
     }
 
     pub fn menubar(&self) -> Element<'_, Message> {
-        // The "Open Recent" submenu is built from `iter_existing` so
+        // The Recent menu is built from `iter_existing` so
         // dead links vanish without mutating the stored MRU list.
         // An empty list renders a single disabled "No recent files"
         // item so the user can see why the menu is empty.
@@ -8574,6 +8631,14 @@ impl App {
             Item::new(menu_button(
                 "Pack archive".to_string(),
                 Message::PackArchive,
+            )),
+            Item::new(menu_button(
+                "Set game folder…".to_string(),
+                Message::PickGameFolder,
+            )),
+            Item::new(menu_button(
+                "Reset game folder".to_string(),
+                Message::ResetGameFolder,
             )),
             Item::new(menu_button(
                 format!("Close tab ({})", shortcut_display(Shortcut::Close)),
@@ -8953,7 +9018,8 @@ fn menu_icon(message: &Message) -> Element<'static, Message> {
         Message::CloseSelectedArchive => icons::close(),
         Message::OpenSortManager => icons::sort(),
         Message::ImportFiles => icons::import(),
-        Message::ImportFolder => icons::open_archive(),
+        Message::ImportFolder | Message::PickGameFolder => icons::open_archive(),
+        Message::ResetGameFolder => icons::refresh(),
         Message::ExportAll | Message::ExportSelected | Message::ExportEntryList => icons::export(),
         Message::CompareWithList => icons::search(),
         Message::SelectAll => icons::check(),
@@ -11200,6 +11266,31 @@ mod tests {
             .expect("imported entry must gain a verdict");
         assert_eq!(merged.textures, 1);
         assert_eq!(merged.worst, crate::compat::games::Verdict::Native);
+    }
+
+    #[test]
+    fn choosing_a_game_folder_overrides_and_resetting_restores_the_guess() {
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("SA").join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        let path = models.join("gta3.img");
+        let mut img: Vec<u8> = Vec::new();
+        img.extend_from_slice(b"VER2");
+        img.extend_from_slice(&0_u32.to_le_bytes());
+        img.resize(2048, 0);
+        std::fs::write(&path, &img).unwrap();
+        let chosen = dir.path().join("elsewhere");
+
+        let mut app = test_app();
+        let _ = app.editor.add_opened_archive(ArchiveInfo::open(&path).unwrap());
+
+        let _ = app.update(Message::GameFolderPicked(Some(chosen.clone())));
+        assert_eq!(app.config.game_root_for(&path), Some(chosen));
+        assert!(app.toast.as_deref().is_some_and(|toast| toast.contains("elsewhere")));
+
+        let _ = app.update(Message::ResetGameFolder);
+        assert_eq!(app.config.game_root_for(&path), Some(dir.path().join("SA")));
+        assert!(app.toast.as_deref().is_some_and(|toast| toast.ends_with("(automatic)")));
     }
 
     #[test]
