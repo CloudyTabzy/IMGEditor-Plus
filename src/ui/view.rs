@@ -2563,7 +2563,13 @@ pub fn build(app: &App) -> Element<'_, Message> {
             };
             let label = ellipsize(&label, tab_width);
             let tab_pulse = app.archive_tab_selection_pulse(index);
-            let tab = button(fonts::body(label))
+            // `ellipsize` estimates glyph widths; a label it underestimates
+            // (the dirty dot is wider than average) is clipped at the tab
+            // edge instead of wrapping onto a second line.
+            let tab = button(
+                container(fonts::body(label).wrapping(iced::widget::text::Wrapping::None))
+                    .clip(true),
+            )
                 .on_press(Message::SelectArchiveTab(index))
                 .width(Length::Fixed(tab_width))
                 .style(move |theme, status| {
