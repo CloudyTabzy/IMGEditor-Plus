@@ -410,14 +410,13 @@ impl SortByKey for SortKey {
                 }
             }
 
-            // Extension: case-insensitive compare on the file_type
-            // string itself (EntryInfo already derives the extension
-            // into file_type).
-            SortKey::Extension => {
-                let a_ext = a.file_type.as_str().to_ascii_lowercase();
-                let b_ext = b.file_type.as_str().to_ascii_lowercase();
-                a_ext.cmp(&b_ext)
-            }
+            // Extension: the raw extension, not the curated `file_type`
+            // label (which groups `.dff` and `.nif` together as "Model").
+            SortKey::Extension => a
+                .file_ext
+                .bytes()
+                .map(|byte| byte.to_ascii_lowercase())
+                .cmp(b.file_ext.bytes().map(|byte| byte.to_ascii_lowercase())),
 
             // Size / Offset: EntryInfo stores `offset` and `sector`
             // in u32. Size happens to be a derived field elsewhere
@@ -425,7 +424,7 @@ impl SortByKey for SortKey {
             // comparator `sector` is what the existing single-key
             // sort already used, so we keep consistency here.
             SortKey::Size => a.sector.cmp(&b.sector),
-            SortKey::Offset => a.sector.cmp(&b.sector),
+            SortKey::Offset => a.offset.cmp(&b.offset),
 
             // IDE / COL file labels come pre-resolved by the caller
             // in the `SortContext` (HashMap keyed by entry filename,
@@ -541,6 +540,31 @@ mod tests {
         sort_entries(&mut entries, &chain, &SortContext::empty());
         assert_eq!(entries[0].file_name.as_str(), "z.nif");
         assert_eq!(entries[1].file_name.as_str(), "a.txd");
+    }
+
+    #[test]
+    fn offset_sort_uses_the_offset_not_the_size() {
+        let chain = chain_one(SortKey::Offset, SortDirection::Ascending);
+        let mut late_small = EntryInfo::new("late_small.dff");
+        late_small.offset = 900;
+        late_small.sector = 1;
+        let mut early_large = EntryInfo::new("early_large.dff");
+        early_large.offset = 10;
+        early_large.sector = 500;
+        let mut entries = vec![late_small, early_large];
+        sort_entries(&mut entries, &chain, &SortContext::empty());
+        assert_eq!(entries[0].file_name.as_str(), "early_large.dff");
+    }
+
+    #[test]
+    fn extension_sort_groups_by_extension_not_type_label() {
+        // `.dff` and `.nif` share the "Model" label; an extension sort
+        // must still separate them around `.ifp`.
+        let chain = chain_one(SortKey::Extension, SortDirection::Ascending);
+        let mut entries = vec![entry("a.nif"), entry("b.ifp"), entry("c.dff")];
+        sort_entries(&mut entries, &chain, &SortContext::empty());
+        let names: Vec<_> = entries.iter().map(|e| e.file_name.as_str()).collect();
+        assert_eq!(names, ["c.dff", "b.ifp", "a.nif"]);
     }
 
     #[test]
