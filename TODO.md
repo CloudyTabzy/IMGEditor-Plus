@@ -11,6 +11,33 @@ separate GTA animation adapters. The remaining
 are tracked below. The shipped compatibility-engine details are recorded in
 the release notes and the dedicated documents under `docs/`.
 
+## Unreleased (v4.12.0 candidate)
+
+Committed on `master` since v4.11.0; a feature release under the version
+scheme (+1 minor). Bump `Cargo.toml` and the README heading before tagging.
+
+- **Merged title bar** — frameless window; the menu bar carries the logo,
+  centered window title, and caption buttons (`src/ui/title_bar.rs`). Native
+  snap/animations/system menu kept; Win11 snap-layouts flyout unavailable.
+- **Recent menu** — recent files moved from File ▸ Open Recent to a root
+  "Recent" menu. **Keep menus one level deep:** iced_aw 0.14.1 panics in the
+  menu overlay's `operate()` with a closed nested submenu (reported upstream
+  as iced-rs/iced_aw#447; see the comment on `App::menubar`).
+- **Per-archive game folder** — File ▸ Set game folder… / Reset game folder,
+  persisted as `archive_game_root_N` in settings.ini and shown in the Export
+  panel; the automatic guess (`parent().parent()`) remains the fallback.
+- **Explorer integration** — View ▸ Open .img/.dir from Explorer registers a
+  per-user ProgID + OpenWithProgids + RegisteredApplications entry (never the
+  `.img` default) and opens Settings ▸ Default apps; an archive path on the
+  command line opens on startup (`src/file_association.rs`).
+- **Fixes** — Save As no longer deletes the source archive; saves rename the
+  new file into place before removing anything; imported files that change
+  size mid-save fail the save instead of corrupting the layout; inspector
+  headers honor pending edits; Offset/Extension sort keys; crash on shortcuts
+  with the File menu open; non-ASCII recent-file labels panicking; missing
+  recent files hidden; tab labels no longer wrap; DFF skin and `.db` count
+  hardening.
+
 ## 0. Entry-list comparison (implemented)
 
 The Alci-compatible name manifest workflow is now shipped. Ctrl+L exports raw
@@ -374,9 +401,9 @@ This is fine for **another IMG version** (`PcV3Parser` etc.). For a brand-new co
   token sets, so Everforest and GitHub Dark style closures match
   `App::design` too.
 - **Cache parsed NFT catalogs** — partially done. The per-game-root `IdeMap` is memoized and decoded texture pixels are cached in the `quick_cache` LRU, so repeated 3D loads skip the directory walk and pixel decode. The catalog parse itself (`parse_nft_catalog_bytes`) still runs per NIF load; parked because parsing is cheap next to decode.
-- **Game root path override** — not started. `Config` has no `game_root` field; the root is still derived from the archive path (`parent().parent()`). A CLI flag or settings field is the planned seam.
+- **Game root path override** — done (unreleased). Per archive rather than global, since III/VC/SA/Bully archives are routinely open side by side: `Config::game_root_for` returns the File ▸ Set game folder… choice, else the `parent().parent()` guess; all 3D/IDE lookups go through it.
 - **Clear old temp files on startup** — done. `main.rs::clean_temp_preview` sweeps `%TEMP%\IMGEditor\preview\` best-effort on launch; locked entries are skipped so it never blocks startup.
-- **Windows file-association registration** — not started. No registry/`ftype` code exists yet.
+- **Windows file-association registration** — done (unreleased). HKCU only, via `winreg`; Windows 8+ lets only the user pick a default, so the app registers itself as a candidate and opens its Default apps page. Each Explorer open starts a new instance (no single-instance forwarding yet).
 
 ---
 
