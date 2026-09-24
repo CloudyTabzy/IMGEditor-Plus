@@ -609,7 +609,7 @@ pub fn parse_dff_rig(bytes: &[u8]) -> Result<DffRig, String> {
         return Err("DFF has no frame list; cannot build a rig".to_string());
     }
 
-    let mut frames: Vec<DffFrame> = clump
+    let frames: Vec<DffFrame> = clump
         .frames
         .iter()
         .enumerate()
@@ -814,66 +814,33 @@ fn parse_modern_skin(body: &[u8], vertex_count: usize) -> Result<DffSkin, String
     let num_bones = cursor.take(1, "skin bone count")?[0] as usize;
     let num_used_bones = cursor.take(1, "skin used-bone count")?[0] as usize;
     let _max_weights = cursor.take(1, "skin max weights")?[0] as usize;
-    cursor.skip(1, "skin header pad");
+    cursor.skip(1, "skin header pad")?;
     if num_bones > MAX_FRAMES {
         return Err(format!("skin bone count {num_bones} exceeds viewer limit"));
     }
 
     let oldver = num_used_bones == 0;
-    // DragonFF reads the influences as two contiguous blocks: 4 bytes of
-    // bone indices per vertex (the whole array first), then 4 f32 weights
-    // per vertex. Interleaving the two blocks garbles every weight.
-    let index_bytes = vertex_count
-        .checked_mul(4)
-        .ok_or_else(|| "skin index size overflowed".to_string())?;
-    let weight_bytes = vertex_count
-        .checked_mul(16)
-        .ok_or_else(|| "skin weight size overflowed".to_string())?;
     let (used_bones, vertex_indices, vertex_weights, bone_matrices) = if oldver {
         // Old RW versions omit the used-bone array entirely: per-vertex
         // indices point straight at the bone list, and each matrix is
         // preceded by a 0xDEADDEAD marker.
-        let mut indices_flat = Vec::with_capacity(vertex_count * 4);
-        for _ in 0..index_bytes {
-            indices_flat.push(cursor.take(1, "skin vertex bone index")?[0]);
-        }
-        let mut vertex_weights = Vec::with_capacity(vertex_count);
-        for _ in 0..vertex_count {
-            let mut weights = [0.0f32; 4];
-            for weight in weights.iter_mut() {
-                *weight = cursor.f32("skin vertex weight")?;
-            }
-            vertex_weights.push(weights);
-        }
+        let (vertex_indices, vertex_weights) = read_skin_influences(&mut cursor, vertex_count)?;
         let mut bone_matrices = Vec::with_capacity(num_bones);
         for _ in 0..num_bones {
             cursor.skip(4, "skin matrix marker")?;
             bone_matrices.push(read_skin_matrix(&mut cursor)?);
         }
-        let vertex_indices = flat_to_vertex_indices(indices_flat, vertex_count);
         (Vec::new(), vertex_indices, vertex_weights, bone_matrices)
     } else {
         let mut used_bones = Vec::with_capacity(num_used_bones);
         for _ in 0..num_used_bones {
             used_bones.push(cursor.take(1, "skin used bone")?[0]);
         }
-        let mut indices_flat = Vec::with_capacity(vertex_count * 4);
-        for _ in 0..index_bytes {
-            indices_flat.push(cursor.take(1, "skin vertex bone index")?[0]);
-        }
-        let mut vertex_weights = Vec::with_capacity(vertex_count);
-        for _ in 0..vertex_count {
-            let mut weights = [0.0f32; 4];
-            for weight in weights.iter_mut() {
-                *weight = cursor.f32("skin vertex weight")?;
-            }
-            vertex_weights.push(weights);
-        }
+        let (vertex_indices, vertex_weights) = read_skin_influences(&mut cursor, vertex_count)?;
         let mut bone_matrices = Vec::with_capacity(num_bones);
         for _ in 0..num_bones {
             bone_matrices.push(read_skin_matrix(&mut cursor)?);
         }
-        let vertex_indices = flat_to_vertex_indices(indices_flat, vertex_count);
         (used_bones, vertex_indices, vertex_weights, bone_matrices)
     };
 
@@ -898,20 +865,36 @@ fn read_skin_matrix(cursor: &mut Cursor<'_>) -> Result<[[f32; 4]; 4], String> {
     Ok(matrix)
 }
 
-/// Reshape the contiguous `4 × vertices` index block into per-vertex
-/// four-slot arrays.
-fn flat_to_vertex_indices(flat: Vec<u8>, vertex_count: usize) -> Vec<[u8; 4]> {
-    let mut vertex_indices = Vec::with_capacity(vertex_count);
-    for vertex in 0..vertex_count {
-        let base = vertex * 4;
-        vertex_indices.push([
-            flat[base],
-            flat.get(base + 1).copied().unwrap_or(0),
-            flat.get(base + 2).copied().unwrap_or(0),
-            flat.get(base + 3).copied().unwrap_or(0),
-        ]);
-    }
-    vertex_indices
+/// Read the skin influences. DragonFF reads them as two contiguous blocks:
+/// 4 bytes of bone indices per vertex (the whole array first), then 4 f32
+/// weights per vertex. Interleaving the two blocks garbles every weight.
+fn read_skin_influences(
+    cursor: &mut Cursor<'_>,
+    vertex_count: usize,
+) -> Result<(Vec<[u8; 4]>, Vec<[f32; 4]>), String> {
+    let index_bytes = vertex_count
+        .checked_mul(4)
+        .ok_or_else(|| "skin index size overflowed".to_string())?;
+    let weight_bytes = vertex_count
+        .checked_mul(16)
+        .ok_or_else(|| "skin weight size overflowed".to_string())?;
+    let indices = cursor.take(index_bytes, "skin vertex bone indices")?;
+    let weights = cursor.take(weight_bytes, "skin vertex weights")?;
+    let vertex_indices = indices
+        .chunks_exact(4)
+        .map(|slots| [slots[0], slots[1], slots[2], slots[3]])
+        .collect();
+    let vertex_weights = weights
+        .chunks_exact(16)
+        .map(|vertex| {
+            let mut out = [0.0f32; 4];
+            for (weight, bytes) in out.iter_mut().zip(vertex.chunks_exact(4)) {
+                *weight = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            }
+            out
+        })
+        .collect();
+    Ok((vertex_indices, vertex_weights))
 }
 
 /// Legacy atomic-level SKIN PLG (DragonFF `from_mem(data, geometry, frame)`):
@@ -931,19 +914,7 @@ fn parse_legacy_skin(body: &[u8], vertex_count_hint: usize) -> Result<DffSkin, S
         ));
     }
     // Same contiguous index/weight blocks as the modern variant.
-    let mut indices_flat = Vec::with_capacity(vertex_count * 4);
-    for _ in 0..vertex_count * 4 {
-        indices_flat.push(cursor.take(1, "skin vertex bone index")?[0]);
-    }
-    let mut vertex_weights = Vec::with_capacity(vertex_count);
-    for _ in 0..vertex_count {
-        let mut weights = [0.0f32; 4];
-        for weight in weights.iter_mut() {
-            *weight = cursor.f32("skin vertex weight")?;
-        }
-        vertex_weights.push(weights);
-    }
-    let vertex_indices = flat_to_vertex_indices(indices_flat, vertex_count);
+    let (vertex_indices, vertex_weights) = read_skin_influences(&mut cursor, vertex_count)?;
     let mut bones = Vec::with_capacity(num_bones);
     let mut bone_matrices = Vec::with_capacity(num_bones);
     for _ in 0..num_bones {
@@ -1573,7 +1544,7 @@ mod tests {
         frames_struct.extend_from_slice(&frame_record(0, [5.0, 0.0, 0.0]));
         frames_struct.extend_from_slice(&frame_record(0, [0.0, 3.0, 0.0]));
 
-        let mut normal_name = section(NODE_NAME_PLG, 0, b"Normal\0");
+        let normal_name = section(NODE_NAME_PLG, 0, b"Normal\0");
         let mut hanim_body = Vec::new();
         hanim_body.extend_from_slice(&0x0000_0100_i32.to_le_bytes());
         hanim_body.extend_from_slice(&0_i32.to_le_bytes());

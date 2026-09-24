@@ -180,7 +180,11 @@ impl<'a> DbFile<'a> {
         // `vector<CDBEntry*>& rvecDBEntries; rvecDBEntries.resize(uiEntryCount);`
         // — we don't materialize a vector of pointers, we just
         // remember the slice bounds. Zero allocation, zero copy.
-        let mut entries: Vec<DbEntry<'a>> = Vec::with_capacity(count);
+        // Every entry starts with a 4-byte name length, so a count larger
+        // than that can never parse; capping the reservation keeps a
+        // corrupt count from aborting on a multi-gigabyte allocation.
+        let mut entries: Vec<DbEntry<'a>> =
+            Vec::with_capacity(count.min((bytes.len() - HEADER_LEN) / 4));
         let mut cursor: usize = HEADER_LEN;
         for i in 0..count {
             // 4 bytes for name length.
