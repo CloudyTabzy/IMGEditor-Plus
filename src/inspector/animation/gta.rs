@@ -91,7 +91,7 @@ fn skin_binding(skin: &DffSkin, vertex_count: usize) -> Result<SkinBinding, Mode
     } else {
         skin.used_bones
             .iter()
-            .map(|&bone| usize::try_from(bone).ok())
+            .map(|&bone| Some(usize::from(bone)))
             .collect()
     };
 
@@ -471,8 +471,7 @@ mod tests {
             rest.aabb.max[1] - rest.aabb.min[1],
             rest.aabb.max[2] - rest.aabb.min[2],
         ];
-        for axis in 0..3 {
-            let span = extent[axis];
+        for (axis, &span) in extent.iter().enumerate() {
             assert!(
                 span > 0.1 && span < GTA_MODEL_MAX_EXTENT_M,
                 "axis {axis} extent {span:.3} outside sane range"

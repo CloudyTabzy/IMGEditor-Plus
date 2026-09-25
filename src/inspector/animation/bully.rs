@@ -2713,7 +2713,7 @@ mod tests {
                 rows.push(format!("{agr_name} | {model_name}: no clips"));
                 continue;
             };
-            if !models.contains_key(&model_index) {
+            if let std::collections::hash_map::Entry::Vacant(slot) = models.entry(model_index) {
                 let Some(nif_bytes) = world_entry(stream, &model_name) else {
                     failed += 1;
                     rows.push(format!("{agr_name} | {model_name}: NIF read failed"));
@@ -2727,7 +2727,7 @@ mod tests {
                 nif.resolve_string_indices();
                 match model_from_nif(&nif, &model_name, format!("audit:{model_name}")) {
                     Ok(model) => {
-                        models.insert(model_index, model);
+                        slot.insert(model);
                     }
                     Err(error) => {
                         failed += 1;
@@ -3365,7 +3365,7 @@ mod tests {
             let posed = crate::inspector::animation::pose::scene_from_pose(&model, &buffers);
             if let Some((angle, _)) = facing_probe_collect(&posed) {
                 let a = angle.rem_euclid(360.0);
-                if a < 90.0 || a > 270.0 {
+                if !(90.0..=270.0).contains(&a) {
                     toward += 1;
                 } else if a > 90.0 && a < 270.0 {
                     away += 1;
@@ -3543,7 +3543,10 @@ mod tests {
             }
         }
         for (ordinal, time_norm, w, x) in
-            [(1u16, 32768u16, 0.7071f32, 0.7071f32), (2, 65535, 1.0, 0.0)]
+            [
+                (1u16, 32768u16, std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2),
+                (2, 65535, 1.0, 0.0),
+            ]
         {
             out.extend_from_slice(&ordinal.to_le_bytes());
             out.extend_from_slice(&time_norm.to_le_bytes());
@@ -3602,7 +3605,7 @@ mod tests {
         assert!((rotation.keys[0].time_s - 0.25).abs() < 1e-3);
         assert!((rotation.keys[1].time_s - 0.5).abs() < 1e-3);
         let q = rotation.keys[0].rotation();
-        assert!((q.x - 0.7071).abs() < 1e-3);
+        assert!((q.x - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3);
         assert!((q.y - 0.0).abs() < 1e-3);
         let translation = clip0
             .tracks

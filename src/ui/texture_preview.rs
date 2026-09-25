@@ -137,9 +137,9 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
                     action
                 })
             }
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(button))
-                if matches!(button, mouse::Button::Left | mouse::Button::Middle) =>
-            {
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(
+                mouse::Button::Left | mouse::Button::Middle,
+            )) => {
                 let cursor_position = cursor.position_over(bounds)?;
                 state.cursor_grabbed_at = Some(cursor_position);
                 state.starting_offset = state.current_offset;
@@ -149,9 +149,9 @@ impl<Message: 'static> canvas::Program<Message> for TextureViewport {
                     None
                 }
             }
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(button))
-                if matches!(button, mouse::Button::Left | mouse::Button::Middle) =>
-            {
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(
+                mouse::Button::Left | mouse::Button::Middle,
+            )) => {
                 if state.cursor_grabbed_at.take().is_some() {
                     self.render_image.then_some(canvas::Action::capture())
                 } else {

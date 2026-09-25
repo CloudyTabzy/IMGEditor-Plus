@@ -435,8 +435,12 @@ fn parse_bully_entry(
     if vertex_count == 0 {
         return Ok(None);
     }
-    let (vertices, indices, faces, face_count) =
-        parse_bully_mesh(bytes, entry_start, entry_end, vertex_count)?;
+    let BullyMesh {
+        vertices,
+        indices,
+        faces,
+        face_count,
+    } = parse_bully_mesh(bytes, entry_start, entry_end, vertex_count)?;
 
     Ok(make_entry(
         ColEntryMetadata {
@@ -529,12 +533,21 @@ fn parse_bully_boxes(
     Ok(boxes)
 }
 
+/// A Bully collision mesh: positions, triangle indices, per-face records
+/// and the face count the file declared.
+struct BullyMesh {
+    vertices: Vec<[f32; 3]>,
+    indices: Vec<u32>,
+    faces: Vec<ColFace>,
+    face_count: u32,
+}
+
 fn parse_bully_mesh(
     bytes: &[u8],
     entry_start: usize,
     entry_end: usize,
     vertex_count: u32,
-) -> Result<(Vec<[f32; 3]>, Vec<u32>, Vec<ColFace>, u32), ColError> {
+) -> Result<BullyMesh, ColError> {
     let vertex_count_usize = checked_count(vertex_count, "Bully vertices")?;
     let vertex_start = entry_offset(entry_start, 100, entry_end)?;
     let vertex_end = checked_items_end(vertex_start, vertex_count_usize, 6, entry_end)?;
@@ -581,7 +594,12 @@ fn parse_bully_mesh(
         }
     }
 
-    Ok((vertices, indices, faces, face_count))
+    Ok(BullyMesh {
+        vertices,
+        indices,
+        faces,
+        face_count,
+    })
 }
 
 fn parse_entry(

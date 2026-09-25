@@ -460,7 +460,8 @@ pub fn parse_record(body: &[u8], fallback_model: &str) -> HxdRecord {
             let Some(weight) = read_f32(body, candidate.saturating_sub(4)) else {
                 continue;
             };
-            if !duration.is_finite() || duration < 0.01 || duration > 600.0 {
+            // Also rejects NaN and infinities, which fall outside any range.
+            if !(0.01..=600.0).contains(&duration) {
                 continue;
             }
             if !weight.is_finite() || !(0.0..=1.0).contains(&weight) {

@@ -2980,7 +2980,7 @@ impl App {
             .or_else(|| {
                 self.active_viewer_entry
                     .filter(|(idx, _)| *idx == archive_index)
-                    .and_then(|(_, entry)| Some(entry))
+                    .map(|(_, entry)| entry)
             })
             .or_else(|| {
                 archive
@@ -5070,11 +5070,10 @@ impl App {
                 );
                 match result {
                     Ok(()) => {
-                        if target_matches {
-                            if let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
-                            {
-                                archive.add_log(t::log_entry_list_exported(count, path.display().to_string()));
-                            }
+                        if target_matches
+                            && let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
+                        {
+                            archive.add_log(t::log_entry_list_exported(count, path.display().to_string()));
                         }
                         self.toast = Some(t::toast_entry_list_exported(count, path.display().to_string()));
                         dev_logger::breadcrumb(&format!(
@@ -11893,7 +11892,7 @@ mod tests {
             for index in 0..40 {
                 archive
                     .entries
-                    .push(EntryInfo::new(&format!("entry{index:03}.dff")));
+                    .push(EntryInfo::new(format!("entry{index:03}.dff")));
             }
             archive.update_selected_list("", false);
         }

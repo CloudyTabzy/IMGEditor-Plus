@@ -280,13 +280,15 @@ fn track_number(name: &str) -> Option<i64> {
 /// candidate set (skin-derived for skinned models). Used by the live
 /// calibration and by the diagnostics-only audit so both measure the same
 /// semantics.
+/// One representative rotation channel list per AGR target.
+type CalibrationTargets = Vec<(String, Vec<crate::inspector::animation::clip::TrackChannel>)>;
+/// Admissible binding candidates: source name and node.
+type CalibrationCandidates = Vec<(String, NodeId)>;
+
 fn calibration_inputs(
     model: &ModelAsset,
     library: &crate::inspector::animation::clip::AnimationLibrary,
-) -> (
-    Vec<(String, Vec<crate::inspector::animation::clip::TrackChannel>)>,
-    Vec<(String, NodeId)>,
-) {
+) -> (CalibrationTargets, CalibrationCandidates) {
     use crate::inspector::animation::clip::TrackChannel;
     use std::collections::{BTreeMap, HashSet};
 
@@ -398,11 +400,15 @@ fn calibration_inputs(
 /// (small `best`, clearly ahead of `second`) pins a target semantically,
 /// so the audit can flag structurally valid bindings that contradict such
 /// evidence without re-deriving the calibration's candidate logic.
+/// A calibration target with its best and second-best rest matches.
+#[cfg(test)]
+pub(crate) type RestMatch = (String, Option<(NodeId, f32)>, Option<(NodeId, f32)>);
+
 #[cfg(test)]
 pub(crate) fn target_rest_matches(
     model: &ModelAsset,
     library: &crate::inspector::animation::clip::AnimationLibrary,
-) -> Vec<(String, Option<(NodeId, f32)>, Option<(NodeId, f32)>)> {
+) -> Vec<RestMatch> {
     let (targets, candidates) = calibration_inputs(model, library);
     targets
         .iter()
@@ -908,7 +914,7 @@ mod tests {
                 parent: Some(NodeId(index)),
                 name: format!("track_{index:03}"),
                 local: NodeTransform {
-                    rotation: Quat::from_rotation_z(index as f32 * 0.7853982),
+                    rotation: Quat::from_rotation_z(index as f32 * std::f32::consts::FRAC_PI_4),
                     ..NodeTransform::IDENTITY
                 },
                 mesh: None,
@@ -967,7 +973,7 @@ mod tests {
 
         let mut tracks = Vec::new();
         for index in 0..8 {
-            let rest = Quat::from_rotation_z((index + 1) as f32 * 0.7853982);
+            let rest = Quat::from_rotation_z((index + 1) as f32 * std::f32::consts::FRAC_PI_4);
             let rotation = if matches!(index, 0 | 4) {
                 rest * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
             } else {
@@ -1162,7 +1168,7 @@ mod tests {
                 parent: Some(NodeId(index)),
                 name: format!("track_{index:03}"),
                 local: NodeTransform {
-                    rotation: Quat::from_rotation_z((index + 1) as f32 * 0.7853982),
+                    rotation: Quat::from_rotation_z((index + 1) as f32 * std::f32::consts::FRAC_PI_4),
                     ..NodeTransform::IDENTITY
                 },
                 mesh: None,
@@ -1211,7 +1217,7 @@ mod tests {
 
         let mut tracks = Vec::new();
         for index in 0..8 {
-            let rest = Quat::from_rotation_z((index + 1) as f32 * 0.7853982);
+            let rest = Quat::from_rotation_z((index + 1) as f32 * std::f32::consts::FRAC_PI_4);
             let rotation = if matches!(index, 0 | 4) {
                 rest * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
             } else {

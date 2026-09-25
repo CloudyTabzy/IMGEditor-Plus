@@ -824,7 +824,10 @@ fn parse_modern_skin(body: &[u8], vertex_count: usize) -> Result<DffSkin, String
         // Old RW versions omit the used-bone array entirely: per-vertex
         // indices point straight at the bone list, and each matrix is
         // preceded by a 0xDEADDEAD marker.
-        let (vertex_indices, vertex_weights) = read_skin_influences(&mut cursor, vertex_count)?;
+        let SkinInfluences {
+            indices: vertex_indices,
+            weights: vertex_weights,
+        } = read_skin_influences(&mut cursor, vertex_count)?;
         let mut bone_matrices = Vec::with_capacity(num_bones);
         for _ in 0..num_bones {
             cursor.skip(4, "skin matrix marker")?;
@@ -836,7 +839,10 @@ fn parse_modern_skin(body: &[u8], vertex_count: usize) -> Result<DffSkin, String
         for _ in 0..num_used_bones {
             used_bones.push(cursor.take(1, "skin used bone")?[0]);
         }
-        let (vertex_indices, vertex_weights) = read_skin_influences(&mut cursor, vertex_count)?;
+        let SkinInfluences {
+            indices: vertex_indices,
+            weights: vertex_weights,
+        } = read_skin_influences(&mut cursor, vertex_count)?;
         let mut bone_matrices = Vec::with_capacity(num_bones);
         for _ in 0..num_bones {
             bone_matrices.push(read_skin_matrix(&mut cursor)?);
@@ -868,10 +874,16 @@ fn read_skin_matrix(cursor: &mut Cursor<'_>) -> Result<[[f32; 4]; 4], String> {
 /// Read the skin influences. DragonFF reads them as two contiguous blocks:
 /// 4 bytes of bone indices per vertex (the whole array first), then 4 f32
 /// weights per vertex. Interleaving the two blocks garbles every weight.
+/// Per-vertex bone slots and their weights, four per vertex.
+struct SkinInfluences {
+    indices: Vec<[u8; 4]>,
+    weights: Vec<[f32; 4]>,
+}
+
 fn read_skin_influences(
     cursor: &mut Cursor<'_>,
     vertex_count: usize,
-) -> Result<(Vec<[u8; 4]>, Vec<[f32; 4]>), String> {
+) -> Result<SkinInfluences, String> {
     let index_bytes = vertex_count
         .checked_mul(4)
         .ok_or_else(|| "skin index size overflowed".to_string())?;
@@ -894,7 +906,10 @@ fn read_skin_influences(
             out
         })
         .collect();
-    Ok((vertex_indices, vertex_weights))
+    Ok(SkinInfluences {
+        indices: vertex_indices,
+        weights: vertex_weights,
+    })
 }
 
 /// Legacy atomic-level SKIN PLG (DragonFF `from_mem(data, geometry, frame)`):
@@ -914,7 +929,10 @@ fn parse_legacy_skin(body: &[u8], vertex_count_hint: usize) -> Result<DffSkin, S
         ));
     }
     // Same contiguous index/weight blocks as the modern variant.
-    let (vertex_indices, vertex_weights) = read_skin_influences(&mut cursor, vertex_count)?;
+    let SkinInfluences {
+            indices: vertex_indices,
+            weights: vertex_weights,
+        } = read_skin_influences(&mut cursor, vertex_count)?;
     let mut bones = Vec::with_capacity(num_bones);
     let mut bone_matrices = Vec::with_capacity(num_bones);
     for _ in 0..num_bones {
@@ -1603,11 +1621,7 @@ mod tests {
             }
         }
 
-        let mut skin = Vec::new();
-        skin.push(2_u8);
-        skin.push(2_u8);
-        skin.push(4_u8);
-        skin.push(0_u8); // header pad ("<3Bx")
+        let mut skin = vec![2_u8, 2, 4, 0]; // counts + header pad ("<3Bx")
         skin.extend_from_slice(&[1_u8, 2_u8]);
         // Contiguous index block (4 bytes per vertex), then the weight
         // block (16 bytes per vertex) — DragonFF's two-array layout.
