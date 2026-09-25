@@ -28,6 +28,7 @@ pub mod t {
 const ENGLISH_FTL: &str = include_str!("../i18n/en.ftl");
 const GERMAN_FTL: &str = include_str!("../i18n/de.ftl");
 const SPANISH_FTL: &str = include_str!("../i18n/es.ftl");
+const INDONESIAN_FTL: &str = include_str!("../i18n/id.ftl");
 const PORTUGUESE_BR_FTL: &str = include_str!("../i18n/pt-BR.ftl");
 const RUSSIAN_FTL: &str = include_str!("../i18n/ru.ftl");
 
@@ -36,6 +37,7 @@ pub enum Language {
     English,
     German,
     Spanish,
+    Indonesian,
     PortugueseBr,
     Russian,
     /// English with accented, lengthened text, for finding labels that
@@ -45,10 +47,11 @@ pub enum Language {
 
 impl Language {
     /// The languages offered in the Language menu, in menu order.
-    pub const SELECTABLE: [Language; 5] = [
+    pub const SELECTABLE: [Language; 6] = [
         Language::English,
         Language::German,
         Language::Spanish,
+        Language::Indonesian,
         Language::PortugueseBr,
         Language::Russian,
     ];
@@ -59,6 +62,7 @@ impl Language {
             Language::English => "en",
             Language::German => "de",
             Language::Spanish => "es",
+            Language::Indonesian => "id",
             Language::PortugueseBr => "pt-BR",
             Language::Russian => "ru",
             Language::Pseudo => "pseudo",
@@ -72,6 +76,7 @@ impl Language {
             Language::English => "English",
             Language::German => "Deutsch",
             Language::Spanish => "Español",
+            Language::Indonesian => "Bahasa Indonesia",
             Language::PortugueseBr => "Português (Brasil)",
             Language::Russian => "Русский",
             Language::Pseudo => "Pseudo",
@@ -92,6 +97,7 @@ impl Language {
             "en" => Some(Language::English),
             "de" => Some(Language::German),
             "es" => Some(Language::Spanish),
+            "id" => Some(Language::Indonesian),
             "pt" => Some(Language::PortugueseBr),
             "ru" => Some(Language::Russian),
             _ => None,
@@ -103,6 +109,7 @@ impl Language {
             Language::English | Language::Pseudo => ENGLISH_FTL,
             Language::German => GERMAN_FTL,
             Language::Spanish => SPANISH_FTL,
+            Language::Indonesian => INDONESIAN_FTL,
             Language::PortugueseBr => PORTUGUESE_BR_FTL,
             Language::Russian => RUSSIAN_FTL,
         }
@@ -114,6 +121,7 @@ impl Language {
             Language::English | Language::Pseudo => "en",
             Language::German => "de",
             Language::Spanish => "es",
+            Language::Indonesian => "id",
             Language::PortugueseBr => "pt-BR",
             Language::Russian => "ru",
         };
@@ -323,6 +331,7 @@ mod tests {
             Language::English,
             Language::German,
             Language::Spanish,
+            Language::Indonesian,
             Language::PortugueseBr,
             Language::Russian,
             Language::Pseudo,
@@ -345,6 +354,9 @@ mod tests {
         set_language(Language::Spanish);
         assert_eq!(t::menu_file(), "Archivo");
         assert_eq!(t::menu_file_new("Ctrl + N"), "Nuevo (Ctrl + N)");
+        set_language(Language::Indonesian);
+        assert_eq!(t::menu_file(), "Berkas");
+        assert_eq!(t::menu_file_new("Ctrl + N"), "Baru (Ctrl + N)");
         set_language(Language::PortugueseBr);
         assert_eq!(t::menu_file(), "Arquivo");
         assert_eq!(t::menu_file_new("Ctrl + N"), "Novo (Ctrl + N)");
@@ -429,6 +441,7 @@ mod tests {
             LanguageSetting::Fixed(Language::English),
             LanguageSetting::Fixed(Language::German),
             LanguageSetting::Fixed(Language::Spanish),
+            LanguageSetting::Fixed(Language::Indonesian),
             LanguageSetting::Fixed(Language::PortugueseBr),
             LanguageSetting::Fixed(Language::Russian),
         ] {
@@ -437,6 +450,10 @@ mod tests {
         assert_eq!("fr".parse::<LanguageSetting>(), Err(()));
         assert_eq!(Language::from_locale_tag("de-DE"), Some(Language::German));
         assert_eq!(Language::from_locale_tag("es-MX"), Some(Language::Spanish));
+        assert_eq!(
+            Language::from_locale_tag("id-ID"),
+            Some(Language::Indonesian)
+        );
         assert_eq!(
             Language::from_locale_tag("pt_BR.UTF-8"),
             Some(Language::PortugueseBr)
