@@ -164,7 +164,6 @@ fn disc_mesh(radius: f32, segments: u32) -> (Vec<Vertex>, Vec<u32>) {
 /// Open tube along local +Y, with skin weights blended between two
 /// joints. `weight_at` maps a vertex's bind-space Y to the upper joint's
 /// weight. Ring order is bottom to top; joint slot 0 is the upper joint.
-#[allow(clippy::too_many_arguments)]
 fn tube_mesh(
     radius: f32,
     height: f32,

@@ -842,11 +842,13 @@ impl primitive::Primitive for ScenePrimitive {
         let rebuilt = pipeline.upload_if_changed(
             device,
             queue,
-            &scene,
-            &camera,
-            flags,
-            origin_offset,
-            dynamic,
+            &FrameView {
+                scene: &scene,
+                camera: &camera,
+                flags,
+                origin_offset,
+                dynamic,
+            },
         );
         if dynamic {
             let uploaded = self.handle.with(|i| {
@@ -947,11 +949,9 @@ pub struct ScenePipeline {
     /// `prepare`. The composite pass uses it as its viewport so the blit
     /// lands exactly over the pane (scissored to `clip_bounds`).
     pub widget_rect: [f32; 4],
-    pub cached_scene_ptr: usize,
-    pub cached_signature: u64,
-    pub cached_flags_bits: u32,
-    pub cached_origin_offset: [f32; 3],
-    pub cached_dynamic: bool,
+    /// What `mesh_cache` was built from; `None` until the first upload and
+    /// after resources are released.
+    uploaded: Option<SceneUploadKey>,
     pub mesh_cache: Vec<(GpuMesh, Option<GpuTexture>)>,
     /// Dynamic overlay (skeleton + motion path) vertex buffer.
     pub skeleton_buffer: Option<wgpu::Buffer>,
@@ -991,68 +991,63 @@ impl ScenePipeline {
         self.widget_rect = [x, y, width.max(1.0), height.max(1.0)];
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Rebuilds the GPU meshes when the scene or anything baked into them
+    /// changed, and refreshes the camera uniforms every frame. Returns
+    /// whether the meshes were rebuilt (the caller then re-uploads poses).
     fn upload_if_changed(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        scene: &Scene,
-        camera: &OrbitCamera,
-        flags: RenderFlags,
-        origin_offset: [f32; 3],
-        dynamic: bool,
+        frame: &FrameView<'_>,
     ) -> bool {
-        let scene_ptr = scene as *const Scene as usize;
-        let eff_flags = effective_texture_flag(scene, flags);
-        let signature = if scene_ptr == self.cached_scene_ptr {
-            self.cached_signature
-        } else {
-            scene_signature(scene)
+        let scene = frame.scene;
+        let scene_ptr = std::ptr::from_ref(scene) as usize;
+        let eff_flags = effective_texture_flag(scene, frame.flags);
+        // Hashing the scene's content is only needed for a different scene
+        // object; the same `Arc` keeps its signature.
+        let signature = match self.uploaded {
+            Some(key) if key.scene_ptr == scene_ptr => key.signature,
+            _ => scene_signature(scene),
         };
-        let resource_flags = resource_cache_flags(eff_flags);
-        if scene_ptr == self.cached_scene_ptr
-            && signature == self.cached_signature
-            && resource_flags == self.cached_flags_bits
-            && origin_offset == self.cached_origin_offset
-            && dynamic == self.cached_dynamic
-        {
-            self.render_pipelines.update_camera(
-                queue,
-                camera,
-                scene.key_light,
-                scene.ambient,
-                eff_flags,
-            );
-            return false;
-        }
-        self.cached_scene_ptr = scene_ptr;
-        self.cached_signature = signature;
-        self.cached_flags_bits = resource_flags;
-        self.cached_origin_offset = origin_offset;
-        self.cached_dynamic = dynamic;
-        self.mesh_cache.clear();
-        for mesh in &scene.meshes {
-            let gpu =
-                GpuMesh::from_scene_mesh_at_offset(device, queue, mesh, origin_offset, dynamic);
-            let tex = mesh.diffuse.as_ref().map(|t| {
-                GpuTexture::from_scene_texture(
+        let key = SceneUploadKey {
+            scene_ptr,
+            signature,
+            resource_flags: resource_cache_flags(eff_flags),
+            origin_offset: frame.origin_offset,
+            dynamic: frame.dynamic,
+        };
+        let rebuilt = self.uploaded != Some(key);
+        if rebuilt {
+            self.uploaded = Some(key);
+            self.mesh_cache.clear();
+            for mesh in &scene.meshes {
+                let gpu = GpuMesh::from_scene_mesh_at_offset(
                     device,
                     queue,
-                    t,
-                    &self.render_pipelines.texture_layout,
-                    &self.render_pipelines.texture_sampler,
-                )
-            });
-            self.mesh_cache.push((gpu, tex));
+                    mesh,
+                    frame.origin_offset,
+                    frame.dynamic,
+                );
+                let tex = mesh.diffuse.as_ref().map(|t| {
+                    GpuTexture::from_scene_texture(
+                        device,
+                        queue,
+                        t,
+                        &self.render_pipelines.texture_layout,
+                        &self.render_pipelines.texture_sampler,
+                    )
+                });
+                self.mesh_cache.push((gpu, tex));
+            }
         }
         self.render_pipelines.update_camera(
             queue,
-            camera,
+            frame.camera,
             scene.key_light,
             scene.ambient,
             eff_flags,
         );
-        true
+        rebuilt
     }
 
     /// Upload an already-evaluated pose into the dynamic vertex buffers.
@@ -1101,11 +1096,7 @@ impl ScenePipeline {
         self.skeleton_buffer = None;
         self.skeleton_capacity = 0;
         self.skeleton_vertex_count = 0;
-        self.cached_signature = 0;
-        self.cached_scene_ptr = 0;
-        self.cached_flags_bits = u32::MAX;
-        self.cached_origin_offset = [0.0; 3];
-        self.cached_dynamic = false;
+        self.uploaded = None;
         self.depth_view = None;
         self.depth_tex = None;
         self.msaa_color_view = None;
@@ -1361,11 +1352,7 @@ impl PrimitivePipeline for ScenePipeline {
             height: 0,
             last_viewport: (1, 1),
             widget_rect: [0.0, 0.0, 1.0, 1.0],
-            cached_scene_ptr: 0,
-            cached_signature: 0,
-            cached_flags_bits: 0,
-            cached_origin_offset: [0.0; 3],
-            cached_dynamic: false,
+            uploaded: None,
             mesh_cache: Vec::new(),
             skeleton_buffer: None,
             skeleton_capacity: 0,
@@ -1386,6 +1373,30 @@ impl PrimitivePipeline for ScenePipeline {
         }
         self.prepared_this_frame = false;
     }
+}
+
+/// The scene and view settings one frame renders.
+struct FrameView<'a> {
+    scene: &'a Scene,
+    camera: &'a OrbitCamera,
+    flags: RenderFlags,
+    /// Display offset baked into vertex positions (centered vs world origin).
+    origin_offset: [f32; 3],
+    /// Whether vertex buffers must accept per-frame pose uploads.
+    dynamic: bool,
+}
+
+/// Everything the uploaded GPU meshes were built from; a frame whose key
+/// differs rebuilds them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SceneUploadKey {
+    /// Identity of the `Scene` allocation.
+    scene_ptr: usize,
+    /// Content hash, guarding against a new scene reusing an old address.
+    signature: u64,
+    resource_flags: u32,
+    origin_offset: [f32; 3],
+    dynamic: bool,
 }
 
 fn scene_signature(scene: &Scene) -> u64 {

@@ -3831,35 +3831,22 @@ impl App {
                 let Ok(target) = crate::compat::convert::writable_target(target_id) else {
                     return Task::none();
                 };
-                let entry = archive.entries[entry_index].clone();
-                let archive_path = archive.path.clone();
-                let archive_name = archive.file_name.clone();
-                let texture_index = self.selected_texture;
+                let job = ReplaceJob {
+                    archive_index,
+                    entry_index,
+                    texture_index: self.selected_texture,
+                    source_path: path,
+                    entry: archive.entries[entry_index].clone(),
+                    archive_path: archive.path.clone(),
+                    target,
+                    archive_name: archive.file_name.clone(),
+                };
                 self.replace_plan_in_flight = true;
                 self.toast = Some(t::toast_preparing_replacement());
-                Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            plan_replace(
-                                &entry,
-                                archive_path.as_deref(),
-                                archive_index,
-                                entry_index,
-                                texture_index,
-                                path,
-                                target,
-                                &archive_name,
-                                None,
-                                crate::compat::encode::EncodeOptions::default(),
-                            )
-                        })
-                        .await
-                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
-                    },
-                    move |result| Message::ReplacePlanned {
-                        attempt,
-                        result: Box::new(result),
-                    },
+                job.plan_task(
+                    None,
+                    crate::compat::encode::EncodeOptions::default(),
+                    move |result| Message::ReplacePlanned { attempt, result },
                 )
             }
             Message::ReplacePlanned { attempt, result } => {
@@ -3929,38 +3916,11 @@ impl App {
                 // flight from an earlier toggle.
                 self.replace_attempt = self.replace_attempt.wrapping_add(1);
                 let attempt = self.replace_attempt;
-                let archive_index = state.archive_index;
-                let entry_index = state.entry_index;
-                let texture_index = state.texture_index;
-                let path = state.source_path.clone();
-                let entry = state.entry.clone();
-                let archive_path = state.archive_path.clone();
-                let target = state.target;
-                let archive_name = state.archive_name.clone();
                 let high_quality = state.high_quality;
-                Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            plan_replace(
-                                &entry,
-                                archive_path.as_deref(),
-                                archive_index,
-                                entry_index,
-                                texture_index,
-                                path,
-                                target,
-                                &archive_name,
-                                Some(format),
-                                replace_encode_options(high_quality),
-                            )
-                        })
-                        .await
-                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
-                    },
-                    move |result| Message::ReplacePlanRefreshed {
-                        attempt,
-                        result: Box::new(result),
-                    },
+                ReplaceJob::from_state(state).plan_task(
+                    Some(format),
+                    replace_encode_options(high_quality),
+                    move |result| Message::ReplacePlanRefreshed { attempt, result },
                 )
             }
             Message::ReplaceHighQualityToggled(high_quality) => {
@@ -3973,38 +3933,11 @@ impl App {
                 // flight from an earlier toggle.
                 self.replace_attempt = self.replace_attempt.wrapping_add(1);
                 let attempt = self.replace_attempt;
-                let archive_index = state.archive_index;
-                let entry_index = state.entry_index;
-                let texture_index = state.texture_index;
-                let path = state.source_path.clone();
-                let entry = state.entry.clone();
-                let archive_path = state.archive_path.clone();
-                let target = state.target;
-                let archive_name = state.archive_name.clone();
                 let format = state.chooser;
-                Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            plan_replace(
-                                &entry,
-                                archive_path.as_deref(),
-                                archive_index,
-                                entry_index,
-                                texture_index,
-                                path,
-                                target,
-                                &archive_name,
-                                Some(format),
-                                replace_encode_options(high_quality),
-                            )
-                        })
-                        .await
-                        .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
-                    },
-                    move |result| Message::ReplacePlanRefreshed {
-                        attempt,
-                        result: Box::new(result),
-                    },
+                ReplaceJob::from_state(state).plan_task(
+                    Some(format),
+                    replace_encode_options(high_quality),
+                    move |result| Message::ReplacePlanRefreshed { attempt, result },
                 )
             }
             Message::ReplacePlanRefreshed { attempt, result } => {
@@ -9146,50 +9079,94 @@ fn replace_encode_options(high_quality: bool) -> crate::compat::encode::EncodeOp
     }
 }
 
-/// Plan one texture replacement off the UI thread.
-#[allow(clippy::too_many_arguments)]
-fn plan_replace(
-    entry: &crate::archive::EntryInfo,
-    archive_path: Option<&std::path::Path>,
+/// One texture replacement: which texture of which entry, the image that
+/// replaces it, and the target it is encoded for. Kept by the open dialog
+/// so format and quality changes re-plan the same job.
+#[derive(Clone)]
+struct ReplaceJob {
     archive_index: usize,
     entry_index: usize,
     texture_index: usize,
-    path: PathBuf,
+    source_path: PathBuf,
+    /// The entry's source (archive or loose file) for re-reading bytes.
+    entry: crate::archive::EntryInfo,
+    archive_path: Option<PathBuf>,
     target: &'static crate::compat::games::GameProfile,
-    archive_name: &str,
+    archive_name: String,
+}
+
+impl ReplaceJob {
+    fn from_state(state: &ReplaceState) -> Self {
+        Self {
+            archive_index: state.archive_index,
+            entry_index: state.entry_index,
+            texture_index: state.texture_index,
+            source_path: state.source_path.clone(),
+            entry: state.entry.clone(),
+            archive_path: state.archive_path.clone(),
+            target: state.target,
+            archive_name: state.archive_name.clone(),
+        }
+    }
+
+    /// Plans on a blocking thread (decoding and encoding are CPU-bound) and
+    /// reports the result through `done`.
+    fn plan_task(
+        self,
+        format: Option<crate::compat::encode::EncodeFormat>,
+        options: crate::compat::encode::EncodeOptions,
+        done: impl FnOnce(Box<Result<ReplacePlanReady, String>>) -> Message + Send + 'static,
+    ) -> Task<Message> {
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || plan_replace(&self, format, options))
+                    .await
+                    .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+            },
+            move |result| done(Box::new(result)),
+        )
+    }
+}
+
+/// Plan one texture replacement off the UI thread.
+fn plan_replace(
+    job: &ReplaceJob,
     format: Option<crate::compat::encode::EncodeFormat>,
     options: crate::compat::encode::EncodeOptions,
 ) -> Result<ReplacePlanReady, String> {
+    let path = &job.source_path;
     let bytes =
-        std::fs::read(&path).map_err(|error| format!("read {} failed: {error}", path.display()))?;
+        std::fs::read(path).map_err(|error| format!("read {} failed: {error}", path.display()))?;
     let source_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("image")
         .to_string();
     let image = crate::compat::convert::decode_source_image_named(&bytes, &source_name)?;
-    let entry_bytes = crate::parser::read_entry_data_from_source(entry, archive_path)
-        .map_err(|error| error.to_string())?;
+    let entry_bytes =
+        crate::parser::read_entry_data_from_source(&job.entry, job.archive_path.as_deref())
+            .map_err(|error| error.to_string())?;
     let txd = crate::parser::txd::parse_txd(&entry_bytes)?;
     let old = txd
         .textures
-        .get(texture_index)
+        .get(job.texture_index)
         .ok_or_else(|| "this entry's texture list changed; reopen it".to_string())?;
     let before_rgba = old.decode_rgba().map_err(|error| error.to_string())?;
-    let plan = crate::compat::convert::plan_import(&image, target, archive_name, format, options)?;
+    let plan =
+        crate::compat::convert::plan_import(&image, job.target, &job.archive_name, format, options)?;
     Ok(ReplacePlanReady {
-        archive_index,
-        entry_index,
-        texture_index,
-        source_path: path,
+        archive_index: job.archive_index,
+        entry_index: job.entry_index,
+        texture_index: job.texture_index,
+        source_path: job.source_path.clone(),
         source_name,
         texture_name: old.diffuse_name.clone(),
         before: Some((old.width, old.height, Arc::new(before_rgba))),
         plan: CompactPlan(Arc::new(plan)),
-        entry: entry.clone(),
-        archive_path: archive_path.map(std::path::Path::to_path_buf),
-        target,
-        archive_name: archive_name.to_string(),
+        entry: job.entry.clone(),
+        archive_path: job.archive_path.clone(),
+        target: job.target,
+        archive_name: job.archive_name.clone(),
     })
 }
 

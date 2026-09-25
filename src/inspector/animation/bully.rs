@@ -1808,35 +1808,19 @@ pub fn model_from_nif_with_mapping(
     source_identity: impl Into<String>,
     mapping: NifMapping,
 ) -> Result<ModelAsset, String> {
-    let mut nodes: Vec<SceneNode> = Vec::new();
-    let mut meshes: Vec<MeshAsset> = Vec::new();
-    let mut diagnostics: Vec<String> = Vec::new();
-    let mut visited = std::collections::HashSet::new();
-    let mut track_counter = 0u32;
-    let mut node_ids: std::collections::HashMap<i32, NodeId> = std::collections::HashMap::new();
-    let mut pending_skins: Vec<PendingSkin> = Vec::new();
-    let mut source_names: Vec<Option<String>> = Vec::new();
-    // NIF-wide diffuse fallback for shapes without their own texturing
-    // properties (resolved to pixels later by the caller, never here).
-    let nif_diffuse = crate::inspector::viewer3d::find_diffuse_texture(nif);
-
+    let mut walk = NifWalk::new(nif, mapping);
     for &root in &nif.footer.roots {
-        visit_nif_block(
-            nif,
-            root,
-            None,
-            &mut nodes,
-            &mut meshes,
-            &mut diagnostics,
-            &mut visited,
-            mapping,
-            &mut track_counter,
-            &mut node_ids,
-            &mut pending_skins,
-            &mut source_names,
-            nif_diffuse.as_deref(),
-        );
+        walk.visit(root, None);
     }
+    let NifWalk {
+        nodes,
+        mut meshes,
+        mut diagnostics,
+        node_ids,
+        pending_skins,
+        source_names,
+        ..
+    } = walk;
     if nodes.is_empty() {
         return Err("the NIF has no scene-graph nodes".to_string());
     }
@@ -1983,143 +1967,211 @@ pub fn model_from_nif_with_mapping(
     Ok(asset)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn visit_nif_block(
-    nif: &NifFile,
-    block_index: i32,
-    parent: Option<NodeId>,
-    nodes: &mut Vec<SceneNode>,
-    meshes: &mut Vec<MeshAsset>,
-    diagnostics: &mut Vec<String>,
-    visited: &mut std::collections::HashSet<i32>,
+/// Depth-first walk of a NIF scene graph. Owns everything the traversal
+/// accumulates, so the recursion carries only the block and its parent.
+struct NifWalk<'n> {
+    nif: &'n NifFile,
     mapping: NifMapping,
-    track_counter: &mut u32,
-    node_ids: &mut std::collections::HashMap<i32, NodeId>,
-    pending_skins: &mut Vec<PendingSkin>,
-    source_names: &mut Vec<Option<String>>,
-    nif_diffuse: Option<&str>,
-) -> Option<NodeId> {
-    if block_index < 0 || !visited.insert(block_index) {
-        return None;
-    }
-    let block = nif.blocks.get(block_index as usize)?;
-    let payload = nif.payloads.get(block_index as usize)?.as_ref()?;
-    let id = NodeId(nodes.len() as u32);
-    let (local, mesh, children): (NodeTransform, Option<usize>, Vec<i32>) = match payload {
-        BlockPayload::NiNode(data) => (
-            nif_local(&data.translation, &data.rotation.m, data.scale),
-            None,
-            data.children.clone(),
-        ),
-        BlockPayload::NiTriShape(data) => {
-            let texture_name = crate::inspector::viewer3d::diffuse_texture_for_properties(
-                nif,
-                &data.properties,
-            )
-            .or_else(|| nif_diffuse.map(str::to_owned));
-            let mesh_index = build_mesh_from_shape(
-                nif,
-                data.data_ref,
-                data.skin_instance_ref,
-                data.name.as_deref().unwrap_or(&block.type_name),
-                texture_name,
-                meshes,
-                diagnostics,
-                pending_skins,
-            );
-            (
-                nif_local(&data.translation, &data.rotation.m, data.scale),
-                mesh_index,
-                Vec::new(),
-            )
-        }
-        BlockPayload::NiTriStrips(data) => {
-            let texture_name = crate::inspector::viewer3d::diffuse_texture_for_properties(
-                nif,
-                &data.base.properties,
-            )
-            .or_else(|| nif_diffuse.map(str::to_owned));
-            let mesh_index = build_mesh_from_shape(
-                nif,
-                data.base.data_ref,
-                data.base.skin_instance_ref,
-                data.base.name.as_deref().unwrap_or(&block.type_name),
-                texture_name,
-                meshes,
-                diagnostics,
-                pending_skins,
-            );
-            (
-                nif_local(
-                    &data.base.translation,
-                    &data.base.rotation.m,
-                    data.base.scale,
-                ),
-                mesh_index,
-                Vec::new(),
-            )
-        }
-        _ => return None,
-    };
+    /// NIF-wide diffuse fallback for shapes without their own texturing
+    /// properties (resolved to pixels later by the caller, never here).
+    nif_diffuse: Option<String>,
+    nodes: Vec<SceneNode>,
+    meshes: Vec<MeshAsset>,
+    diagnostics: Vec<String>,
+    visited: std::collections::HashSet<i32>,
+    track_counter: u32,
+    node_ids: std::collections::HashMap<i32, NodeId>,
+    pending_skins: Vec<PendingSkin>,
+    source_names: Vec<Option<String>>,
+}
 
-    let original_name = match payload {
-        BlockPayload::NiNode(data) => data.name.clone(),
-        BlockPayload::NiTriShape(data) => data.name.clone(),
-        BlockPayload::NiTriStrips(data) => data.base.name.clone(),
-        _ => None,
-    };
-    let track_name = if mapping == NifMapping::BonesOnly && mesh.is_some() {
-        format!("shape_{:03}", id.0)
-    } else if original_name
-        .as_deref()
-        .is_some_and(|name| name.eq_ignore_ascii_case("Scene Root"))
-    {
-        // `Scene Root` is the NIF scene-graph root, not an animation target:
-        // the exported animation skeleton starts one level below it. AGR
-        // track indices must skip it or every track binds its parent bone.
-        "Scene Root".to_string()
-    } else {
-        let name = format!("track_{:03}", *track_counter);
-        *track_counter += 1;
-        name
-    };
-    if let Some(original) = &original_name
-        && *original != track_name
-    {
-        // Keep the original identity visible for diagnostics; the binding
-        // identity stays the index-based track name.
-        if diagnostics.len() < 64 {
-            diagnostics.push(format!("{track_name} = {original}"));
-        }
-    }
-
-    nodes.push(SceneNode {
-        id,
-        parent,
-        name: track_name,
-        local,
-        mesh,
-    });
-    source_names.push(original_name);
-    node_ids.insert(block_index, id);
-    for child in children {
-        visit_nif_block(
+impl<'n> NifWalk<'n> {
+    fn new(nif: &'n NifFile, mapping: NifMapping) -> Self {
+        Self {
             nif,
-            child,
-            Some(id),
-            nodes,
-            meshes,
-            diagnostics,
-            visited,
             mapping,
-            track_counter,
-            node_ids,
-            pending_skins,
-            source_names,
-            nif_diffuse,
-        );
+            nif_diffuse: crate::inspector::viewer3d::find_diffuse_texture(nif),
+            nodes: Vec::new(),
+            meshes: Vec::new(),
+            diagnostics: Vec::new(),
+            visited: std::collections::HashSet::new(),
+            track_counter: 0,
+            node_ids: std::collections::HashMap::new(),
+            pending_skins: Vec::new(),
+            source_names: Vec::new(),
+        }
     }
-    Some(id)
+
+    /// Walks one block and its children depth-first, appending scene nodes
+    /// and meshes in visit order.
+    fn visit(&mut self, block_index: i32, parent: Option<NodeId>) -> Option<NodeId> {
+        let nif = self.nif;
+        if block_index < 0 || !self.visited.insert(block_index) {
+            return None;
+        }
+        let block = nif.blocks.get(block_index as usize)?;
+        let payload = nif.payloads.get(block_index as usize)?.as_ref()?;
+        let id = NodeId(self.nodes.len() as u32);
+        let (local, mesh, children): (NodeTransform, Option<usize>, Vec<i32>) = match payload {
+            BlockPayload::NiNode(data) => (
+                nif_local(&data.translation, &data.rotation.m, data.scale),
+                None,
+                data.children.clone(),
+            ),
+            BlockPayload::NiTriShape(data) => {
+                let texture_name = crate::inspector::viewer3d::diffuse_texture_for_properties(
+                    nif,
+                    &data.properties,
+                )
+                .or_else(|| self.nif_diffuse.clone());
+                let mesh_index = self.build_mesh(
+                    data.data_ref,
+                    data.skin_instance_ref,
+                    data.name.as_deref().unwrap_or(&block.type_name),
+                    texture_name,
+                );
+                (
+                    nif_local(&data.translation, &data.rotation.m, data.scale),
+                    mesh_index,
+                    Vec::new(),
+                )
+            }
+            BlockPayload::NiTriStrips(data) => {
+                let texture_name = crate::inspector::viewer3d::diffuse_texture_for_properties(
+                    nif,
+                    &data.base.properties,
+                )
+                .or_else(|| self.nif_diffuse.clone());
+                let mesh_index = self.build_mesh(
+                    data.base.data_ref,
+                    data.base.skin_instance_ref,
+                    data.base.name.as_deref().unwrap_or(&block.type_name),
+                    texture_name,
+                );
+                (
+                    nif_local(
+                        &data.base.translation,
+                        &data.base.rotation.m,
+                        data.base.scale,
+                    ),
+                    mesh_index,
+                    Vec::new(),
+                )
+            }
+            _ => return None,
+        };
+
+        let original_name = match payload {
+            BlockPayload::NiNode(data) => data.name.clone(),
+            BlockPayload::NiTriShape(data) => data.name.clone(),
+            BlockPayload::NiTriStrips(data) => data.base.name.clone(),
+            _ => None,
+        };
+        let track_name = if self.mapping == NifMapping::BonesOnly && mesh.is_some() {
+            format!("shape_{:03}", id.0)
+        } else if original_name
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case("Scene Root"))
+        {
+            // `Scene Root` is the NIF scene-graph root, not an animation target:
+            // the exported animation skeleton starts one level below it. AGR
+            // track indices must skip it or every track binds its parent bone.
+            "Scene Root".to_string()
+        } else {
+            let name = format!("track_{:03}", self.track_counter);
+            self.track_counter += 1;
+            name
+        };
+        if let Some(original) = &original_name
+            && *original != track_name
+        {
+            // Keep the original identity visible for diagnostics; the binding
+            // identity stays the index-based track name.
+            if self.diagnostics.len() < 64 {
+                self.diagnostics.push(format!("{track_name} = {original}"));
+            }
+        }
+
+        self.nodes.push(SceneNode {
+            id,
+            parent,
+            name: track_name,
+            local,
+            mesh,
+        });
+        self.source_names.push(original_name);
+        self.node_ids.insert(block_index, id);
+        for child in children {
+            self.visit(child, Some(id));
+        }
+        Some(id)
+    }
+
+    /// Converts a shape's `NiTriShapeData` into a mesh, queuing its skin for
+    /// resolution once every node has an id.
+    fn build_mesh(
+        &mut self,
+        data_ref: i32,
+        skin_instance_ref: i32,
+        name: &str,
+        texture_name: Option<String>,
+    ) -> Option<usize> {
+        if data_ref < 0 {
+            return None;
+        }
+        let nif = self.nif;
+        let data = match nif.payloads.get(data_ref as usize)?.as_ref()? {
+            BlockPayload::NiTriShapeData(data) => data,
+            BlockPayload::NiTriStripsData(_) => {
+                self.diagnostics.push(format!(
+                    "mesh '{name}': triangle strips are not yet triangulated"
+                ));
+                return None;
+            }
+            _ => return None,
+        };
+        let mut vertices = Vec::with_capacity(data.vertices.len());
+        for (index, position) in data.vertices.iter().enumerate() {
+            let normal = data.normals.get(index).copied().unwrap_or_default();
+            let uv = data
+                .uvs
+                .get(index)
+                .map(|uv| [uv.u, uv.v])
+                .unwrap_or([0.0, 0.0]);
+            vertices.push(Vertex {
+                position: [position.x, position.y, position.z],
+                normal: [normal.x, normal.y, normal.z],
+                uv,
+            });
+        }
+        let indices: Vec<u32> = data
+            .triangles
+            .iter()
+            .flat_map(|triangle| [triangle.v0 as u32, triangle.v1 as u32, triangle.v2 as u32])
+            .collect();
+        if vertices.is_empty() || indices.is_empty() {
+            return None;
+        }
+        let index = self.meshes.len();
+        self.meshes.push(MeshAsset {
+            name: name.to_string(),
+            texture_name,
+            vertices,
+            indices,
+            diffuse: None,
+            skin: None,
+        });
+        if let Some(pending) = build_pending_skin(
+            nif,
+            skin_instance_ref,
+            self.meshes[index].vertices.len(),
+            index,
+            &mut self.diagnostics,
+        ) {
+            self.pending_skins.push(pending);
+        }
+        Some(index)
+    }
 }
 
 fn nif_local(
@@ -2147,71 +2199,6 @@ fn nif_local(
     }
 }
 
-fn build_mesh_from_shape(
-    nif: &NifFile,
-    data_ref: i32,
-    skin_instance_ref: i32,
-    name: &str,
-    texture_name: Option<String>,
-    meshes: &mut Vec<MeshAsset>,
-    diagnostics: &mut Vec<String>,
-    pending_skins: &mut Vec<PendingSkin>,
-) -> Option<usize> {
-    if data_ref < 0 {
-        return None;
-    }
-    let data = match nif.payloads.get(data_ref as usize)?.as_ref()? {
-        BlockPayload::NiTriShapeData(data) => data,
-        BlockPayload::NiTriStripsData(_) => {
-            diagnostics.push(format!(
-                "mesh '{name}': triangle strips are not yet triangulated"
-            ));
-            return None;
-        }
-        _ => return None,
-    };
-    let mut vertices = Vec::with_capacity(data.vertices.len());
-    for (index, position) in data.vertices.iter().enumerate() {
-        let normal = data.normals.get(index).copied().unwrap_or_default();
-        let uv = data
-            .uvs
-            .get(index)
-            .map(|uv| [uv.u, uv.v])
-            .unwrap_or([0.0, 0.0]);
-        vertices.push(Vertex {
-            position: [position.x, position.y, position.z],
-            normal: [normal.x, normal.y, normal.z],
-            uv,
-        });
-    }
-    let indices: Vec<u32> = data
-        .triangles
-        .iter()
-        .flat_map(|triangle| [triangle.v0 as u32, triangle.v1 as u32, triangle.v2 as u32])
-        .collect();
-    if vertices.is_empty() || indices.is_empty() {
-        return None;
-    }
-    let index = meshes.len();
-    meshes.push(MeshAsset {
-        name: name.to_string(),
-        texture_name,
-        vertices,
-        indices,
-        diffuse: None,
-        skin: None,
-    });
-    if let Some(pending) = build_pending_skin(
-        nif,
-        skin_instance_ref,
-        meshes[index].vertices.len(),
-        index,
-        diagnostics,
-    ) {
-        pending_skins.push(pending);
-    }
-    Some(index)
-}
 
 #[cfg(test)]
 mod tests {
