@@ -229,6 +229,8 @@ pub struct WindowGeometry {
 pub struct Config {
     pub first_run_complete: bool,
     pub theme: ThemeMode,
+    /// UI language: follow Windows (`auto`) or a fixed language.
+    pub language: crate::i18n::LanguageSetting,
     pub window: WindowGeometry,
     pub last_export_folder: Option<PathBuf>,
     pub last_open_folder: Option<PathBuf>,
@@ -391,6 +393,7 @@ impl Default for Config {
         Self {
             first_run_complete: false,
             theme: ThemeMode::default(),
+            language: crate::i18n::LanguageSetting::System,
             window: WindowGeometry::default(),
             last_export_folder: None,
             last_open_folder: None,
@@ -458,6 +461,11 @@ impl Config {
                 "theme" => {
                     if let Ok(theme) = ThemeMode::from_str(value) {
                         config.theme = theme;
+                    }
+                }
+                "language" => {
+                    if let Ok(language) = value.parse() {
+                        config.language = language;
                     }
                 }
                 "window_size" => {
@@ -681,6 +689,7 @@ impl Config {
             }
         )?;
         writeln!(file, "theme={}", self.theme.as_str())?;
+        writeln!(file, "language={}", self.language)?;
         if let Some(size) = self.window.size {
             writeln!(file, "window_size={:.1},{:.1}", size[0], size[1])?;
         }
@@ -934,6 +943,7 @@ mod tests {
         let mut original = Config {
             first_run_complete: true,
             theme: ThemeMode::DarkTokyoNight,
+            language: crate::i18n::LanguageSetting::Fixed(crate::i18n::Language::Russian),
             window: WindowGeometry {
                 size: Some([1280.0, 800.0]),
                 position: Some([100.0, 50.0]),
@@ -973,6 +983,10 @@ mod tests {
         let loaded = Config::load_from_path(&path);
         assert!(loaded.first_run_complete);
         assert_eq!(loaded.theme, ThemeMode::DarkTokyoNight);
+        assert_eq!(
+            loaded.language,
+            crate::i18n::LanguageSetting::Fixed(crate::i18n::Language::Russian)
+        );
         assert_eq!(loaded.window.size, Some([1280.0, 800.0]));
         assert_eq!(loaded.window.position, Some([100.0, 50.0]));
         assert!(loaded.window.maximized);

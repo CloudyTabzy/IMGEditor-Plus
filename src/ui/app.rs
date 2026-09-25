@@ -36,6 +36,7 @@ use crate::ui::icons;
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
 use crate::ui::theme::resolve_theme;
 use crate::file_association::AssociationState;
+use crate::i18n::{Language, LanguageSetting, t};
 use crate::ui::title_bar::{self, ChromeMessage, TitleDrag};
 use crate::ui::tokens::motion::DurationPreset;
 use crate::ui::widgets as w;
@@ -670,6 +671,8 @@ pub enum Message {
     UpdateResultReceived(UpdateResult),
 
     SetTheme(ThemeMode),
+    /// Language menu: follow Windows or pick a language.
+    SetLanguage(crate::i18n::LanguageSetting),
     ToastTimeout,
     TickProgress,
     PaneResized(pane_grid::ResizeEvent),
@@ -1668,6 +1671,7 @@ impl Default for App {
 
 impl App {
     pub fn new(config: Config) -> Self {
+        crate::i18n::set_language(config.language.resolve());
         let show_welcome = !config.first_run_complete;
         let empty_state_tip_index = empty_state_tip_index();
         let mut editor = Editor::new();
@@ -5937,6 +5941,12 @@ impl App {
                 Task::none()
             }
 
+            Message::SetLanguage(setting) => {
+                self.config.language = setting;
+                crate::i18n::set_language(setting.resolve());
+                self.save_config();
+                Task::none()
+            }
             Message::SetTheme(theme) => {
                 self.config.theme = theme;
                 self.save_config();
@@ -8633,7 +8643,7 @@ impl App {
         let recent_menu_items: Vec<Item<'_, Message, _, _>> =
             if self.config.recent_files.iter_existing().next().is_none() {
                 vec![Item::new(iced::Element::from(
-                    iced::widget::text("No recent files").size(13),
+                    iced::widget::text(t::menu_recent_empty()).size(13),
                 ))]
             } else {
                 self.config
@@ -8651,204 +8661,156 @@ impl App {
 
         let file_menu = Menu::new(vec![
             Item::new(menu_button(
-                format!("New ({})", shortcut_display(Shortcut::New)),
+                t::menu_file_new(menu_shortcut(Shortcut::New)),
                 Message::NewArchive,
             )),
             Item::new(menu_button(
-                format!("Open… ({})", shortcut_display(Shortcut::Open)),
+                t::menu_file_open(menu_shortcut(Shortcut::Open)),
                 Message::OpenArchive,
             )),
             Item::new(menu_button(
-                format!("Save ({})", shortcut_display(Shortcut::Save)),
+                t::menu_file_save(menu_shortcut(Shortcut::Save)),
                 Message::SaveArchive,
             )),
             Item::new(menu_button(
-                format!("Save as… ({})", shortcut_display(Shortcut::SaveAs)),
+                t::menu_file_save_as(menu_shortcut(Shortcut::SaveAs)),
                 Message::SaveArchiveAs,
             )),
             Item::new(menu_button(
-                "Pack archive".to_string(),
+                t::menu_file_pack(),
                 Message::PackArchive,
             )),
             Item::new(menu_button(
-                "Set game folder…".to_string(),
+                t::menu_file_set_game_folder(),
                 Message::PickGameFolder,
             )),
             Item::new(menu_button(
-                "Reset game folder".to_string(),
+                t::menu_file_reset_game_folder(),
                 Message::ResetGameFolder,
             )),
             Item::new(menu_button(
-                format!("Close tab ({})", shortcut_display(Shortcut::Close)),
+                t::menu_file_close_tab(menu_shortcut(Shortcut::Close)),
                 Message::CloseSelectedArchive,
             )),
             Item::new(menu_button(
-                "Sort by…".to_string(),
+                t::menu_file_sort_by(),
                 Message::OpenSortManager,
             )),
         ])
-        .max_width(220.0);
+        .max_width(MENU_WIDTH);
 
         let edit_menu = Menu::new(vec![
             Item::new(menu_button(
-                format!("Import ({})", shortcut_display(Shortcut::Import)),
+                t::menu_edit_import(menu_shortcut(Shortcut::Import)),
                 Message::ImportFiles,
             )),
             Item::new(menu_button(
-                "Import folder".to_string(),
+                t::menu_edit_import_folder(),
                 Message::ImportFolder,
             )),
             Item::new(menu_button(
-                format!("Export all ({})", shortcut_display(Shortcut::ExportAll)),
+                t::menu_edit_export_all(menu_shortcut(Shortcut::ExportAll)),
                 Message::ExportAll,
             )),
             Item::new(menu_button(
-                format!(
-                    "Export selected ({})",
-                    shortcut_display(Shortcut::ExportSelected)
-                ),
+                t::menu_edit_export_selected(menu_shortcut(Shortcut::ExportSelected)),
                 Message::ExportSelected,
             )),
             Item::new(menu_button(
-                format!(
-                    "Export as list ({})",
-                    shortcut_display(Shortcut::ExportEntryList)
-                ),
+                t::menu_edit_export_list(menu_shortcut(Shortcut::ExportEntryList)),
                 Message::ExportEntryList,
             )),
             Item::new(menu_button(
-                format!(
-                    "Compare with list ({})",
-                    shortcut_display(Shortcut::CompareWithList)
-                ),
+                t::menu_edit_compare_list(menu_shortcut(Shortcut::CompareWithList)),
                 Message::CompareWithList,
             )),
             Item::new(menu_button(
-                "Load .agr animation file…".to_string(),
+                t::menu_edit_load_agr(),
                 Message::PickAgrFile,
             )),
         ])
-        .max_width(220.0);
+        .max_width(MENU_WIDTH);
 
         let selection_menu = Menu::new(vec![
             Item::new(menu_button(
-                format!("Select all ({})", shortcut_display(Shortcut::SelectAll)),
+                t::menu_selection_all(menu_shortcut(Shortcut::SelectAll)),
                 Message::SelectAll,
             )),
             Item::new(menu_button(
-                format!(
-                    "Invert selection ({})",
-                    shortcut_display(Shortcut::InvertSelection)
-                ),
+                t::menu_selection_invert(menu_shortcut(Shortcut::InvertSelection)),
                 Message::InvertSelection,
             )),
             Item::new(menu_button(
-                format!(
-                    "Clear selection ({})",
-                    shortcut_display(Shortcut::ClearSelection)
-                ),
+                t::menu_selection_clear(menu_shortcut(Shortcut::ClearSelection)),
                 Message::ClearSelection,
             )),
             Item::new(menu_button(
-                format!("Delete selected ({})", shortcut_display(Shortcut::Delete)),
+                t::menu_selection_delete(menu_shortcut(Shortcut::Delete)),
                 Message::DeleteSelected,
             )),
         ])
-        .max_width(220.0);
+        .max_width(MENU_WIDTH);
 
         let option_items: Vec<Item<'_, Message, iced::Theme, iced::Renderer>> = ThemeMode::ALL
             .iter()
             .map(|mode| {
-                let label = if *mode == self.config.theme {
-                    format!("● {}", mode.as_str())
-                } else {
-                    format!("○ {}", mode.as_str())
-                };
+                let marker = if *mode == self.config.theme { "● " } else { "○ " };
+                let label = format!("{marker}{}", theme_display_name(*mode));
                 Item::new(menu_button(label, Message::SetTheme(*mode)))
             })
             .collect();
 
-        let option_menu = Menu::new(option_items).max_width(220.0);
+        let option_menu = Menu::new(option_items).max_width(MENU_WIDTH);
 
         // The View menu contains application-wide interaction preferences.
         let view_toggle = |on: bool| if on { "● " } else { "○ " };
         let mut view_items = vec![
             Item::new(menu_button(
-                format!(
-                    "{}Navigation gizmo",
-                    view_toggle(self.config.show_navigation_gizmo)
-                ),
+                format!("{}{}", view_toggle(self.config.show_navigation_gizmo), t::menu_view_navigation_gizmo()),
                 Message::SetNavigationGizmoVisible(!self.config.show_navigation_gizmo),
             )),
             Item::new(menu_button(
-                format!("{}Search bar", view_toggle(self.config.show_search_bar)),
+                format!("{}{}", view_toggle(self.config.show_search_bar), t::menu_view_search_bar()),
                 Message::ToggleSearchBar(!self.config.show_search_bar),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Search selection context",
-                    view_toggle(self.config.search_selection_context)
-                ),
+                format!("{}{}", view_toggle(self.config.search_selection_context), t::menu_view_search_selection_context()),
                 Message::ToggleSearchSelectionContext(!self.config.search_selection_context),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Literal file types",
-                    view_toggle(self.config.literal_file_types)
-                ),
+                format!("{}{}", view_toggle(self.config.literal_file_types), t::menu_view_literal_file_types()),
                 Message::ToggleLiteralFileTypes(!self.config.literal_file_types),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Highlight validator rows",
-                    view_toggle(self.compat_highlight_enabled)
-                ),
+                format!("{}{}", view_toggle(self.compat_highlight_enabled), t::menu_view_highlight_validator_rows()),
                 Message::SetCompatHighlight(!self.compat_highlight_enabled),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Right-click adds to selection",
-                    view_toggle(self.config.context_selection_accumulates)
-                ),
+                format!("{}{}", view_toggle(self.config.context_selection_accumulates), t::menu_view_context_accumulates()),
                 Message::ToggleContextAccumulate(!self.config.context_selection_accumulates),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Autoscroll momentum",
-                    view_toggle(self.config.autoscroll_momentum_enabled)
-                ),
+                format!("{}{}", view_toggle(self.config.autoscroll_momentum_enabled), t::menu_view_autoscroll_momentum()),
                 Message::ToggleAutoscrollMomentum(!self.config.autoscroll_momentum_enabled),
             )),
             Item::new(menu_button(
-                format!("{}Motion effects", view_toggle(self.config.motion_enabled)),
+                format!("{}{}", view_toggle(self.config.motion_enabled), t::menu_view_motion_effects()),
                 Message::ToggleMotionEffects(!self.config.motion_enabled),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Selection pulse",
-                    view_toggle(self.config.selection_pulse_enabled)
-                ),
+                format!("{}{}", view_toggle(self.config.selection_pulse_enabled), t::menu_view_selection_pulse()),
                 Message::ToggleSelectionPulse(!self.config.selection_pulse_enabled),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Click ripples",
-                    view_toggle(self.config.click_ripple_enabled)
-                ),
+                format!("{}{}", view_toggle(self.config.click_ripple_enabled), t::menu_view_click_ripples()),
                 Message::ToggleClickRipple(!self.config.click_ripple_enabled),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Icon micro-motion",
-                    view_toggle(self.config.icon_micro_motion_enabled)
-                ),
+                format!("{}{}", view_toggle(self.config.icon_micro_motion_enabled), t::menu_view_icon_micro_motion()),
                 Message::ToggleIconMicroMotion(!self.config.icon_micro_motion_enabled),
             )),
             Item::new(menu_button(
-                format!(
-                    "{}Animation demo (synthetic)",
-                    view_toggle(self.animation_demo_active())
-                ),
+                format!("{}{}", view_toggle(self.animation_demo_active()), t::menu_view_animation_demo()),
                 if self.animation_demo_active() {
                     Message::AnimationDemoExit
                 } else {
@@ -8859,37 +8821,73 @@ impl App {
         if self.file_association != AssociationState::Unsupported {
             let associated = self.file_association == AssociationState::Registered;
             view_items.push(Item::new(menu_button(
-                format!("{}Open .img/.dir from Explorer", view_toggle(associated)),
+                format!("{}{}", view_toggle(associated), t::menu_view_explorer_association()),
                 Message::SetFileAssociation(!associated),
             )));
         }
-        let view_menu = Menu::new(view_items).max_width(220.0);
+        let view_menu = Menu::new(view_items).max_width(MENU_WIDTH);
 
         let help_menu = Menu::new(vec![
             Item::new(menu_button(
-                format!(
-                    "Check for updates ({})\u{200B}",
-                    shortcut_display(Shortcut::CheckUpdates)
-                ),
+                t::menu_help_check_updates(menu_shortcut(Shortcut::CheckUpdates)),
                 Message::CheckUpdatesManual,
             )),
             Item::new(menu_button(
-                "Visit repository\u{200B}".to_string(),
+                t::menu_help_repository(),
                 Message::VisitRepository,
             )),
-            Item::new(menu_button("About".to_string(), Message::ShowAbout)),
+            Item::new(menu_button(t::menu_help_about(), Message::ShowAbout)),
         ])
-        .max_width(220.0);
+        .max_width(MENU_WIDTH);
+
+        // Languages are listed under their own names, so a user can find
+        // theirs whatever the UI language is.
+        let language = self.config.language;
+        let language_marker = |setting| if language == setting { "● " } else { "○ " };
+        let mut language_items = vec![Item::new(menu_button(
+            format!(
+                "{}{}",
+                language_marker(LanguageSetting::System),
+                t::menu_language_system(crate::i18n::system_language().autonym())
+            ),
+            Message::SetLanguage(LanguageSetting::System),
+        ))];
+        for choice in Language::SELECTABLE {
+            let setting = LanguageSetting::Fixed(choice);
+            language_items.push(Item::new(menu_button(
+                format!("{}{}", language_marker(setting), choice.autonym()),
+                Message::SetLanguage(setting),
+            )));
+        }
+        if cfg!(debug_assertions) {
+            let setting = LanguageSetting::Fixed(Language::Pseudo);
+            language_items.push(Item::new(menu_button(
+                format!("{}{}", language_marker(setting), t::menu_language_pseudo()),
+                Message::SetLanguage(setting),
+            )));
+        }
+        let language_menu = Menu::new(language_items).max_width(MENU_WIDTH + 20.0);
 
         // Root labels fill the bar height so dropdowns open flush with its
         // bottom edge.
-        fn menu_label(label: &'static str) -> iced::Element<'static, Message> {
+        fn menu_label(label: String) -> iced::Element<'static, Message> {
             container(fonts::header(label))
                 .padding([0, 12])
                 .height(iced::Length::Fill)
                 .align_y(iced::Alignment::Center)
                 .into()
         }
+        // The Language menu keeps an icon so it stays recognizable after
+        // switching to a language the user cannot read.
+        let language_label: iced::Element<'static, Message> = container(
+            iced::widget::row![icons::language().size(14), fonts::header(t::menu_language())]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+        )
+        .padding([0, 12])
+        .height(iced::Length::Fill)
+        .align_y(iced::Alignment::Center)
+        .into();
 
         // Keep every menu one level deep: no `Item::with_menu` inside a
         // `Menu`. iced_aw 0.14.1's overlay `operate` indexes a submenu's state
@@ -8903,13 +8901,14 @@ impl App {
         // the iced_aw release in use fixed this (menu_bar_overlay.rs,
         // `operate`), then open the parent menu and press Esc to verify.
         let bar = MenuBar::new(vec![
-            Item::with_menu(menu_label("File"), file_menu),
-            Item::with_menu(menu_label("Recent"), recent_menu),
-            Item::with_menu(menu_label("Edit"), edit_menu),
-            Item::with_menu(menu_label("Selection"), selection_menu),
-            Item::with_menu(menu_label("View"), view_menu),
-            Item::with_menu(menu_label("Themes"), option_menu),
-            Item::with_menu(menu_label("Help"), help_menu),
+            Item::with_menu(menu_label(t::menu_file()), file_menu),
+            Item::with_menu(menu_label(t::menu_recent()), recent_menu),
+            Item::with_menu(menu_label(t::menu_edit()), edit_menu),
+            Item::with_menu(menu_label(t::menu_selection()), selection_menu),
+            Item::with_menu(menu_label(t::menu_view()), view_menu),
+            Item::with_menu(menu_label(t::menu_themes()), option_menu),
+            Item::with_menu(menu_label(t::menu_help()), help_menu),
+            Item::with_menu(language_label, language_menu),
         ])
         .height(iced::Length::Fill)
         // The bar sits on the title-bar gradient; iced_aw's default rounded
@@ -8958,6 +8957,27 @@ impl App {
                 ..Default::default()
             })
             .into()
+    }
+}
+
+/// Dropdown width: room for Spanish and Russian labels, which run about a
+/// third longer than English.
+const MENU_WIDTH: f32 = 260.0;
+
+/// Shortcut text for a menu label. Non-breaking spaces keep a wrapped label
+/// from splitting the shortcut itself ("(Ctrl +" / "D)").
+fn menu_shortcut(shortcut: Shortcut) -> String {
+    shortcut_display(shortcut).replace(' ', "\u{a0}")
+}
+
+/// Theme names for the menu. "Dark" and "Light" are translated; named
+/// themes (Catppuccin Mocha, Tokyo Night...) are proper names. `as_str` stays
+/// the settings.ini value.
+fn theme_display_name(mode: ThemeMode) -> String {
+    match mode {
+        ThemeMode::System => t::theme_dark(),
+        ThemeMode::Light => t::theme_light(),
+        named => named.as_str().to_string(),
     }
 }
 
@@ -9072,6 +9092,7 @@ fn menu_icon(message: &Message) -> Element<'static, Message> {
         Message::ClearSelection => icons::close(),
         Message::DeleteSelected => icons::delete(),
         Message::SetTheme(_) => icons::settings(),
+        Message::SetLanguage(_) => icons::language(),
         Message::CheckUpdatesManual | Message::ShowAbout => icons::help(),
         Message::VisitRepository => icons::external_viewer(),
         _ => icons::generic_file(),
@@ -11313,6 +11334,22 @@ mod tests {
             .expect("imported entry must gain a verdict");
         assert_eq!(merged.textures, 1);
         assert_eq!(merged.worst, crate::compat::games::Verdict::Native);
+    }
+
+    #[test]
+    fn choosing_a_language_switches_the_ui_and_persists_the_choice() {
+        let mut app = test_app();
+        let spanish = LanguageSetting::Fixed(Language::Spanish);
+        let _ = app.update(Message::SetLanguage(spanish));
+        assert_eq!(app.config.language, spanish);
+        assert_eq!(crate::i18n::current(), Language::Spanish);
+        assert_eq!(theme_display_name(ThemeMode::System), "Oscuro");
+        assert_eq!(theme_display_name(ThemeMode::DarkCatppuccin), "Catppuccin Mocha");
+        // The menu bar builds in every language.
+        let _ = app.menubar();
+
+        let _ = app.update(Message::SetLanguage(LanguageSetting::System));
+        assert_eq!(crate::i18n::current(), Language::English);
     }
 
     #[test]

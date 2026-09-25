@@ -5,6 +5,7 @@ pub mod config;
 pub mod dev_logger;
 pub mod editor;
 pub mod file_association;
+pub mod i18n;
 pub mod inspector;
 pub mod parser;
 pub mod runtime;

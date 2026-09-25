@@ -30,6 +30,17 @@ scheme (+1 minor). Bump `Cargo.toml` and the README heading before tagging.
   per-user ProgID + OpenWithProgids + RegisteredApplications entry (never the
   `.img` default) and opens Settings ▸ Default apps; an archive path on the
   command line opens on startup (`src/file_association.rs`).
+- **Translations (English / Español / Русский)** — Project Fluent via its
+  Rust crates; `build/i18n.rs` generates a typed `i18n::t` API from
+  `i18n/en.ftl` and validates the translations; root Language menu with a
+  "System language" default and instant switching (`i18n/README.md`).
+  - [x] Phase 1: infrastructure, all menus, entry context menu, title bar,
+    Russian heading font fallback, debug-only pseudo-locale.
+  - [ ] Phase 2: dialogs (unsaved changes, save report, folder import,
+    replace texture, sort manager, compare, about, welcome…).
+  - [ ] Phase 3: toasts (≈120), inspector/export panels, status bar,
+    empty states, tooltips.
+  - [ ] Phase 4: native review of `es.ftl` and `ru.ftl` (drafts today).
 - **Fixes** — Save As no longer deletes the source archive; saves rename the
   new file into place before removing anything; imported files that change
   size mid-save fail the save instead of corrupting the layout; inspector

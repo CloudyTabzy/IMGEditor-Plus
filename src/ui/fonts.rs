@@ -52,7 +52,17 @@ pub const BRICOLAGE_DISPLAY: iced::Font = iced::Font {
 };
 
 pub fn display<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {
-    text(label.into(), 18.0, BRICOLAGE_DISPLAY)
+    text(label.into(), 18.0, display_font())
+}
+
+/// Bricolage has no Cyrillic, so languages it cannot draw use Inter at the
+/// same heavy weight rather than a mismatched system fallback font.
+pub fn display_font() -> iced::Font {
+    if crate::i18n::current().display_font_covers() {
+        BRICOLAGE_DISPLAY
+    } else {
+        INTER_EXTRA_BOLD
+    }
 }
 
 pub fn header<'a>(label: impl Into<Cow<'a, str>>) -> Text<'a> {

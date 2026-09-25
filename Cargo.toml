@@ -55,6 +55,10 @@ wgpu = { version = "27", default-features = false, features = ["wgsl", "vulkan"]
 quick_cache = { version = "0.7.0", features = ["stats"] }
 texpresso = { version = "2.0.2", features = ["rayon"] }
 quantette = { version = "0.6.0", default-features = false, features = ["kmeans", "threads"] }
+# UI translations (src/i18n.rs): Project Fluent's own Rust crates.
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+sys-locale = "0.3"
 
 # Per-user Explorer file associations (src/file_association.rs); already
 # in the dependency graph through dark-light.
@@ -67,6 +71,8 @@ iced_runtime = "0.14"
 
 [build-dependencies]
 embed-resource = "2"
+# Generates the typed translation API from i18n/en.ftl (build.rs).
+fluent-syntax = "0.12"
 
 [profile.release]
 lto = "thin"

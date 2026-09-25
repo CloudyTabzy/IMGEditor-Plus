@@ -16,6 +16,7 @@ use crate::ui::app::{
     ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget, TextureSnapshot,
     is_animation_group_name, renderable_model_kind,
 };
+use crate::i18n::t;
 use crate::ui::design::Design;
 use crate::ui::fonts;
 use crate::ui::icons;
@@ -4604,10 +4605,7 @@ fn build_context_menu(
     let mut header = Column::new().spacing(2);
     header = header.push(fonts::strong(entry.file_name.to_string()));
     if selected_count > 1 {
-        header = header.push(fonts::caption(format!(
-            "+{} more selected",
-            selected_count - 1
-        )));
+        header = header.push(fonts::caption(t::context_more_selected(selected_count - 1)));
     }
 
     let mut items: Vec<Element<'_, Message>> = vec![header.into(), w::hairline(divider)];
@@ -4616,7 +4614,7 @@ fn build_context_menu(
     if crate::ui::app::is_ifp_animation_name(&entry.file_name) {
         items.push(
             context_button(
-                "Play animation",
+                t::context_play_animation(),
                 Message::EntryContextAction(EntryAction::ViewIfpAnimation),
             )
             .into(),
@@ -4627,14 +4625,14 @@ fn build_context_menu(
     {
         items.push(
             context_button(
-                "Open in 3D viewer",
+                t::context_open_3d(),
                 Message::EntryContextAction(EntryAction::Render),
             )
             .into(),
         );
         items.push(
             context_button(
-                "Open in external viewer",
+                t::context_open_external(),
                 Message::EntryContextAction(EntryAction::RenderExternal),
             )
             .into(),
@@ -4648,7 +4646,7 @@ fn build_context_menu(
     {
         items.push(
             context_button(
-                "View textures",
+                t::context_view_textures(),
                 Message::EntryContextAction(EntryAction::ViewTextures),
             )
             .into(),
@@ -4660,7 +4658,7 @@ fn build_context_menu(
         // resolves the basename and exports the NFT's contents.
         items.push(
             context_button(
-                "Export companion NFT textures",
+                t::context_export_companion_textures(),
                 Message::EntryContextAction(EntryAction::ExportEmbeddedTextures),
             )
             .into(),
@@ -4670,23 +4668,26 @@ fn build_context_menu(
         // NiPixelData blocks directly.
         items.push(
             context_button(
-                "Export Embedded Textures",
+                t::context_export_embedded_textures(),
                 Message::EntryContextAction(EntryAction::ExportEmbeddedTextures),
             )
             .into(),
         );
     }
 
-    items.push(context_button("Export", Message::EntryContextAction(EntryAction::Export)).into());
-    items.push(context_button("Rename", Message::EntryContextAction(EntryAction::Rename)).into());
+    items.push(context_button(
+                t::context_export(), Message::EntryContextAction(EntryAction::Export)).into());
+    items.push(context_button(
+                t::context_rename(), Message::EntryContextAction(EntryAction::Rename)).into());
     items.push(
         context_button(
-            "Copy name",
+                t::context_copy_name(),
             Message::EntryContextAction(EntryAction::CopyName),
         )
         .into(),
     );
-    items.push(context_button("Delete", Message::EntryContextAction(EntryAction::Delete)).into());
+    items.push(context_button(
+                t::context_delete(), Message::EntryContextAction(EntryAction::Delete)).into());
 
     let card = container(
         iced::widget::Column::with_children(items)
@@ -4728,7 +4729,8 @@ fn build_context_menu(
 
 const CONTEXT_MENU_EDGE_GAP: f32 = 8.0;
 const CONTEXT_MENU_LEFT_OFFSET: f32 = 12.0;
-const CONTEXT_MENU_WIDTH: f32 = 260.0;
+/// Wide enough for the longest Russian and Spanish labels on one line.
+const CONTEXT_MENU_WIDTH: f32 = 300.0;
 
 fn context_menu_translation(bounds: Rectangle, viewport: Rectangle, row_y: f32) -> Vector {
     let anchor_x = bounds.x + CONTEXT_MENU_LEFT_OFFSET;
@@ -4932,7 +4934,7 @@ fn build_toast_overlay(app: &App) -> Option<Element<'_, Message>> {
     )
 }
 
-fn context_button(label: &str, message: Message) -> iced::widget::Button<'_, Message> {
+fn context_button<'a>(label: String, message: Message) -> iced::widget::Button<'a, Message> {
     button(w::icon_label(
         context_icon(&message),
         fonts::body(label)

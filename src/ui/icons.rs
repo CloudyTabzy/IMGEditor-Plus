@@ -101,6 +101,11 @@ pub fn sort<'a>() -> Text<'a> {
     lucide::list_filter()
 }
 
+/// Language menu: recognizable whatever language the UI is in.
+pub fn language<'a>() -> Text<'a> {
+    lucide::languages()
+}
+
 pub fn settings<'a>() -> Text<'a> {
     lucide::settings()
 }
