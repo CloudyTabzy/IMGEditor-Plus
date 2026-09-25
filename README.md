@@ -177,6 +177,42 @@ for the engineering story.
 - ✅ **Resizable master/detail panes** — drag the splitter
 - ✅ **Full keyboard shortcut set** — see table below
 - ✅ **DPI-aware** window sizing
+- ✅ **Six interface languages** — see [Languages](#-languages) below
+
+---
+
+## 🌐 Languages
+
+The whole interface is translated: menus, dialogs, notifications, the inspector
+and 3D/texture panels, and the compatibility validator's verdicts and notes.
+
+| Language | Status |
+|----------|--------|
+| English | Source |
+| Deutsch | Draft, pending native review |
+| Español | Draft, pending native review |
+| Bahasa Indonesia | Draft, pending native review |
+| Português (Brasil) | Draft, pending native review |
+| Русский | Draft, pending native review |
+
+- **Instant switching** — pick a language from the **Language** menu (it keeps
+  its icon, so you can find it from any language); no restart needed. **System
+  language** follows the Windows display language and falls back to English.
+- **Proper plurals** — counts follow each language's rules, including Russian
+  one/few/many forms and Portuguese zero.
+- **Cyrillic-ready fonts** — the embedded Inter covers Cyrillic, and headings
+  switch to it automatically where the display font has no Cyrillic glyphs.
+- **Layouts that fit** — menus size themselves to the translation, and a test
+  measures every menu label in every language with the real font.
+- **Archive entry names stay ASCII**, as the games require. Importing or
+  renaming to a name with other characters is refused with an explanation
+  instead of producing an archive the games (and the editor) cannot read.
+
+Built on [Project Fluent](https://projectfluent.org/)'s Rust crates: each
+language is one `.ftl` file in [`i18n/`](i18n/), compiled into typed message
+functions at build time, so a missing or misnamed string is a build error.
+Corrections from native speakers are very welcome; see
+[`i18n/README.md`](i18n/README.md) for how to contribute.
 
 ---
 
@@ -242,7 +278,7 @@ The Ayu theme's dark variant, tuned with a deeper terracotta-orange accent.
 </details>
 
 ### ⚙️ Configuration
-- ✅ **`settings.ini`** — persists theme, window geometry, last-used folders, update preferences
+- ✅ **`settings.ini`** — persists theme, language, window geometry, last-used folders, update preferences
 - ✅ **Auto-update checker** — GitHub release tags, semver comparison
 - ✅ **Toggle update checks** — from the welcome dialog or Help menu
 - ✅ **"Don't show again"** — welcome screen toggle
@@ -281,13 +317,6 @@ The main UI layer uses Iced, which is cross-platform by design, so the desktop p
 
 ### Platform-specific note on GTA support
 Version 4.0 was developed and tested primarily against **Bully Scholarship Edition** archives, with the embedded viewer now covering common PC RenderWare DFF/TXD assets used by GTA III, Vice City, and San Andreas. Genuine per-game fixtures are still needed for compatibility claims; console-native geometry and advanced RenderWare material effects remain future work. Bully AGR animation, HXD association, and NIF CPU skinning are now documented in the AGR research record above. Broader GTA workflow polish — importing, exporting, and format edge cases — will be addressed as representative archives become available.
-
-### Unicode and non-ASCII language support
-Core archive parsing stores entry names as UTF-8, so non-ASCII characters inside archives round-trip correctly. However, full support for languages like Russian (Cyrillic) is not yet guaranteed:
-
-- Some UI paths and logs still fall back to lossy conversion (`to_string_lossy`), which can mangle Cyrillic file paths.
-- Embedded fonts cover Latin well, but Cyrillic glyph coverage depends on the active font.
-- A future release will audit all path/string display code, ensure proper `OsStr` handling, and verify Cyrillic (and other scripts) render correctly end-to-end.
 
 ---
 
@@ -336,6 +365,8 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 | `fuzzt` | Jaro-Winkler typo matching (search) |
 | `rfd` | Native Windows file dialogs |
 | `ureq` | Update checker (HTTP) |
+| `fluent-bundle` / `fluent-syntax` | Interface translations (Project Fluent) |
+| `sys-locale` | Detects the Windows display language |
 
 ---
 
