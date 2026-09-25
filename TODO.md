@@ -1,9 +1,9 @@
 # IMGEditor-rs — Next Objectives
 
-Last tagged release: **v4.11.0** (shipped 2026-09-16: the complete Bully
-AGR animation pipeline — all variants, all-rig binding, textured playback,
-model picker, load caching — plus fullscreen texture previews, the
-bulk-converter hardening, entry-list comparison, and the Ayu Dark theme).
+Last tagged release: **v4.16.0** (shipped 2026-09-25: the interface in six
+languages, AI-translated pending native review, plus the merged title bar,
+Recent menu, per-archive game folder, Explorer integration, save-safety and
+entry-name fixes, and a clippy/rustfmt code-quality pass).
 
 Next phase: **Bully AGR completion and CAT/LIP/LUR inspection**, followed by
 separate GTA animation adapters. The remaining
@@ -11,12 +11,10 @@ separate GTA animation adapters. The remaining
 are tracked below. The shipped compatibility-engine details are recorded in
 the release notes and the dedicated documents under `docs/`.
 
-## Unreleased (v4.16.0)
+## v4.16.0 (released 2026-09-25)
 
-Committed on `master` since v4.11.0. A major implementation under the version
-scheme (+5 minor): the fully translated interface in six languages headlines
-the release, alongside the features below. `Cargo.toml` and the README heading
-are bumped; tag once the release build is made.
+A major implementation under the version scheme (+5 minor from v4.11.0): the
+fully translated interface in six languages headlines the release.
 
 - **Merged title bar** — frameless window; the menu bar carries the logo,
   centered window title, and caption buttons (`src/ui/title_bar.rs`). Native
