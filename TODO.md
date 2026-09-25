@@ -11,10 +11,12 @@ separate GTA animation adapters. The remaining
 are tracked below. The shipped compatibility-engine details are recorded in
 the release notes and the dedicated documents under `docs/`.
 
-## Unreleased (v4.12.0 candidate)
+## Unreleased (v4.16.0)
 
-Committed on `master` since v4.11.0; a feature release under the version
-scheme (+1 minor). Bump `Cargo.toml` and the README heading before tagging.
+Committed on `master` since v4.11.0. A major implementation under the version
+scheme (+5 minor): the fully translated interface in six languages headlines
+the release, alongside the features below. `Cargo.toml` and the README heading
+are bumped; tag once the release build is made.
 
 - **Merged title bar** — frameless window; the menu bar carries the logo,
   centered window title, and caption buttons (`src/ui/title_bar.rs`). Native
