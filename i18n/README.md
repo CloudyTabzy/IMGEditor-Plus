@@ -7,11 +7,15 @@ is one `.ftl` file here, embedded in the executable at build time.
 | File | Language | Status |
 |---|---|---|
 | `en.ftl` | English | Source of truth |
-| `de.ftl` | Deutsch | Draft, pending native review |
-| `es.ftl` | Español | Draft, pending native review |
-| `id.ftl` | Bahasa Indonesia | Draft, pending native review |
-| `pt-BR.ftl` | Português (Brasil) | Draft, pending native review |
-| `ru.ftl` | Русский | Draft, pending native review |
+| `de.ftl` | Deutsch | AI-translated, pending native review |
+| `es.ftl` | Español | AI-translated, pending native review |
+| `id.ftl` | Bahasa Indonesia | AI-translated, pending native review |
+| `pt-BR.ftl` | Português (Brasil) | AI-translated, pending native review |
+| `ru.ftl` | Русский | AI-translated, pending native review |
+
+Every translation was produced by an AI model (Claude) and has not yet been
+reviewed by a native speaker; native-speaker corrections are the most useful
+contribution here.
 
 The Language menu switches instantly, without a restart. "System language"
 follows the Windows display language and falls back to English.
@@ -88,9 +92,15 @@ Pass counts as numbers, not formatted strings, so plural rules can apply.
 ## Checking layouts
 
 German, Spanish, Portuguese and Russian run roughly a third longer than
-English, and Indonesian is often longer too. Debug builds add a "Pseudo-locale" entry to the Language menu: English with every letter
+English, and Indonesian is often longer too. To check a layout before real
+translations exist, start a debug build with `IMGEDITOR_PSEUDO_LOCALE=1`:
+the Language menu then offers a "Pseudo-locale", English with every letter
 accented and the vowels doubled ("Fíílée"), so clipped or badly wrapped
-labels show up before real translations exist.
+labels show up. It is hidden otherwise, and release builds never offer it.
+
+```powershell
+$env:IMGEDITOR_PSEUDO_LOCALE = 1; cargo run
+```
 
 Headings use the Bricolage display font, which has no Cyrillic; in Russian
 they switch to Inter ExtraBold (`fonts::display_font`).

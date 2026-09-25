@@ -186,14 +186,20 @@ for the engineering story.
 The whole interface is translated: menus, dialogs, notifications, the inspector
 and 3D/texture panels, and the compatibility validator's verdicts and notes.
 
+> **AI-translated.** For transparency: every language other than English was
+> translated by an AI model (Claude), then reviewed and refined by it against
+> the English source and the app's context. None has been checked by a native
+> speaker yet, so expect the occasional awkward phrase. Corrections are very
+> welcome.
+
 | Language | Status |
 |----------|--------|
 | English | Source |
-| Deutsch | Draft, pending native review |
-| Español | Draft, pending native review |
-| Bahasa Indonesia | Draft, pending native review |
-| Português (Brasil) | Draft, pending native review |
-| Русский | Draft, pending native review |
+| Deutsch | AI-translated, pending native review |
+| Español | AI-translated, pending native review |
+| Bahasa Indonesia | AI-translated, pending native review |
+| Português (Brasil) | AI-translated, pending native review |
+| Русский | AI-translated, pending native review |
 
 - **Instant switching** — pick a language from the **Language** menu (it keeps
   its icon, so you can find it from any language); no restart needed. **System
