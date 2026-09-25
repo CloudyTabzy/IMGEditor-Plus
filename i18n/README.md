@@ -43,6 +43,27 @@ context-more-selected =
     }
 ```
 
+- Brazilian Portuguese puts 0 in the `one` category ("0 textura"), so every
+  `[one]` branch in `pt-BR.ftl` needs an `[0]` branch with the plural text.
+- Where several counts share a sentence, or the noun would need many forms,
+  prefer the "Label: N" shape ("Текстур: 3, записей: 5") over plural
+  selectors. Indonesian has no grammatical plural and uses the bare noun.
+
+### Conventions per language
+
+| | Quotes | Dash | Register | Notes |
+|---|---|---|---|---|
+| de | „…“ | – | du | "Engine", not "Motor"; nouns capitalized after a colon |
+| es | «…» | — | tú | "archivo" is both archive and file; sort rules are "criterios" |
+| id | “…” | — | Anda | completed actions in the passive ("3 berkas diimpor") |
+| pt-BR | “…” | — | você | `[0]` branches, see above |
+| ru | «…» | — | вы | "Label: N" counts; "оригинальная версия" for retail |
+
+The English source uses ASCII `'…'` and ` - `; translations use their
+language's typography instead. Menu and context-menu labels are checked by
+a test (`menu_labels_fit_their_dropdowns_in_every_language`) that measures
+them with the real font; if it fails, shorten the label.
+
 Build with `cargo build`. It reports syntax errors with file and line, rejects
 messages English does not have, and prints a warning listing how many
 messages are still untranslated.

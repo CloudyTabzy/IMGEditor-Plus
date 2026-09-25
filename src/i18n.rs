@@ -321,6 +321,17 @@ fn format(id: &str, args: Option<&FluentArgs>) -> String {
     with_current(|localizer| localizer.format(id, args))
 }
 
+/// Formats any message by id in the current language, for tests that sweep
+/// whole message families (every `menu-…` label, say).
+#[cfg(test)]
+pub(crate) fn format_for_test(id: &str, args: &[(&str, &str)]) -> String {
+    let mut fluent_args = FluentArgs::new();
+    for (name, value) in args {
+        fluent_args.set(*name, *value);
+    }
+    format(id, Some(&fluent_args))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

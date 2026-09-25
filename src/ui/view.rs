@@ -4616,7 +4616,7 @@ fn build_context_menu(
             .width(Length::Fill),
     )
     // Keep the outer card compact while giving its Fill labels a real width to use.
-    .width(Length::Fixed(CONTEXT_MENU_WIDTH))
+    .width(Length::Fixed(context_menu_width()))
     .style(|theme: &iced::Theme| iced::widget::container::Style {
         background: Some(theme.extended_palette().background.base.color.into()),
         border: Border {
@@ -4649,8 +4649,33 @@ fn build_context_menu(
 
 const CONTEXT_MENU_EDGE_GAP: f32 = 8.0;
 const CONTEXT_MENU_LEFT_OFFSET: f32 = 12.0;
-/// Wide enough for the longest Russian and Spanish labels on one line.
+/// Narrowest context menu; it grows to fit the longest action label.
 const CONTEXT_MENU_WIDTH: f32 = 300.0;
+pub(crate) const CONTEXT_MENU_MAX_WIDTH: f32 = 460.0;
+/// Card padding (8 + 8), button padding (10 + 10), icon and gap, slack.
+pub(crate) const CONTEXT_MENU_CHROME: f32 = 64.0;
+
+/// Sized from every action label, not just the ones this entry shows, so the
+/// menu keeps one width whichever entry is right-clicked, and no language's
+/// longest label ("Экспортировать связанные текстуры NFT") wraps.
+fn context_menu_width() -> f32 {
+    let widest = [
+        t::context_play_animation(),
+        t::context_open_3d(),
+        t::context_open_external(),
+        t::context_view_textures(),
+        t::context_export_companion_textures(),
+        t::context_export_embedded_textures(),
+        t::context_export(),
+        t::context_rename(),
+        t::context_copy_name(),
+        t::context_delete(),
+    ]
+    .iter()
+    .map(|label| crate::ui::app::menu_label_width(label))
+    .fold(0.0, f32::max);
+    (widest + CONTEXT_MENU_CHROME).clamp(CONTEXT_MENU_WIDTH, CONTEXT_MENU_MAX_WIDTH)
+}
 
 fn context_menu_translation(bounds: Rectangle, viewport: Rectangle, row_y: f32) -> Vector {
     let anchor_x = bounds.x + CONTEXT_MENU_LEFT_OFFSET;

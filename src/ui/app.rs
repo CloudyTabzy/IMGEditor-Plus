@@ -8586,214 +8586,210 @@ impl App {
             };
         let recent_menu = Menu::new(recent_menu_items).max_width(320.0);
 
-        let file_menu = Menu::new(vec![
-            Item::new(menu_button(
+        let file_menu = dropdown(vec![
+            (
                 t::menu_file_new(menu_shortcut(Shortcut::New)),
                 Message::NewArchive,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_file_open(menu_shortcut(Shortcut::Open)),
                 Message::OpenArchive,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_file_save(menu_shortcut(Shortcut::Save)),
                 Message::SaveArchive,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_file_save_as(menu_shortcut(Shortcut::SaveAs)),
                 Message::SaveArchiveAs,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_file_pack(),
                 Message::PackArchive,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_file_set_game_folder(),
                 Message::PickGameFolder,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_file_reset_game_folder(),
                 Message::ResetGameFolder,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_file_close_tab(menu_shortcut(Shortcut::Close)),
                 Message::CloseSelectedArchive,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_file_sort_by(),
                 Message::OpenSortManager,
-            )),
-        ])
-        .max_width(MENU_WIDTH);
+            ),
+        ]);
 
-        let edit_menu = Menu::new(vec![
-            Item::new(menu_button(
+        let edit_menu = dropdown(vec![
+            (
                 t::menu_edit_import(menu_shortcut(Shortcut::Import)),
                 Message::ImportFiles,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_edit_import_folder(),
                 Message::ImportFolder,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_edit_export_all(menu_shortcut(Shortcut::ExportAll)),
                 Message::ExportAll,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_edit_export_selected(menu_shortcut(Shortcut::ExportSelected)),
                 Message::ExportSelected,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_edit_export_list(menu_shortcut(Shortcut::ExportEntryList)),
                 Message::ExportEntryList,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_edit_compare_list(menu_shortcut(Shortcut::CompareWithList)),
                 Message::CompareWithList,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_edit_load_agr(),
                 Message::PickAgrFile,
-            )),
-        ])
-        .max_width(MENU_WIDTH);
+            ),
+        ]);
 
-        let selection_menu = Menu::new(vec![
-            Item::new(menu_button(
+        let selection_menu = dropdown(vec![
+            (
                 t::menu_selection_all(menu_shortcut(Shortcut::SelectAll)),
                 Message::SelectAll,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_selection_invert(menu_shortcut(Shortcut::InvertSelection)),
                 Message::InvertSelection,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_selection_clear(menu_shortcut(Shortcut::ClearSelection)),
                 Message::ClearSelection,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_selection_delete(menu_shortcut(Shortcut::Delete)),
                 Message::DeleteSelected,
-            )),
-        ])
-        .max_width(MENU_WIDTH);
+            ),
+        ]);
 
-        let option_items: Vec<Item<'_, Message, iced::Theme, iced::Renderer>> = ThemeMode::ALL
+        let option_items: Vec<(String, Message)> = ThemeMode::ALL
             .iter()
             .map(|mode| {
                 let marker = if *mode == self.config.theme { "● " } else { "○ " };
                 let label = format!("{marker}{}", theme_display_name(*mode));
-                Item::new(menu_button(label, Message::SetTheme(*mode)))
+                (label, Message::SetTheme(*mode))
             })
             .collect();
 
-        let option_menu = Menu::new(option_items).max_width(MENU_WIDTH);
+        let option_menu = dropdown(option_items);
 
         // The View menu contains application-wide interaction preferences.
         let view_toggle = |on: bool| if on { "● " } else { "○ " };
         let mut view_items = vec![
-            Item::new(menu_button(
+            (
                 format!("{}{}", view_toggle(self.config.show_navigation_gizmo), t::menu_view_navigation_gizmo()),
                 Message::SetNavigationGizmoVisible(!self.config.show_navigation_gizmo),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.config.show_search_bar), t::menu_view_search_bar()),
                 Message::ToggleSearchBar(!self.config.show_search_bar),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.config.search_selection_context), t::menu_view_search_selection_context()),
                 Message::ToggleSearchSelectionContext(!self.config.search_selection_context),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.config.literal_file_types), t::menu_view_literal_file_types()),
                 Message::ToggleLiteralFileTypes(!self.config.literal_file_types),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.compat_highlight_enabled), t::menu_view_highlight_validator_rows()),
                 Message::SetCompatHighlight(!self.compat_highlight_enabled),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.config.context_selection_accumulates), t::menu_view_context_accumulates()),
                 Message::ToggleContextAccumulate(!self.config.context_selection_accumulates),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.config.autoscroll_momentum_enabled), t::menu_view_autoscroll_momentum()),
                 Message::ToggleAutoscrollMomentum(!self.config.autoscroll_momentum_enabled),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.config.motion_enabled), t::menu_view_motion_effects()),
                 Message::ToggleMotionEffects(!self.config.motion_enabled),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.config.selection_pulse_enabled), t::menu_view_selection_pulse()),
                 Message::ToggleSelectionPulse(!self.config.selection_pulse_enabled),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.config.click_ripple_enabled), t::menu_view_click_ripples()),
                 Message::ToggleClickRipple(!self.config.click_ripple_enabled),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.config.icon_micro_motion_enabled), t::menu_view_icon_micro_motion()),
                 Message::ToggleIconMicroMotion(!self.config.icon_micro_motion_enabled),
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 format!("{}{}", view_toggle(self.animation_demo_active()), t::menu_view_animation_demo()),
                 if self.animation_demo_active() {
                     Message::AnimationDemoExit
                 } else {
                     Message::AnimationDemoStart
                 },
-            )),
+            ),
         ];
         if self.file_association != AssociationState::Unsupported {
             let associated = self.file_association == AssociationState::Registered;
-            view_items.push(Item::new(menu_button(
+            view_items.push((
                 format!("{}{}", view_toggle(associated), t::menu_view_explorer_association()),
                 Message::SetFileAssociation(!associated),
-            )));
+            ));
         }
-        let view_menu = Menu::new(view_items).max_width(MENU_WIDTH);
+        let view_menu = dropdown(view_items);
 
-        let help_menu = Menu::new(vec![
-            Item::new(menu_button(
+        let help_menu = dropdown(vec![
+            (
                 t::menu_help_check_updates(menu_shortcut(Shortcut::CheckUpdates)),
                 Message::CheckUpdatesManual,
-            )),
-            Item::new(menu_button(
+            ),
+            (
                 t::menu_help_repository(),
                 Message::VisitRepository,
-            )),
-            Item::new(menu_button(t::menu_help_about(), Message::ShowAbout)),
-        ])
-        .max_width(MENU_WIDTH);
+            ),
+            (t::menu_help_about(), Message::ShowAbout),
+        ]);
 
         // Languages are listed under their own names, so a user can find
         // theirs whatever the UI language is.
         let language = self.config.language;
         let language_marker = |setting| if language == setting { "● " } else { "○ " };
-        let mut language_items = vec![Item::new(menu_button(
+        let mut language_items = vec![(
             format!(
                 "{}{}",
                 language_marker(LanguageSetting::System),
                 t::menu_language_system(crate::i18n::system_language().autonym())
             ),
             Message::SetLanguage(LanguageSetting::System),
-        ))];
+        )];
         for choice in Language::SELECTABLE {
             let setting = LanguageSetting::Fixed(choice);
-            language_items.push(Item::new(menu_button(
+            language_items.push((
                 format!("{}{}", language_marker(setting), choice.autonym()),
                 Message::SetLanguage(setting),
-            )));
+            ));
         }
         if cfg!(debug_assertions) {
             let setting = LanguageSetting::Fixed(Language::Pseudo);
-            language_items.push(Item::new(menu_button(
+            language_items.push((
                 format!("{}{}", language_marker(setting), t::menu_language_pseudo()),
                 Message::SetLanguage(setting),
-            )));
+            ));
         }
-        let language_menu = Menu::new(language_items).max_width(MENU_WIDTH + 20.0);
+        let language_menu = dropdown(language_items);
 
         // Root labels fill the bar height so dropdowns open flush with its
         // bottom edge.
@@ -8891,9 +8887,50 @@ impl App {
     }
 }
 
-/// Dropdown width: room for Spanish and Russian labels, which run about a
-/// third longer than English.
+/// Narrowest dropdown; menus grow past it to fit their longest label.
 const MENU_WIDTH: f32 = 260.0;
+/// Widest dropdown before labels wrap.
+const MENU_MAX_WIDTH: f32 = 440.0;
+/// Horizontal space around a label: menu padding (5 + 5), button padding
+/// (10 + 10), the 16 px icon and its 6 px gap, plus slack for rounding.
+const MENU_ITEM_CHROME: f32 = 60.0;
+
+/// A dropdown sized to its longest label. Translations run up to half again
+/// as long as English, so a fixed width either wraps them ("Экспортировать
+/// выбранное (Ctrl + Shift + E)" broke onto two lines) or wastes space in
+/// English. Labels are measured with the same shaper and font the menu
+/// renders with.
+fn dropdown<'a>(entries: Vec<(String, Message)>) -> Menu<'a, Message, iced::Theme, iced::Renderer> {
+    let widest = entries
+        .iter()
+        .map(|(label, _)| menu_label_width(label))
+        .fold(0.0, f32::max);
+    let width = (widest + MENU_ITEM_CHROME).clamp(MENU_WIDTH, MENU_MAX_WIDTH);
+    Menu::new(
+        entries
+            .into_iter()
+            .map(|(label, message)| Item::new(menu_button(label, message)))
+            .collect(),
+    )
+    .max_width(width)
+}
+
+/// Rendered width of a 14 px Inter label on one line.
+pub(crate) fn menu_label_width(label: &str) -> f32 {
+    use iced::advanced::text::Paragraph as _;
+    iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::Text {
+        content: label,
+        bounds: iced::Size::INFINITE,
+        size: iced::Pixels(14.0),
+        line_height: iced::widget::text::LineHeight::default(),
+        font: fonts::INTER,
+        align_x: iced::widget::text::Alignment::Default,
+        align_y: iced::alignment::Vertical::Top,
+        shaping: iced::widget::text::Shaping::Advanced,
+        wrapping: iced::widget::text::Wrapping::None,
+    })
+    .min_width()
+}
 
 /// Shortcut text for a menu label. Non-breaking spaces keep a wrapped label
 /// from splitting the shortcut itself ("(Ctrl +" / "D)").
@@ -9301,6 +9338,50 @@ fn convert_bulk_entries(
 mod tests {
     use super::*;
     use crate::archive::EntryInfo;
+
+    /// Every menu and context-menu label, in every language, fits on one line
+    /// at the widest the dropdowns grow to. A translation that fails this
+    /// wraps in the real menu; shorten it rather than raising the limit.
+    #[test]
+    fn menu_labels_fit_their_dropdowns_in_every_language() {
+        iced::advanced::graphics::text::font_system()
+            .write()
+            .expect("font system")
+            .load_font(std::borrow::Cow::Borrowed(fonts::INTER_FONT_BYTES));
+        // The longest shortcut and autonym the menus ever show.
+        let shortcut = menu_shortcut(Shortcut::ExportSelected);
+        let args = [
+            ("shortcut", shortcut.as_str()),
+            ("language", "Português (Brasil)"),
+        ];
+        let mut too_wide = Vec::new();
+        for language in Language::SELECTABLE {
+            crate::i18n::set_language(language);
+            for id in crate::i18n::t::MESSAGE_IDS {
+                let (chrome, limit) = if id.starts_with("menu-") && !matches!(
+                    *id,
+                    "menu-file" | "menu-recent" | "menu-edit" | "menu-selection"
+                        | "menu-view" | "menu-themes" | "menu-help" | "menu-language"
+                ) {
+                    // Toggle rows carry a "● " marker.
+                    (MENU_ITEM_CHROME + menu_label_width("● "), MENU_MAX_WIDTH)
+                } else if id.starts_with("context-") && *id != "context-more-selected" {
+                    (crate::ui::view::CONTEXT_MENU_CHROME, crate::ui::view::CONTEXT_MENU_MAX_WIDTH)
+                } else {
+                    continue;
+                };
+                let label = crate::i18n::format_for_test(id, &args);
+                let width = menu_label_width(&label) + chrome;
+                if width > limit {
+                    too_wide.push(format!("{language:?} {id}: {width:.0} > {limit}: {label}"));
+                }
+            }
+        }
+        crate::i18n::set_language(Language::English);
+        assert!(too_wide.is_empty(), "labels would wrap:
+{}", too_wide.join("
+"));
+    }
 
     fn test_app() -> App {
         let mut app = App::new(Config::default());
