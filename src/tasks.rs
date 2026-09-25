@@ -8,6 +8,7 @@ use compact_str::CompactString;
 use rayon::prelude::*;
 
 use crate::archive::{ArchiveInfo, EntryInfo, PackStats, ProgressInfo};
+use crate::i18n::t;
 use crate::parser::{
     ImgParser, ImgVersion, ImportEntryResult, PcV1Parser, PcV2Parser, SECTOR_SIZE,
     Xbox360Parser, import_entry_with_result, safe_entry_output_path, unique_output_path,
@@ -78,7 +79,7 @@ impl SaveTask {
             eprintln!("save failed: {err}");
         } else {
             progress.set_percentage(1.0);
-            archive.add_log("Archive saved".to_string());
+            archive.add_log(t::log_archive_saved());
         }
         // Must run on every path: a successful save that skipped this
         // left the archive "in use" forever, which then made the
@@ -231,10 +232,9 @@ impl PackTask {
         let packed_bytes = std::fs::metadata(&self.path)?.len();
         let stats = PackStats::from_sizes(entry_count, original_bytes, packed_bytes);
 
-        archive.add_log(format!(
-            "Archive packed: {} entries, {} reclaimed",
+        archive.add_log(t::log_archive_packed(
             stats.entry_count,
-            format_bytes(stats.reclaimed_bytes())
+            format_bytes(stats.reclaimed_bytes()),
         ));
 
         Ok(PackOutcome { archive, stats })
@@ -288,10 +288,7 @@ impl FolderImportTask {
             if progress.is_cancelled() {
                 summary.cancelled = true;
                 summary.skipped += plan.files.len() - index;
-                push_import_detail(
-                    &mut summary,
-                    "Import cancelled; remaining files were skipped.",
-                );
+                push_import_detail(&mut summary, t::folder_import_cancelled_detail());
                 break;
             }
 
@@ -304,7 +301,7 @@ impl FolderImportTask {
 
             if duplicate && duplicate_policy == FolderDuplicatePolicy::Skip {
                 summary.skipped += 1;
-                push_import_detail(&mut summary, format!("{display_name}: duplicate skipped"));
+                push_import_detail(&mut summary, t::folder_import_duplicate(display_name.as_str()));
             } else {
                 let replace = duplicate && duplicate_policy == FolderDuplicatePolicy::Replace;
                 match import_entry_with_result(&mut archive, path, replace) {
@@ -327,12 +324,13 @@ impl FolderImportTask {
             archive.dirty = true;
             archive.invalidate_entry_caches_keeping_report();
         }
-        archive.add_log(format!(
-            "Folder import: {} imported, {} skipped, {} failed",
-            summary.imported, summary.skipped, summary.failed
+        archive.add_log(t::log_folder_import(
+            summary.imported,
+            summary.skipped,
+            summary.failed,
         ));
         for detail in &summary.details {
-            archive.add_log(format!("Folder import detail: {detail}"));
+            archive.add_log(t::log_folder_import_detail(detail.as_str()));
         }
         archive.update_search = true;
         progress.finish();

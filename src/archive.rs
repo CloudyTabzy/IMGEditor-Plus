@@ -131,6 +131,7 @@ fn new_texture_preview_cache(active_entry: &Arc<AtomicUsize>) -> Arc<TexturePrev
     ))
 }
 use crate::sort::{SortChain, SortDirection, SortKey};
+use crate::i18n::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportStatus {
@@ -269,7 +270,7 @@ impl Default for SortState {
             column: SortColumn::Name,
             direction: crate::sort::SortDirection::Ascending,
             type_index: 0,
-            type_header_label: "Type".to_string(),
+            type_header_label: t::table_type(),
         }
     }
 }
@@ -501,7 +502,7 @@ impl ArchiveInfo {
             generation: 0,
         };
 
-        archive.add_log("Created archive".to_string());
+        archive.add_log(t::log_archive_created());
         archive
     }
 
@@ -679,9 +680,9 @@ impl ArchiveInfo {
                 SortDirection::Ascending => '↑',
                 SortDirection::Descending => '↓',
             };
-            format!("Type {arrow} {primary}")
+            t::table_type_sorted(arrow.to_string(), file_type_display(primary))
         } else {
-            "Type".to_string()
+            t::table_type()
         };
 
         self.refresh_export_status();
@@ -884,6 +885,23 @@ impl ArchiveInfo {
             self.rename_index = Some(index);
         }
     }
+}
+
+/// Display text for a file type. The curated names returned by
+/// [`infer_file_type`] stay English because they are sort and grouping
+/// keys; literal extensions (`DFF`, `TXD`) are shown as-is.
+pub fn file_type_display(file_type: &str) -> std::borrow::Cow<'_, str> {
+    let translated = match file_type {
+        "Model" => t::file_type_model(),
+        "Texture" => t::file_type_texture(),
+        "Collision" => t::file_type_collision(),
+        "Animation" => t::file_type_animation(),
+        "Placement" => t::file_type_placement(),
+        "Definition" => t::file_type_definition(),
+        "Data" => t::file_type_data(),
+        other => return std::borrow::Cow::Borrowed(other),
+    };
+    std::borrow::Cow::Owned(translated)
 }
 
 pub fn infer_file_type(file_name: &str) -> CompactString {

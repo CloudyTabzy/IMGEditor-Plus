@@ -5560,7 +5560,11 @@ impl App {
                 };
                 let mut lines = Vec::new();
                 lines.push(format!("{}: {}", t::inspect_name(), inspection.file_name));
-                lines.push(format!("{}: {}", t::inspect_type(), inspection.file_type));
+                lines.push(format!(
+                    "{}: {}",
+                    t::inspect_type(),
+                    crate::archive::file_type_display(&inspection.file_type)
+                ));
                 lines.push(format!(
                     "{}: {}",
                     t::inspect_size(),
@@ -5874,6 +5878,8 @@ impl App {
             Message::SetLanguage(setting) => {
                 self.config.language = setting;
                 crate::i18n::set_language(setting.resolve());
+                // Rebuild the list so the Type header picks up the new language.
+                self.filter_pending = true;
                 self.save_config();
                 Task::none()
             }
@@ -6560,13 +6566,7 @@ impl App {
                         let verdict_summary = report
                             .verdicts
                             .get(target)
-                            .map(|counts| {
-                                counts
-                                    .iter()
-                                    .map(|(verdict, count)| format!("{verdict} {count}"))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            })
+                            .map(crate::compat::games::Verdict::counts_summary)
                             .unwrap_or_else(t::validator_no_textures);
                         let summary = t::validation_summary(
                             report.txd_entries,
@@ -6578,14 +6578,19 @@ impl App {
                         );
                         archive.add_log(t::log_compat_check(summary.as_str()));
                         for (code, count) in &report.anomaly_counts {
+                            let example = report
+                                .anomaly_examples
+                                .get(code)
+                                .and_then(|examples| examples.first())
+                                .cloned()
+                                .unwrap_or_default();
                             archive.add_log(format!(
-                                "  {code}: {count} (e.g. {})",
-                                report
-                                    .anomaly_examples
-                                    .get(code)
-                                    .and_then(|examples| examples.first())
-                                    .cloned()
-                                    .unwrap_or_default()
+                                "  {}",
+                                t::save_check_anomaly(
+                                    code.to_string(),
+                                    count.to_string(),
+                                    example,
+                                )
                             ));
                         }
                         archive.compat_report = Some(report);

@@ -888,3 +888,242 @@ texture-grid-tip = Muestra una cuadrícula de referencia sobre la vista previa d
 texture-grid-size-tip = Usa una cuadrícula de referencia de { $size }×{ $size } para la textura.
 texture-grid-size = Tamaño:
 texture-fullscreen-tip = Ver a pantalla completa (calidad completa)
+
+## Entry table: the Type column and curated file-type names
+
+table-type = Tipo
+table-type-sorted = Tipo { $arrow } { $primary }
+file-type-model = Modelo
+file-type-texture = Textura
+file-type-collision = Colisión
+file-type-animation = Animación
+file-type-placement = Colocación
+file-type-definition = Definición
+file-type-data = Datos
+archive-untitled = Sin título
+
+## Archive log (Export tab)
+
+log-archive-created = Archivo creado
+log-archive-saved = Archivo guardado
+log-archive-packed =
+    { $entries ->
+        [one] Archivo compactado: { $entries } entrada, { $reclaimed } recuperados
+       *[other] Archivo compactado: { $entries } entradas, { $reclaimed } recuperados
+    }
+log-imported-entries =
+    { $count ->
+        [one] Se importó { $count } entrada
+       *[other] Se importaron { $count } entradas
+    }
+log-folder-import = Importación de carpeta: { $imported } importados, { $skipped } omitidos, { $failed } con error
+log-folder-import-detail = Detalle de la importación de carpeta: { $detail }
+folder-import-cancelled-detail = Importación cancelada; se omitieron los archivos restantes.
+folder-import-duplicate = { $name }: duplicado omitido
+
+## Entry details: source and format summary
+
+inspect-source-imported = Importado
+inspect-source-imported-from = Importado desde { $path }
+inspect-source-archive = Archivo { $archive }, sector { $sector }
+inspect-key-format = Formato
+inspect-key-version = Versión
+inspect-key-clump-size = Tamaño del clump
+inspect-key-endian = Orden de bytes
+inspect-key-user-version = Versión de usuario
+inspect-key-lines = Líneas
+inspect-key-atomics = Atomics
+inspect-key-textures = Texturas
+inspect-key-entries = Entradas
+inspect-key-mesh-vertices = Vértices de malla
+inspect-key-mesh-faces = Caras de malla
+inspect-key-spheres = Esferas
+inspect-key-boxes = Cajas
+inspect-key-shadow-mesh = Malla de sombra
+inspect-rw-truncated = RenderWare (truncado)
+inspect-rw-clump = Clump (modelo)
+inspect-rw-txd = Diccionario de texturas
+inspect-rw-pi-txd = Diccionario de texturas independiente de plataforma
+inspect-rw-animation = Animación
+inspect-rw-uv-animation = Animación UV
+inspect-rw-stream = Flujo RenderWare
+inspect-bytes =
+    { $count ->
+        [one] { $count } byte
+       *[other] { $count } bytes
+    }
+inspect-col-unknown = Colisión desconocida
+inspect-endian-big = Big-endian
+inspect-endian-little = Little-endian
+inspect-nif-truncated = NIF (truncado)
+inspect-lines-value = { $lines } ({ $nonempty } no vacías)
+inspect-format-scm = Script de GTA (main.scm)
+inspect-format-ipl = Colocación de objetos de GTA
+inspect-format-ide = Definición de objetos de GTA
+inspect-texture-count =
+    { $count ->
+        [one] { $count } textura
+       *[other] { $count } texturas
+    }
+
+## Embedded-texture export (NIF → NFT)
+
+texture-export-none = No se encontraron texturas incrustadas
+texture-export-done =
+    { $count ->
+        [one] Se exportó { $count } textura incrustada
+       *[other] Se exportaron { $count } texturas incrustadas
+    }
+texture-export-partial = Texturas exportadas: { $written }; errores: { $failures }
+texture-export-no-nft = No se encontró ningún NFT para '{ $name }'
+
+## Manifest comparison errors
+
+compare-manifest-inspect = No se pudo inspeccionar el manifiesto '{ $path }': { $error }
+compare-manifest-too-large = El manifiesto '{ $path }' es demasiado grande ({ $size }; el límite es { $limit }).
+compare-manifest-read = No se pudo leer el manifiesto '{ $path }': { $error }
+compare-manifest-grew = El manifiesto '{ $path }' superó el límite de { $limit } mientras se leía.
+compare-manifest-utf8 = El manifiesto '{ $path }' no es UTF-8 válido: { $error }
+
+## Compatibility verdicts
+
+verdict-native = nativo
+verdict-supported = compatible
+verdict-convertible-lossless = convertible (sin pérdida)
+verdict-convertible-lossy = convertible (con pérdida)
+verdict-unsupported = incompatible
+verdict-untested = sin verificar
+
+## Compatibility evidence notes
+
+compat-class-other-nif = otros formatos NiPixelData
+compat-cat-iii-pal = el 96,5 % de las texturas del mundo del juego original
+compat-cat-iii-888 = 6806 rásteres, incluido el conjunto de jugador/vehículos
+compat-cat-iii-8888 = 1121 rásteres
+compat-cat-iii-1555 = 24 rásteres
+compat-cat-iii-dxt1 = el juego original no incluye ninguno; el hardware D3D8 lo admite
+compat-cat-iii-dxt = valores de compresión D3D8 1-5; el juego original no incluye ninguno
+compat-cat-depth24 = forma documentada de profundidad 24; paso/orden sin verificar
+compat-cat-iii-565 = asignado por el controlador; III no incluye ninguno
+compat-cat-555-lum8 = el controlador asigna C555 y LUM8; el juego original no incluye ninguno
+compat-cat-a8l8 = D3D9 y los decodificadores lo admiten; ruta de nibble RW sin verificar
+compat-cat-vc-dxt1 = dialecto del mundo original; D3D8 pp=1 (más de 10 000 rásteres, nibbles obsoletos)
+compat-cat-vc-dxt3 = dialecto alfa original; D3D8 pp=3 (1149 rásteres)
+compat-cat-vc-pal = 27 rásteres; se acepta, pero es poco común
+compat-cat-vc-888 = 1 ráster
+compat-cat-vc-8888 = III lo incluye; VC no incluye ninguno
+compat-cat-vc-565 = las etiquetas 565 del original son datos DXT1; no se midió ningún R565 real
+compat-cat-vc-16bit = las etiquetas del original son datos DXT1/DXT3; formas de 16 bits sin medir
+compat-cat-vc-dxt = existen valores de compresión D3D8; el original solo usa 1 y 3
+compat-cat-sa-dxt1 = 28 807 rásteres en los cuatro archivos
+compat-cat-sa-dxt3 = 2098 rásteres
+compat-cat-sa-888 = 1015 rásteres, sobre todo skins de player.img
+compat-cat-sa-8888 = 237 rásteres
+compat-cat-sa-dxt5 = el juego original no incluye ninguno; D3D9 lo admite
+compat-cat-sa-dxt24 = la palabra de formato D3D9 los transporta; alfa premultiplicado
+compat-cat-sa-pal = las fuentes se contradicen; el original no incluye ninguno; leer y conservar
+compat-cat-sa-16bit = asignado por el controlador; el original no incluye 16 bits sin comprimir
+compat-cat-sa-a8l8 = Magic.TXD lo incluye para SA PC; ruta RW sin verificar
+compat-cat-bully-dxt1 = 31 714 rásteres
+compat-cat-bully-dxt5 = 3526 rásteres
+compat-cat-bully-rgb = 138 / 134 rásteres
+compat-cat-bully-pal = 127 / 1 rásteres
+compat-cat-bully-dxt3 = Gamebryo lo admite; el juego original no incluye ninguno
+compat-cat-bully-other = 15 rásteres no decodificables
+
+compat-note-bully-not-rw = Los recursos de Bully son NIF/NFT de Gamebryo, no nativos de RenderWare
+compat-note-platform-rewrite = un ráster de plataforma { $platform } en un archivo de { $game } necesita reescribir la plataforma/versión
+compat-note-no-profile = aún no hay tabla de perfil
+compat-note-nft-not-rw = Los rásteres NFT de Gamebryo no son nativos de RenderWare
+compat-note-bully-dxt1 = Bully original: 31 714 rásteres DXT1
+compat-note-bully-dxt5 = Bully original: 3526 rásteres DXT5
+compat-note-bully-rgb = Bully original incluye RGB/RGBA sin comprimir (138/134)
+compat-note-bully-pal = Bully original incluye rásteres con paleta (127 PAL + 1 PALA)
+compat-note-bully-dxt3 = Gamebryo admite DXT3, pero Bully original no incluye ninguno
+compat-note-sa-dxt = SA original: 28 807 rásteres DXT1 + 2098 DXT3
+compat-note-sa-dxt24 = el formato nativo D3D9 transporta DXT2/DXT4 (premultiplicado); SA original no incluye ninguno
+compat-note-sa-dxt5 = SA original no incluye ninguno; DXT5 funciona gracias a D3D9 (lo usan las herramientas de mods)
+compat-note-sa-pal = las fuentes se contradicen sobre las paletas en SA; SA original no incluye ninguna; leer y conservar
+compat-note-sa-depth24 = forma documentada R8G8B8 de profundidad 24; SA original no incluye ninguna; ejecución sin verificar
+compat-note-sa-16bit = el controlador asigna 1555/565/4444; SA original no incluye 16 bits sin comprimir
+compat-note-c555 = el controlador asigna C555 a X1R5G5B5; el original no incluye ninguno
+compat-note-lum8 = el controlador asigna LUM8 a D3DFMT_L8; el original no incluye ninguno
+compat-note-sa-a8l8 = D3D9 transporta A8L8 y hay decodificadores independientes que lo admiten; la asignación de nibble RW habitual está sin verificar
+compat-note-iii-pal = III original: 96,5 % PAL8; VC original: 27 rásteres; se acepta, pero es poco común
+compat-note-vc-dxt1 = dialecto del mundo de VC original: DXT1 con D3D8 pp=1; el nibble del ráster es obsoleto
+compat-note-iii-dxt1 = III original no incluye rásteres comprimidos (0/15 372); el hardware D3D8 admite DXT1
+compat-note-vc-dxt3 = dialecto alfa de VC original: DXT3 con D3D8 pp=3 (1149 rásteres)
+compat-note-iii-dxt = los valores de compresión D3D8 1-5 corresponden a DXT1-5 (DXT2/4 premultiplicados); III y VC originales solo usan 1 y 3
+compat-note-iii-depth24 = forma documentada R8G8B8 de profundidad 24; paso/orden/ejecución sin verificar
+compat-note-iii-8888 = III original incluye 8888 en ambos archivos (1121 rásteres)
+compat-note-vc-565 = los rásteres etiquetados 565 de VC original son datos DXT1; no se midió ningún R565 real
+compat-note-iii-565 = forma de 16 bits asignada por el controlador; III no incluye ninguna
+compat-note-vc-1555 = las etiquetas 1555 de VC original son datos DXT1; no se midió ningún R1555 real
+compat-note-vc-4444 = las etiquetas 4444 de VC original son datos DXT3; no se midió ningún R4444 real
+compat-note-iii-4444 = III no incluye ninguno; 16 bits con alfa de la época D3D8
+compat-note-iii-a8l8 = Magic.TXD incluye A8L8 para SA PC; D3D9 lo transporta; ruta RW habitual sin verificar
+
+## Output-format choices (import and replace dialogs)
+
+compat-choice-iii-888 = X8R8G8B8 de 32 bits, sin pérdida; estándar de txd.img en III original
+compat-choice-iii-8888 = A8R8G8B8, conserva el alfa; III original incluye 1121
+compat-choice-iii-pal8 = paleta de 8 bits, cuantiza los colores; dialecto del mundo original (96,5 %)
+compat-choice-pal4 = paleta de 4 bits, cuantiza mucho; solo para arte de 16 colores
+compat-choice-iii-1555 = 16 bits con alfa de 1 bit; el original incluye 24
+compat-choice-iii-dxt = admitido por el hardware, pero III no lo usa; con pérdida
+compat-choice-vc-dxt1 = dialecto del mundo de VC original (D3D8 pp=1); compresión con pérdida
+compat-choice-vc-dxt3 = dialecto alfa de VC original (D3D8 pp=3); compresión con pérdida
+compat-choice-vc-888 = X8R8G8B8 de 32 bits, sin pérdida; VC original incluye uno
+compat-choice-vc-8888 = A8R8G8B8, conserva el alfa; forma de la época D3D8
+compat-choice-vc-pal8 = paleta de 8 bits, cuantiza los colores; VC original incluye 27
+compat-choice-vc-565 = 16 bits; VC original etiqueta 565 a datos DXT, forma sin comprimir sin medir
+compat-choice-vc-4444 = 16 bits con alfa; VC original etiqueta 4444 a datos DXT3
+compat-choice-player-888 = X8R8G8B8 de 32 bits; player.img original incluye 269
+compat-choice-player-8888 = A8R8G8B8, conserva el alfa; player.img original incluye 125
+compat-choice-player-dxt = compatible en todas partes; con pérdida (player.img no incluye ninguno)
+compat-choice-sa-dxt1 = dialecto del mundo de SA original; compresión con pérdida
+compat-choice-sa-dxt3 = dialecto alfa de SA original; compresión con pérdida
+compat-choice-sa-8888 = A8R8G8B8, sin pérdida; SA original lo incluye en player.img
+compat-choice-sa-pal8 = cuantiza los colores; SA original no incluye rásteres con paleta
+
+## Conversion warnings and errors
+
+compat-warn-alpha-discarded = { $source } tiene alfa, pero { $format } no puede guardarlo: se descartará el canal alfa.
+compat-warn-dxt-lossy = La compresión { $format } es con pérdida; la vista previa muestra el resultado codificado.
+compat-warn-palette-exact =
+    { $colors ->
+        [one] { $format } guarda la imagen exactamente ({ $colors } color).
+       *[other] { $format } guarda la imagen exactamente ({ $colors } colores).
+    }
+compat-warn-palette-quantize = Los colores se cuantizarán a { $cap } como máximo.
+compat-warn-stream-budget = { $width }x{ $height } supera el límite de streaming de 1024 px de SA; puede que el juego no lo cargue.
+compat-warn-verdict = { $format } es { $verdict } para { $game }: { $note }
+compat-error-image-format = formato de imagen no reconocido: { $error }
+compat-error-image-kind = las imágenes { $kind } no son compatibles; usa PNG, DDS, BMP o TGA
+compat-error-decode = no se pudo decodificar { $label }: { $error }
+compat-error-image-size = tamaño de imagen no compatible: { $width }x{ $height }
+compat-error-unreadable-texture = '{ $name }' no se puede decodificar ({ $error }); la conversión necesita píxeles legibles
+compat-error-no-dimensions = la textura no tiene dimensiones
+compat-error-texture-index = el índice de textura { $index } está fuera de rango
+compat-error-unknown-target = juego de destino desconocido: '{ $id }'
+
+## Save check: container conventions
+
+compat-container-v2-expects-v1 = Contenedor IMG v2, pero { $game } espera IMG v1: el juego no verá estos archivos.
+compat-container-v1-sa = Contenedor IMG v1; San Andreas original usa IMG v2 (v1 solo se carga si aparece en gta.dat).
+compat-container-xbox = Empaquetado de Xbox 360; { $game } espera un contenedor de PC.
+
+## Import check notes
+
+compat-scan-unreadable = no se pudo leer: { $error }
+compat-scan-bad-nif = cabecera NIF ilegible: { $error }
+compat-scan-empty-nif = sin bloques NiPixelData (archivo vacío)
+compat-scan-not-texture = no es una textura TXD ni de Gamebryo
+
+## Target-game suggestion evidence
+
+compat-hint-gamebryo = { $total } entradas de Gamebryo ({ $nft } NFT, { $nif } NIF)
+compat-hint-d3d9 = plataforma 9 (D3D9) en el { $share } de { $total } rásteres analizados
+compat-hint-pal = PAL8/PAL4 en el { $share } de los rásteres analizados
+compat-hint-vc16 = 16 bits 565/4444/1555 en el { $share } de los rásteres analizados
+compat-hint-d3d8 = plataforma 8 (D3D8)

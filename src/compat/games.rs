@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 
 use super::raster::{LogicalFormat, RasterProfile};
 
+use crate::i18n::t;
+
 /// How confident we are in a verdict.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Evidence {
@@ -47,6 +49,7 @@ pub enum Verdict {
 }
 
 impl Verdict {
+    /// Stable English key: persisted in reports and used as a map key.
     pub fn label(self) -> &'static str {
         match self {
             Self::Native => "native",
@@ -56,6 +59,45 @@ impl Verdict {
             Self::Unsupported => "unsupported",
             Self::Untested => "untested",
         }
+    }
+
+    /// Translated label for display.
+    pub fn display_label(self) -> String {
+        match self {
+            Self::Native => t::verdict_native(),
+            Self::Supported => t::verdict_supported(),
+            Self::ConvertibleLossless => t::verdict_convertible_lossless(),
+            Self::LossyConvertible => t::verdict_convertible_lossy(),
+            Self::Unsupported => t::verdict_unsupported(),
+            Self::Untested => t::verdict_untested(),
+        }
+    }
+
+    /// Inverse of [`Self::label`], for count maps keyed by label.
+    pub fn from_label(label: &str) -> Option<Self> {
+        [
+            Self::Untested,
+            Self::Native,
+            Self::Supported,
+            Self::ConvertibleLossless,
+            Self::LossyConvertible,
+            Self::Unsupported,
+        ]
+        .into_iter()
+        .find(|verdict| verdict.label() == label)
+    }
+
+    /// Formats a per-verdict count map (keyed by [`Self::label`]) with
+    /// translated labels, e.g. `native 12, untested 1`.
+    pub fn counts_summary(counts: &BTreeMap<&'static str, usize>) -> String {
+        counts
+            .iter()
+            .map(|(label, count)| match Self::from_label(label) {
+                Some(verdict) => format!("{} {count}", verdict.display_label()),
+                None => format!("{label} {count}"),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     /// Higher severity wins when combining a format verdict with a
@@ -247,56 +289,66 @@ pub struct VerdictReport {
 pub struct FormatInfo {
     pub class: &'static str,
     pub verdict: Verdict,
-    pub note: &'static str,
+    pub note: fn() -> String,
+}
+
+impl FormatInfo {
+    pub fn class_label(&self) -> String {
+        if self.class == "other NiPixelData formats" {
+            t::compat_class_other_nif()
+        } else {
+            self.class.to_string()
+        }
+    }
 }
 
 const GTA3_FORMATS: &[FormatInfo] = &[
-    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Native, note: "96.5% of retail world textures" },
-    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: "6,806 rasters, incl. player/vehicle set" },
-    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: "1,121 rasters" },
-    FormatInfo { class: "1555", verdict: Verdict::Native, note: "24 rasters" },
-    FormatInfo { class: "DXT1", verdict: Verdict::Supported, note: "retail ships none; D3D8 hardware supports it" },
-    FormatInfo { class: "DXT2 - DXT5", verdict: Verdict::Supported, note: "D3D8 compression values 1-5; retail ships none" },
-    FormatInfo { class: "888 true 24-bit", verdict: Verdict::Untested, note: "documented depth-24 form; stride/order unverified" },
-    FormatInfo { class: "565 / 4444", verdict: Verdict::Supported, note: "driver-mapped; III ships none" },
-    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: "driver maps C555 and LUM8; retail ships none" },
-    FormatInfo { class: "A8L8", verdict: Verdict::Untested, note: "D3D9/decoders support it; RW nibble path unverified" },
+    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Native, note: t::compat_cat_iii_pal },
+    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: t::compat_cat_iii_888 },
+    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: t::compat_cat_iii_8888 },
+    FormatInfo { class: "1555", verdict: Verdict::Native, note: t::compat_cat_iii_1555 },
+    FormatInfo { class: "DXT1", verdict: Verdict::Supported, note: t::compat_cat_iii_dxt1 },
+    FormatInfo { class: "DXT2 - DXT5", verdict: Verdict::Supported, note: t::compat_cat_iii_dxt },
+    FormatInfo { class: "888 true 24-bit", verdict: Verdict::Untested, note: t::compat_cat_depth24 },
+    FormatInfo { class: "565 / 4444", verdict: Verdict::Supported, note: t::compat_cat_iii_565 },
+    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: t::compat_cat_555_lum8 },
+    FormatInfo { class: "A8L8", verdict: Verdict::Untested, note: t::compat_cat_a8l8 },
 ];
 
 const VC_FORMATS: &[FormatInfo] = &[
-    FormatInfo { class: "DXT1", verdict: Verdict::Native, note: "retail world dialect; D3D8 pp=1 (10k+ rasters, stale nibbles)" },
-    FormatInfo { class: "DXT3", verdict: Verdict::Native, note: "retail alpha dialect; D3D8 pp=3 (1,149 rasters)" },
-    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Native, note: "27 rasters; accepted but rare" },
-    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: "1 raster" },
-    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: "III ships it; VC itself ships none" },
-    FormatInfo { class: "565 (R5G6B5)", verdict: Verdict::Supported, note: "retail 565 labels are DXT1 data; no genuine R565 measured" },
-    FormatInfo { class: "1555 / 4444", verdict: Verdict::Supported, note: "retail labels are DXT1/DXT3 data; raw 16-bit forms unmeasured" },
-    FormatInfo { class: "DXT2 / DXT4 / DXT5", verdict: Verdict::Supported, note: "D3D8 compression values exist; retail ships only 1 and 3" },
-    FormatInfo { class: "888 true 24-bit", verdict: Verdict::Untested, note: "documented depth-24 form; stride/order unverified" },
-    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: "driver maps C555 and LUM8; retail ships none" },
-    FormatInfo { class: "A8L8", verdict: Verdict::Untested, note: "D3D9/decoders support it; RW nibble path unverified" },
+    FormatInfo { class: "DXT1", verdict: Verdict::Native, note: t::compat_cat_vc_dxt1 },
+    FormatInfo { class: "DXT3", verdict: Verdict::Native, note: t::compat_cat_vc_dxt3 },
+    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Native, note: t::compat_cat_vc_pal },
+    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: t::compat_cat_vc_888 },
+    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: t::compat_cat_vc_8888 },
+    FormatInfo { class: "565 (R5G6B5)", verdict: Verdict::Supported, note: t::compat_cat_vc_565 },
+    FormatInfo { class: "1555 / 4444", verdict: Verdict::Supported, note: t::compat_cat_vc_16bit },
+    FormatInfo { class: "DXT2 / DXT4 / DXT5", verdict: Verdict::Supported, note: t::compat_cat_vc_dxt },
+    FormatInfo { class: "888 true 24-bit", verdict: Verdict::Untested, note: t::compat_cat_depth24 },
+    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: t::compat_cat_555_lum8 },
+    FormatInfo { class: "A8L8", verdict: Verdict::Untested, note: t::compat_cat_a8l8 },
 ];
 
 const SA_FORMATS: &[FormatInfo] = &[
-    FormatInfo { class: "DXT1", verdict: Verdict::Native, note: "28,807 rasters across the four archives" },
-    FormatInfo { class: "DXT3", verdict: Verdict::Native, note: "2,098 rasters" },
-    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: "1,015 rasters, mostly player.img skins" },
-    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: "237 rasters" },
-    FormatInfo { class: "DXT5", verdict: Verdict::Supported, note: "retail ships none; D3D9 supports it" },
-    FormatInfo { class: "DXT2 / DXT4", verdict: Verdict::Supported, note: "D3D9 format word carries them; premultiplied alpha" },
-    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Untested, note: "sources conflict; retail ships none; parse and preserve" },
-    FormatInfo { class: "1555 / 565 / 4444", verdict: Verdict::Supported, note: "driver-mapped; retail ships no 16-bit uncompressed" },
-    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: "driver maps C555 and LUM8; retail ships none" },
-    FormatInfo { class: "A8L8", verdict: Verdict::Untested, note: "Magic.TXD lists it for SA PC; RW path unverified" },
+    FormatInfo { class: "DXT1", verdict: Verdict::Native, note: t::compat_cat_sa_dxt1 },
+    FormatInfo { class: "DXT3", verdict: Verdict::Native, note: t::compat_cat_sa_dxt3 },
+    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: t::compat_cat_sa_888 },
+    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: t::compat_cat_sa_8888 },
+    FormatInfo { class: "DXT5", verdict: Verdict::Supported, note: t::compat_cat_sa_dxt5 },
+    FormatInfo { class: "DXT2 / DXT4", verdict: Verdict::Supported, note: t::compat_cat_sa_dxt24 },
+    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Untested, note: t::compat_cat_sa_pal },
+    FormatInfo { class: "1555 / 565 / 4444", verdict: Verdict::Supported, note: t::compat_cat_sa_16bit },
+    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: t::compat_cat_555_lum8 },
+    FormatInfo { class: "A8L8", verdict: Verdict::Untested, note: t::compat_cat_sa_a8l8 },
 ];
 
 const BULLY_FORMATS: &[FormatInfo] = &[
-    FormatInfo { class: "DXT1 (NFT)", verdict: Verdict::Native, note: "31,714 rasters" },
-    FormatInfo { class: "DXT5 (NFT)", verdict: Verdict::Native, note: "3,526 rasters" },
-    FormatInfo { class: "RGB / RGBA (NFT)", verdict: Verdict::Native, note: "138 / 134 rasters" },
-    FormatInfo { class: "PAL / PALA (NFT)", verdict: Verdict::Native, note: "127 / 1 rasters" },
-    FormatInfo { class: "DXT3 (NFT)", verdict: Verdict::Supported, note: "Gamebryo supports it; retail ships none" },
-    FormatInfo { class: "other NiPixelData formats", verdict: Verdict::Untested, note: "15 rasters undecodable" },
+    FormatInfo { class: "DXT1 (NFT)", verdict: Verdict::Native, note: t::compat_cat_bully_dxt1 },
+    FormatInfo { class: "DXT5 (NFT)", verdict: Verdict::Native, note: t::compat_cat_bully_dxt5 },
+    FormatInfo { class: "RGB / RGBA (NFT)", verdict: Verdict::Native, note: t::compat_cat_bully_rgb },
+    FormatInfo { class: "PAL / PALA (NFT)", verdict: Verdict::Native, note: t::compat_cat_bully_pal },
+    FormatInfo { class: "DXT3 (NFT)", verdict: Verdict::Supported, note: t::compat_cat_bully_dxt3 },
+    FormatInfo { class: "other NiPixelData formats", verdict: Verdict::Untested, note: t::compat_cat_bully_other },
 ];
 
 /// The catalog a game picker shows: what the engine natively ships and
@@ -320,7 +372,7 @@ pub fn classify(game: &GameProfile, profile: &RasterProfile) -> VerdictReport {
             game_id: game.id,
             verdict: Verdict::Unsupported,
             evidence: Evidence::Docs,
-            note: "Bully assets are Gamebryo NIF/NFT, not RenderWare natives".to_string(),
+            note: t::compat_note_bully_not_rw(),
         };
     }
 
@@ -331,10 +383,7 @@ pub fn classify(game: &GameProfile, profile: &RasterProfile) -> VerdictReport {
     // never *lowers* the severity of the format verdict. The evidence
     // stays the format's: the format table governs the outcome.
     if !game.platforms.contains(&profile.platform_id) {
-        let platform_note = format!(
-            "platform-{} raster in a {} archive needs a platform/version rewrite",
-            profile.platform_id, game.display
-        );
+        let platform_note = t::compat_note_platform_rewrite(profile.platform_id, game.display);
         let verdict = verdict.combine(Verdict::ConvertibleLossless);
         note = if note.is_empty() {
             platform_note
@@ -367,7 +416,7 @@ fn format_verdict(
         _ => (
             Verdict::Untested,
             Evidence::Untested,
-            "no profile table yet".to_string(),
+            t::compat_note_no_profile(),
         ),
     }
 }
@@ -385,36 +434,36 @@ pub fn classify_nft_format(game: &GameProfile, format: u32) -> VerdictReport {
             game_id: game.id,
             verdict: Verdict::Unsupported,
             evidence: Evidence::Docs,
-            note: "Gamebryo NFT rasters are not RenderWare natives".to_string(),
+            note: t::compat_note_nft_not_rw(),
         };
     }
     let (verdict, evidence, note) = match format {
         4 => (
             Verdict::Native,
             Evidence::Retail,
-            "retail Bully: 31,714 DXT1 rasters".to_string(),
+            t::compat_note_bully_dxt1(),
         ),
         6 => (
             Verdict::Native,
             Evidence::Retail,
-            "retail Bully: 3,526 DXT5 rasters".to_string(),
+            t::compat_note_bully_dxt5(),
         ),
         0 | 1 => (
             Verdict::Native,
             Evidence::Retail,
-            "retail Bully ships raw RGB/RGBA (138/134)".to_string(),
+            t::compat_note_bully_rgb(),
         ),
         2 | 3 => (
             Verdict::Native,
             Evidence::Retail,
-            "retail Bully ships paletted rasters (127 PAL + 1 PALA)".to_string(),
+            t::compat_note_bully_pal(),
         ),
         // The Gamebryo format enum and our decoder both handle DXT3,
         // but retail Bully ships none - keep it non-native.
         5 => (
             Verdict::Supported,
             Evidence::Docs,
-            "Gamebryo supports DXT3 but retail Bully ships none".to_string(),
+            t::compat_note_bully_dxt3(),
         ),
         _ => (Verdict::Untested, Evidence::Untested, String::new()),
     };
@@ -435,7 +484,7 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
         LogicalFormat::Dxt1 | LogicalFormat::Dxt3 => (
             Verdict::Native,
             Evidence::Retail,
-            "retail SA: 28,807 DXT1 + 2,098 DXT3 rasters".to_string(),
+            t::compat_note_sa_dxt(),
         ),
         // DXT2/DXT4 are DXT3/DXT5 with premultiplied alpha; the D3D9
         // native format word carries them directly. Retail SA ships
@@ -443,12 +492,12 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
         LogicalFormat::Dxt2 | LogicalFormat::Dxt4 => (
             Verdict::Supported,
             Evidence::Docs,
-            "D3D9 native format carries DXT2/DXT4 (premultiplied); retail SA ships none".to_string(),
+            t::compat_note_sa_dxt24(),
         ),
         LogicalFormat::Dxt5 => (
             Verdict::Supported,
             Evidence::Retail,
-            "retail SA ships none; DXT5 rides D3D9 support (mod tooling uses it)".to_string(),
+            t::compat_note_sa_dxt5(),
         ),
         // Sources conflict on SA palettes: the raster spec and librw's
         // native reader contain palette logic, while Magic.TXD's matrix
@@ -456,7 +505,7 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
         LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
             Verdict::Untested,
             Evidence::Docs,
-            "sources conflict on SA palettes; retail SA ships none; parse and preserve".to_string(),
+            t::compat_note_sa_pal(),
         ),
         // Retail SA ships uncompressed 888 as X8R8G8B8 32bpp storage
         // (1,015 rasters, mostly player.img ped skins) and 8888 (237).
@@ -466,30 +515,29 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
         LogicalFormat::R888 => (
             Verdict::Untested,
             Evidence::Docs,
-            "documented depth-24 R8G8B8 form; retail SA ships none; runtime unverified".to_string(),
+            t::compat_note_sa_depth24(),
         ),
         LogicalFormat::R8888 => (Verdict::Native, Evidence::Retail, String::new()),
         // Driver-mapped formats that retail SA happens not to ship.
         LogicalFormat::R1555 | LogicalFormat::R565 | LogicalFormat::R4444 => (
             Verdict::Supported,
             Evidence::Docs,
-            "driver maps 1555/565/4444; retail SA ships no 16-bit uncompressed".to_string(),
+            t::compat_note_sa_16bit(),
         ),
         LogicalFormat::R555 => (
             Verdict::Supported,
             Evidence::Docs,
-            "driver maps C555 to X1R5G5B5; retail ships none".to_string(),
+            t::compat_note_c555(),
         ),
         LogicalFormat::Lum8 => (
             Verdict::Supported,
             Evidence::Docs,
-            "driver maps LUM8 to D3DFMT_L8; retail ships none".to_string(),
+            t::compat_note_lum8(),
         ),
         LogicalFormat::A8l8 => (
             Verdict::Untested,
             Evidence::Docs,
-            "D3D9 carries A8L8 and independent decoders support it; ordinary RW nibble mapping unverified"
-                .to_string(),
+            t::compat_note_sa_a8l8(),
         ),
         LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, String::new()),
     }
@@ -512,24 +560,24 @@ fn iii_vc_verdict(
         LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
             Verdict::Native,
             Evidence::Retail,
-            "retail III: 96.5% PAL8; retail VC: 27 rasters - accepted but rare".to_string(),
+            t::compat_note_iii_pal(),
         ),
         LogicalFormat::Dxt1 if vc => (
             Verdict::Native,
             Evidence::Retail,
-            "retail VC world dialect: DXT1 with D3D8 pp=1; the raster nibble is stale".to_string(),
+            t::compat_note_vc_dxt1(),
         ),
         // III genuinely ships zero compressed rasters; DXT1 rides on
         // D3D8 hardware support but is not the game's data dialect.
         LogicalFormat::Dxt1 => (
             Verdict::Supported,
             Evidence::Retail,
-            "retail III ships no compressed rasters (0/15,372); D3D8 hardware supports DXT1".to_string(),
+            t::compat_note_iii_dxt1(),
         ),
         LogicalFormat::Dxt3 if vc => (
             Verdict::Native,
             Evidence::Retail,
-            "retail VC alpha dialect: DXT3 with D3D8 pp=3 (1,149 rasters)".to_string(),
+            t::compat_note_vc_dxt3(),
         ),
         // librw's D3D driver reads native compression values 1..5 into
         // DXT1..DXT5 textures; DXT2/DXT4 are the premultiplied-alpha
@@ -537,8 +585,7 @@ fn iii_vc_verdict(
         LogicalFormat::Dxt2 | LogicalFormat::Dxt3 | LogicalFormat::Dxt4 | LogicalFormat::Dxt5 => (
             Verdict::Supported,
             Evidence::Docs,
-            "D3D8 compression values 1-5 map to DXT1-5 (DXT2/4 premultiplied); retail III+VC ship only 1 and 3"
-                .to_string(),
+            t::compat_note_iii_dxt(),
         ),
         // Question 5 answered: retail III stores 888 exclusively as
         // 32-bit X8R8G8B8 (6,806 rasters; the txd.img player/vehicle
@@ -555,12 +602,12 @@ fn iii_vc_verdict(
         LogicalFormat::R888 => (
             Verdict::Untested,
             Evidence::Docs,
-            "documented depth-24 R8G8B8 form; stride/order/runtime unverified".to_string(),
+            t::compat_note_iii_depth24(),
         ),
         LogicalFormat::R8888 => (
             Verdict::Native,
             Evidence::Retail,
-            "retail III ships 8888 in both archives (1,121 rasters)".to_string(),
+            t::compat_note_iii_8888(),
         ),
         // The raw 16-bit forms are not what retail VC stores: its
         // 565/1555/4444 headers label DXT1/DXT3 data. They still load,
@@ -568,45 +615,44 @@ fn iii_vc_verdict(
         LogicalFormat::R565 if vc => (
             Verdict::Supported,
             Evidence::Retail,
-            "retail VC's 565-labelled rasters are DXT1 data; no genuine R565 measured".to_string(),
+            t::compat_note_vc_565(),
         ),
         LogicalFormat::R565 => (
             Verdict::Supported,
             Evidence::Docs,
-            "driver-mapped 16-bit form; III ships none".to_string(),
+            t::compat_note_iii_565(),
         ),
         LogicalFormat::R1555 if vc => (
             Verdict::Supported,
             Evidence::Retail,
-            "retail VC's 1555 labels are DXT1 data; no genuine R1555 measured".to_string(),
+            t::compat_note_vc_1555(),
         ),
         LogicalFormat::R1555 => (Verdict::Native, Evidence::Retail, String::new()),
         LogicalFormat::R4444 if vc => (
             Verdict::Supported,
             Evidence::Retail,
-            "retail VC's 4444 labels are DXT3 data; no genuine R4444 measured".to_string(),
+            t::compat_note_vc_4444(),
         ),
         LogicalFormat::R4444 => (
             Verdict::Supported,
             Evidence::Docs,
-            "III ships none; D3D8-era 16-bit with alpha".to_string(),
+            t::compat_note_iii_4444(),
         ),
         // Mapped driver formats that retail happens not to use.
         LogicalFormat::R555 => (
             Verdict::Supported,
             Evidence::Docs,
-            "driver maps C555 to X1R5G5B5; retail ships none".to_string(),
+            t::compat_note_c555(),
         ),
         LogicalFormat::Lum8 => (
             Verdict::Supported,
             Evidence::Docs,
-            "driver maps LUM8 to D3DFMT_L8; retail ships none".to_string(),
+            t::compat_note_lum8(),
         ),
         LogicalFormat::A8l8 => (
             Verdict::Untested,
             Evidence::Docs,
-            "Magic.TXD lists A8L8 for SA PC; D3D9 carries it; ordinary RW path unverified"
-                .to_string(),
+            t::compat_note_iii_a8l8(),
         ),
         LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, String::new()),
     }
@@ -641,6 +687,19 @@ mod tests {
             let report = classify_nft_format(game, 4);
             assert_eq!(report.verdict, Verdict::Unsupported, "{}", game.id);
         }
+    }
+
+    #[test]
+    fn verdict_counts_summary_translates_labels() {
+        let mut counts = BTreeMap::new();
+        counts.insert("native", 12);
+        counts.insert("untested", 1);
+        assert_eq!(Verdict::counts_summary(&counts), "native 12, untested 1");
+
+        crate::i18n::set_language(crate::i18n::Language::Russian);
+        let translated = Verdict::counts_summary(&counts);
+        crate::i18n::set_language(crate::i18n::Language::English);
+        assert_eq!(translated, "родной 12, не проверено 1");
     }
 
     fn raster(platform: u32, logical: LogicalFormat) -> RasterProfile {

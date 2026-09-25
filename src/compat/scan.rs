@@ -17,6 +17,7 @@ use crate::parser::{iparser::ImgParser, pc_v2::PcV2Parser};
 
 use super::games::{classify, ALL_GAMES};
 use super::raster::{LogicalFormat, RasterProfile, Severity};
+use crate::i18n::t;
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanReport {
@@ -367,7 +368,7 @@ pub fn check_import_file(path: &Path, target: &crate::compat::games::GameProfile
         Ok(bytes) => bytes,
         Err(err) => {
             check.skipped = true;
-            check.note = Some(format!("could not read: {err}"));
+            check.note = Some(t::compat_scan_unreadable(err.to_string()));
             return check;
         }
     };
@@ -377,7 +378,7 @@ pub fn check_import_file(path: &Path, target: &crate::compat::games::GameProfile
             Ok(header) => header,
             Err(err) => {
                 check.skipped = true;
-                check.note = Some(format!("unreadable NIF header: {err}"));
+                check.note = Some(t::compat_scan_bad_nif(err.to_string()));
                 return check;
             }
         };
@@ -405,7 +406,7 @@ pub fn check_import_file(path: &Path, target: &crate::compat::games::GameProfile
         }
         if check.textures == 0 {
             check.skipped = true;
-            check.note = Some("no NiPixelData blocks (empty stub)".to_string());
+            check.note = Some(t::compat_scan_empty_nif());
         }
         return check;
     }
@@ -414,7 +415,7 @@ pub fn check_import_file(path: &Path, target: &crate::compat::games::GameProfile
         Ok(parsed) => parsed,
         Err(_) => {
             check.skipped = true;
-            check.note = Some("not a TXD or Gamebryo texture".to_string());
+            check.note = Some(t::compat_scan_not_texture());
             return check;
         }
     };

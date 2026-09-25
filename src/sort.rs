@@ -75,7 +75,7 @@ impl SortKey {
         SortKey::ColFile,
     ];
 
-        /// Stable English name, written to and read from settings.ini. The UI
+    /// Stable English name, written to and read from settings.ini. The UI
     /// shows [`SortKey::label`] instead.
     pub fn display_name(self) -> &'static str {
         match self {

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{ImgVersion, import_entry};
 use crate::sort::SortChain;
+use crate::i18n::t;
 
 #[derive(Debug, Default)]
 pub struct Editor {
@@ -91,7 +92,7 @@ impl Editor {
     }
 
     pub fn new_archive(&mut self) {
-        let name = unique_archive_name(&self.archives, "Untitled");
+        let name = unique_archive_name(&self.archives, &t::archive_untitled());
         let mut archive = ArchiveInfo::new(name, true, ImgVersion::One);
         archive.sort_chain = self.default_sort_chain.clone();
         archive.sync_sort_state_from_chain();
@@ -312,7 +313,7 @@ impl Editor {
             archive.dirty = true;
             archive.invalidate_entry_caches_keeping_report();
         }
-        archive.add_log(format!("Imported {count} entries"));
+        archive.add_log(t::log_imported_entries(count));
         archive.update_search = true;
     }
 
@@ -361,7 +362,7 @@ impl Editor {
             archive.dirty = true;
             archive.invalidate_entry_caches_keeping_report();
         }
-        archive.add_log(format!("Imported {count} entries"));
+        archive.add_log(t::log_imported_entries(count));
         archive.update_search = true;
     }
 

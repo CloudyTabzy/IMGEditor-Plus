@@ -6,6 +6,7 @@ use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{SECTOR_SIZE, read_entry_header_standalone};
+use crate::i18n::t;
 
 #[derive(Debug, Clone, Default)]
 pub struct EntryInspection {
@@ -52,16 +53,13 @@ pub fn inspect_entry_standalone(
         entry
             .source_path
             .as_ref()
-            .map(|p| CompactString::new(format!("Imported from {}", p.display())))
-            .unwrap_or_else(|| CompactString::new("Imported"))
+            .map(|p| CompactString::new(t::inspect_source_imported_from(p.display().to_string())))
+            .unwrap_or_else(|| CompactString::new(t::inspect_source_imported()))
     } else {
         let archive_name = archive_path
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| archive_file_name.to_string());
-        CompactString::new(format!(
-            "Archive {} at sector {}",
-            archive_name, entry.offset
-        ))
+        CompactString::new(t::inspect_source_archive(archive_name, entry.offset))
     };
 
     let ext = Path::new(entry.file_name.as_str())
@@ -119,7 +117,7 @@ fn inspect_renderware(header: &[u8], inspection: &mut EntryInspection) {
     if header.len() < 12 {
         inspection
             .summary
-            .push(("Format".to_string(), "RenderWare (truncated)".to_string()));
+            .push((t::inspect_key_format(), t::inspect_rw_truncated()));
         return;
     }
 
@@ -127,20 +125,20 @@ fn inspect_renderware(header: &[u8], inspection: &mut EntryInspection) {
     let version = u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
 
     let type_name = match chunk_type {
-        0x10 => "Clump (model)",
-        0x16 => "Texture Dictionary",
-        0x23 => "Platform-independent Texture Dictionary",
-        0x1B => "Animation",
-        0x0253F2F6 => "UV Animation",
-        _ => "RenderWare stream",
+        0x10 => t::inspect_rw_clump(),
+        0x16 => t::inspect_rw_txd(),
+        0x23 => t::inspect_rw_pi_txd(),
+        0x1B => t::inspect_rw_animation(),
+        0x0253F2F6 => t::inspect_rw_uv_animation(),
+        _ => t::inspect_rw_stream(),
     };
 
     inspection
         .summary
-        .push(("Format".to_string(), type_name.to_string()));
+        .push((t::inspect_key_format(), type_name));
     inspection
         .summary
-        .push(("Version".to_string(), format!("0x{:08X}", version)));
+        .push((t::inspect_key_version(), format!("0x{:08X}", version)));
 
     if inspection
         .file_name
@@ -152,7 +150,7 @@ fn inspect_renderware(header: &[u8], inspection: &mut EntryInspection) {
         let clump_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
         inspection
             .summary
-            .push(("Clump size".to_string(), format!("{} bytes", clump_size)));
+            .push((t::inspect_key_clump_size(), t::inspect_bytes(clump_size)));
     }
 }
 
@@ -160,23 +158,23 @@ fn inspect_collision(header: &[u8], inspection: &mut EntryInspection) {
     if header.starts_with(b"COLL") {
         inspection
             .summary
-            .push(("Version".to_string(), "GTA III / VC (COLL)".to_string()));
+            .push((t::inspect_key_version(), "GTA III / VC (COLL)".to_string()));
     } else if header.starts_with(b"COL2") {
         inspection
             .summary
-            .push(("Version".to_string(), "GTA SA (COL2)".to_string()));
+            .push((t::inspect_key_version(), "GTA SA (COL2)".to_string()));
     } else if header.starts_with(b"COL3") {
         inspection
             .summary
-            .push(("Version".to_string(), "GTA SA (COL3)".to_string()));
+            .push((t::inspect_key_version(), "GTA SA (COL3)".to_string()));
     } else if header.starts_with(b"COL4") {
         inspection
             .summary
-            .push(("Version".to_string(), "GTA IV (COL4)".to_string()));
+            .push((t::inspect_key_version(), "GTA IV (COL4)".to_string()));
     } else {
         inspection
             .summary
-            .push(("Version".to_string(), "Unknown collision".to_string()));
+            .push((t::inspect_key_version(), t::inspect_col_unknown()));
     }
 }
 
@@ -190,29 +188,33 @@ fn inspect_nif(header: &[u8], inspection: &mut EntryInspection) {
             .trim_end_matches('\0');
         inspection
             .summary
-            .push(("Format".to_string(), version_line.to_string()));
+            .push((t::inspect_key_format(), version_line.to_string()));
     } else if header.len() >= 20 {
         let version = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
         let endian = header[12];
         let user_version = u32::from_le_bytes([header[13], header[14], header[15], header[16]]);
         inspection
             .summary
-            .push(("Format".to_string(), "NetImmerse / Gamebryo".to_string()));
+            .push((t::inspect_key_format(), "NetImmerse / Gamebryo".to_string()));
         inspection
             .summary
-            .push(("Version".to_string(), format!("0x{:08X}", version)));
+            .push((t::inspect_key_version(), format!("0x{:08X}", version)));
         inspection.summary.push((
-            "Endian".to_string(),
-            if endian == 1 { "Big" } else { "Little" }.to_string(),
+            t::inspect_key_endian(),
+            if endian == 1 {
+                t::inspect_endian_big()
+            } else {
+                t::inspect_endian_little()
+            },
         ));
         inspection.summary.push((
-            "User version".to_string(),
+            t::inspect_key_user_version(),
             format!("0x{:08X}", user_version),
         ));
     } else {
         inspection
             .summary
-            .push(("Format".to_string(), "NIF (truncated)".to_string()));
+            .push((t::inspect_key_format(), t::inspect_nif_truncated()));
     }
 }
 
@@ -221,8 +223,8 @@ fn inspect_text(header: &[u8], inspection: &mut EntryInspection) {
     let lines = text.lines().count();
     let non_empty = text.lines().filter(|l| !l.trim().is_empty()).count();
     inspection.summary.push((
-        "Lines".to_string(),
-        format!("{} ({} non-empty)", lines, non_empty),
+        t::inspect_key_lines(),
+        t::inspect_lines_value(lines, non_empty),
     ));
 
     if inspection
@@ -233,7 +235,7 @@ fn inspect_text(header: &[u8], inspection: &mut EntryInspection) {
     {
         inspection
             .summary
-            .push(("Format".to_string(), "GTA script (main.scm)".to_string()));
+            .push((t::inspect_key_format(), t::inspect_format_scm()));
     } else if inspection
         .file_name
         .as_str()
@@ -242,7 +244,7 @@ fn inspect_text(header: &[u8], inspection: &mut EntryInspection) {
     {
         inspection
             .summary
-            .push(("Format".to_string(), "GTA item placement".to_string()));
+            .push((t::inspect_key_format(), t::inspect_format_ipl()));
     } else if inspection
         .file_name
         .as_str()
@@ -251,7 +253,7 @@ fn inspect_text(header: &[u8], inspection: &mut EntryInspection) {
     {
         inspection
             .summary
-            .push(("Format".to_string(), "GTA item definition".to_string()));
+            .push((t::inspect_key_format(), t::inspect_format_ide()));
     }
 }
 
@@ -290,7 +292,7 @@ fn inspect_dff(header: &[u8], inspection: &mut EntryInspection) {
             ]);
             inspection
                 .summary
-                .push(("Atomics".to_string(), format!("{}", num_atomics)));
+                .push((t::inspect_key_atomics(), format!("{}", num_atomics)));
             break;
         }
         pos = child_end;
@@ -307,7 +309,7 @@ fn inspect_txd(header: &[u8], inspection: &mut EntryInspection) {
             let count = txd.textures.len();
             inspection
                 .summary
-                .push(("Textures".to_string(), format!("{} texture(s)", count)));
+                .push((t::inspect_key_textures(), t::inspect_texture_count(count)));
             inspection.txd_textures = txd
                 .textures
                 .iter()
@@ -339,27 +341,27 @@ fn inspect_col_mesh(header: &[u8], inspection: &mut EntryInspection) {
 
         inspection
             .summary
-            .push(("Entries".to_string(), format!("{}", col.entries.len())));
+            .push((t::inspect_key_entries(), format!("{}", col.entries.len())));
         inspection
             .summary
-            .push(("Mesh vertices".to_string(), format!("{total_verts}")));
+            .push((t::inspect_key_mesh_vertices(), format!("{total_verts}")));
         inspection
             .summary
-            .push(("Mesh faces".to_string(), format!("{total_faces}")));
+            .push((t::inspect_key_mesh_faces(), format!("{total_faces}")));
         if total_spheres > 0 {
             inspection
                 .summary
-                .push(("Spheres".to_string(), format!("{total_spheres}")));
+                .push((t::inspect_key_spheres(), format!("{total_spheres}")));
         }
         if total_boxes > 0 {
             inspection
                 .summary
-                .push(("Boxes".to_string(), format!("{total_boxes}")));
+                .push((t::inspect_key_boxes(), format!("{total_boxes}")));
         }
         if has_shadow {
             inspection
                 .summary
-                .push(("Shadow mesh".to_string(), "Yes".to_string()));
+                .push((t::inspect_key_shadow_mesh(), t::texture_yes()));
         }
     }
 }

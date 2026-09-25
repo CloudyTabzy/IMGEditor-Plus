@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Path;
+use crate::i18n::t;
 
 /// Refuse unbounded input from a user-selected manifest. Real archive lists
 /// are normally a few megabytes at most; this still leaves room for very
@@ -136,27 +137,26 @@ fn record_line(
 
 /// Read and parse a manifest selected by the user.
 pub fn read_manifest_file(path: &Path) -> Result<ParsedManifest, String> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("Could not inspect manifest '{}': {error}", path.display()))?;
+    let metadata = fs::metadata(path).map_err(|error| {
+        t::compare_manifest_inspect(path.display().to_string(), error.to_string())
+    })?;
     if metadata.len() > MAX_MANIFEST_BYTES {
-        return Err(format!(
-            "Manifest '{}' is too large ({}; limit is {}).",
-            path.display(),
+        return Err(t::compare_manifest_too_large(
+            path.display().to_string(),
             format_bytes(metadata.len()),
-            format_bytes(MAX_MANIFEST_BYTES)
+            format_bytes(MAX_MANIFEST_BYTES),
         ));
     }
     let bytes = fs::read(path)
-        .map_err(|error| format!("Could not read manifest '{}': {error}", path.display()))?;
+        .map_err(|error| t::compare_manifest_read(path.display().to_string(), error.to_string()))?;
     if bytes.len() as u64 > MAX_MANIFEST_BYTES {
-        return Err(format!(
-            "Manifest '{}' grew beyond the {} limit while it was being read.",
-            path.display(),
-            format_bytes(MAX_MANIFEST_BYTES)
+        return Err(t::compare_manifest_grew(
+            path.display().to_string(),
+            format_bytes(MAX_MANIFEST_BYTES),
         ));
     }
     let text = std::str::from_utf8(&bytes)
-        .map_err(|error| format!("Manifest '{}' is not valid UTF-8: {error}", path.display()))?;
+        .map_err(|error| t::compare_manifest_utf8(path.display().to_string(), error.to_string()))?;
     Ok(parse_manifest(text))
 }
 

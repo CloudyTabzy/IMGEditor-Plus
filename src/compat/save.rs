@@ -11,6 +11,7 @@ use crate::parser::ImgVersion;
 use super::games::profile_by_id;
 use super::raster::Severity;
 use super::scan::ScanReport;
+use crate::i18n::t;
 
 /// Everything the pre-save dialog needs to report.
 #[derive(Debug, Clone, Default)]
@@ -117,19 +118,11 @@ pub fn evaluate_save(report: &ScanReport, archive: &ArchiveInfo) -> SaveIssue {
 fn container_note(version: ImgVersion, target_id: &str) -> Option<String> {
     let target = profile_by_id(target_id)?.display;
     match (version, target_id) {
-        (ImgVersion::Two, "gta3" | "vc") => Some(format!(
-            "IMG v2 container, but {target} expects IMG v1 - the game will not see these files."
-        )),
-        (ImgVersion::Two, "bully") => Some(format!(
-            "IMG v2 container, but {target} expects IMG v1 - the game will not see these files."
-        )),
-        (ImgVersion::One, "sa") => Some(
-            "IMG v1 container; retail San Andreas ships IMG v2 (v1 loads only when listed in gta.dat)."
-                .to_string(),
-        ),
-        (ImgVersion::Xbox360, _) => Some(format!(
-            "Xbox 360 packing; {target} expects a PC container."
-        )),
+        (ImgVersion::Two, "gta3" | "vc" | "bully") => {
+            Some(t::compat_container_v2_expects_v1(target))
+        }
+        (ImgVersion::One, "sa") => Some(t::compat_container_v1_sa()),
+        (ImgVersion::Xbox360, _) => Some(t::compat_container_xbox(target)),
         _ => None,
     }
 }

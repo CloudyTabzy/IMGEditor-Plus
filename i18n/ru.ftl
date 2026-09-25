@@ -730,3 +730,223 @@ texture-grid-tip = Показывать опорную сетку поверх �
 texture-grid-size-tip = Использовать опорную сетку { $size }×{ $size } для текстуры.
 texture-grid-size = Размер:
 texture-fullscreen-tip = На весь экран (полное качество)
+
+## Entry table: the Type column and curated file-type names
+
+table-type = Тип
+table-type-sorted = Тип { $arrow } { $primary }
+file-type-model = Модель
+file-type-texture = Текстура
+file-type-collision = Коллизия
+file-type-animation = Анимация
+file-type-placement = Размещение
+file-type-definition = Определение
+file-type-data = Данные
+archive-untitled = Без имени
+
+## Archive log (Export tab)
+
+log-archive-created = Архив создан
+log-archive-saved = Архив сохранён
+log-archive-packed = Архив упакован: записей — { $entries }, освобождено { $reclaimed }
+log-imported-entries = Импортировано записей: { $count }
+log-folder-import = Импорт папки: импортировано — { $imported }, пропущено — { $skipped }, ошибок — { $failed }
+log-folder-import-detail = Подробности импорта папки: { $detail }
+folder-import-cancelled-detail = Импорт отменён; оставшиеся файлы пропущены.
+folder-import-duplicate = { $name }: дубликат пропущен
+
+## Entry details: source and format summary
+
+inspect-source-imported = Импортировано
+inspect-source-imported-from = Импортировано из { $path }
+inspect-source-archive = Архив { $archive }, сектор { $sector }
+inspect-key-format = Формат
+inspect-key-version = Версия
+inspect-key-clump-size = Размер clump
+inspect-key-endian = Порядок байтов
+inspect-key-user-version = Пользовательская версия
+inspect-key-lines = Строк
+inspect-key-atomics = Atomic-объектов
+inspect-key-textures = Текстур
+inspect-key-entries = Записей
+inspect-key-mesh-vertices = Вершин сетки
+inspect-key-mesh-faces = Граней сетки
+inspect-key-spheres = Сфер
+inspect-key-boxes = Боксов
+inspect-key-shadow-mesh = Теневая сетка
+inspect-rw-truncated = RenderWare (обрезан)
+inspect-rw-clump = Clump (модель)
+inspect-rw-txd = Словарь текстур
+inspect-rw-pi-txd = Платформенно-независимый словарь текстур
+inspect-rw-animation = Анимация
+inspect-rw-uv-animation = UV-анимация
+inspect-rw-stream = Поток RenderWare
+inspect-bytes =
+    { $count ->
+        [one] { $count } байт
+        [few] { $count } байта
+       *[other] { $count } байт
+    }
+inspect-col-unknown = Неизвестная коллизия
+inspect-endian-big = Big-endian
+inspect-endian-little = Little-endian
+inspect-nif-truncated = NIF (обрезан)
+inspect-lines-value = { $lines } (непустых: { $nonempty })
+inspect-format-scm = Скрипт GTA (main.scm)
+inspect-format-ipl = Размещение объектов GTA
+inspect-format-ide = Определения объектов GTA
+inspect-texture-count = { $count }
+
+## Embedded-texture export (NIF → NFT)
+
+texture-export-none = Встроенные текстуры не найдены
+texture-export-done = Экспортировано встроенных текстур: { $count }
+texture-export-partial = Экспортировано текстур: { $written }, ошибок: { $failures }
+texture-export-no-nft = Не найден NFT для «{ $name }»
+
+## Manifest comparison errors
+
+compare-manifest-inspect = Не удалось проверить манифест «{ $path }»: { $error }
+compare-manifest-too-large = Манифест «{ $path }» слишком большой ({ $size }; предел — { $limit }).
+compare-manifest-read = Не удалось прочитать манифест «{ $path }»: { $error }
+compare-manifest-grew = Манифест «{ $path }» превысил предел { $limit } во время чтения.
+compare-manifest-utf8 = Манифест «{ $path }» не является корректным UTF-8: { $error }
+
+## Compatibility verdicts
+
+verdict-native = родной
+verdict-supported = поддерживается
+verdict-convertible-lossless = преобразуется без потерь
+verdict-convertible-lossy = преобразуется с потерями
+verdict-unsupported = несовместимо
+verdict-untested = не проверено
+
+## Compatibility evidence notes
+
+compat-class-other-nif = прочие форматы NiPixelData
+compat-cat-iii-pal = 96,5% текстур мира в оригинальной игре
+compat-cat-iii-888 = растров: 6 806, включая набор игрока/транспорта
+compat-cat-iii-8888 = растров: 1 121
+compat-cat-iii-1555 = растров: 24
+compat-cat-iii-dxt1 = в оригинале нет; оборудование D3D8 поддерживает
+compat-cat-iii-dxt = значения сжатия D3D8 1-5; в оригинале нет
+compat-cat-depth24 = документированная форма глубины 24; шаг/порядок не проверены
+compat-cat-iii-565 = сопоставляется драйвером; в III нет
+compat-cat-555-lum8 = драйвер сопоставляет C555 и LUM8; в оригинале нет
+compat-cat-a8l8 = поддерживается D3D9 и декодерами; путь через полубайт RW не проверен
+compat-cat-vc-dxt1 = родной диалект мира; D3D8 pp=1 (10 тыс.+ растров, устаревшие полубайты)
+compat-cat-vc-dxt3 = родной диалект с альфой; D3D8 pp=3 (растров: 1 149)
+compat-cat-vc-pal = растров: 27; принимается, но редко
+compat-cat-vc-888 = растров: 1
+compat-cat-vc-8888 = есть в III; в самой VC нет
+compat-cat-vc-565 = метки 565 в оригинале — это данные DXT1; настоящих R565 не найдено
+compat-cat-vc-16bit = метки в оригинале — это данные DXT1/DXT3; настоящие 16-битные формы не измерены
+compat-cat-vc-dxt = значения сжатия D3D8 существуют; в оригинале только 1 и 3
+compat-cat-sa-dxt1 = растров: 28 807 в четырёх архивах
+compat-cat-sa-dxt3 = растров: 2 098
+compat-cat-sa-888 = растров: 1 015, в основном скины player.img
+compat-cat-sa-8888 = растров: 237
+compat-cat-sa-dxt5 = в оригинале нет; D3D9 поддерживает
+compat-cat-sa-dxt24 = передаются словом формата D3D9; предумноженная альфа
+compat-cat-sa-pal = источники расходятся; в оригинале нет; читать и сохранять как есть
+compat-cat-sa-16bit = сопоставляется драйвером; в оригинале нет 16-битных несжатых
+compat-cat-sa-a8l8 = Magic.TXD указывает его для SA PC; путь RW не проверен
+compat-cat-bully-dxt1 = растров: 31 714
+compat-cat-bully-dxt5 = растров: 3 526
+compat-cat-bully-rgb = растров: 138 / 134
+compat-cat-bully-pal = растров: 127 / 1
+compat-cat-bully-dxt3 = Gamebryo поддерживает; в оригинале нет
+compat-cat-bully-other = растров не декодируется: 15
+
+compat-note-bully-not-rw = Ресурсы Bully — это NIF/NFT Gamebryo, а не родные форматы RenderWare
+compat-note-platform-rewrite = растр платформы { $platform } в архиве { $game } требует перезаписи платформы/версии
+compat-note-no-profile = таблицы профиля пока нет
+compat-note-nft-not-rw = Растры NFT Gamebryo не являются родными для RenderWare
+compat-note-bully-dxt1 = оригинальный Bully: растров DXT1 — 31 714
+compat-note-bully-dxt5 = оригинальный Bully: растров DXT5 — 3 526
+compat-note-bully-rgb = в оригинальном Bully есть несжатые RGB/RGBA (138/134)
+compat-note-bully-pal = в оригинальном Bully есть растры с палитрой (127 PAL + 1 PALA)
+compat-note-bully-dxt3 = Gamebryo поддерживает DXT3, но в оригинальном Bully его нет
+compat-note-sa-dxt = оригинальная SA: растров DXT1 — 28 807, DXT3 — 2 098
+compat-note-sa-dxt24 = родной формат D3D9 передаёт DXT2/DXT4 (предумноженная альфа); в оригинальной SA нет
+compat-note-sa-dxt5 = в оригинальной SA нет; DXT5 работает благодаря D3D9 (его используют инструменты для модов)
+compat-note-sa-pal = источники расходятся насчёт палитр в SA; в оригинальной SA нет; читать и сохранять как есть
+compat-note-sa-depth24 = документированная форма R8G8B8 глубины 24; в оригинальной SA нет; работа в игре не проверена
+compat-note-sa-16bit = драйвер сопоставляет 1555/565/4444; в оригинальной SA нет 16-битных несжатых
+compat-note-c555 = драйвер сопоставляет C555 с X1R5G5B5; в оригинале нет
+compat-note-lum8 = драйвер сопоставляет LUM8 с D3DFMT_L8; в оригинале нет
+compat-note-sa-a8l8 = D3D9 передаёт A8L8, и независимые декодеры его поддерживают; обычное сопоставление полубайта RW не проверено
+compat-note-iii-pal = оригинальная III: 96,5% PAL8; оригинальная VC: растров — 27; принимается, но редко
+compat-note-vc-dxt1 = родной диалект мира VC: DXT1 с D3D8 pp=1; полубайт растра устарел
+compat-note-iii-dxt1 = в оригинальной III нет сжатых растров (0/15 372); оборудование D3D8 поддерживает DXT1
+compat-note-vc-dxt3 = родной диалект VC с альфой: DXT3 с D3D8 pp=3 (растров: 1 149)
+compat-note-iii-dxt = значения сжатия D3D8 1-5 соответствуют DXT1-5 (DXT2/4 с предумноженной альфой); в оригинальных III и VC только 1 и 3
+compat-note-iii-depth24 = документированная форма R8G8B8 глубины 24; шаг/порядок/работа в игре не проверены
+compat-note-iii-8888 = в оригинальной III 8888 есть в обоих архивах (растров: 1 121)
+compat-note-vc-565 = растры VC с меткой 565 — это данные DXT1; настоящих R565 не найдено
+compat-note-iii-565 = 16-битная форма, сопоставляемая драйвером; в III нет
+compat-note-vc-1555 = метки 1555 в оригинальной VC — это данные DXT1; настоящих R1555 не найдено
+compat-note-vc-4444 = метки 4444 в оригинальной VC — это данные DXT3; настоящих R4444 не найдено
+compat-note-iii-4444 = в III нет; 16 бит с альфой эпохи D3D8
+compat-note-iii-a8l8 = Magic.TXD указывает A8L8 для SA PC; D3D9 его передаёт; обычный путь RW не проверен
+
+## Output-format choices (import and replace dialogs)
+
+compat-choice-iii-888 = 32-битный X8R8G8B8, без потерь; стандарт txd.img в оригинальной III
+compat-choice-iii-8888 = A8R8G8B8, сохраняет альфу; в оригинальной III — 1 121
+compat-choice-iii-pal8 = 8-битная палитра, квантует цвета; родной диалект мира (96,5%)
+compat-choice-pal4 = 4-битная палитра, сильное квантование; только для 16-цветной графики
+compat-choice-iii-1555 = 16 бит с 1-битной альфой; в оригинале — 24
+compat-choice-iii-dxt = поддерживается оборудованием, но в III не используется; с потерями
+compat-choice-vc-dxt1 = родной диалект мира VC (D3D8 pp=1); сжатие с потерями
+compat-choice-vc-dxt3 = родной диалект VC с альфой (D3D8 pp=3); сжатие с потерями
+compat-choice-vc-888 = 32-битный X8R8G8B8, без потерь; в оригинальной VC — один
+compat-choice-vc-8888 = A8R8G8B8, сохраняет альфу; форма эпохи D3D8
+compat-choice-vc-pal8 = 8-битная палитра, квантует цвета; в оригинальной VC — 27
+compat-choice-vc-565 = 16 бит; в оригинальной VC меткой 565 помечены данные DXT, несжатая форма не измерена
+compat-choice-vc-4444 = 16 бит с альфой; в оригинальной VC меткой 4444 помечены данные DXT3
+compat-choice-player-888 = 32-битный X8R8G8B8; в оригинальном player.img — 269
+compat-choice-player-8888 = A8R8G8B8, сохраняет альфу; в оригинальном player.img — 125
+compat-choice-player-dxt = поддерживается везде; с потерями (в player.img не используется)
+compat-choice-sa-dxt1 = родной диалект мира SA; сжатие с потерями
+compat-choice-sa-dxt3 = родной диалект SA с альфой; сжатие с потерями
+compat-choice-sa-8888 = A8R8G8B8, без потерь; в оригинальной SA есть в player.img
+compat-choice-sa-pal8 = квантует цвета; в оригинальной SA нет растров с палитрой
+
+## Conversion warnings and errors
+
+compat-warn-alpha-discarded = У { $source } есть альфа-канал, но { $format } не может его хранить — альфа-канал будет отброшен.
+compat-warn-dxt-lossy = Сжатие { $format } идёт с потерями; в предпросмотре показан закодированный результат.
+compat-warn-palette-exact = { $format } хранит изображение без искажений (цветов: { $colors }).
+compat-warn-palette-quantize = Цвета будут квантованы максимум до { $cap } значений.
+compat-warn-stream-budget = { $width }x{ $height } превышает лимит стриминга SA в 1024 px; игра может не подгрузить текстуру.
+compat-warn-verdict = { $format } для { $game }: { $verdict } — { $note }
+compat-error-image-format = нераспознанный формат изображения: { $error }
+compat-error-image-kind = изображения { $kind } не поддерживаются; используйте PNG, DDS, BMP или TGA
+compat-error-decode = не удалось декодировать { $label }: { $error }
+compat-error-image-size = неподдерживаемый размер изображения: { $width }x{ $height }
+compat-error-unreadable-texture = «{ $name }» не удаётся декодировать ({ $error }); для преобразования нужны читаемые пиксели
+compat-error-no-dimensions = у текстуры нет размеров
+compat-error-texture-index = индекс текстуры { $index } вне диапазона
+compat-error-unknown-target = неизвестная целевая игра «{ $id }»
+
+## Save check: container conventions
+
+compat-container-v2-expects-v1 = Контейнер IMG v2, но { $game } ожидает IMG v1 — игра не увидит эти файлы.
+compat-container-v1-sa = Контейнер IMG v1; оригинальная San Andreas использует IMG v2 (v1 загружается, только если указан в gta.dat).
+compat-container-xbox = Упаковка Xbox 360; { $game } ожидает контейнер для ПК.
+
+## Import check notes
+
+compat-scan-unreadable = не удалось прочитать: { $error }
+compat-scan-bad-nif = нечитаемый заголовок NIF: { $error }
+compat-scan-empty-nif = нет блоков NiPixelData (пустая заглушка)
+compat-scan-not-texture = не TXD и не текстура Gamebryo
+
+## Target-game suggestion evidence
+
+compat-hint-gamebryo = Записей Gamebryo: { $total } (NFT: { $nft }, NIF: { $nif })
+compat-hint-d3d9 = платформа 9 (D3D9) у { $share } из { $total } проверенных растров
+compat-hint-pal = PAL8/PAL4 у { $share } проверенных растров
+compat-hint-vc16 = 16-битные 565/4444/1555 у { $share } проверенных растров
+compat-hint-d3d8 = платформа 8 (D3D8)

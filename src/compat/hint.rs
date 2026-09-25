@@ -13,6 +13,7 @@ use crate::archive::ArchiveInfo;
 use crate::parser::{read_entry_data_from_source, ImgVersion};
 
 use super::raster::LogicalFormat;
+use crate::i18n::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HintConfidence {
@@ -302,10 +303,7 @@ pub fn classify(stats: &ProbeStats, version: ImgVersion) -> Option<TargetHint> {
         return Some(TargetHint {
             game_id: "bully",
             confidence,
-            reasons: vec![format!(
-                "{gamebryo} Gamebryo entries ({} NFT, {} NIF)",
-                stats.nft_entries, stats.nif_entries
-            )],
+            reasons: vec![t::compat_hint_gamebryo(gamebryo, stats.nft_entries, stats.nif_entries)],
             sampled_textures: stats.textures,
         });
     }
@@ -324,11 +322,7 @@ pub fn classify(stats: &ProbeStats, version: ImgVersion) -> Option<TargetHint> {
             } else {
                 HintConfidence::Medium
             },
-            reasons: vec![format!(
-                "platform 9 (D3D9) on {} of {} sampled rasters",
-                percent(platform9),
-                stats.textures
-            )],
+            reasons: vec![t::compat_hint_d3d9(percent(platform9), stats.textures)],
             sampled_textures: stats.textures,
         });
     }
@@ -348,8 +342,8 @@ pub fn classify(stats: &ProbeStats, version: ImgVersion) -> Option<TargetHint> {
                 HintConfidence::Medium
             },
             reasons: vec![
-                format!("PAL8/PAL4 on {} of sampled rasters", percent(pal8)),
-                "platform 8 (D3D8)".to_string(),
+                t::compat_hint_pal(percent(pal8)),
+                t::compat_hint_d3d8(),
             ],
             sampled_textures: stats.textures,
         });
@@ -370,8 +364,8 @@ pub fn classify(stats: &ProbeStats, version: ImgVersion) -> Option<TargetHint> {
                 HintConfidence::Medium
             },
             reasons: vec![
-                format!("16-bit 565/4444/1555 on {} of sampled rasters", percent(vc16)),
-                "platform 8 (D3D8)".to_string(),
+                t::compat_hint_vc16(percent(vc16)),
+                t::compat_hint_d3d8(),
             ],
             sampled_textures: stats.textures,
         });

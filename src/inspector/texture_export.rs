@@ -11,6 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::inspector::texture::{IdeMap, NftCatalog, TextureEntry, resolve_textures_for_nif};
+use crate::i18n::t;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ExportReport {
@@ -27,16 +28,12 @@ impl ExportReport {
     pub fn summary(&self) -> String {
         if self.failures.is_empty() {
             if self.written == 0 {
-                "No embedded textures found".to_string()
+                t::texture_export_none()
             } else {
-                format!("Exported {} embedded texture(s)", self.written)
+                t::texture_export_done(self.written)
             }
         } else {
-            format!(
-                "Exported {} texture(s), {} failure(s)",
-                self.written,
-                self.failures.len()
-            )
+            t::texture_export_partial(self.written, self.failures.len())
         }
     }
 }
@@ -107,7 +104,7 @@ pub fn export_embedded_textures(
     dest_dir: &Path,
 ) -> Result<ExportReport, String> {
     let catalog: NftCatalog = resolve_textures_for_nif(nif_basename, ide_map)
-        .ok_or_else(|| format!("No NFT found for '{nif_basename}'"))?;
+        .ok_or_else(|| t::texture_export_no_nft(nif_basename))?;
 
     let mut report = ExportReport::default();
 
@@ -211,11 +208,11 @@ mod tests {
             skipped_no_data: 1,
             failures: vec![],
         };
-        assert_eq!(r.summary(), "Exported 4 embedded texture(s)");
+        assert_eq!(r.summary(), t::texture_export_done(4));
         assert!(r.is_success());
 
         let empty = ExportReport::default();
-        assert_eq!(empty.summary(), "No embedded textures found");
+        assert_eq!(empty.summary(), t::texture_export_none());
         assert!(!empty.is_success());
 
         let failed = ExportReport {
@@ -223,7 +220,7 @@ mod tests {
             skipped_no_data: 0,
             failures: vec![("x.tga".to_string(), "boom".to_string())],
         };
-        assert_eq!(failed.summary(), "Exported 1 texture(s), 1 failure(s)");
+        assert_eq!(failed.summary(), t::texture_export_partial(1, 1));
         assert!(!failed.is_success());
     }
 

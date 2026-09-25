@@ -388,7 +388,8 @@ impl App {
         let shown_name = ellipsize_in(&full_name, name_width);
         let name_truncated = shown_name != full_name;
         let file_name: Cow<'_, str> = Cow::Owned(shown_name);
-        let file_type = Cow::Borrowed(entry.display_file_type(literal_types).as_str());
+        let file_type =
+            crate::archive::file_type_display(entry.display_file_type(literal_types).as_str());
         let size_kb = Cow::Owned(Self::entry_size_label(entry));
 
         let entry_key = (archive_index, entry_index);
@@ -1847,7 +1848,7 @@ impl App {
             let accent = compat_verdict_accent(report.verdict);
             let background = iced::theme::palette::mix(palette.background.base.color, accent, 0.55);
             let chip = w::badge(
-                report.verdict.label().to_string(),
+                report.verdict.display_label(),
                 background,
                 w::readable_text_color(background, palette.background.base.text),
             );
@@ -2192,7 +2193,7 @@ impl App {
         let type_label = if literal_types {
             literal_type_label(&inspection.file_name)
         } else {
-            inspection.file_type.to_string()
+            crate::archive::file_type_display(&inspection.file_type).into_owned()
         };
         panel = panel.push(label_value_owned(t::inspect_type(), type_label));
 
@@ -3061,21 +3062,21 @@ fn format_note_for(
     app: &App,
     archive_index: usize,
     format: crate::compat::encode::EncodeFormat,
-) -> &'static str {
+) -> String {
     let Some(archive) = app.editor.archives().get(archive_index) else {
-        return "";
+        return String::new();
     };
     let Some(target_id) = archive.target_game else {
-        return "";
+        return String::new();
     };
     let Ok(target) = crate::compat::convert::writable_target(target_id) else {
-        return "";
+        return String::new();
     };
     crate::compat::convert::format_choices(target, &archive.file_name)
         .into_iter()
         .find(|choice| choice.format == format)
         .map(|choice| choice.note)
-        .unwrap_or("")
+        .unwrap_or_default()
 }
 
 fn plan_warnings(warnings: &[String]) -> Element<'_, Message> {
@@ -3262,7 +3263,7 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
         .spacing(6)
         .align_y(Alignment::Center),
     );
-    body = body.push(fonts::caption_wrapped(note.to_string()));
+    body = body.push(fonts::caption_wrapped(note));
     if state.chooser.is_dxt() {
         body = body.push(
             checkbox(state.high_quality)
@@ -3349,7 +3350,7 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
         .spacing(6)
         .align_y(Alignment::Center),
     );
-    body = body.push(fonts::caption_wrapped(note.to_string()));
+    body = body.push(fonts::caption_wrapped(note));
     if state.chooser.is_dxt() {
         body = body.push(
             checkbox(state.high_quality)
@@ -3778,9 +3779,13 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
             .first()
             .map(|(name, verdict, note)| {
                 if note.is_empty() {
-                    t::import_check_offender(name.to_string(), verdict.label())
+                    t::import_check_offender(name.to_string(), verdict.display_label())
                 } else {
-                    t::import_check_offender_note(name.to_string(), verdict.label(), note.to_string())
+                    t::import_check_offender_note(
+                        name.to_string(),
+                        verdict.display_label(),
+                        note.to_string(),
+                    )
                 }
             })
             .unwrap_or_default();
@@ -4098,8 +4103,8 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
             let mut has_unknown = false;
             for info in crate::compat::games::format_catalog(game) {
                 let line = row![
-                    fonts::caption(info.class).width(Length::Fixed(210.0)),
-                    fonts::caption(info.note).width(Length::Fill),
+                    fonts::caption(info.class_label()).width(Length::Fixed(210.0)),
+                    fonts::caption((info.note)()).width(Length::Fill),
                 ]
                 .spacing(8)
                 .width(Length::Fill);
@@ -4119,13 +4124,7 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
                     let counts = report
                         .verdicts
                         .get(game.id)
-                        .map(|counts| {
-                            counts
-                                .iter()
-                                .map(|(verdict, count)| format!("{verdict} {count}"))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        })
+                        .map(crate::compat::games::Verdict::counts_summary)
                         .unwrap_or_else(t::validator_no_textures);
                     t::validator_last_run(counts)
                 });

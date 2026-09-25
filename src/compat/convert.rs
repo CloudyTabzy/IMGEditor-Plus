@@ -16,6 +16,7 @@ use crate::compat::raster::{classify_format, RasterProfile};
 use crate::parser::texture_decoder::{decode_native_raster, RasterDescriptor, PLATFORM_D3D8, PLATFORM_D3D9};
 use crate::parser::txd::{parse_txd, NativeTexture};
 use crate::parser::txd_writer;
+use crate::i18n::t;
 
 /// A decoded source image (PNG/DDS/BMP/TGA).
 #[derive(Debug, Clone)]
@@ -40,7 +41,7 @@ impl SourceImage {
 /// Formats without magic bytes (TGA) need [`decode_source_image_named`].
 pub fn decode_source_image(bytes: &[u8]) -> Result<SourceImage, String> {
     let format = image::guess_format(bytes)
-        .map_err(|error| format!("unrecognized image format: {error}"))?;
+        .map_err(|error| t::compat_error_image_format(error.to_string()))?;
     decode_image_with_format(bytes, format)
 }
 
@@ -60,7 +61,7 @@ pub fn decode_source_image_named(bytes: &[u8], file_name: &str) -> Result<Source
     let format = match hinted {
         Some(format) => format,
         None => image::guess_format(bytes)
-            .map_err(|error| format!("unrecognized image format: {error}"))?,
+            .map_err(|error| t::compat_error_image_format(error.to_string()))?,
     };
     decode_image_with_format(bytes, format)
 }
@@ -75,17 +76,15 @@ fn decode_image_with_format(
         image::ImageFormat::Bmp => "BMP",
         image::ImageFormat::Tga => "TGA",
         other => {
-            return Err(format!(
-                "{other:?} images are not supported; use PNG, DDS, BMP, or TGA"
-            ));
+            return Err(t::compat_error_image_kind(format!("{other:?}")));
         }
     };
     let decoded = image::load_from_memory_with_format(bytes, format)
-        .map_err(|error| format!("{label} decode failed: {error}"))?;
+        .map_err(|error| t::compat_error_decode(label, error.to_string()))?;
     let rgba = decoded.to_rgba8();
     let (width, height) = rgba.dimensions();
     if width == 0 || height == 0 || width > 8192 || height > 8192 {
-        return Err(format!("unsupported image size {width}x{height}"));
+        return Err(t::compat_error_image_size(width, height));
     }
     let has_alpha = rgba.pixels().any(|pixel| pixel[3] < 255);
     Ok(SourceImage {
@@ -126,7 +125,7 @@ pub struct FormatChoice {
     pub format: EncodeFormat,
     /// Whether this is a stock form for the target (native dialect).
     pub native: bool,
-    pub note: &'static str,
+    pub note: String,
 }
 
 /// Suggested formats for a target, best-first. The default choice is
@@ -139,74 +138,74 @@ pub fn format_choices(target: &GameProfile, archive_file_name: &str) -> Vec<Form
             FormatChoice {
                 format: EncodeFormat::Rgb888,
                 native: true,
-                note: "32-bit X8R8G8B8, lossless; retail III txd.img standard",
+                note: t::compat_choice_iii_888(),
             },
             FormatChoice {
                 format: EncodeFormat::Argb8888,
                 native: true,
-                note: "A8R8G8B8, keeps alpha; retail III ships 1,121",
+                note: t::compat_choice_iii_8888(),
             },
             FormatChoice {
                 format: EncodeFormat::Pal8,
                 native: true,
-                note: "8-bit palette, quantizes colors; retail world dialect (96.5%)",
+                note: t::compat_choice_iii_pal8(),
             },
             FormatChoice {
                 format: EncodeFormat::Pal4,
                 native: true,
-                note: "4-bit palette, quantizes hard; 16-color art only",
+                note: t::compat_choice_pal4(),
             },
             FormatChoice {
                 format: EncodeFormat::Argb1555,
                 native: true,
-                note: "16-bit with 1-bit alpha; retail ships 24",
+                note: t::compat_choice_iii_1555(),
             },
             FormatChoice {
                 format: EncodeFormat::Dxt1,
                 native: false,
-                note: "hardware-supported but not shipped by III; lossy",
+                note: t::compat_choice_iii_dxt(),
             },
             FormatChoice {
                 format: EncodeFormat::Dxt3,
                 native: false,
-                note: "hardware-supported but not shipped by III; lossy",
+                note: t::compat_choice_iii_dxt(),
             },
         ],
         "vc" => vec![
             FormatChoice {
                 format: EncodeFormat::Dxt1,
                 native: true,
-                note: "retail VC world dialect (D3D8 pp=1); lossy compression",
+                note: t::compat_choice_vc_dxt1(),
             },
             FormatChoice {
                 format: EncodeFormat::Dxt3,
                 native: true,
-                note: "retail VC alpha dialect (D3D8 pp=3); lossy compression",
+                note: t::compat_choice_vc_dxt3(),
             },
             FormatChoice {
                 format: EncodeFormat::Rgb888,
                 native: true,
-                note: "32-bit X8R8G8B8, lossless; retail VC ships one",
+                note: t::compat_choice_vc_888(),
             },
             FormatChoice {
                 format: EncodeFormat::Argb8888,
                 native: true,
-                note: "A8R8G8B8, keeps alpha; D3D8-era form",
+                note: t::compat_choice_vc_8888(),
             },
             FormatChoice {
                 format: EncodeFormat::Pal8,
                 native: true,
-                note: "8-bit palette, quantizes colors; retail VC ships 27",
+                note: t::compat_choice_vc_pal8(),
             },
             FormatChoice {
                 format: EncodeFormat::Rgb565,
                 native: false,
-                note: "16-bit; retail VC labels 565 as DXT data, raw form unmeasured",
+                note: t::compat_choice_vc_565(),
             },
             FormatChoice {
                 format: EncodeFormat::Argb4444,
                 native: false,
-                note: "16-bit with alpha; retail VC labels 4444 as DXT3 data",
+                note: t::compat_choice_vc_4444(),
             },
         ],
         "sa" => {
@@ -215,43 +214,43 @@ pub fn format_choices(target: &GameProfile, archive_file_name: &str) -> Vec<Form
                 choices.push(FormatChoice {
                     format: EncodeFormat::Rgb888,
                     native: true,
-                    note: "32-bit X8R8G8B8; retail player.img ships 269",
+                    note: t::compat_choice_player_888(),
                 });
                 choices.push(FormatChoice {
                     format: EncodeFormat::Argb8888,
                     native: true,
-                    note: "A8R8G8B8, keeps alpha; retail player.img ships 125",
+                    note: t::compat_choice_player_8888(),
                 });
                 choices.push(FormatChoice {
                     format: EncodeFormat::Dxt1,
                     native: true,
-                    note: "supported everywhere; lossy (player.img ships none)",
+                    note: t::compat_choice_player_dxt(),
                 });
                 choices.push(FormatChoice {
                     format: EncodeFormat::Dxt3,
                     native: true,
-                    note: "supported everywhere; lossy (player.img ships none)",
+                    note: t::compat_choice_player_dxt(),
                 });
             } else {
                 choices.push(FormatChoice {
                     format: EncodeFormat::Dxt1,
                     native: true,
-                    note: "retail SA world dialect; lossy compression",
+                    note: t::compat_choice_sa_dxt1(),
                 });
                 choices.push(FormatChoice {
                     format: EncodeFormat::Dxt3,
                     native: true,
-                    note: "retail SA alpha dialect; lossy compression",
+                    note: t::compat_choice_sa_dxt3(),
                 });
                 choices.push(FormatChoice {
                     format: EncodeFormat::Argb8888,
                     native: true,
-                    note: "A8R8G8B8, lossless; retail SA ships it in player.img",
+                    note: t::compat_choice_sa_8888(),
                 });
                 choices.push(FormatChoice {
                     format: EncodeFormat::Pal8,
                     native: false,
-                    note: "quantizes colors; retail SA ships zero paletted rasters",
+                    note: t::compat_choice_sa_pal8(),
                 });
             }
             choices
@@ -293,7 +292,7 @@ pub fn default_format(
                 })
             }
         }
-        _ => Err("Bully (Gamebryo) texture writing is not supported yet".to_string()),
+        _ => Err(t::toast_bully_texture_writing()),
     }
 }
 
@@ -339,50 +338,36 @@ pub fn plan_import(
 
     let mut warnings = Vec::new();
     if image.has_alpha && !format.has_alpha() {
-        warnings.push(format!(
-            "{} has alpha, but {} cannot store it - the alpha channel will be discarded.",
-            image.format_label,
-            format.label()
+        warnings.push(t::compat_warn_alpha_discarded(
+            image.format_label.to_string(),
+            format.label(),
         ));
     }
     if format.is_dxt() {
-        warnings.push(format!(
-            "{} compression is lossy; the preview shows the encoded result.",
-            format.label()
-        ));
+        warnings.push(t::compat_warn_dxt_lossy(format.label()));
     }
     if format.is_paletted() {
         let cap = if format == EncodeFormat::Pal4 { 16 } else { 256 };
         match image.unique_colors() {
             Some(colors) if usize::from(colors) <= cap => {
-                warnings.push(format!(
-                    "{format_label} stores the image exactly ({colors} colors).",
-                    format_label = format.label()
-                ));
+                warnings.push(t::compat_warn_palette_exact(format.label(), colors));
             }
-            _ => warnings.push(format!(
-                "Colors will be quantized to at most {cap} entries.",
-                cap = cap
-            )),
+            _ => warnings.push(t::compat_warn_palette_quantize(cap)),
         }
     }
     if target.id == "sa" && image.width.max(image.height) > 1024 {
-        warnings.push(format!(
-            "{}x{} exceeds the 1024 px SA stream budget; the game may not stream it.",
-            image.width, image.height
-        ));
+        warnings.push(t::compat_warn_stream_budget(image.width, image.height));
     }
     // The target's own verdict for the chosen form, so the dialog never
     // hides a non-native choice.
     let sample = synthetic_profile(&encoded, platform);
     let report = crate::compat::games::classify(target, &sample);
     if report.verdict > Verdict::Supported {
-        warnings.push(format!(
-            "{} is {} for {}: {}",
+        warnings.push(t::compat_warn_verdict(
             format.label(),
-            report.verdict.label(),
+            report.verdict.display_label(),
             target.display,
-            report.note
+            report.note,
         ));
     }
 
@@ -426,7 +411,7 @@ pub fn plan_conversion(
     let texture = parsed
         .textures
         .get(texture_index)
-        .ok_or_else(|| format!("texture index {texture_index} is out of range"))?;
+        .ok_or_else(|| t::compat_error_texture_index(texture_index))?;
     let mut plan = plan_conversion_for_texture(texture, target, archive_file_name, format_override, options)?;
     // The single-texture dialog shows the encoded result; bulk planning
     // uses [`plan_conversion_for_texture`] directly and skips this decode.
@@ -446,13 +431,10 @@ pub fn plan_conversion_for_texture(
     options: EncodeOptions,
 ) -> Result<ConversionPlan, String> {
     let rgba = texture.decode_rgba().map_err(|error| {
-        format!(
-            "'{}' cannot be decoded ({error}); conversion needs readable pixels",
-            texture.diffuse_name
-        )
+        t::compat_error_unreadable_texture(texture.diffuse_name.to_string(), error.to_string())
     })?;
     if texture.width == 0 || texture.height == 0 {
-        return Err("texture has no dimensions".to_string());
+        return Err(t::compat_error_no_dimensions());
     }
     let source_bytes = texture
         .mipmaps
@@ -489,7 +471,7 @@ pub fn apply_replaces(
     let mut replacements = Vec::with_capacity(plans.len());
     for (index, plan) in plans {
         let old = parsed.textures.get(*index).ok_or_else(|| {
-            format!("texture index {index} is out of range")
+            t::compat_error_texture_index(index)
         })?;
         replacements.push((
             *index,
@@ -586,9 +568,9 @@ pub fn texture_profile(texture: &NativeTexture) -> RasterProfile {
 
 /// Resolve a target id, erroring when unknown or Bully.
 pub fn writable_target(id: &str) -> Result<&'static GameProfile, String> {
-    let target = profile_by_id(id).ok_or_else(|| format!("unknown game target '{id}'"))?;
+    let target = profile_by_id(id).ok_or_else(|| t::compat_error_unknown_target(id))?;
     if target.id == crate::compat::games::BULLY.id {
-        return Err("Bully (Gamebryo) texture writing is not supported yet".to_string());
+        return Err(t::toast_bully_texture_writing());
     }
     Ok(target)
 }
