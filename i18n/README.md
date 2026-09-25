@@ -7,6 +7,7 @@ is one `.ftl` file here, embedded in the executable at build time.
 | File | Language | Status |
 |---|---|---|
 | `en.ftl` | English | Source of truth |
+| `de.ftl` | Deutsch | Draft, pending native review |
 | `es.ftl` | Español | Draft, pending native review |
 | `pt-BR.ftl` | Português (Brasil) | Draft, pending native review |
 | `ru.ftl` | Русский | Draft, pending native review |
@@ -55,14 +56,14 @@ User-facing text never goes into Rust source as a literal.
    into a typed function in `crate::i18n::t`, so `menu-file-new` with
    `{ $shortcut }` becomes `t::menu_file_new(shortcut)`. A misspelled
    message or a missing, extra or misnamed argument is a compile error.
-3. Add the translations to `es.ftl`, `pt-BR.ftl` and `ru.ftl`, or leave them
-   for a translator (they fall back to English).
+3. Add the translations to `de.ftl`, `es.ftl`, `pt-BR.ftl` and `ru.ftl`,
+   or leave them for a translator (they fall back to English).
 
 Pass counts as numbers, not formatted strings, so plural rules can apply.
 
 ## Checking layouts
 
-Spanish, Portuguese and Russian run roughly a third longer than English. Debug builds
+German, Spanish, Portuguese and Russian run roughly a third longer than English. Debug builds
 add a "Pseudo-locale" entry to the Language menu: English with every letter
 accented and the vowels doubled ("Fíílée"), so clipped or badly wrapped
 labels show up before real translations exist.
