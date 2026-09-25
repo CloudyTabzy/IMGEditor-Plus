@@ -6,7 +6,7 @@
 ## Menu bar: root menus
 
 menu-file = Datei
-menu-recent = Zuletzt
+menu-recent = Zuletzt verwendet
 menu-edit = Bearbeiten
 menu-selection = Auswahl
 menu-view = Ansicht
@@ -282,7 +282,7 @@ unsaved-window =
         [one] { $count } Archiv hat nicht gespeicherte Änderungen: { $archives }
        *[other] { $count } Archive haben nicht gespeicherte Änderungen: { $archives }
     }
-unsaved-window-note = Beenden verwirft sie jetzt; die Dateien auf der Festplatte bleiben unverändert.
+unsaved-window-note = Beim Beenden werden sie verworfen; die Dateien auf der Festplatte bleiben unverändert.
 unsaved-discard-and-quit = Änderungen verwerfen und beenden
 
 ## Import check dialog
@@ -350,7 +350,7 @@ update-open-releases = Releases öffnen
 ## Validate textures dialog
 
 dialog-validator-title = Texturen validieren
-validator-intro = Wähle das Spiel, für das dieses Archiv bestimmt ist. Der Validator markiert jede Textur außerhalb der im Original akzeptierten Formate dieses Motors und listet die Unbekannten auf, die plausibel laden könnten, aber nicht spielnativ sind.
+validator-intro = Wähle das Spiel, für das dieses Archiv bestimmt ist. Der Validator markiert jede Textur außerhalb der im Original akzeptierten Formate dieser Engine und listet die Unbekannten auf, die plausibel laden könnten, aber nicht spielnativ sind.
 validator-last-run = Letzter Lauf: { $counts }
 validator-no-textures = keine Texturen
 validator-current-target = aktuelles Ziel
@@ -364,15 +364,15 @@ validator-use-as-target = { $game } als Ziel verwenden
 validator-already-target = (bereits das Ziel)
 validator-highlight-rows = Zeilen hervorheben
 legend-native = nativ
-legend-native-description = Von diesem Motor erstellt – keine Aktion nötig.
+legend-native-description = Von dieser Engine erstellt – keine Aktion nötig.
 legend-supported = unterstützt / konvertierbar
-legend-supported-description = Lädt, ist aber nicht der Datendialekt des Spiels; eine verlustfreie Neukodierung kann angeboten werden.
+legend-supported-description = Lädt, ist aber nicht der Datendialekt des Spiels; ein verlustfreies Umschreiben kann angeboten werden.
 legend-lossy = verlustbehaftete Konvertierung
 legend-lossy-description = Erst nach einer pixelverändernden Konvertierung (Komprimierung oder Quantisierung) verwendbar.
 legend-unknown = unbekannt
 legend-unknown-description = Keine Hinweise in beide Richtungen – nicht als inkompatibel bekannt. Mit Vorsicht behandeln.
 legend-incompatible = inkompatibel
-legend-incompatible-description = Der ausgewählte Motor kann dieses Format nicht verarbeiten.
+legend-incompatible-description = Die ausgewählte Engine kann dieses Format nicht verarbeiten.
 
 ## Sort by dialog
 
@@ -404,7 +404,7 @@ sort-preset-name-az = Name (A→Z)
 sort-preset-name-za = Name (Z→A)
 sort-preset-type-then-name = Typ, dann Name
 sort-preset-size-desc = Größe (groß → klein)
-sort-preset-offset-asc = Offset (klein → groß)
+sort-preset-offset-asc = Offset (niedrig → hoch)
 
 ## Windows file dialogs (titles and file-type filters)
 
@@ -599,16 +599,13 @@ toast-validation-failed = Validierung fehlgeschlagen: { $error }
 toast-no-compat-issues = Keine Kompatibilitätsprobleme gefunden – { $summary }
 # $verdicts is the per-verdict count list, e.g. "native 12, untested 1".
 validation-summary =
-    Validierte { $txds ->
+    Für { $game } validiert: { $txds ->
         [one] { $txds } TXD
        *[other] { $txds } TXDs
     } ({ $textures ->
         [one] { $textures } Textur
        *[other] { $textures } Texturen
-    }) für { $game }: { $verdicts }; { $errors ->
-        [one] { $errors } Fehler
-       *[other] { $errors } Fehler
-    }, { $warnings ->
+    }): { $verdicts }; { $errors } Fehler, { $warnings ->
         [one] { $warnings } Warnung
        *[other] { $warnings } Warnungen
     }
@@ -651,14 +648,14 @@ recent-exported-files =
 ## with the translated menu labels)
 
 pro-tip-label = Tipp:
-pro-tip-search = Drücke Ctrl+F, um die Suche zu fokussieren, dann mit ↑/↓ und Enter zu einem Treffer springen.
+pro-tip-search = Drücke Ctrl+F, um die Suche zu fokussieren, und springe dann mit ↑/↓ und Enter zu einem Treffer.
 pro-tip-search-context = Suchvorschläge zeigen einen Treffer in seinem Archivkontext; Ansicht → Auswahlkontext in der Suche aktiviert isolierte Ergebnisse.
 pro-tip-context-menu = Rechtsklick auf einen Eintrag für 3D-Ansicht, Texturen, Export, Umbenennen und weitere Aktionen.
 pro-tip-autoscroll = Mittelklick auf die Eintragsliste für Autoscroll im Browser-Stil; optionale Trägheit findest du unter Ansicht.
 pro-tip-tab-keys = Drücke 1, 2 oder 3, um zu Export, 3D-Ansicht oder Textur zu wechseln.
 pro-tip-close-tab = Mittelklick auf einen Archiv-Tab, um ihn schnell zu schließen.
 pro-tip-uv-overlay = Textur-UV-Overlays sind verfügbar, wenn das ausgewählte Modell passende Geometrie mitbringt.
-pro-tip-wire-grid = In der 3D-Ansicht zeigt das Drahtgitter-Overlay Dreieckskanten und der Bodenraster hilft bei der Größeneinschätzung.
+pro-tip-wire-grid = In der 3D-Ansicht zeigt „Drahtgitter“ die Dreieckskanten, und das „Bodenraster“ hilft beim Einschätzen der Größe.
 pro-tip-save-keys = Verwende Ctrl+S zum schnellen Speichern und Ctrl+Shift+S, um ein Archiv unter neuem Namen zu speichern.
 pro-tip-unique-exports = Exportierte Texturen erhalten automatisch eindeutige Dateinamen, sodass Batch-Exporte sich nie gegenseitig überschreiben.
 pro-tip-agr = Bearbeiten → .agr-Animationsdatei laden spielt eine Animation in der 3D-Ansicht ab; Leertaste schaltet die Wiedergabe um, ←/→ geht Frame für Frame.
@@ -746,7 +743,7 @@ export-progress = Fortschritt
 export-ready = Bereit zum Exportieren
 export-open-folder = Exportordner öffnen
 export-selected-entry = Ausgewählter Eintrag:
-export-logs = Protokolle:
+export-logs = Protokoll:
 export-recent = Letzte Exporte:
 button-copy = Kopieren
 
@@ -777,7 +774,7 @@ viewer-preparing-detail = Geometrie wird gelesen und Texturen werden aufgelöst�
 viewer-preparing-cache-note = Zukünftige Vorschauen dieses Modells sind sofort verfügbar.
 viewer-ready = Bereit, dieses Modell in 3D anzuzeigen.
 viewer-unsupported-entry = Der integrierte Viewer rendert .nif-, .dff- und .col-Einträge. { $entry } ist kein unterstütztes Modell — verwende das Rechtsklickmenü für einen anderen Viewer.
-viewer-load-selected-hint = Verwende ‘{ viewer-load-selected }’ oben, um dieses Modell anzuzeigen.
+viewer-load-selected-hint = Verwende oben „{ viewer-load-selected }“, um dieses Modell anzuzeigen.
 viewer-right-click-hint = Wähle einen .nif-, .dff- oder .col-Eintrag und klicke mit der rechten Maustaste → { context-open-3d }.
 viewer-toolbar-label = 3D:
 viewer-preparing-selected = Ausgewähltes Modell wird vorbereitet…
@@ -864,7 +861,7 @@ texture-no-companions = Für { $entry } wurden keine zugehörigen Texturen aufge
 texture-load-model-hint = Lade das ausgewählte Modell, um seine Texturen aufzulösen.
 texture-load-model = Ausgewähltes Modell laden
 texture-not-decoded = { $kind } { $entry } ist noch nicht dekodiert.
-texture-load-textures = Texturen des ausgewählten { $kind } laden
+texture-load-textures = Texturen aus ausgewähltem { $kind } laden
 texture-none-decodable = Keine dekodierbaren Texturen in diesem Container.
 texture-animation-model = Animationsmodell { $entry } — wechsle das Modell im 3D-Dock
 texture-export =
@@ -898,7 +895,7 @@ texture-grid-tip = Ein Referenzraster über der Texturvorschau anzeigen.
 texture-grid-size-tip = Ein { $size }×{ $size }-Referenzraster für die Textur verwenden.
 texture-grid-size = Größe:
 texture-fullscreen-tip = Im Vollbild anzeigen (volle Qualität)
-texture-model-companion = Modellbegleitende Textur
+texture-model-companion = Zugehörige Modelltextur
 
 ## Entry table: the Type column and curated file-type names
 ## (the English names double as sort and grouping keys; only the
@@ -973,7 +970,7 @@ inspect-nif-truncated = NIF (abgeschnitten)
 inspect-lines-value = { $lines } ({ $nonempty } nicht leer)
 inspect-format-scm = GTA-Skript (main.scm)
 inspect-format-ipl = GTA-Objektplatzierung
-inspect-format-ide = GTA-Objektedefinition
+inspect-format-ide = GTA-Objektdefinition
 inspect-texture-count =
     { $count ->
         [one] { $count } Textur
@@ -1025,7 +1022,7 @@ compat-cat-depth24 = dokumentierte 24-Bit-Tiefenform; Stride/Reihenfolge ungepr�
 compat-cat-iii-565 = treiberzugeordnet; III enthält keine
 compat-cat-555-lum8 = Treiber ordnet C555 und LUM8 zu; Original enthält keine
 compat-cat-a8l8 = D3D9/Decoder unterstützen es; RW-Nibble-Pfad ungeprüft
-compat-cat-vc-dxt1 = Welten-Dialekt des Originals; D3D8 pp=1 (über 10.000 Raster, veraltete Nibbles)
+compat-cat-vc-dxt1 = Welt-Dialekt des Originals; D3D8 pp=1 (über 10.000 Raster, veraltete Nibbles)
 compat-cat-vc-dxt3 = Alpha-Dialekt des Originals; D3D8 pp=3 (1.149 Raster)
 compat-cat-vc-pal = 27 Raster; akzeptiert, aber selten
 compat-cat-vc-888 = 1 Raster
@@ -1050,7 +1047,7 @@ compat-cat-bully-dxt3 = Gamebryo unterstützt es; Original enthält keine
 compat-cat-bully-other = 15 Raster nicht dekodierbar
 
 compat-note-bully-not-rw = Bully-Assets sind Gamebryo NIF/NFT, keine RenderWare-Natives
-compat-note-platform-rewrite = ein platform-{ $platform }-Raster in einem { $game }-Archiv benötigt eine Plattform-/Versions-Neukodierung
+compat-note-platform-rewrite = ein Plattform-{ $platform }-Raster in einem { $game }-Archiv muss für Plattform/Version umgeschrieben werden
 compat-note-no-profile = noch keine Profiltabelle
 compat-note-nft-not-rw = Gamebryo-NFT-Raster sind keine RenderWare-Natives
 compat-note-bully-dxt1 = Original-Bully: 31.714 DXT1-Raster
@@ -1068,7 +1065,7 @@ compat-note-c555 = Treiber ordnet C555 X1R5G5B5 zu; Original enthält keine
 compat-note-lum8 = Treiber ordnet LUM8 D3DFMT_L8 zu; Original enthält keine
 compat-note-sa-a8l8 = D3D9 trägt A8L8 und unabhängige Decoder unterstützen es; gewöhnliches RW-Nibble-Mapping ungeprüft
 compat-note-iii-pal = Original-III: 96,5 % PAL8; Original-VC: 27 Raster – akzeptiert, aber selten
-compat-note-vc-dxt1 = Welten-Dialekt des Original-VC: DXT1 mit D3D8 pp=1; das Raster-Nibble ist veraltet
+compat-note-vc-dxt1 = Welt-Dialekt des Original-VC: DXT1 mit D3D8 pp=1; das Raster-Nibble ist veraltet
 compat-note-iii-dxt1 = Original-III enthält keine komprimierten Raster (0/15.372); D3D8-Hardware unterstützt DXT1
 compat-note-vc-dxt3 = Alpha-Dialekt des Original-VC: DXT3 mit D3D8 pp=3 (1.149 Raster)
 compat-note-iii-dxt = D3D8-Kompressionswerte 1-5 entsprechen DXT1-5 (DXT2/4 prämultipliziert); Original-III+VC enthalten nur 1 und 3
@@ -1085,11 +1082,11 @@ compat-note-iii-a8l8 = Magic.TXD listet A8L8 für SA PC; D3D9 trägt es; gewöhn
 
 compat-choice-iii-888 = 32-Bit X8R8G8B8, verlustfrei; Standard im txd.img des Originals
 compat-choice-iii-8888 = A8R8G8B8, behält Alpha; Original-III enthält 1.121
-compat-choice-iii-pal8 = 8-Bit-Palette, quantisiert Farben; Welten-Dialekt des Originals (96,5 %)
+compat-choice-iii-pal8 = 8-Bit-Palette, quantisiert Farben; Welt-Dialekt des Originals (96,5 %)
 compat-choice-pal4 = 4-Bit-Palette, quantisiert stark; nur 16-Farben-Artworks
 compat-choice-iii-1555 = 16-Bit mit 1-Bit-Alpha; Original enthält 24
-compat-choice-iii-dxt = hardwareunterstützt, aber nicht im III verwendet; verlustbehaftet
-compat-choice-vc-dxt1 = Welten-Dialekt des Original-VC (D3D8 pp=1); verlustbehaftete Komprimierung
+compat-choice-iii-dxt = hardwareunterstützt, aber von III nicht verwendet; verlustbehaftet
+compat-choice-vc-dxt1 = Welt-Dialekt des Original-VC (D3D8 pp=1); verlustbehaftete Komprimierung
 compat-choice-vc-dxt3 = Alpha-Dialekt des Original-VC (D3D8 pp=3); verlustbehaftete Komprimierung
 compat-choice-vc-888 = 32-Bit X8R8G8B8, verlustfrei; Original-VC enthält eines
 compat-choice-vc-8888 = A8R8G8B8, behält Alpha; Form aus der D3D8-Ära
@@ -1099,7 +1096,7 @@ compat-choice-vc-4444 = 16-Bit mit Alpha; Original-VC beschriftet 4444 als DXT3-
 compat-choice-player-888 = 32-Bit X8R8G8B8; Original-player.img enthält 269
 compat-choice-player-8888 = A8R8G8B8, behält Alpha; Original-player.img enthält 125
 compat-choice-player-dxt = überall unterstützt; verlustbehaftet (player.img enthält keine)
-compat-choice-sa-dxt1 = Welten-Dialekt des Original-SA; verlustbehaftete Komprimierung
+compat-choice-sa-dxt1 = Welt-Dialekt des Original-SA; verlustbehaftete Komprimierung
 compat-choice-sa-dxt3 = Alpha-Dialekt des Original-SA; verlustbehaftete Komprimierung
 compat-choice-sa-8888 = A8R8G8B8, verlustfrei; Original-SA enthält es im player.img
 compat-choice-sa-pal8 = quantisiert Farben; Original-SA enthält keine palettierten Raster
@@ -1107,7 +1104,7 @@ compat-choice-sa-pal8 = quantisiert Farben; Original-SA enthält keine palettier
 ## Conversion warnings and errors
 
 compat-warn-alpha-discarded = { $source } hat Alpha, aber { $format } kann es nicht speichern – der Alphakanal wird verworfen.
-compat-warn-dxt-lossy = die { $format }-Komprimierung ist verlustbehaftet; die Vorschau zeigt das kodierte Ergebnis.
+compat-warn-dxt-lossy = Die { $format }-Komprimierung ist verlustbehaftet; die Vorschau zeigt das kodierte Ergebnis.
 compat-warn-palette-exact =
     { $colors ->
         [one] { $format } speichert das Bild exakt ({ $colors } Farbe).
@@ -1130,7 +1127,7 @@ compat-error-unknown-target = unbekanntes Spielziel „{ $id }“
 
 compat-container-v2-expects-v1 = IMG-v2-Container, aber { $game } erwartet IMG v1 – das Spiel wird diese Dateien nicht sehen.
 compat-container-v1-sa = IMG-v1-Container; Original-San Andreas verwendet IMG v2 (v1 lädt nur, wenn es in gta.dat gelistet ist).
-compat-container-xbox = Xbox-360-Packung; { $game } erwartet einen PC-Container.
+compat-container-xbox = Xbox-360-Paketierung; { $game } erwartet einen PC-Container.
 
 ## Import check notes
 

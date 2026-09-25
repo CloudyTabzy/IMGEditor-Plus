@@ -273,11 +273,11 @@ validator-highlight-rows = Sorot baris
 legend-native = asli
 legend-native-description = Dibuat oleh mesin ini - tidak perlu tindakan.
 legend-supported = didukung / dapat dikonversi
-legend-supported-description = Dapat dimuat, tetapi bukan dialek data game; pengodean ulang tanpa kehilangan mungkin ditawarkan.
+legend-supported-description = Dapat dimuat, tetapi bukan dialek data game; penulisan ulang tanpa kehilangan mungkin ditawarkan.
 legend-lossy = konversi dengan kehilangan
 legend-lossy-description = Hanya dapat digunakan setelah konversi yang mengubah piksel (kompresi atau kuantisasi).
 legend-unknown = tidak diketahui
-legend-unknown-description = Tidak ada bukti ke arah mana pun - tidak diketahui tidak kompatibel. Tangani dengan hati-hati.
+legend-unknown-description = Tidak ada bukti ke arah mana pun - belum diketahui adanya ketidakcocokan. Gunakan dengan hati-hati.
 legend-incompatible = tidak kompatibel
 legend-incompatible-description = Mesin yang dipilih tidak dapat memakai format ini.
 
@@ -307,7 +307,7 @@ sort-preset-name-az = Nama (A→Z)
 sort-preset-name-za = Nama (Z→A)
 sort-preset-type-then-name = Tipe, lalu nama
 sort-preset-size-desc = Ukuran (besar → kecil)
-sort-preset-offset-asc = Offset (kecil → besar)
+sort-preset-offset-asc = Offset (rendah → tinggi)
 
 ## Windows file dialogs (titles and file-type filters)
 
@@ -357,7 +357,7 @@ toast-save-before-pack = Simpan arsip sebelum mengemasnya.
 toast-packed = Arsip dikemas — { $reclaimed } diklaim kembali ({ $size } di disk).
 toast-packed-nothing = Arsip dikemas — tidak ada ruang yang diklaim kembali ({ $size } di disk).
 toast-pack-failed = Pengemasan gagal: { $error }
-toast-headers-repaired = Memperbaiki { $count } header tekstur; menyimpan.
+toast-headers-repaired = { $count } header tekstur diperbaiki; menyimpan.
 
 ## Toasts: game folder
 
@@ -405,11 +405,11 @@ toast-convert-only-txd = Hanya entri TXD yang dapat dikonversi - tidak ada entri
 toast-convert-all-native = Semua tekstur yang dipilih sudah asli untuk target.
 toast-archive-changed-after-plan = Arsip berubah setelah konversi ini direncanakan; coba lagi.
 toast-archive-changed-during = Arsip berubah selama konversi; hasil usang dibuang.
-toast-converted = Mengonversi { $count } entri - simpan arsip untuk menulisnya.
+toast-converted = { $count } entri dikonversi - simpan arsip untuk menulisnya.
 toast-conversion-failed = Konversi gagal: { $error }
 toast-no-decoded-textures = Tidak ada tekstur terdekode untuk diekspor.
-toast-decoded = Mendekode { $count } tekstur
-toast-decoded-not-retained = Mendekode { $count } tekstur, tetapi pratinjau tidak dapat dipertahankan
+toast-decoded = { $count } tekstur didekode
+toast-decoded-not-retained = { $count } tekstur didekode, tetapi pratinjau tidak dapat dipertahankan
 toast-pick-embedded-folder = Pilih folder untuk mengekspor tekstur tersemat dari { $model }
 toast-basename-unknown = Tidak dapat menentukan nama dasar { $entry }
 toast-read-failed = Gagal membaca { $name }: { $error }
@@ -417,8 +417,8 @@ toast-read-failed = Gagal membaca { $name }: { $error }
 ## Toasts: import and export
 
 toast-import-cancelled = Impor dibatalkan.
-toast-imported = Mengimpor { $count } berkas.
-toast-imported-unchecked = Mengimpor { $count } berkas - target validator belum ditetapkan, format tidak diperiksa.
+toast-imported = { $count } berkas diimpor.
+toast-imported-unchecked = { $count } berkas diimpor - target validator belum ditetapkan, format tidak diperiksa.
 toast-import-failed = Impor gagal: { $error }
 toast-no-files-in-folder = Tidak ada berkas biasa ditemukan di { $folder }.
 toast-folder-scan-failed = Pemindaian folder gagal: { $error }
@@ -426,21 +426,21 @@ toast-folder-import-failed = Impor folder gagal: { $error }
 toast-folder-import-done = Impor folder selesai: { $imported } diimpor, { $skipped } dilewati, { $failed } gagal.
 toast-folder-import-cancelled = Impor folder dibatalkan: { $imported } diimpor, { $skipped } dilewati, { $failed } gagal.
 toast-see-log = Lihat log arsip untuk detailnya.
-toast-exported = Mengekspor { $count } entri.
+toast-exported = { $count } entri diekspor.
 toast-export-failed = Ekspor gagal: { $error }
-toast-entry-list-exported = Mengekspor { $count } nama entri ke { $path }.
+toast-entry-list-exported = { $count } nama entri diekspor ke { $path }.
 toast-entry-list-export-failed = Ekspor daftar entri gagal: { $error }
 toast-compare-failed = Perbandingan daftar entri gagal: { $error }
 toast-no-missing-to-copy = Tidak ada entri hilang untuk disalin.
-toast-copied-missing = Menyalin { $count } nama entri yang hilang.
+toast-copied-missing = { $count } nama entri yang hilang disalin.
 
 ## Toasts: clipboard, dragging and other actions
 
 toast-copied-entry-details = Detail entri yang dipilih disalin.
 toast-copied-logs = Log disalin.
 toast-copied-name = Nama disalin: { $name }
-toast-drag-cancelled = Seret dibatalkan.
-toast-moved-entries = Memindahkan { $count } entri ke arsip #{ $archive }.
+toast-drag-cancelled = Penyeretan dibatalkan.
+toast-moved-entries = { $count } entri dipindahkan ke arsip #{ $archive }.
 toast-autoscroll = Gulir otomatis aktif: gerakkan penunjuk untuk menggulir. Klik, klik tengah, klik kanan, gunakan roda, atau tekan tombol untuk berhenti.
 toast-association-added = IMG Editor Plus kini ada di “Buka dengan” File Explorer untuk .img/.dir. Untuk menjadikannya default, pilih di halaman Pengaturan yang terbuka.
 toast-association-removed = Asosiasi .img/.dir dihapus.
@@ -449,7 +449,7 @@ toast-validation-cancelled = Validasi dibatalkan.
 toast-validation-failed = Validasi gagal: { $error }
 toast-no-compat-issues = Tidak ada masalah kompatibilitas - { $summary }
 # $verdicts is the per-verdict count list, e.g. "native 12, untested 1".
-validation-summary = Memvalidasi { $txds } TXD ({ $textures } tekstur) untuk { $game }: { $verdicts }; { $errors } kesalahan, { $warnings } peringatan
+validation-summary = Validasi untuk { $game }: { $txds } TXD ({ $textures } tekstur): { $verdicts }; { $errors } kesalahan, { $warnings } peringatan
 
 ## Archive log (the Logs box in the Export tab)
 
@@ -459,11 +459,11 @@ log-viewer-opened = Penampil 3D dibuka: { $name }
 log-viewer-failed = Penampil 3D gagal: { $reason }
 log-viewer-closed = Penampil 3D ditutup
 log-external-viewer = Membuka penampil 3D eksternal untuk { $name }
-log-exported = Mengekspor { $count } entri
+log-exported = { $count } entri diekspor
 log-export-failed = Ekspor gagal: { $error }
-log-entry-list-exported = Mengekspor daftar entri ({ $count } nama) ke { $path }
+log-entry-list-exported = Daftar entri ({ $count } nama) diekspor ke { $path }
 log-compat-check = Pemeriksaan kompatibilitas: { $summary }
-log-decoded = Mendekode { $count } pratinjau tekstur
+log-decoded = { $count } pratinjau tekstur didekode
 log-texture-export-failed = Ekspor { $model } gagal: { $error }
 # "Exported <what>" in the Export tab's recent list.
 recent-exported = Ekspor: { $what }
@@ -498,7 +498,7 @@ toast-folder-import-discarded = Impor folder dibuang karena arsip target berubah
 toast-compare-discarded = Perbandingan dibuang karena arsip berubah; coba lagi.
 toast-drop-needs-archive = Buka arsip terlebih dahulu untuk menjatuhkan berkas non-IMG ke dalamnya.
 toast-no-game-root = Tidak dapat menentukan folder game dari jalur arsip.
-toast-textures-exported = Mengekspor { $count } tekstur.
+toast-textures-exported = { $count } tekstur diekspor.
 toast-textures-export-failed = Ekspor tekstur gagal: { $error }
 error-write-file = Gagal menulis { $path }: { $error }
 error-read-entry = Gagal membaca entri: { $error }
@@ -591,11 +591,11 @@ viewer-gpu-hint = Coba bersihkan pratinjau atau pilih model yang lebih kecil.
 viewer-clear-error = Bersihkan galat penampil
 viewer-selected-model = model terpilih
 viewer-preparing = Menyiapkan pratinjau 3D
-viewer-preparing-detail = Membaca geometri dan menyelesaikan tekstur…
+viewer-preparing-detail = Membaca geometri dan mencari tekstur…
 viewer-preparing-cache-note = Pratinjau model ini berikutnya akan instan.
 viewer-ready = Siap melihat model ini dalam 3D.
 viewer-unsupported-entry = Penampil bawaan merender entri .nif, .dff, dan .col. { $entry } bukan model yang didukung — gunakan menu klik kanan untuk penampil lain.
-viewer-load-selected-hint = Gunakan ‘{ viewer-load-selected }’ di atas untuk melihat model ini.
+viewer-load-selected-hint = Gunakan “{ viewer-load-selected }” di atas untuk melihat model ini.
 viewer-right-click-hint = Pilih entri .nif, .dff, atau .col, lalu klik kanan → { context-open-3d }.
 viewer-toolbar-label = 3D:
 viewer-preparing-selected = Menyiapkan model terpilih…
@@ -612,7 +612,7 @@ viewer-cull-tip = Sembunyikan segitiga sisi belakang untuk memeriksa orientasi p
 viewer-textured = Bertekstur
 viewer-textured-tip = Gunakan tekstur model yang terdekode alih-alih material netral.
 viewer-alpha = Blending alfa
-viewer-alpha-tip = Hormati alfa tekstur untuk potongan dan material transparan.
+viewer-alpha-tip = Perhitungkan alfa tekstur untuk potongan dan material transparan.
 viewer-alpha-unavailable-tip = Aktifkan { viewer-textured } pada model bertekstur untuk memakai blending alfa.
 viewer-center = Pusatkan titik asal
 viewer-center-tip = Pusatkan ulang model untuk pemeriksaan; nonaktifkan untuk mempertahankan koordinat dunia.
@@ -627,12 +627,12 @@ viewer-no-scene = Tidak ada adegan yang dimuat
 ## Animation dock
 
 anim-preparing = Menyiapkan animasi
-anim-preparing-detail = Mendekode klip dan menyelesaikan tekstur…
+anim-preparing-detail = Mendekode klip dan mencari tekstur…
 anim-preparing-cache-note = Pemutaran ulang pasangan ini berikutnya akan instan.
 anim-preparing-label = Menyiapkan { $label }…
 anim-title = Animasi
 anim-title-demo = Demo animasi
-anim-demo-note = perlengkapan sintetis — tanpa data game
+anim-demo-note = data sintetis — tanpa data game
 anim-exit-demo = Keluar dari demo
 anim-loop = Ulangi pemutaran
 anim-speed = Kecepatan
@@ -649,8 +649,8 @@ anim-stop = Hentikan
 anim-rate-source = sumber { $fps } fps
 anim-rate-preview = pratinjau { $fps } fps
 anim-frame = Bingkai
-anim-frame-rest = Istirahat
-anim-frame-rest-tip = Bingkai pose istirahat
+anim-frame-rest = Dasar
+anim-frame-rest-tip = Bingkai pose dasar
 anim-frame-pose = Pose
 anim-frame-pose-tip = Bingkai pose saat ini
 anim-frame-motion = Gerakan
@@ -668,8 +668,8 @@ anim-keys-hint = Spasi putar/jeda · ←/→ langkah frame · Home/End ujung ren
 texture-no-archive = Tidak ada arsip terbuka.
 texture-select-entry = Pilih entri TXD, NFT, NIF, atau DFF untuk melihat teksturnya.
 texture-not-container = { $entry } bukan wadah tekstur. Pratinjau tersedia untuk entri TXD, NFT, atau model yang dirender.
-texture-no-companions = Tidak ada tekstur pendamping yang diselesaikan untuk { $entry }.
-texture-load-model-hint = Muat model yang dipilih untuk menyelesaikan teksturnya.
+texture-no-companions = Tidak ditemukan tekstur pendamping untuk { $entry }.
+texture-load-model-hint = Muat model yang dipilih untuk menemukan teksturnya.
 texture-load-model = Muat model terpilih
 texture-not-decoded = { $kind } { $entry } belum didekode.
 texture-load-textures = Muat tekstur { $kind } terpilih
@@ -721,7 +721,7 @@ archive-untitled = Tanpa judul
 log-archive-created = Arsip dibuat
 log-archive-saved = Arsip disimpan
 log-archive-packed = Arsip dikemas: { $entries } entri, { $reclaimed } diklaim kembali
-log-imported-entries = Mengimpor { $count } entri
+log-imported-entries = { $count } entri diimpor
 log-folder-import = Impor folder: { $imported } diimpor, { $skipped } dilewati, { $failed } gagal
 log-folder-import-detail = Detail impor folder: { $detail }
 folder-import-cancelled-detail = Impor dibatalkan; berkas yang tersisa dilewati.
@@ -767,7 +767,7 @@ inspect-texture-count = { $count } tekstur
 ## Embedded-texture export (NIF → NFT)
 
 texture-export-none = Tidak ada tekstur tersemat yang ditemukan
-texture-export-done = Mengekspor { $count } tekstur tersemat
+texture-export-done = { $count } tekstur tersemat diekspor
 texture-export-partial = Tekstur diekspor: { $written }, gagal: { $failures }
 texture-export-no-nft = Tidak ada NFT ditemukan untuk “{ $name }”
 
@@ -799,7 +799,7 @@ compat-cat-iii-pal = 96,5% tekstur dunia retail
 compat-cat-iii-888 = 6.806 raster, termasuk set pemain/kendaraan
 compat-cat-iii-8888 = 1.121 raster
 compat-cat-iii-1555 = 24 raster
-compat-cat-iii-dxt1 = retail tidak menyertakan satu pun; perangkat D3D8 mendukungnya
+compat-cat-iii-dxt1 = retail tidak menyertakan satu pun; perangkat keras D3D8 mendukungnya
 compat-cat-iii-dxt = nilai kompresi D3D8 1-5; retail tidak menyertakan satu pun
 compat-cat-depth24 = bentuk kedalaman 24 yang didokumentasikan; stride/urutan belum diverifikasi
 compat-cat-iii-565 = dipetakan driver; III tidak menyertakan satu pun
@@ -849,7 +849,7 @@ compat-note-lum8 = driver memetakan LUM8 ke D3DFMT_L8; retail tidak menyertakan 
 compat-note-sa-a8l8 = D3D9 membawa A8L8 dan dekoder independen mendukungnya; pemetaan nibble RW biasa belum diverifikasi
 compat-note-iii-pal = III retail: 96,5% PAL8; VC retail: 27 raster - diterima tetapi jarang
 compat-note-vc-dxt1 = dialek dunia VC retail: DXT1 dengan D3D8 pp=1; nibble raster usang
-compat-note-iii-dxt1 = III retail tidak menyertakan raster terkompresi (0/15.372); perangkat D3D8 mendukung DXT1
+compat-note-iii-dxt1 = III retail tidak menyertakan raster terkompresi (0/15.372); perangkat keras D3D8 mendukung DXT1
 compat-note-vc-dxt3 = dialek alfa VC retail: DXT3 dengan D3D8 pp=3 (1.149 raster)
 compat-note-iii-dxt = nilai kompresi D3D8 1-5 memetakan ke DXT1-5 (DXT2/4 premultiplied); III+VC retail hanya menyertakan 1 dan 3
 compat-note-iii-depth24 = bentuk R8G8B8 kedalaman 24 yang didokumentasikan; stride/urutan/runtime belum diverifikasi
@@ -887,7 +887,7 @@ compat-choice-sa-pal8 = mengkuantisasi warna; SA retail tidak menyertakan raster
 ## Conversion warnings and errors
 
 compat-warn-alpha-discarded = { $source } memiliki alfa, tetapi { $format } tidak dapat menyimpannya - kanal alfa akan dibuang.
-compat-warn-dxt-lossy = kompresi { $format } menyebabkan kehilangan; pratinjau menampilkan hasil terkode.
+compat-warn-dxt-lossy = Kompresi { $format } menyebabkan kehilangan; pratinjau menampilkan hasil terkode.
 compat-warn-palette-exact = { $format } menyimpan gambar dengan tepat ({ $colors } warna).
 compat-warn-palette-quantize = Warna akan dikuantisasi menjadi paling banyak { $cap } entri.
 compat-warn-stream-budget = { $width }x{ $height } melebihi anggaran streaming 1024 px SA; game mungkin tidak dapat memuatnya secara streaming.

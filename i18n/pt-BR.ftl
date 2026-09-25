@@ -254,7 +254,7 @@ save-check-summary =
         [one] { $entries } entrada
        *[other] { $entries } entradas
     } - verificado em relação a { $target }.
-save-check-counts = { $fine } nativas/compatíveis · { $convertible } conversíveis (sem perdas) · { $incompatible } incompatíveis · { $unknown } não verificadas
+save-check-counts = { $fine } nativas/compatíveis · { $convertible } conversíveis (sem perdas) · { $incompatible } incompatíveis · { $unknown } desconhecidas
 # $note is a technical detail and stays in English.
 save-check-container = Contêiner: { $note }
 save-check-anomaly = { $code }: { $count } (ex.: { $example })
@@ -310,7 +310,7 @@ import-check-summary =
         [0] { $incompatible } texturas incompatíveis
         [one] { $incompatible } textura incompatível
        *[other] { $incompatible } texturas incompatíveis
-    } e { $unknown } não verificadas.
+    } e { $unknown } desconhecidas.
 import-check-note = As importações são gravadas como estão de qualquer forma - o formato só importa se o jogo precisar carregar essas texturas.
 import-check-import-anyway = Importar mesmo assim
 import-check-cancel = Cancelar importação
@@ -374,9 +374,9 @@ legend-supported-description = Carrega, mas não é o dialeto de dados do jogo; 
 legend-lossy = conversão com perdas
 legend-lossy-description = Só pode ser usado após uma conversão que altera pixels (compressão ou quantização).
 legend-unknown = desconhecido
-legend-unknown-description = Sem evidências em nenhum sentido - não se sabe incompatível. Use com cuidado.
+legend-unknown-description = Sem evidências em nenhum sentido - não há registro de incompatibilidade. Use com cuidado.
 legend-incompatible = incompatível
-legend-incompatible-description = O motor selecionado não consegue consumir este formato.
+legend-incompatible-description = O motor selecionado não consegue usar este formato.
 
 ## Sort by dialog
 
@@ -603,7 +603,7 @@ toast-validation-failed = Falha na validação: { $error }
 toast-no-compat-issues = Nenhum problema de compatibilidade encontrado - { $summary }
 # $verdicts is the per-verdict count list, e.g. "native 12, untested 1".
 validation-summary =
-    Validado { $txds ->
+    Validação para { $game }: { $txds ->
         [0] { $txds } TXDs
         [one] { $txds } TXD
        *[other] { $txds } TXDs
@@ -611,7 +611,7 @@ validation-summary =
         [0] { $textures } texturas
         [one] { $textures } textura
        *[other] { $textures } texturas
-    }) para { $game }: { $verdicts }; { $errors ->
+    }): { $verdicts }; { $errors ->
         [0] { $errors } erros
         [one] { $errors } erro
        *[other] { $errors } erros
@@ -785,7 +785,7 @@ viewer-preparing-detail = Lendo a geometria e resolvendo as texturas…
 viewer-preparing-cache-note = As próximas pré-visualizações deste modelo serão instantâneas.
 viewer-ready = Pronto para visualizar este modelo em 3D.
 viewer-unsupported-entry = O visualizador integrado renderiza entradas .nif, .dff e .col. { $entry } não é um modelo compatível — use o menu de clique direito para outro visualizador.
-viewer-load-selected-hint = Use ‘{ viewer-load-selected }’ acima para visualizar este modelo.
+viewer-load-selected-hint = Use “{ viewer-load-selected }” acima para visualizar este modelo.
 viewer-right-click-hint = Selecione uma entrada .nif, .dff ou .col e clique com o botão direito → { context-open-3d }.
 viewer-toolbar-label = 3D:
 viewer-preparing-selected = Preparando o modelo selecionado…
@@ -849,8 +849,8 @@ anim-step-back = Voltar um quadro (←)
 anim-step-forward = Avançar um quadro (→)
 anim-jump-end = Ir para o fim (End)
 anim-stop = Parar
-anim-rate-source = fonte de { $fps } fps
-anim-rate-preview = pré-visualização de { $fps } fps
+anim-rate-source = { $fps } fps (origem)
+anim-rate-preview = { $fps } fps (pré-visualização)
 anim-frame = Enquadramento
 anim-frame-rest = Repouso
 anim-frame-rest-tip = Enquadrar a pose de repouso
@@ -1060,10 +1060,10 @@ compat-cat-bully-dxt5 = 3.526 rasters
 compat-cat-bully-rgb = 138 / 134 rasters
 compat-cat-bully-pal = 127 / 1 rasters
 compat-cat-bully-dxt3 = o Gamebryo é compatível; o original não inclui nenhum
-compat-cat-bully-other = 15 rasters indecifráveis
+compat-cat-bully-other = 15 rasters não decodificáveis
 
 compat-note-bully-not-rw = os recursos do Bully são Gamebryo NIF/NFT, não nativos do RenderWare
-compat-note-platform-rewrite = um raster platform-{ $platform } em um arquivo de { $game } precisa de uma reescrita de plataforma/versão
+compat-note-platform-rewrite = um raster de plataforma { $platform } em um arquivo de { $game } precisa de uma reescrita de plataforma/versão
 compat-note-no-profile = ainda não há tabela de perfil
 compat-note-nft-not-rw = os rasters NFT do Gamebryo não são nativos do RenderWare
 compat-note-bully-dxt1 = Bully original: 31.714 rasters DXT1
@@ -1074,7 +1074,7 @@ compat-note-bully-dxt3 = o Gamebryo é compatível com DXT3, mas o Bully origina
 compat-note-sa-dxt = SA original: 28.807 DXT1 + 2.098 DXT3 rasters
 compat-note-sa-dxt24 = o formato nativo D3D9 carrega DXT2/DXT4 (pré-multiplicados); o SA original não inclui nenhum
 compat-note-sa-dxt5 = o SA original não inclui nenhum; o DXT5 conta com o suporte do D3D9 (as ferramentas de mod usam)
-compat-note-sa-pal = as fontes divergem sobre as paletas do SA; o SA original não inclui nenhum; analisar e preservar
+compat-note-sa-pal = as fontes divergem sobre as paletas do SA; o SA original não inclui nenhuma; analisar e preservar
 compat-note-sa-depth24 = formato documentado R8G8B8 de profundidade 24; o SA original não inclui nenhum; execução não verificada
 compat-note-sa-16bit = o driver mapeia 1555/565/4444; o SA original não inclui 16 bits descomprimidos
 compat-note-c555 = o driver mapeia C555 para X1R5G5B5; o original não inclui nenhum
@@ -1120,7 +1120,7 @@ compat-choice-sa-pal8 = quantiza as cores; o SA original não inclui nenhum rast
 ## Conversion warnings and errors
 
 compat-warn-alpha-discarded = { $source } tem alfa, mas { $format } não consegue armazená-lo - o canal alfa será descartado.
-compat-warn-dxt-lossy = a compressão { $format } tem perdas; a pré-visualização mostra o resultado codificado.
+compat-warn-dxt-lossy = A compressão { $format } tem perdas; a pré-visualização mostra o resultado codificado.
 compat-warn-palette-exact =
     { $colors ->
         [one] { $format } armazena a imagem exatamente ({ $colors } cor).
