@@ -7,23 +7,14 @@ rust-version = "1.96"
 [features]
 default = ["native-dialogs"]
 native-dialogs = ["dep:rfd"]
+# Builds imgeditor.exe as a console program, so benchmark runs can read its
+# output. The benchmark harnesses in examples/ are local-only (gitignored);
+# Cargo discovers whichever exist, so they are not declared here.
 bench = []
 
 [lib]
 name = "imgeditor"
 path = "src/lib.rs"
-
-[[example]]
-name = "benchmark_cancel_latency"
-required-features = ["bench"]
-
-[[example]]
-name = "benchmark_export"
-required-features = ["bench"]
-
-[[example]]
-name = "benchmark_stress"
-required-features = ["bench"]
 
 [dependencies]
 anyhow = "1.0"
@@ -97,6 +88,3 @@ opt-level = 3
 [profile.dev.package.rayon]
 opt-level = 2
 
-[[example]]
-name = "probe_filecreate"
-required-features = ["bench"]
