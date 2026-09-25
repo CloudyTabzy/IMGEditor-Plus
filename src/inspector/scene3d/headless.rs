@@ -559,10 +559,11 @@ mod tests {
         };
         let calibration =
             crate::inspector::animation::binding::calibrate_bindings(&model, &library);
-        let binding =
-            crate::inspector::animation::binding::bind_clip_with_calibration(
-                &model, clip, &calibration,
-            );
+        let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
+            &model,
+            clip,
+            &calibration,
+        );
         println!(
             "clip {} dur {:.3}s tracks {} bound {}/{}",
             clip.name,
@@ -634,8 +635,16 @@ mod tests {
             );
             if std::env::var("IMGEDITOR_AGR_DEBUG_NODES").is_ok() {
                 for name in [
-                    "track_000", "track_001", "track_002", "track_003", "track_004",
-                    "track_009", "track_013", "track_019", "track_027", "track_029",
+                    "track_000",
+                    "track_001",
+                    "track_002",
+                    "track_003",
+                    "track_004",
+                    "track_009",
+                    "track_013",
+                    "track_019",
+                    "track_027",
+                    "track_029",
                     "track_034",
                 ] {
                     if let Some((id, _)) = model

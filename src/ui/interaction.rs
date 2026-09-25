@@ -124,10 +124,7 @@ impl<Message> canvas::Program<Message> for ShimmerOverlay {
         let color = Color::from_rgba(sheen.r, sheen.g, sheen.b, 0.16);
 
         frame.with_clip(
-            Rectangle::new(
-                Point::ORIGIN,
-                iced::Size::new(fill_width, bounds.height),
-            ),
+            Rectangle::new(Point::ORIGIN, iced::Size::new(fill_width, bounds.height)),
             |clipped| {
                 let stripe = canvas::Path::new(|builder| {
                     builder.move_to(Point::new(center - SLANT, bounds.height));

@@ -10,8 +10,8 @@ use rayon::prelude::*;
 use crate::archive::{ArchiveInfo, EntryInfo, PackStats, ProgressInfo};
 use crate::i18n::t;
 use crate::parser::{
-    ImgParser, ImgVersion, ImportEntryResult, PcV1Parser, PcV2Parser, SECTOR_SIZE,
-    Xbox360Parser, import_entry_with_result, safe_entry_output_path, unique_output_path,
+    ImgParser, ImgVersion, ImportEntryResult, PcV1Parser, PcV2Parser, SECTOR_SIZE, Xbox360Parser,
+    import_entry_with_result, safe_entry_output_path, unique_output_path,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -301,7 +301,10 @@ impl FolderImportTask {
 
             if duplicate && duplicate_policy == FolderDuplicatePolicy::Skip {
                 summary.skipped += 1;
-                push_import_detail(&mut summary, t::folder_import_duplicate(display_name.as_str()));
+                push_import_detail(
+                    &mut summary,
+                    t::folder_import_duplicate(display_name.as_str()),
+                );
             } else {
                 let replace = duplicate && duplicate_policy == FolderDuplicatePolicy::Replace;
                 match import_entry_with_result(&mut archive, path, replace) {
@@ -738,9 +741,7 @@ mod tests {
 
         let mut archive = ArchiveInfo::new("one.img", false, ImgVersion::Two);
         archive.path = Some(path.clone());
-        crate::parser::pc_v2::PcV2Parser
-            .open(&mut archive)
-            .unwrap();
+        crate::parser::pc_v2::PcV2Parser.open(&mut archive).unwrap();
         assert_eq!(archive.entries.len(), 1);
         archive.entries[0].override_bytes =
             Some(std::sync::Arc::new(b"PATCHED-TXD-BYTES".to_vec()));
@@ -758,9 +759,7 @@ mod tests {
         let reopened = {
             let mut archive = ArchiveInfo::new("one.img", false, ImgVersion::Two);
             archive.path = Some(path.clone());
-            crate::parser::pc_v2::PcV2Parser
-                .open(&mut archive)
-                .unwrap();
+            crate::parser::pc_v2::PcV2Parser.open(&mut archive).unwrap();
             archive
         };
         let data = read_entry_data(&reopened, &reopened.entries[0]).unwrap();
@@ -786,9 +785,7 @@ mod tests {
 
         let mut archive = ArchiveInfo::new("empty.img", false, ImgVersion::Two);
         archive.path = Some(path.clone());
-        crate::parser::pc_v2::PcV2Parser
-            .open(&mut archive)
-            .unwrap();
+        crate::parser::pc_v2::PcV2Parser.open(&mut archive).unwrap();
         assert!(!archive.progress.in_use());
 
         let saved = SaveTask::new(archive, path, ImgVersion::Two)
@@ -1126,7 +1123,10 @@ mod tests {
             .run_blocking()
             .unwrap();
 
-        assert_eq!(count, 1, "the unsafe entry should fail while the other exports");
+        assert_eq!(
+            count, 1,
+            "the unsafe entry should fail while the other exports"
+        );
         assert!(!dir.path().join("escape.dff").exists());
         assert!(out_dir.join("second.txd").is_file());
     }

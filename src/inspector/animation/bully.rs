@@ -329,7 +329,10 @@ fn fixed_metadata_end(
     let mut invalid_records = 0usize;
     let mut offset = metadata_start;
     let mut metadata_closed = false;
-    while let Some(next) = offset.checked_add(metadata_size).filter(|next| *next <= end) {
+    while let Some(next) = offset
+        .checked_add(metadata_size)
+        .filter(|next| *next <= end)
+    {
         let record = &bytes[offset..next];
         let record_index = if variant == 1000 {
             read_u32(record, 0) as usize
@@ -367,9 +370,7 @@ fn fixed_metadata_end(
         ));
     }
     if metadata_records > 0
-        && bytes[metadata_end..end]
-            .iter()
-            .any(|byte| *byte != 0)
+        && bytes[metadata_end..end].iter().any(|byte| *byte != 0)
         && !partial_nonzero
     {
         diagnostics.push(format!(
@@ -438,14 +439,8 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
         }
         let metadata_start = data_start + required;
         if let Some(_metadata_size) = variant_metadata_record_size(variant) {
-            let (metadata_end, metadata_records) = fixed_metadata_end(
-                bytes,
-                metadata_start,
-                end,
-                variant,
-                count,
-                &mut diagnostics,
-            );
+            let (metadata_end, metadata_records) =
+                fixed_metadata_end(bytes, metadata_start, end, variant, count, &mut diagnostics);
             (
                 metadata_records,
                 metadata_start,
@@ -456,11 +451,7 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
             )
         } else {
             let trailing = available - required;
-            if trailing > 0
-                && bytes[metadata_start..end]
-                    .iter()
-                    .any(|byte| *byte != 0)
-            {
+            if trailing > 0 && bytes[metadata_start..end].iter().any(|byte| *byte != 0) {
                 diagnostics.push(format!(
                     "ignored {trailing} trailing byte(s) after the declared records"
                 ));
@@ -561,20 +552,8 @@ fn parse_clip(bytes: &[u8], start: usize, end: usize, index: usize) -> Result<Ag
     let tracks = match variant {
         1002 => decode_object_1002_records(body, count, duration, &mut diagnostics),
         999 => decode_object_float_records(body, count, duration, &mut diagnostics),
-        1000 => decode_variant_1000_records(
-            body,
-            count,
-            duration,
-            metadata,
-            &mut diagnostics,
-        ),
-        1001 => decode_variant_1001_records(
-            body,
-            count,
-            duration,
-            metadata,
-            &mut diagnostics,
-        ),
+        1000 => decode_variant_1000_records(body, count, duration, metadata, &mut diagnostics),
+        1001 => decode_variant_1001_records(body, count, duration, metadata, &mut diagnostics),
         1003 => decode_object_compact_records(body, count, duration, &mut diagnostics),
         1004 => decode_object_1004_records(body, count, duration, &mut diagnostics),
         _ => {
@@ -1083,8 +1062,8 @@ fn decode_variant_1000_records(
 
     let keys: Vec<PackedRotationKey> = (0..count)
         .map(|index| {
-            let record = &body[index * FLOAT_LINKED_RECORD_BYTES
-                ..(index + 1) * FLOAT_LINKED_RECORD_BYTES];
+            let record =
+                &body[index * FLOAT_LINKED_RECORD_BYTES..(index + 1) * FLOAT_LINKED_RECORD_BYTES];
             PackedRotationKey {
                 previous: u16::from_le_bytes([record[0], record[1]]) as usize,
                 time_code: u16::from_le_bytes([record[2], record[3]]),
@@ -1101,7 +1080,11 @@ fn decode_variant_1000_records(
     let mut translations = Vec::with_capacity(metadata.len() / 16);
     for record in metadata.chunks_exact(16) {
         let record_index = read_u32(record, 0) as usize;
-        let values = [read_f32(record, 4), read_f32(record, 8), read_f32(record, 12)];
+        let values = [
+            read_f32(record, 4),
+            read_f32(record, 8),
+            read_f32(record, 12),
+        ];
         if values.iter().all(|value| value.is_finite()) {
             translations.push((record_index, values));
         } else {
@@ -1115,13 +1098,7 @@ fn decode_variant_1000_records(
         ));
     }
 
-    decode_linked_transform_tracks(
-        &keys,
-        duration,
-        1000,
-        &translations,
-        diagnostics,
-    )
+    decode_linked_transform_tracks(&keys, duration, 1000, &translations, diagnostics)
 }
 
 /// Decode variant 1001: compact linked quaternion records followed by
@@ -1149,8 +1126,8 @@ fn decode_variant_1001_records(
 
     let keys: Vec<PackedRotationKey> = (0..count)
         .map(|index| {
-            let record = &body[index * COMPACT_LINKED_RECORD_BYTES
-                ..(index + 1) * COMPACT_LINKED_RECORD_BYTES];
+            let record = &body
+                [index * COMPACT_LINKED_RECORD_BYTES..(index + 1) * COMPACT_LINKED_RECORD_BYTES];
             let x = i16::from_le_bytes([record[4], record[5]]) as f32 / COMPACT_QUAT_SCALE;
             let y = i16::from_le_bytes([record[6], record[7]]) as f32 / COMPACT_QUAT_SCALE;
             let z = i16::from_le_bytes([record[8], record[9]]) as f32 / COMPACT_QUAT_SCALE;
@@ -1180,13 +1157,7 @@ fn decode_variant_1001_records(
         ));
     }
 
-    decode_linked_transform_tracks(
-        &keys,
-        duration,
-        1001,
-        &translations,
-        diagnostics,
-    )
+    decode_linked_transform_tracks(&keys, duration, 1001, &translations, diagnostics)
 }
 
 /// One decoded record from the retail variant-1004 evaluator.
@@ -2199,7 +2170,6 @@ fn nif_local(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2613,7 +2583,11 @@ mod tests {
         use crate::inspector::animation::model::ModelAsset;
         use crate::inspector::scene3d::camera::BaseOrientation;
 
-        fn descends_from(model: &ModelAsset, mut id: crate::inspector::animation::NodeId, ancestor: crate::inspector::animation::NodeId) -> bool {
+        fn descends_from(
+            model: &ModelAsset,
+            mut id: crate::inspector::animation::NodeId,
+            ancestor: crate::inspector::animation::NodeId,
+        ) -> bool {
             loop {
                 if id == ancestor {
                     return true;
@@ -2624,13 +2598,14 @@ mod tests {
                 }
             }
         }
-        let track_of = |model: &ModelAsset, id: crate::inspector::animation::NodeId| -> Option<u32> {
-            model
-                .node(id)?
-                .name
-                .strip_prefix("track_")
-                .and_then(|number| number.parse::<u32>().ok())
-        };
+        let track_of =
+            |model: &ModelAsset, id: crate::inspector::animation::NodeId| -> Option<u32> {
+                model
+                    .node(id)?
+                    .name
+                    .strip_prefix("track_")
+                    .and_then(|number| number.parse::<u32>().ok())
+            };
         let node_name = |model: &ModelAsset, id: Option<crate::inspector::animation::NodeId>| {
             id.and_then(|id| model.node(id))
                 .map(|node| node.name.clone())
@@ -2753,10 +2728,12 @@ mod tests {
             let signatures: Vec<_> = file
                 .clips
                 .iter()
-                .map(|agr_clip| crate::inspector::animation::hxd::HxdClipSignature {
-                    source_size: agr_clip.source_size,
-                    duration_s: agr_clip.duration_s,
-                })
+                .map(
+                    |agr_clip| crate::inspector::animation::hxd::HxdClipSignature {
+                        source_size: agr_clip.source_size,
+                        duration_s: agr_clip.duration_s,
+                    },
+                )
                 .collect();
             let names = hxd
                 .as_ref()
@@ -2896,7 +2873,10 @@ mod tests {
             if character {
                 character_rows.push(row.clone());
                 if let Some(offset) = offset {
-                    character_offsets.entry(offset).or_default().push(agr_name.clone());
+                    character_offsets
+                        .entry(offset)
+                        .or_default()
+                        .push(agr_name.clone());
                 }
             }
             rows.push(row);
@@ -2977,13 +2957,15 @@ mod tests {
                 ..Default::default()
             })),
             shape(vec![2]),
-            Some(BlockPayload::NiTexturingProperty(Box::new(NiTexturingPropertyData {
-                base: Some(TexDesc {
-                    source_ref: 4,
+            Some(BlockPayload::NiTexturingProperty(Box::new(
+                NiTexturingPropertyData {
+                    base: Some(TexDesc {
+                        source_ref: 4,
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            }))),
+                },
+            ))),
             Some(BlockPayload::NiTriShapeData(NiTriShapeDataPayload {
                 vertices: vec![
                     Vector3 {
@@ -3065,8 +3047,7 @@ mod tests {
             })
             .collect();
         let anim = stream.parent().expect("game root").join("Anim");
-        let candidates =
-            crate::inspector::animation::hxd::candidate_models(Some(&anim), &entries);
+        let candidates = crate::inspector::animation::hxd::candidate_models(Some(&anim), &entries);
         assert!(
             candidates.len() > 50,
             "expected a catalog-sized candidate list, got {}",
@@ -3135,8 +3116,7 @@ mod tests {
             "player meshes must carry diffuse texture names"
         );
         let game_root = stream.parent().expect("game root");
-        let ide_map =
-            std::sync::Arc::new(crate::inspector::texture::IdeMap::build(game_root));
+        let ide_map = std::sync::Arc::new(crate::inspector::texture::IdeMap::build(game_root));
         let resolver = crate::ui::app::nif_texture_resolver(
             crate::inspector::texture::ArchiveTextureIndex::from_entries(&entries, Some(&img_path)),
             Some(ide_map),
@@ -3319,7 +3299,9 @@ mod tests {
         let mut motion_samples: Vec<f32> = Vec::new();
         for clip in library.clips.iter() {
             let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
-                &model, clip, &calibration,
+                &model,
+                clip,
+                &calibration,
             );
             // Root travel direction (source XY) over the first half of the
             // clip: locomotion evidence for which way is "forward".
@@ -3542,12 +3524,15 @@ mod tests {
                 push_f32(&mut out, value);
             }
         }
-        for (ordinal, time_norm, w, x) in
-            [
-                (1u16, 32768u16, std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2),
-                (2, 65535, 1.0, 0.0),
-            ]
-        {
+        for (ordinal, time_norm, w, x) in [
+            (
+                1u16,
+                32768u16,
+                std::f32::consts::FRAC_1_SQRT_2,
+                std::f32::consts::FRAC_1_SQRT_2,
+            ),
+            (2, 65535, 1.0, 0.0),
+        ] {
             out.extend_from_slice(&ordinal.to_le_bytes());
             out.extend_from_slice(&time_norm.to_le_bytes());
             for value in [w, x, 0.0, 0.0, 0.1, 0.2, 0.3] {
@@ -3664,15 +3649,7 @@ mod tests {
         push_f32(&mut data, 1.0);
         push_linked_1000_record(&mut data, 0, 0, 1.0, 0.0, 0.0, 0.0); // default root
         push_linked_1000_record(&mut data, 0, 0, 1.0, 0.0, 0.0, 0.0); // curve root
-        push_linked_1000_record(
-            &mut data,
-            1,
-            u16::MAX,
-            0.8660254,
-            0.5,
-            0.0,
-            0.0,
-        );
+        push_linked_1000_record(&mut data, 1, u16::MAX, 0.8660254, 0.5, 0.0, 0.0);
         push_linked_1000_record(&mut data, 0, u16::MAX, 1.0, 0.0, 0.0, 0.0); // sentinel
         push_1000_translation(&mut data, 1, [1.0, -0.5, 0.0]);
         push_1000_translation(&mut data, 2, [2.0, 0.0, 0.0]);
@@ -3722,18 +3699,24 @@ mod tests {
             .expect("1000 translation track");
         assert_eq!(float_translation.keys.len(), 2);
         assert_eq!(float_translation.keys[1].values, [2.0, 0.0, 0.0]);
-        assert!(float_clip
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("decoded 1 linked 1000")));
-        assert!(float_clip
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("sentinel")));
-        assert!(float_clip
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("malformed 1000")));
+        assert!(
+            float_clip
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("decoded 1 linked 1000"))
+        );
+        assert!(
+            float_clip
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("sentinel"))
+        );
+        assert!(
+            float_clip
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("malformed 1000"))
+        );
 
         let compact_clip = &file.clips[1];
         assert_eq!(compact_clip.variant, 1001);
@@ -3758,18 +3741,24 @@ mod tests {
         assert_eq!(compact_translation.keys.len(), 2);
         assert_eq!(compact_translation.keys[0].values, [1.0, -0.5, 0.0]);
         assert_eq!(compact_translation.keys[1].values, [2.0, 0.0, 0.0]);
-        assert!(compact_clip
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("decoded 1 linked 1001")));
-        assert!(compact_clip
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("sentinel")));
-        assert!(compact_clip
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("malformed 1001")));
+        assert!(
+            compact_clip
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("decoded 1 linked 1001"))
+        );
+        assert!(
+            compact_clip
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("sentinel"))
+        );
+        assert!(
+            compact_clip
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("malformed 1001"))
+        );
     }
 
     #[test]
@@ -4101,10 +4090,9 @@ mod tests {
         let mut checked_clips = 0usize;
 
         for (agr_name, nif_name) in cases {
-            let (Some(agr_bytes), Some(nif_bytes)) = (
-                world_entry(stream, agr_name),
-                world_entry(stream, nif_name),
-            ) else {
+            let (Some(agr_bytes), Some(nif_bytes)) =
+                (world_entry(stream, agr_name), world_entry(stream, nif_name))
+            else {
                 continue;
             };
             let file = parse_agr(&agr_bytes).unwrap_or_else(|error| {
@@ -4131,8 +4119,7 @@ mod tests {
                     .clips
                     .get(clip.index)
                     .expect("runtime clip follows source clip order");
-                let binding =
-                    crate::inspector::animation::binding::bind_clip(&model, runtime_clip);
+                let binding = crate::inspector::animation::binding::bind_clip(&model, runtime_clip);
                 assert!(
                     binding.is_fully_bound(),
                     "{agr_name} clip {} did not bind to {nif_name}: {:?}",
@@ -4187,9 +4174,8 @@ mod tests {
         let model = model_from_nif(&nif, "Mandy", "Mandy").expect("Mandy model builds");
         let file = parse_agr(&agr_bytes).expect("Mandy AGR parses");
         let library = to_library(&file, "1_08_MandPuke.agr");
-        let calibration = crate::inspector::animation::binding::calibrate_bindings(
-            &model, &library,
-        );
+        let calibration =
+            crate::inspector::animation::binding::calibrate_bindings(&model, &library);
 
         let root = model.root_motion_node.expect("Mandy has a motion root");
         assert_eq!(model.source_name(root), Some("Dummy"));
@@ -4225,9 +4211,7 @@ mod tests {
                 .expect("Mandy calibrated node")
                 .id;
             assert_eq!(
-                binding
-                    .node_for_track(track_index)
-                    .expect("curve is bound"),
+                binding.node_for_track(track_index).expect("curve is bound"),
                 expected,
                 "AGR {} must bind three nodes below the Dummy placeholder",
                 track.target
@@ -4309,7 +4293,10 @@ mod tests {
             .filter(|(_, node)| right_nodes.contains(node))
             .map(|(slot, _)| slot)
             .collect();
-        assert!(!right_slots.is_empty(), "Mandy skin includes right arm joints");
+        assert!(
+            !right_slots.is_empty(),
+            "Mandy skin includes right arm joints"
+        );
 
         let right_arm = model.node_by_name("track_030").expect("right upper arm").id;
         let right_hand = model.node_by_name("track_032").expect("right hand").id;
@@ -4339,8 +4326,7 @@ mod tests {
         let (upper_start, hand_start, vertices_start) = sample_at(0.0);
         let (upper_mid, hand_mid, vertices_mid) = sample_at(clip.duration * 0.5);
         assert!(
-            upper_start.distance(upper_mid) > 1e-3
-                || hand_start.distance(hand_mid) > 1e-3,
+            upper_start.distance(upper_mid) > 1e-3 || hand_start.distance(hand_mid) > 1e-3,
             "right arm nodes must respond to MANDY_PUKE_LOOP"
         );
         let mut affected = 0usize;
@@ -4396,7 +4382,9 @@ mod tests {
             crate::inspector::animation::binding::calibrate_bindings(&model, &library);
         let clip = library.clips.first().expect("idle clip");
         let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
-            &model, clip, &calibration,
+            &model,
+            clip,
+            &calibration,
         );
 
         let root = model.root_motion_node.expect("Gurney motion root");
@@ -4453,9 +4441,7 @@ mod tests {
             ("N2B Dishonerable", 5usize, "VAULT_BAR"),
             ("W_snowshwl", 8, "MINISNOW_HITSHVL"),
         ] {
-            let Some(record) =
-                crate::inspector::animation::hxd::find_for_agr(&anim, stem)
-            else {
+            let Some(record) = crate::inspector::animation::hxd::find_for_agr(&anim, stem) else {
                 continue;
             };
             let Some(agr_bytes) = world_entry(stream, &format!("{stem}.agr")) else {
@@ -4493,8 +4479,7 @@ mod tests {
         };
         let stream = std::path::Path::new(&stream);
         let anim = stream.parent().expect("game root").join("Anim");
-        let Some(record) =
-            crate::inspector::animation::hxd::find_for_agr(&anim, "Area_GirlsDorm")
+        let Some(record) = crate::inspector::animation::hxd::find_for_agr(&anim, "Area_GirlsDorm")
         else {
             return;
         };
@@ -4561,7 +4546,9 @@ mod tests {
             crate::inspector::animation::binding::calibrate_bindings(&model, &library);
         let clip = library.clips.first().expect("first player clip");
         let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
-            &model, clip, &calibration,
+            &model,
+            clip,
+            &calibration,
         );
 
         let dummy = model
@@ -4581,7 +4568,11 @@ mod tests {
             (34, "track_035"),
         ] {
             let expected = model.node_by_name(node).map(|node| node.id);
-            assert_ne!(expected, Some(dummy), "sanity: {node} is not the placeholder");
+            assert_ne!(
+                expected,
+                Some(dummy),
+                "sanity: {node} is not the placeholder"
+            );
             assert_eq!(
                 binding.node_for_track(track_index),
                 expected,
@@ -4616,7 +4607,9 @@ mod tests {
             crate::inspector::animation::binding::calibrate_bindings(&model, &library);
         let clip = library.clips.first().expect("first workout clip");
         let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
-            &model, clip, &calibration,
+            &model,
+            clip,
+            &calibration,
         );
 
         let dummy = model
@@ -4635,7 +4628,11 @@ mod tests {
             (34, "track_035"),
         ] {
             let expected = model.node_by_name(node).map(|node| node.id);
-            assert_ne!(expected, Some(dummy), "sanity: {node} is not the placeholder");
+            assert_ne!(
+                expected,
+                Some(dummy),
+                "sanity: {node} is not the placeholder"
+            );
             assert_eq!(
                 binding.node_for_track(track_index),
                 expected,
@@ -4669,7 +4666,9 @@ mod tests {
             crate::inspector::animation::binding::calibrate_bindings(&model, &library);
         let clip = library.clips.first().expect("first rat clip");
         let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
-            &model, clip, &calibration,
+            &model,
+            clip,
+            &calibration,
         );
 
         let dummy = model.node_by_name("track_000").expect("rat placeholder").id;
@@ -4688,7 +4687,11 @@ mod tests {
             let expected = model
                 .node_by_name(&format!("track_{:03}", curve + 1))
                 .map(|node| node.id);
-            assert_ne!(expected, Some(dummy), "curve {curve} must skip the placeholder");
+            assert_ne!(
+                expected,
+                Some(dummy),
+                "curve {curve} must skip the placeholder"
+            );
             assert_eq!(
                 binding.node_for_track(track_index),
                 expected,
@@ -4719,16 +4722,14 @@ mod tests {
         let model = model_from_nif(&nif, "calibration", "calibration").expect("model builds");
         let file = parse_agr(&agr_bytes).expect("parse AGR");
         let library = to_library(&file, "calibration");
-        let clip = library
-            .clips
-            .first()
-            .expect("at least one clip");
+        let clip = library.clips.first().expect("at least one clip");
         let calibration =
             crate::inspector::animation::binding::calibrate_bindings(&model, &library);
-        let binding =
-            crate::inspector::animation::binding::bind_clip_with_calibration(
-                &model, clip, &calibration,
-            );
+        let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
+            &model,
+            clip,
+            &calibration,
+        );
         let nif_stem = std::path::Path::new(&nif_path)
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -4747,14 +4748,14 @@ mod tests {
                 "player AGR must bind every declared character curve"
             );
             for (track, expected_node) in [
-                (0, "track_001"), // Root
-                (1, "track_002"), // pelvis
-                (2, "track_003"), // left thigh
-                (3, "track_004"), // left calf
-                (4, "track_005"), // left foot
-                (5, "track_006"), // right thigh
-                (6, "track_007"), // right calf
-                (7, "track_008"), // right foot
+                (0, "track_001"),  // Root
+                (1, "track_002"),  // pelvis
+                (2, "track_003"),  // left thigh
+                (3, "track_004"),  // left calf
+                (4, "track_005"),  // left foot
+                (5, "track_006"),  // right thigh
+                (6, "track_007"),  // right calf
+                (7, "track_008"),  // right foot
                 (34, "track_035"), // TranslationNode/ARROW attachment
             ] {
                 assert_eq!(
@@ -4866,16 +4867,20 @@ mod tests {
         let calibration =
             crate::inspector::animation::binding::calibrate_bindings(&model, &library);
         let up = model.ground_normal_model();
-        let mut buffers =
-            crate::inspector::animation::pose::PoseBuffers::new(&model);
+        let mut buffers = crate::inspector::animation::pose::PoseBuffers::new(&model);
         let mut offset_of = |index: usize| {
             let clip = library.clips.get(index).expect("clip exists");
-            let binding =
-                crate::inspector::animation::binding::bind_clip_with_calibration(
-                    &model, clip, &calibration,
-                );
+            let binding = crate::inspector::animation::binding::bind_clip_with_calibration(
+                &model,
+                clip,
+                &calibration,
+            );
             crate::inspector::animation::pose::clip_ground_offset(
-                &model, clip, &binding, 12, &mut buffers,
+                &model,
+                clip,
+                &binding,
+                12,
+                &mut buffers,
             )
         };
         // RUN dips to the floor within its cycle (a real foot plant).

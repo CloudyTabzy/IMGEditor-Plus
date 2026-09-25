@@ -163,12 +163,7 @@ fn cell_key(r: u8, g: u8, b: u8) -> usize {
 /// through the 15-bit LUT; transparent pixels go to the reserved slot.
 /// With `dither`, a Bayer 4x4 threshold is applied before matching (off
 /// by default, matching retail output).
-pub fn map_level(
-    rgba: &[u8],
-    width: u32,
-    palette: &QuantizedPalette,
-    dither: bool,
-) -> Vec<u8> {
+pub fn map_level(rgba: &[u8], width: u32, palette: &QuantizedPalette, dither: bool) -> Vec<u8> {
     let lut = build_lut(palette);
     map_with_lut(rgba, width, palette, dither, &lut)
 }
@@ -197,12 +192,7 @@ fn map_with_lut(
     let transparent_index = palette.transparent_index().unwrap_or(0);
     let mut out = Vec::with_capacity(rgba.len() / 4);
     if dither {
-        const BAYER: [[i16; 4]; 4] = [
-            [0, 8, 2, 10],
-            [12, 4, 14, 6],
-            [3, 11, 1, 9],
-            [15, 7, 13, 5],
-        ];
+        const BAYER: [[i16; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
         for (index, pixel) in rgba.chunks_exact(4).enumerate() {
             if pixel[3] < TRANSPARENT_CUTOFF {
                 out.push(transparent_index);
@@ -276,7 +266,8 @@ mod tests {
         let indices = map_level(&rgba, 8, &palette, false);
         for (i, index) in indices.iter().enumerate() {
             assert_eq!(
-                palette.entries[*index as usize], colors[i % colors.len()],
+                palette.entries[*index as usize],
+                colors[i % colors.len()],
                 "an exact palette image must round-trip"
             );
         }
@@ -331,7 +322,8 @@ mod tests {
     }
 
     #[test]
-    fn quality_beats_plain_median_cut_on_a_gradient() {        fn median_cut_reference(rgba: &[u8], max_colors: usize) -> Vec<[u8; 4]> {
+    fn quality_beats_plain_median_cut_on_a_gradient() {
+        fn median_cut_reference(rgba: &[u8], max_colors: usize) -> Vec<[u8; 4]> {
             let mut histogram: HashMap<[u8; 4], u32> = HashMap::new();
             for p in rgba.chunks_exact(4) {
                 *histogram.entry([p[0], p[1], p[2], p[3]]).or_insert(0) += 1;
@@ -366,7 +358,9 @@ mod tests {
                         best = Some((i, channel, spread));
                     }
                 }
-                let Some((index, channel, _)) = best else { break };
+                let Some((index, channel, _)) = best else {
+                    break;
+                };
                 let mut target = boxes.swap_remove(index);
                 target.sort_by_key(|(c, _)| c[channel]);
                 let total: u64 = target.iter().map(|(_, n)| u64::from(*n)).sum();
@@ -532,8 +526,8 @@ mod tests {
     #[test]
     #[ignore]
     fn write_quality_sheet() {
-        use crate::compat::encode::{encode_texture, DxtQuality, EncodeFormat, EncodeOptions};
-        use crate::parser::texture_decoder::{decode_native_raster, RasterDescriptor};
+        use crate::compat::encode::{DxtQuality, EncodeFormat, EncodeOptions, encode_texture};
+        use crate::parser::texture_decoder::{RasterDescriptor, decode_native_raster};
 
         let size = 256u32;
         let sample = sample_image(size);
@@ -606,8 +600,8 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("converter-fixtures");
         std::fs::create_dir_all(&dir).expect("create converter-fixtures");
         let path = dir.join("palette-quality-sheet.png");
-        let image = image::RgbaImage::from_raw(sheet_width, sheet_height, sheet)
-            .expect("sheet dimensions");
+        let image =
+            image::RgbaImage::from_raw(sheet_width, sheet_height, sheet).expect("sheet dimensions");
         image.save(&path).expect("write sheet");
         eprintln!("wrote {}", path.display());
     }

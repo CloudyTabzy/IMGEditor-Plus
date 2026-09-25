@@ -286,7 +286,11 @@ impl AnimationSession {
     /// orientation before being added.
     pub(crate) fn effective_display_offset(&self) -> Vec3 {
         if self.panel.ground_clip {
-            self.display_offset + self.asset.source_to_view.transform_vector3(self.ground_offset)
+            self.display_offset
+                + self
+                    .asset
+                    .source_to_view
+                    .transform_vector3(self.ground_offset)
         } else {
             self.display_offset
         }

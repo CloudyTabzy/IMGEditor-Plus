@@ -10,8 +10,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::inspector::texture::{IdeMap, NftCatalog, TextureEntry, resolve_textures_for_nif};
 use crate::i18n::t;
+use crate::inspector::texture::{IdeMap, NftCatalog, TextureEntry, resolve_textures_for_nif};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ExportReport {

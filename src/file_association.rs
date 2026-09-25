@@ -62,7 +62,11 @@ pub(crate) fn association_values(exe: &Path) -> Vec<(String, String, String)> {
             "ApplicationDescription",
             "Open and edit GTA III, Vice City, San Andreas and Bully IMG archives.".to_string(),
         ),
-        value(REGISTERED_APPLICATIONS_KEY, APP_NAME, CAPABILITIES_KEY.to_string()),
+        value(
+            REGISTERED_APPLICATIONS_KEY,
+            APP_NAME,
+            CAPABILITIES_KEY.to_string(),
+        ),
     ];
     for extension in EXTENSIONS {
         values.push(value(
@@ -269,7 +273,11 @@ mod tests {
         let values = association_values(Path::new(r"C:\apps\imgeditor.exe"));
         for extension in EXTENSIONS {
             let open_with = format!(r"Software\Classes\{extension}\OpenWithProgids");
-            assert!(values.iter().any(|(key, name, _)| key == &open_with && name == PROG_ID));
+            assert!(
+                values
+                    .iter()
+                    .any(|(key, name, _)| key == &open_with && name == PROG_ID)
+            );
             // The extension key's own default value (its current default
             // handler) is never written.
             assert!(!values.iter().any(|(key, name, _)| {
@@ -312,7 +320,10 @@ mod tests {
         other.set_value("Windows.IsoFile", &String::new()).unwrap();
 
         let exe = Path::new(r"C:\apps\imgeditor.exe");
-        assert_eq!(platform::state_in(&root, exe), AssociationState::NotRegistered);
+        assert_eq!(
+            platform::state_in(&root, exe),
+            AssociationState::NotRegistered
+        );
         platform::register_in(&root, exe).unwrap();
         assert_eq!(platform::state_in(&root, exe), AssociationState::Registered);
         assert_eq!(
@@ -321,7 +332,10 @@ mod tests {
         );
 
         platform::unregister_in(&root).unwrap();
-        assert_eq!(platform::state_in(&root, exe), AssociationState::NotRegistered);
+        assert_eq!(
+            platform::state_in(&root, exe),
+            AssociationState::NotRegistered
+        );
         let open_with = root
             .open_subkey(r"Software\Classes\.img\OpenWithProgids")
             .unwrap();

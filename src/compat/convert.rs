@@ -8,15 +8,15 @@
 //! apply a plan through the splices in
 //! [`crate::parser::txd_writer`], so untouched textures stay verbatim.
 
-use crate::compat::encode::{
-    encode_texture, EncodeFormat, EncodeOptions, EncodedTexture,
-};
-use crate::compat::games::{profile_by_id, GameProfile, Verdict, SA};
-use crate::compat::raster::{classify_format, RasterProfile};
-use crate::parser::texture_decoder::{decode_native_raster, RasterDescriptor, PLATFORM_D3D8, PLATFORM_D3D9};
-use crate::parser::txd::{parse_txd, NativeTexture};
-use crate::parser::txd_writer;
+use crate::compat::encode::{EncodeFormat, EncodeOptions, EncodedTexture, encode_texture};
+use crate::compat::games::{GameProfile, SA, Verdict, profile_by_id};
+use crate::compat::raster::{RasterProfile, classify_format};
 use crate::i18n::t;
+use crate::parser::texture_decoder::{
+    PLATFORM_D3D8, PLATFORM_D3D9, RasterDescriptor, decode_native_raster,
+};
+use crate::parser::txd::{NativeTexture, parse_txd};
+use crate::parser::txd_writer;
 
 /// A decoded source image (PNG/DDS/BMP/TGA).
 #[derive(Debug, Clone)]
@@ -347,7 +347,11 @@ pub fn plan_import(
         warnings.push(t::compat_warn_dxt_lossy(format.label()));
     }
     if format.is_paletted() {
-        let cap = if format == EncodeFormat::Pal4 { 16 } else { 256 };
+        let cap = if format == EncodeFormat::Pal4 {
+            16
+        } else {
+            256
+        };
         match image.unique_colors() {
             Some(colors) if usize::from(colors) <= cap => {
                 warnings.push(t::compat_warn_palette_exact(format.label(), colors));
@@ -412,7 +416,8 @@ pub fn plan_conversion(
         .textures
         .get(texture_index)
         .ok_or_else(|| t::compat_error_texture_index(texture_index))?;
-    let mut plan = plan_conversion_for_texture(texture, target, archive_file_name, format_override, options)?;
+    let mut plan =
+        plan_conversion_for_texture(texture, target, archive_file_name, format_override, options)?;
     // The single-texture dialog shows the encoded result; bulk planning
     // uses [`plan_conversion_for_texture`] directly and skips this decode.
     plan.preview_rgba = decode_encoded(&plan.encoded, plan.platform_id)?;
@@ -452,11 +457,7 @@ pub fn plan_conversion_for_texture(
     };
     // A source with real transparency in a non-alpha header should
     // still plan as alpha-carrying.
-    image.has_alpha = image.has_alpha
-        || image
-            .rgba
-            .chunks_exact(4)
-            .any(|pixel| pixel[3] < 255);
+    image.has_alpha = image.has_alpha || image.rgba.chunks_exact(4).any(|pixel| pixel[3] < 255);
     plan_import(&image, target, archive_file_name, format_override, options)
 }
 
@@ -470,9 +471,10 @@ pub fn apply_replaces(
     let parsed = parse_txd(txd_bytes)?;
     let mut replacements = Vec::with_capacity(plans.len());
     for (index, plan) in plans {
-        let old = parsed.textures.get(*index).ok_or_else(|| {
-            t::compat_error_texture_index(index)
-        })?;
+        let old = parsed
+            .textures
+            .get(*index)
+            .ok_or_else(|| t::compat_error_texture_index(index))?;
         replacements.push((
             *index,
             txd_writer::native_from_encoded(
@@ -498,12 +500,7 @@ pub fn apply_replace(
 
 /// Build a brand-new single-texture TXD from an import plan.
 pub fn build_new_txd(plan: &ConversionPlan, target: &GameProfile, texture_name: &str) -> Vec<u8> {
-    let native = txd_writer::native_from_encoded(
-        &plan.encoded,
-        plan.platform_id,
-        texture_name,
-        "",
-    );
+    let native = txd_writer::native_from_encoded(&plan.encoded, plan.platform_id, texture_name, "");
     txd_writer::single_texture_txd(native, target_rw_version(target))
 }
 
@@ -578,7 +575,7 @@ pub fn writable_target(id: &str) -> Result<&'static GameProfile, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compat::encode::{encode_texture, DxtQuality};
+    use crate::compat::encode::{DxtQuality, encode_texture};
     use crate::compat::games::{GTA3, VC};
     use crate::parser::txd_writer::single_texture_txd;
 
@@ -638,8 +635,15 @@ mod tests {
                 rgba.extend([(x * 16) as u8, (y * 16) as u8, 128, 200]);
             }
         }
-        let mut blocks = vec![0u8; texpresso::Format::Bc3.compressed_size(width as usize, height as usize)];
-        texpresso::Format::Bc3.compress(&rgba, width as usize, height as usize, texpresso::Params::default(), &mut blocks);
+        let mut blocks =
+            vec![0u8; texpresso::Format::Bc3.compressed_size(width as usize, height as usize)];
+        texpresso::Format::Bc3.compress(
+            &rgba,
+            width as usize,
+            height as usize,
+            texpresso::Params::default(),
+            &mut blocks,
+        );
         let mut dds = vec![0u8; 128];
         dds[0..4].copy_from_slice(b"DDS ");
         dds[4..8].copy_from_slice(&124u32.to_le_bytes());
@@ -699,14 +703,28 @@ mod tests {
     fn alpha_loss_and_quantization_are_warned_about() {
         let png = png_bytes(8, 8, true);
         let image = decode_source_image(&png).unwrap();
-        let plan = plan_import(&image, &GTA3, "txd.img", Some(EncodeFormat::Rgb888), EncodeOptions::default()).unwrap();
+        let plan = plan_import(
+            &image,
+            &GTA3,
+            "txd.img",
+            Some(EncodeFormat::Rgb888),
+            EncodeOptions::default(),
+        )
+        .unwrap();
         assert!(
             plan.warnings.iter().any(|w| w.contains("alpha")),
             "{:?}",
             plan.warnings
         );
 
-        let plan = plan_import(&image, &GTA3, "gta3.img", Some(EncodeFormat::Pal4), EncodeOptions::default()).unwrap();
+        let plan = plan_import(
+            &image,
+            &GTA3,
+            "gta3.img",
+            Some(EncodeFormat::Pal4),
+            EncodeOptions::default(),
+        )
+        .unwrap();
         assert!(
             plan.warnings.iter().any(|w| w.contains("quantized")),
             "{:?}",
@@ -724,13 +742,27 @@ mod tests {
                 px.extend([(x * 15) as u8, (y * 15) as u8, 64, 255]);
             }
         }
-        let encoded =
-            encode_texture(&px, 16, 16, EncodeFormat::Pal8, PLATFORM_D3D8, EncodeOptions::default())
-                .unwrap();
+        let encoded = encode_texture(
+            &px,
+            16,
+            16,
+            EncodeFormat::Pal8,
+            PLATFORM_D3D8,
+            EncodeOptions::default(),
+        )
+        .unwrap();
         let native = txd_writer::native_from_encoded(&encoded, PLATFORM_D3D8, "grass", "");
         let txd = single_texture_txd(native, 0x1003_FFFF);
 
-        let plan = plan_conversion(&txd, 0, &VC, "gta3.img", Some(EncodeFormat::Rgb888), EncodeOptions::default()).unwrap();
+        let plan = plan_conversion(
+            &txd,
+            0,
+            &VC,
+            "gta3.img",
+            Some(EncodeFormat::Rgb888),
+            EncodeOptions::default(),
+        )
+        .unwrap();
         assert_eq!(plan.width, 16);
         let converted = apply_replace(&txd, 0, &plan).unwrap();
         let parsed = parse_txd(&converted).unwrap();
@@ -770,8 +802,8 @@ mod tests {
             let Ok(bytes) = std::fs::read(&path) else {
                 continue;
             };
-            let image = decode_source_image(&bytes)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let image =
+                decode_source_image(&bytes).unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!((image.width, image.height), (128, 128), "{name}");
         }
     }
@@ -852,7 +884,7 @@ mod tests {
     #[test]
     fn retail_textures_convert_to_native_dialects() {
         use crate::archive::ArchiveInfo;
-        use crate::compat::games::{classify, profile_by_id, Verdict};
+        use crate::compat::games::{Verdict, classify, profile_by_id};
         use crate::parser::{ImgParser, ImgVersion, PcV1Parser, PcV2Parser, detect_version};
 
         let Some(root) = crate::test_paths::corpus_root() else {
@@ -861,7 +893,10 @@ mod tests {
         let archives = [
             ("gta3", root.join("Gta_3_img/models/gta3.img")),
             ("gta3", root.join("Gta_3_img/models/txd.img")),
-            ("vc", root.join("Grand Theft Auto Vice City/models/gta3.img")),
+            (
+                "vc",
+                root.join("Grand Theft Auto Vice City/models/gta3.img"),
+            ),
             ("sa", root.join("GTA San Andreas/models/gta3.img")),
             ("sa", root.join("GTA San Andreas/models/player.img")),
             ("sa", root.join("GTA San Andreas/models/cutscene.img")),

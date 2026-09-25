@@ -230,9 +230,8 @@ pub fn has_hanim(bytes: &[u8]) -> bool {
         }
         let mut position = pos;
         while position + 12 <= end {
-            let kind = u32::from_le_bytes(
-                data[position..position + 4].try_into().unwrap_or_default(),
-            );
+            let kind =
+                u32::from_le_bytes(data[position..position + 4].try_into().unwrap_or_default());
             let size = u32::from_le_bytes(
                 data[position + 4..position + 8]
                     .try_into()
@@ -494,8 +493,7 @@ fn parse_atomic(bytes: &[u8], section: Section, clump: &mut ClumpData) -> Result
                     }
                     let plugin = read_section(bytes, position, child.end)?;
                     if plugin.kind == SKIN_PLG {
-                        skin_body =
-                            Some(bytes[plugin.start..plugin.end].to_vec());
+                        skin_body = Some(bytes[plugin.start..plugin.end].to_vec());
                     }
                     position = plugin.end;
                 }
@@ -645,13 +643,7 @@ pub fn parse_dff_rig(bytes: &[u8]) -> Result<DffRig, String> {
                     .map(|body| parse_modern_skin(body, geometry.positions.len()))
             })
             .transpose()?;
-        append_rig_meshes(
-            geometry,
-            geometry_index,
-            atomic.frame,
-            skin,
-            &mut meshes,
-        );
+        append_rig_meshes(geometry, geometry_index, atomic.frame, skin, &mut meshes);
     }
     if valid_atomics == 0 {
         // Old exports without atomics: hang every geometry on frame 0 so
@@ -930,9 +922,9 @@ fn parse_legacy_skin(body: &[u8], vertex_count_hint: usize) -> Result<DffSkin, S
     }
     // Same contiguous index/weight blocks as the modern variant.
     let SkinInfluences {
-            indices: vertex_indices,
-            weights: vertex_weights,
-        } = read_skin_influences(&mut cursor, vertex_count)?;
+        indices: vertex_indices,
+        weights: vertex_weights,
+    } = read_skin_influences(&mut cursor, vertex_count)?;
     let mut bones = Vec::with_capacity(num_bones);
     let mut bone_matrices = Vec::with_capacity(num_bones);
     for _ in 0..num_bones {
@@ -1027,8 +1019,7 @@ fn parse_geometry_section(bytes: &[u8], section: Section) -> Result<GeometryData
                     }
                     let plugin = read_section(bytes, position, child.end)?;
                     if plugin.kind == SKIN_PLG {
-                        skin_body =
-                            Some(bytes[plugin.start..plugin.end].to_vec());
+                        skin_body = Some(bytes[plugin.start..plugin.end].to_vec());
                     }
                     position = plugin.end;
                 }
@@ -1718,8 +1709,9 @@ mod tests {
                 continue;
             }
             let bytes = std::fs::read(&path).expect("fixture path was checked above");
-            let rig = parse_dff_rig(&bytes)
-                .unwrap_or_else(|error| panic!("{} should parse as a rig: {error}", path.display()));
+            let rig = parse_dff_rig(&bytes).unwrap_or_else(|error| {
+                panic!("{} should parse as a rig: {error}", path.display())
+            });
             assert!(
                 rig.frames.len() >= 20,
                 "{} should carry a full skeleton (got {} frames)",
@@ -1737,15 +1729,12 @@ mod tests {
                 .filter(|frame| frame.hanim.as_ref().is_some_and(|h| !h.bones.is_empty()))
                 .count();
             assert_eq!(
-                hanim_roots, 1,
+                hanim_roots,
+                1,
                 "{} should have exactly one HAnim root listing the bones",
                 path.display()
             );
-            let skinned = rig
-                .meshes
-                .iter()
-                .filter(|mesh| mesh.skin.is_some())
-                .count();
+            let skinned = rig.meshes.iter().filter(|mesh| mesh.skin.is_some()).count();
             assert!(
                 skinned > 0,
                 "{} should carry at least one skinned mesh",

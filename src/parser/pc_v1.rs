@@ -301,8 +301,9 @@ impl PcV1Parser {
             entry.offset = u32::try_from(offset / SECTOR_SIZE).map_err(|_| {
                 anyhow::anyhow!("IMG v1 output offset is too large for {}", entry.file_name)
             })?;
-            entry.sector = u32::try_from(size / SECTOR_SIZE)
-                .map_err(|_| anyhow::anyhow!("IMG v1 entry is too large for {}", entry.file_name))?;
+            entry.sector = u32::try_from(size / SECTOR_SIZE).map_err(|_| {
+                anyhow::anyhow!("IMG v1 entry is too large for {}", entry.file_name)
+            })?;
             offset = offset
                 .checked_add(size)
                 .ok_or_else(|| anyhow::anyhow!("IMG v1 output is too large"))?;
@@ -340,10 +341,7 @@ fn validate_v1_directory(
 
         if !name.is_empty() {
             named_entries += 1;
-            if name
-                .iter()
-                .any(|&byte| !(0x20..=0x7E).contains(&byte))
-            {
+            if name.iter().any(|&byte| !(0x20..=0x7E).contains(&byte)) {
                 return Err(format!("entry {index} has a non-printable filename"));
             }
         }
@@ -374,9 +372,7 @@ fn validate_v1_directory(
         let (_, previous_end, previous_index) = pair[0];
         let (next_start, _, next_index) = pair[1];
         if next_start < previous_end {
-            return Err(format!(
-                "entries {previous_index} and {next_index} overlap"
-            ));
+            return Err(format!("entries {previous_index} and {next_index} overlap"));
         }
     }
 
@@ -549,9 +545,11 @@ mod tests {
         PcV1Parser.save(&mut archive, &img_path, false).unwrap();
 
         let reopened = ArchiveInfo::open(&img_path).unwrap();
-        assert!(read_entry_data(&reopened, &reopened.entries[0])
-            .unwrap()
-            .starts_with(b"new"));
+        assert!(
+            read_entry_data(&reopened, &reopened.entries[0])
+                .unwrap()
+                .starts_with(b"new")
+        );
         drop(ui_copy);
     }
 
@@ -645,7 +643,10 @@ mod tests {
             let archive = ArchiveInfo::open(&dir_path)
                 .unwrap_or_else(|error| panic!("{label} should open from .dir: {error}"));
             assert_eq!(archive.path.as_deref(), Some(img_path.as_path()));
-            assert!(!archive.entries.is_empty(), "{label} should contain entries");
+            assert!(
+                !archive.entries.is_empty(),
+                "{label} should contain entries"
+            );
 
             let mut first_by_extension = BTreeMap::new();
             for (index, entry) in archive.entries.iter().enumerate() {
@@ -655,11 +656,8 @@ mod tests {
             }
 
             let roundtrip_dir = tempfile::tempdir().unwrap();
-            let mut sample = ArchiveInfo::new(
-                format!("{label}-sample.img"),
-                false,
-                ImgVersion::One,
-            );
+            let mut sample =
+                ArchiveInfo::new(format!("{label}-sample.img"), false, ImgVersion::One);
             let mut expected = Vec::new();
 
             for extension in wanted_extensions {
@@ -680,9 +678,10 @@ mod tests {
 
                 match extension {
                     "DFF" => {
-                        let meshes = crate::parser::dff::parse_dff(&bytes).unwrap_or_else(|error| {
-                            panic!("{label}: {} should parse as DFF: {error}", entry.file_name)
-                        });
+                        let meshes =
+                            crate::parser::dff::parse_dff(&bytes).unwrap_or_else(|error| {
+                                panic!("{label}: {} should parse as DFF: {error}", entry.file_name)
+                            });
                         assert!(
                             meshes
                                 .iter()
@@ -720,19 +719,13 @@ mod tests {
                     .join(format!("sample-{index}.{extension}"));
                 std::fs::write(&source_path, &bytes).unwrap();
 
-                let mut imported = EntryInfo::new_for_version(
-                    entry.file_name.clone(),
-                    ImgVersion::One,
-                );
+                let mut imported =
+                    EntryInfo::new_for_version(entry.file_name.clone(), ImgVersion::One);
                 imported.file_name_raw = entry.file_name_raw;
                 imported.source_path = Some(source_path);
                 imported.imported = true;
                 sample.entries.push(imported);
-                expected.push((
-                    entry.file_name.to_string(),
-                    entry.file_name_raw,
-                    bytes,
-                ));
+                expected.push((entry.file_name.to_string(), entry.file_name_raw, bytes));
             }
 
             assert!(

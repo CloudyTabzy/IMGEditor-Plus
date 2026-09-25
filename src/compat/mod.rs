@@ -17,10 +17,10 @@ pub mod save;
 pub mod scan;
 
 pub use encode::{
-    encode_texture, header_spec, DxtQuality, EncodeFormat, EncodeOptions, EncodedTexture,
+    DxtQuality, EncodeFormat, EncodeOptions, EncodedTexture, encode_texture, header_spec,
 };
 pub use games::{
-    classify, classify_nft_format, profile_by_id, validate_rasters, Evidence, GameProfile, Offender,
-    ValidationSummary, Verdict, VerdictReport, ALL_GAMES, BULLY, GTA3, SA, VC,
+    ALL_GAMES, BULLY, Evidence, GTA3, GameProfile, Offender, SA, VC, ValidationSummary, Verdict,
+    VerdictReport, classify, classify_nft_format, profile_by_id, validate_rasters,
 };
 pub use raster::{Anomaly, LogicalFormat, PaletteKind, RasterProfile, Severity};

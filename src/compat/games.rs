@@ -103,11 +103,7 @@ impl Verdict {
     /// Higher severity wins when combining a format verdict with a
     /// container/platform verdict.
     fn combine(self, other: Self) -> Self {
-        if self >= other {
-            self
-        } else {
-            other
-        }
+        if self >= other { self } else { other }
     }
 }
 
@@ -246,10 +242,7 @@ where
     for (name, profile) in rasters {
         let report = classify(target, profile);
         summary.textures += 1;
-        *summary
-            .counts
-            .entry(report.verdict.label())
-            .or_default() += 1;
+        *summary.counts.entry(report.verdict.label()).or_default() += 1;
         worst = Some(match worst {
             Some(previous) => previous.max(report.verdict),
             None => report.verdict,
@@ -303,52 +296,200 @@ impl FormatInfo {
 }
 
 const GTA3_FORMATS: &[FormatInfo] = &[
-    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Native, note: t::compat_cat_iii_pal },
-    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: t::compat_cat_iii_888 },
-    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: t::compat_cat_iii_8888 },
-    FormatInfo { class: "1555", verdict: Verdict::Native, note: t::compat_cat_iii_1555 },
-    FormatInfo { class: "DXT1", verdict: Verdict::Supported, note: t::compat_cat_iii_dxt1 },
-    FormatInfo { class: "DXT2 - DXT5", verdict: Verdict::Supported, note: t::compat_cat_iii_dxt },
-    FormatInfo { class: "888 true 24-bit", verdict: Verdict::Untested, note: t::compat_cat_depth24 },
-    FormatInfo { class: "565 / 4444", verdict: Verdict::Supported, note: t::compat_cat_iii_565 },
-    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: t::compat_cat_555_lum8 },
-    FormatInfo { class: "A8L8", verdict: Verdict::Untested, note: t::compat_cat_a8l8 },
+    FormatInfo {
+        class: "PAL8 / PAL4",
+        verdict: Verdict::Native,
+        note: t::compat_cat_iii_pal,
+    },
+    FormatInfo {
+        class: "888 (X8R8G8B8 32bpp)",
+        verdict: Verdict::Native,
+        note: t::compat_cat_iii_888,
+    },
+    FormatInfo {
+        class: "8888 (A8R8G8B8)",
+        verdict: Verdict::Native,
+        note: t::compat_cat_iii_8888,
+    },
+    FormatInfo {
+        class: "1555",
+        verdict: Verdict::Native,
+        note: t::compat_cat_iii_1555,
+    },
+    FormatInfo {
+        class: "DXT1",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_iii_dxt1,
+    },
+    FormatInfo {
+        class: "DXT2 - DXT5",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_iii_dxt,
+    },
+    FormatInfo {
+        class: "888 true 24-bit",
+        verdict: Verdict::Untested,
+        note: t::compat_cat_depth24,
+    },
+    FormatInfo {
+        class: "565 / 4444",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_iii_565,
+    },
+    FormatInfo {
+        class: "555 / LUM8",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_555_lum8,
+    },
+    FormatInfo {
+        class: "A8L8",
+        verdict: Verdict::Untested,
+        note: t::compat_cat_a8l8,
+    },
 ];
 
 const VC_FORMATS: &[FormatInfo] = &[
-    FormatInfo { class: "DXT1", verdict: Verdict::Native, note: t::compat_cat_vc_dxt1 },
-    FormatInfo { class: "DXT3", verdict: Verdict::Native, note: t::compat_cat_vc_dxt3 },
-    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Native, note: t::compat_cat_vc_pal },
-    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: t::compat_cat_vc_888 },
-    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: t::compat_cat_vc_8888 },
-    FormatInfo { class: "565 (R5G6B5)", verdict: Verdict::Supported, note: t::compat_cat_vc_565 },
-    FormatInfo { class: "1555 / 4444", verdict: Verdict::Supported, note: t::compat_cat_vc_16bit },
-    FormatInfo { class: "DXT2 / DXT4 / DXT5", verdict: Verdict::Supported, note: t::compat_cat_vc_dxt },
-    FormatInfo { class: "888 true 24-bit", verdict: Verdict::Untested, note: t::compat_cat_depth24 },
-    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: t::compat_cat_555_lum8 },
-    FormatInfo { class: "A8L8", verdict: Verdict::Untested, note: t::compat_cat_a8l8 },
+    FormatInfo {
+        class: "DXT1",
+        verdict: Verdict::Native,
+        note: t::compat_cat_vc_dxt1,
+    },
+    FormatInfo {
+        class: "DXT3",
+        verdict: Verdict::Native,
+        note: t::compat_cat_vc_dxt3,
+    },
+    FormatInfo {
+        class: "PAL8 / PAL4",
+        verdict: Verdict::Native,
+        note: t::compat_cat_vc_pal,
+    },
+    FormatInfo {
+        class: "888 (X8R8G8B8 32bpp)",
+        verdict: Verdict::Native,
+        note: t::compat_cat_vc_888,
+    },
+    FormatInfo {
+        class: "8888 (A8R8G8B8)",
+        verdict: Verdict::Native,
+        note: t::compat_cat_vc_8888,
+    },
+    FormatInfo {
+        class: "565 (R5G6B5)",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_vc_565,
+    },
+    FormatInfo {
+        class: "1555 / 4444",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_vc_16bit,
+    },
+    FormatInfo {
+        class: "DXT2 / DXT4 / DXT5",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_vc_dxt,
+    },
+    FormatInfo {
+        class: "888 true 24-bit",
+        verdict: Verdict::Untested,
+        note: t::compat_cat_depth24,
+    },
+    FormatInfo {
+        class: "555 / LUM8",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_555_lum8,
+    },
+    FormatInfo {
+        class: "A8L8",
+        verdict: Verdict::Untested,
+        note: t::compat_cat_a8l8,
+    },
 ];
 
 const SA_FORMATS: &[FormatInfo] = &[
-    FormatInfo { class: "DXT1", verdict: Verdict::Native, note: t::compat_cat_sa_dxt1 },
-    FormatInfo { class: "DXT3", verdict: Verdict::Native, note: t::compat_cat_sa_dxt3 },
-    FormatInfo { class: "888 (X8R8G8B8 32bpp)", verdict: Verdict::Native, note: t::compat_cat_sa_888 },
-    FormatInfo { class: "8888 (A8R8G8B8)", verdict: Verdict::Native, note: t::compat_cat_sa_8888 },
-    FormatInfo { class: "DXT5", verdict: Verdict::Supported, note: t::compat_cat_sa_dxt5 },
-    FormatInfo { class: "DXT2 / DXT4", verdict: Verdict::Supported, note: t::compat_cat_sa_dxt24 },
-    FormatInfo { class: "PAL8 / PAL4", verdict: Verdict::Untested, note: t::compat_cat_sa_pal },
-    FormatInfo { class: "1555 / 565 / 4444", verdict: Verdict::Supported, note: t::compat_cat_sa_16bit },
-    FormatInfo { class: "555 / LUM8", verdict: Verdict::Supported, note: t::compat_cat_555_lum8 },
-    FormatInfo { class: "A8L8", verdict: Verdict::Untested, note: t::compat_cat_sa_a8l8 },
+    FormatInfo {
+        class: "DXT1",
+        verdict: Verdict::Native,
+        note: t::compat_cat_sa_dxt1,
+    },
+    FormatInfo {
+        class: "DXT3",
+        verdict: Verdict::Native,
+        note: t::compat_cat_sa_dxt3,
+    },
+    FormatInfo {
+        class: "888 (X8R8G8B8 32bpp)",
+        verdict: Verdict::Native,
+        note: t::compat_cat_sa_888,
+    },
+    FormatInfo {
+        class: "8888 (A8R8G8B8)",
+        verdict: Verdict::Native,
+        note: t::compat_cat_sa_8888,
+    },
+    FormatInfo {
+        class: "DXT5",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_sa_dxt5,
+    },
+    FormatInfo {
+        class: "DXT2 / DXT4",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_sa_dxt24,
+    },
+    FormatInfo {
+        class: "PAL8 / PAL4",
+        verdict: Verdict::Untested,
+        note: t::compat_cat_sa_pal,
+    },
+    FormatInfo {
+        class: "1555 / 565 / 4444",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_sa_16bit,
+    },
+    FormatInfo {
+        class: "555 / LUM8",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_555_lum8,
+    },
+    FormatInfo {
+        class: "A8L8",
+        verdict: Verdict::Untested,
+        note: t::compat_cat_sa_a8l8,
+    },
 ];
 
 const BULLY_FORMATS: &[FormatInfo] = &[
-    FormatInfo { class: "DXT1 (NFT)", verdict: Verdict::Native, note: t::compat_cat_bully_dxt1 },
-    FormatInfo { class: "DXT5 (NFT)", verdict: Verdict::Native, note: t::compat_cat_bully_dxt5 },
-    FormatInfo { class: "RGB / RGBA (NFT)", verdict: Verdict::Native, note: t::compat_cat_bully_rgb },
-    FormatInfo { class: "PAL / PALA (NFT)", verdict: Verdict::Native, note: t::compat_cat_bully_pal },
-    FormatInfo { class: "DXT3 (NFT)", verdict: Verdict::Supported, note: t::compat_cat_bully_dxt3 },
-    FormatInfo { class: "other NiPixelData formats", verdict: Verdict::Untested, note: t::compat_cat_bully_other },
+    FormatInfo {
+        class: "DXT1 (NFT)",
+        verdict: Verdict::Native,
+        note: t::compat_cat_bully_dxt1,
+    },
+    FormatInfo {
+        class: "DXT5 (NFT)",
+        verdict: Verdict::Native,
+        note: t::compat_cat_bully_dxt5,
+    },
+    FormatInfo {
+        class: "RGB / RGBA (NFT)",
+        verdict: Verdict::Native,
+        note: t::compat_cat_bully_rgb,
+    },
+    FormatInfo {
+        class: "PAL / PALA (NFT)",
+        verdict: Verdict::Native,
+        note: t::compat_cat_bully_pal,
+    },
+    FormatInfo {
+        class: "DXT3 (NFT)",
+        verdict: Verdict::Supported,
+        note: t::compat_cat_bully_dxt3,
+    },
+    FormatInfo {
+        class: "other NiPixelData formats",
+        verdict: Verdict::Untested,
+        note: t::compat_cat_bully_other,
+    },
 ];
 
 /// The catalog a game picker shows: what the engine natively ships and
@@ -406,10 +547,7 @@ pub fn classify(game: &GameProfile, profile: &RasterProfile) -> VerdictReport {
     }
 }
 
-fn format_verdict(
-    game: &GameProfile,
-    profile: &RasterProfile,
-) -> (Verdict, Evidence, String) {
+fn format_verdict(game: &GameProfile, profile: &RasterProfile) -> (Verdict, Evidence, String) {
     match game.id {
         "sa" => sa_verdict(profile),
         "gta3" | "vc" => iii_vc_verdict(game.id, profile),
@@ -481,11 +619,9 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
     // zero parse failures, zero header anomalies). SA is a
     // palette-free dialect: no PAL, no 1555, no DXT5 in retail.
     match profile.logical {
-        LogicalFormat::Dxt1 | LogicalFormat::Dxt3 => (
-            Verdict::Native,
-            Evidence::Retail,
-            t::compat_note_sa_dxt(),
-        ),
+        LogicalFormat::Dxt1 | LogicalFormat::Dxt3 => {
+            (Verdict::Native, Evidence::Retail, t::compat_note_sa_dxt())
+        }
         // DXT2/DXT4 are DXT3/DXT5 with premultiplied alpha; the D3D9
         // native format word carries them directly. Retail SA ships
         // neither, so runtime acceptance stays unverified.
@@ -502,11 +638,9 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
         // Sources conflict on SA palettes: the raster spec and librw's
         // native reader contain palette logic, while Magic.TXD's matrix
         // omits SA. Parse and preserve, do not claim runtime support.
-        LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
-            Verdict::Untested,
-            Evidence::Docs,
-            t::compat_note_sa_pal(),
-        ),
+        LogicalFormat::Pal8 | LogicalFormat::Pal4 => {
+            (Verdict::Untested, Evidence::Docs, t::compat_note_sa_pal())
+        }
         // Retail SA ships uncompressed 888 as X8R8G8B8 32bpp storage
         // (1,015 rasters, mostly player.img ped skins) and 8888 (237).
         LogicalFormat::R888 if profile.storage_bpp == 4 => {
@@ -524,29 +658,14 @@ fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
             Evidence::Docs,
             t::compat_note_sa_16bit(),
         ),
-        LogicalFormat::R555 => (
-            Verdict::Supported,
-            Evidence::Docs,
-            t::compat_note_c555(),
-        ),
-        LogicalFormat::Lum8 => (
-            Verdict::Supported,
-            Evidence::Docs,
-            t::compat_note_lum8(),
-        ),
-        LogicalFormat::A8l8 => (
-            Verdict::Untested,
-            Evidence::Docs,
-            t::compat_note_sa_a8l8(),
-        ),
+        LogicalFormat::R555 => (Verdict::Supported, Evidence::Docs, t::compat_note_c555()),
+        LogicalFormat::Lum8 => (Verdict::Supported, Evidence::Docs, t::compat_note_lum8()),
+        LogicalFormat::A8l8 => (Verdict::Untested, Evidence::Docs, t::compat_note_sa_a8l8()),
         LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, String::new()),
     }
 }
 
-fn iii_vc_verdict(
-    game_id: &str,
-    profile: &RasterProfile,
-) -> (Verdict, Evidence, String) {
+fn iii_vc_verdict(game_id: &str, profile: &RasterProfile) -> (Verdict, Evidence, String) {
     // Retail evidence base: GTA III PC 1.0 (gta3.img + txd.img,
     // 15,372 textures) and GTA VC PC 1.0 (gta3.img, 12,023 textures)
     // measured 2026-09-11. The VC pass was re-resolved 2026-09-11e:
@@ -557,16 +676,10 @@ fn iii_vc_verdict(
     match profile.logical {
         // PAL is the III world-texture form (96.5% PAL8); VC barely
         // uses it (27 rasters) in favor of compressed data.
-        LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
-            Verdict::Native,
-            Evidence::Retail,
-            t::compat_note_iii_pal(),
-        ),
-        LogicalFormat::Dxt1 if vc => (
-            Verdict::Native,
-            Evidence::Retail,
-            t::compat_note_vc_dxt1(),
-        ),
+        LogicalFormat::Pal8 | LogicalFormat::Pal4 => {
+            (Verdict::Native, Evidence::Retail, t::compat_note_iii_pal())
+        }
+        LogicalFormat::Dxt1 if vc => (Verdict::Native, Evidence::Retail, t::compat_note_vc_dxt1()),
         // III genuinely ships zero compressed rasters; DXT1 rides on
         // D3D8 hardware support but is not the game's data dialect.
         LogicalFormat::Dxt1 => (
@@ -574,19 +687,13 @@ fn iii_vc_verdict(
             Evidence::Retail,
             t::compat_note_iii_dxt1(),
         ),
-        LogicalFormat::Dxt3 if vc => (
-            Verdict::Native,
-            Evidence::Retail,
-            t::compat_note_vc_dxt3(),
-        ),
+        LogicalFormat::Dxt3 if vc => (Verdict::Native, Evidence::Retail, t::compat_note_vc_dxt3()),
         // librw's D3D driver reads native compression values 1..5 into
         // DXT1..DXT5 textures; DXT2/DXT4 are the premultiplied-alpha
         // twins of DXT3/DXT5 and our decoder already handles them.
-        LogicalFormat::Dxt2 | LogicalFormat::Dxt3 | LogicalFormat::Dxt4 | LogicalFormat::Dxt5 => (
-            Verdict::Supported,
-            Evidence::Docs,
-            t::compat_note_iii_dxt(),
-        ),
+        LogicalFormat::Dxt2 | LogicalFormat::Dxt3 | LogicalFormat::Dxt4 | LogicalFormat::Dxt5 => {
+            (Verdict::Supported, Evidence::Docs, t::compat_note_iii_dxt())
+        }
         // Question 5 answered: retail III stores 888 exclusively as
         // 32-bit X8R8G8B8 (6,806 rasters; the txd.img player/vehicle
         // set is 87% of this class). True 24-bit never ships. VC
@@ -604,11 +711,7 @@ fn iii_vc_verdict(
             Evidence::Docs,
             t::compat_note_iii_depth24(),
         ),
-        LogicalFormat::R8888 => (
-            Verdict::Native,
-            Evidence::Retail,
-            t::compat_note_iii_8888(),
-        ),
+        LogicalFormat::R8888 => (Verdict::Native, Evidence::Retail, t::compat_note_iii_8888()),
         // The raw 16-bit forms are not what retail VC stores: its
         // 565/1555/4444 headers label DXT1/DXT3 data. They still load,
         // but they are not the dialect.
@@ -617,11 +720,7 @@ fn iii_vc_verdict(
             Evidence::Retail,
             t::compat_note_vc_565(),
         ),
-        LogicalFormat::R565 => (
-            Verdict::Supported,
-            Evidence::Docs,
-            t::compat_note_iii_565(),
-        ),
+        LogicalFormat::R565 => (Verdict::Supported, Evidence::Docs, t::compat_note_iii_565()),
         LogicalFormat::R1555 if vc => (
             Verdict::Supported,
             Evidence::Retail,
@@ -639,21 +738,9 @@ fn iii_vc_verdict(
             t::compat_note_iii_4444(),
         ),
         // Mapped driver formats that retail happens not to use.
-        LogicalFormat::R555 => (
-            Verdict::Supported,
-            Evidence::Docs,
-            t::compat_note_c555(),
-        ),
-        LogicalFormat::Lum8 => (
-            Verdict::Supported,
-            Evidence::Docs,
-            t::compat_note_lum8(),
-        ),
-        LogicalFormat::A8l8 => (
-            Verdict::Untested,
-            Evidence::Docs,
-            t::compat_note_iii_a8l8(),
-        ),
+        LogicalFormat::R555 => (Verdict::Supported, Evidence::Docs, t::compat_note_c555()),
+        LogicalFormat::Lum8 => (Verdict::Supported, Evidence::Docs, t::compat_note_lum8()),
+        LogicalFormat::A8l8 => (Verdict::Untested, Evidence::Docs, t::compat_note_iii_a8l8()),
         LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, String::new()),
     }
 }
@@ -666,14 +753,14 @@ mod tests {
     #[test]
     fn bully_nft_formats_classify_against_retail_profile() {
         for (format, expected) in [
-            (4_u32, Verdict::Native),  // DXT1
-            (6, Verdict::Native),      // DXT5
-            (0, Verdict::Native),      // RGB
-            (1, Verdict::Native),      // RGBA
-            (2, Verdict::Native),      // PAL
-            (3, Verdict::Native),      // PALA
-            (5, Verdict::Supported),   // DXT3 - engine-supported, retail-absent
-            (99, Verdict::Untested),   // unknown enum value
+            (4_u32, Verdict::Native), // DXT1
+            (6, Verdict::Native),     // DXT5
+            (0, Verdict::Native),     // RGB
+            (1, Verdict::Native),     // RGBA
+            (2, Verdict::Native),     // PAL
+            (3, Verdict::Native),     // PALA
+            (5, Verdict::Supported),  // DXT3 - engine-supported, retail-absent
+            (99, Verdict::Untested),  // unknown enum value
         ] {
             let report = classify_nft_format(&BULLY, format);
             assert_eq!(report.verdict, expected, "format {format}");
@@ -770,11 +857,7 @@ mod tests {
         use crate::compat::raster::PaletteKind;
 
         fn platform_for(game: &GameProfile) -> u32 {
-            if game.id == "sa" {
-                9
-            } else {
-                8
-            }
+            if game.id == "sa" { 9 } else { 8 }
         }
 
         fn verdict(game: &GameProfile, logical: LogicalFormat, bpp: u32) -> VerdictReport {
@@ -812,14 +895,39 @@ mod tests {
             let report = verdict(&GTA3, logical, 4);
             assert_eq!(report.verdict, Verdict::Supported, "gta3 {logical:?}");
         }
-        assert_eq!(verdict(&VC, LogicalFormat::Dxt1, 4).verdict, Verdict::Native);
-        assert_eq!(verdict(&VC, LogicalFormat::Dxt3, 4).verdict, Verdict::Native);
-        for logical in [LogicalFormat::Dxt2, LogicalFormat::Dxt4, LogicalFormat::Dxt5] {
-            assert_eq!(verdict(&VC, logical, 4).verdict, Verdict::Supported, "vc {logical:?}");
+        assert_eq!(
+            verdict(&VC, LogicalFormat::Dxt1, 4).verdict,
+            Verdict::Native
+        );
+        assert_eq!(
+            verdict(&VC, LogicalFormat::Dxt3, 4).verdict,
+            Verdict::Native
+        );
+        for logical in [
+            LogicalFormat::Dxt2,
+            LogicalFormat::Dxt4,
+            LogicalFormat::Dxt5,
+        ] {
+            assert_eq!(
+                verdict(&VC, logical, 4).verdict,
+                Verdict::Supported,
+                "vc {logical:?}"
+            );
         }
-        assert_eq!(verdict(&SA, LogicalFormat::Dxt3, 4).verdict, Verdict::Native);
-        for logical in [LogicalFormat::Dxt2, LogicalFormat::Dxt4, LogicalFormat::Dxt5] {
-            assert_eq!(verdict(&SA, logical, 4).verdict, Verdict::Supported, "{logical:?}");
+        assert_eq!(
+            verdict(&SA, LogicalFormat::Dxt3, 4).verdict,
+            Verdict::Native
+        );
+        for logical in [
+            LogicalFormat::Dxt2,
+            LogicalFormat::Dxt4,
+            LogicalFormat::Dxt5,
+        ] {
+            assert_eq!(
+                verdict(&SA, logical, 4).verdict,
+                Verdict::Supported,
+                "{logical:?}"
+            );
         }
 
         // VC's raw 16-bit formats are not its dialect (the retail
@@ -829,9 +937,16 @@ mod tests {
             LogicalFormat::R1555,
             LogicalFormat::R4444,
         ] {
-            assert_eq!(verdict(&VC, logical, 2).verdict, Verdict::Supported, "vc {logical:?}");
+            assert_eq!(
+                verdict(&VC, logical, 2).verdict,
+                Verdict::Supported,
+                "vc {logical:?}"
+            );
         }
-        assert_eq!(verdict(&GTA3, LogicalFormat::R1555, 2).verdict, Verdict::Native);
+        assert_eq!(
+            verdict(&GTA3, LogicalFormat::R1555, 2).verdict,
+            Verdict::Native
+        );
 
         // Depth-24 888 and A8L8 are documented/tool-supported but not
         // proven at runtime, so they stay unknown rather than being
@@ -857,7 +972,12 @@ mod tests {
         for game in [&GTA3, &VC, &SA] {
             for logical in [LogicalFormat::Lum8, LogicalFormat::R555] {
                 let report = verdict(game, logical, 1);
-                assert_eq!(report.verdict, Verdict::Supported, "{} {logical:?}", game.id);
+                assert_eq!(
+                    report.verdict,
+                    Verdict::Supported,
+                    "{} {logical:?}",
+                    game.id
+                );
                 assert_eq!(report.evidence, Evidence::Docs);
             }
         }
@@ -883,8 +1003,7 @@ mod tests {
     fn validate_rasters_caps_offenders_but_counts_all() {
         let bad = raster(8, LogicalFormat::Dxt1);
         let names: Vec<&str> = (0..10).map(|_| "prop").collect();
-        let items: Vec<(&str, &RasterProfile)> =
-            names.iter().map(|n| (*n, &bad)).collect();
+        let items: Vec<(&str, &RasterProfile)> = names.iter().map(|n| (*n, &bad)).collect();
         let summary = validate_rasters(&GTA3, items);
         assert_eq!(summary.textures, 10);
         assert_eq!(summary.offenders.len(), MAX_OFFENDERS);
@@ -893,10 +1012,7 @@ mod tests {
 
     #[test]
     fn validate_rasters_handles_empty_sets() {
-        let summary = validate_rasters(
-            &SA,
-            std::iter::empty::<(&str, &RasterProfile)>(),
-        );
+        let summary = validate_rasters(&SA, std::iter::empty::<(&str, &RasterProfile)>());
         assert_eq!(summary.textures, 0);
         assert_eq!(summary.worst, Verdict::Untested);
         assert!(!summary.all_native());

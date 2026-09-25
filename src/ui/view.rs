@@ -7,16 +7,16 @@ use iced::widget::{
 };
 use iced::{Alignment, Border, Color, Element, Length, Rectangle, Vector};
 
+use crate::i18n::t;
 use crate::inspector::animation::ClipId;
 use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::tasks::FolderDuplicatePolicy;
 use crate::ui::app::{
-        App, EntryAction, InspectorTab, Message, Pane, RippleTarget, TextureSnapshot,
+    App, EntryAction, InspectorTab, Message, Pane, RippleTarget, TextureSnapshot,
     is_animation_group_name, renderable_model_kind,
 };
-use crate::i18n::t;
 use crate::ui::design::Design;
 use crate::ui::fonts;
 use crate::ui::icons;
@@ -942,7 +942,9 @@ impl App {
                 .padding(16)
                 .into()
         } else {
-            container(fonts::caption_wrapped(t::viewer_unsupported_entry(entry_lower.as_str())))
+            container(fonts::caption_wrapped(t::viewer_unsupported_entry(
+                entry_lower.as_str(),
+            )))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
@@ -955,8 +957,7 @@ impl App {
         } else if !scene_matches && is_model {
             fonts::caption_wrapped(t::viewer_load_selected_hint()).into()
         } else if !scene_matches {
-            fonts::caption_wrapped(t::viewer_right_click_hint())
-            .into()
+            fonts::caption_wrapped(t::viewer_right_click_hint()).into()
         } else {
             Space::new().height(Length::Fixed(0.0)).into()
         };
@@ -1014,12 +1015,14 @@ impl App {
         };
         let dock = self.build_animation_dock();
         let stats: Element<'_, Message> = if pending {
-            container(fonts::caption(t::anim_preparing_label(pending_label.as_str())))
-                .width(Length::Fill)
-                .height(Length::Fixed(20.0))
-                .align_x(Alignment::Center)
-                .padding(2)
-                .into()
+            container(fonts::caption(t::anim_preparing_label(
+                pending_label.as_str(),
+            )))
+            .width(Length::Fill)
+            .height(Length::Fixed(20.0))
+            .align_x(Alignment::Center)
+            .padding(2)
+            .into()
         } else {
             self.build_viewer3d_stats(true)
         };
@@ -1202,15 +1205,13 @@ impl App {
                 if playback.available_ifps.len() < 2 {
                     return None;
                 }
-                let current = playback
-                    .agr_entry
-                    .and_then(|idx| {
-                        playback
-                            .available_ifps
-                            .iter()
-                            .find(|(entry, _)| *entry == idx)
-                            .map(|(_, name)| name.clone())
-                    });
+                let current = playback.agr_entry.and_then(|idx| {
+                    playback
+                        .available_ifps
+                        .iter()
+                        .find(|(entry, _)| *entry == idx)
+                        .map(|(_, name)| name.clone())
+                });
                 let ifp_map: std::collections::HashMap<String, usize> = playback
                     .available_ifps
                     .iter()
@@ -1255,7 +1256,9 @@ impl App {
                     return None;
                 }
                 let mut models = playback.models.clone();
-                if !models.iter().any(|(entry, _)| *entry == playback.model_entry)
+                if !models
+                    .iter()
+                    .any(|(entry, _)| *entry == playback.model_entry)
                     && let Some(entry) = self
                         .editor
                         .archives()
@@ -1269,8 +1272,7 @@ impl App {
                             .cmp(&right.1.to_ascii_lowercase())
                     });
                 }
-                let names: Vec<String> =
-                    models.iter().map(|(_, name)| name.clone()).collect();
+                let names: Vec<String> = models.iter().map(|(_, name)| name.clone()).collect();
                 let current = models
                     .iter()
                     .find(|(entry, _)| *entry == playback.model_entry)
@@ -1620,7 +1622,15 @@ impl App {
             SceneOriginMode::World => t::viewer_origin_world(),
         };
         let line = if has_scene {
-            t::viewer_stats(vertices, triangles, textures, w, h, orient_label, origin_label)
+            t::viewer_stats(
+                vertices,
+                triangles,
+                textures,
+                w,
+                h,
+                orient_label,
+                origin_label,
+            )
         } else if let Some(entry_name) = self.viewer_loading_entry_name() {
             t::viewer_preparing_entry(entry_name)
         } else {
@@ -1645,11 +1655,11 @@ impl App {
         };
         let Some(selected_entry) = self.editor.selected_entry() else {
             return container(fonts::caption_wrapped(t::texture_select_entry()))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-            .into();
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into();
         };
         // While an AGR re-plays on a picked model, this tab follows that
         // model: the dock's model picker then swaps the previews shown here
@@ -1658,11 +1668,11 @@ impl App {
         let entry_index = following_model.unwrap_or(selected_entry);
         let Some(entry) = archive.entries.get(entry_index) else {
             return container(fonts::caption_wrapped(t::texture_select_entry()))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-            .into();
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .into();
         };
         let entry_name = entry.file_name.to_string();
         let lower = entry_name.to_ascii_lowercase();
@@ -1671,7 +1681,9 @@ impl App {
         let is_nif = lower.ends_with(".nif");
         let is_dff = lower.ends_with(".dff");
         if !is_txd && !is_nft && !is_nif && !is_dff {
-            return container(fonts::caption_wrapped(t::texture_not_container(entry_name.as_str())))
+            return container(fonts::caption_wrapped(t::texture_not_container(
+                entry_name.as_str(),
+            )))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
@@ -1681,7 +1693,9 @@ impl App {
         let textures = archive.texture_cache.get(&entry_index);
         let Some(textures) = textures else {
             if following_model.is_some() {
-                return container(fonts::caption_wrapped(t::texture_no_companions(entry_name.as_str())))
+                return container(fonts::caption_wrapped(t::texture_no_companions(
+                    entry_name.as_str(),
+                )))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Alignment::Center)
@@ -1732,7 +1746,9 @@ impl App {
             .height(Length::Fill)
             .padding(8);
         if following_model.is_some() {
-            col = col.push(muted_caption(t::texture_animation_model(entry_name.as_str())));
+            col = col.push(muted_caption(t::texture_animation_model(
+                entry_name.as_str(),
+            )));
         }
         let mut action_row = Row::new()
             .spacing(6)
@@ -1818,9 +1834,12 @@ impl App {
         let theme = self.theme();
         let palette = theme.extended_palette();
         let mut texture_meta = row![
-            row![fonts::header(t::field_name()), fonts::body(tex.name.clone())]
-                .spacing(3)
-                .align_y(Alignment::Center),
+            row![
+                fonts::header(t::field_name()),
+                fonts::body(tex.name.clone())
+            ]
+            .spacing(3)
+            .align_y(Alignment::Center),
             row![
                 fonts::header(t::field_format()),
                 fonts::body(format!(
@@ -2018,29 +2037,27 @@ impl App {
         // Fullscreen escape hatch, matching the converter dialogs: the
         // overlay layer shows the same pixels with the texture tab's
         // pan/zoom, at full resolution.
-        let expand_layer = container(
-            w::styled_tooltip(
-                button(
-                    icons::expand()
-                        .size(14)
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .center(),
-                )
-                .on_press(Message::OpenTextureFullscreen(TextureSnapshot {
-                    handle: fullscreen_handle,
-                    width: tex.width,
-                    height: tex.height,
-                    label: tex.name.clone(),
-                }))
-                .width(Length::Fixed(28.0))
-                .height(Length::Fixed(28.0))
-                .padding(0.0)
-                .style(animation_subtle_button_style),
-                fonts::caption(t::texture_fullscreen_tip()),
-                tooltip::Position::Left,
-            ),
-        )
+        let expand_layer = container(w::styled_tooltip(
+            button(
+                icons::expand()
+                    .size(14)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .center(),
+            )
+            .on_press(Message::OpenTextureFullscreen(TextureSnapshot {
+                handle: fullscreen_handle,
+                width: tex.width,
+                height: tex.height,
+                label: tex.name.clone(),
+            }))
+            .width(Length::Fixed(28.0))
+            .height(Length::Fixed(28.0))
+            .padding(0.0)
+            .style(animation_subtle_button_style),
+            fonts::caption(t::texture_fullscreen_tip()),
+            tooltip::Position::Left,
+        ))
         .width(Length::Fill)
         .height(Length::Fill)
         .align_x(Alignment::End)
@@ -2070,7 +2087,10 @@ impl App {
         if !scene_matches {
             if loading {
                 return row![
-                    w::icon_label(icons::model().size(14), fonts::caption(t::viewer_toolbar_label())),
+                    w::icon_label(
+                        icons::model().size(14),
+                        fonts::caption(t::viewer_toolbar_label())
+                    ),
                     fonts::caption(t::viewer_preparing_selected()),
                 ]
                 .spacing(4)
@@ -2079,7 +2099,10 @@ impl App {
                 .into();
             }
             return row![
-                w::icon_label(icons::model().size(14), fonts::caption(t::viewer_toolbar_label())),
+                w::icon_label(
+                    icons::model().size(14),
+                    fonts::caption(t::viewer_toolbar_label())
+                ),
                 w::styled_tooltip(
                     button(w::icon_label(
                         icons::refresh().size(14),
@@ -2189,7 +2212,10 @@ impl App {
     ) -> Element<'_, Message> {
         let mut panel = Column::new().spacing(4);
 
-        panel = panel.push(label_value_owned(t::inspect_name(), inspection.file_name.to_string()));
+        panel = panel.push(label_value_owned(
+            t::inspect_name(),
+            inspection.file_name.to_string(),
+        ));
         let type_label = if literal_types {
             literal_type_label(&inspection.file_name)
         } else {
@@ -2216,7 +2242,10 @@ impl App {
         let offset_text =
             t::inspect_offset_value(inspection.offset_bytes / 2048, inspection.offset_bytes);
         panel = panel.push(label_value_owned(t::inspect_offset(), offset_text));
-        panel = panel.push(label_value_owned(t::inspect_source(), inspection.source.to_string()));
+        panel = panel.push(label_value_owned(
+            t::inspect_source(),
+            inspection.source.to_string(),
+        ));
 
         if !inspection.summary.is_empty() {
             panel = panel.push(
@@ -2557,28 +2586,28 @@ pub fn build(app: &App) -> Element<'_, Message> {
                 container(fonts::body(label).wrapping(iced::widget::text::Wrapping::None))
                     .clip(true),
             )
-                .on_press(Message::SelectArchiveTab(index))
-                .width(Length::Fixed(tab_width))
-                .style(move |theme, status| {
-                    let mut style = if is_selected {
-                        button::primary(theme, status)
-                    } else {
-                        button::secondary(theme, status)
-                    };
-                    if is_selected
-                        && tab_pulse > 0.0
-                        && let Some(iced::Background::Color(background)) = style.background
-                    {
-                        let background = iced::theme::palette::mix(
-                            background,
-                            theme.extended_palette().primary.strong.color,
-                            tab_pulse * 0.38,
-                        );
-                        style.background = Some(background.into());
-                        style.text_color = w::readable_text_color(background, style.text_color);
-                    }
-                    style
-                });
+            .on_press(Message::SelectArchiveTab(index))
+            .width(Length::Fixed(tab_width))
+            .style(move |theme, status| {
+                let mut style = if is_selected {
+                    button::primary(theme, status)
+                } else {
+                    button::secondary(theme, status)
+                };
+                if is_selected
+                    && tab_pulse > 0.0
+                    && let Some(iced::Background::Color(background)) = style.background
+                {
+                    let background = iced::theme::palette::mix(
+                        background,
+                        theme.extended_palette().primary.strong.color,
+                        tab_pulse * 0.38,
+                    );
+                    style.background = Some(background.into());
+                    style.text_color = w::readable_text_color(background, style.text_color);
+                }
+                style
+            });
             // Accent bar on the left of the active tab
             let tab: Element<'_, Message> = if is_selected {
                 Row::new()
@@ -2955,8 +2984,11 @@ fn build_about(app: &App) -> Option<Element<'_, Message>> {
             ))
             .on_press(Message::VisitRepository)
             .style(button::primary),
-            button(w::icon_label(icons::close().size(14), fonts::body(t::button_close())))
-                .on_press(Message::HideAbout),
+            button(w::icon_label(
+                icons::close().size(14),
+                fonts::body(t::button_close())
+            ))
+            .on_press(Message::HideAbout),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -3104,29 +3136,33 @@ fn preview_column(
         label: title.to_string(),
     };
     let expand = w::styled_tooltip(
-        button(icons::expand().size(13).width(Length::Fill).height(Length::Fill).center())
-            .on_press(Message::OpenTextureFullscreen(snapshot))
-            .width(Length::Fixed(26.0))
-            .height(Length::Fixed(26.0))
-            .padding(0.0)
-            .style(animation_subtle_button_style),
+        button(
+            icons::expand()
+                .size(13)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center(),
+        )
+        .on_press(Message::OpenTextureFullscreen(snapshot))
+        .width(Length::Fixed(26.0))
+        .height(Length::Fixed(26.0))
+        .padding(0.0)
+        .style(animation_subtle_button_style),
         fonts::caption(t::preview_full_quality()),
         tooltip::Position::Left,
     );
-    let framed = container(
-        stack![
-            image(handle)
-                .content_fit(iced::ContentFit::Contain)
-                .width(Length::Fill)
-                .height(Length::Fixed(180.0)),
-            container(expand)
-                .width(Length::Fill)
-                .height(Length::Fixed(180.0))
-                .align_x(Alignment::End)
-                .align_y(Alignment::Start)
-                .padding(4),
-        ],
-    )
+    let framed = container(stack![
+        image(handle)
+            .content_fit(iced::ContentFit::Contain)
+            .width(Length::Fill)
+            .height(Length::Fixed(180.0)),
+        container(expand)
+            .width(Length::Fill)
+            .height(Length::Fixed(180.0))
+            .align_x(Alignment::End)
+            .align_y(Alignment::Start)
+            .padding(4),
+    ])
     .width(Length::Fixed(180.0))
     .height(Length::Fixed(180.0))
     .style(|theme: &iced::Theme| container::Style {
@@ -3154,18 +3190,16 @@ fn preview_column(
 /// Escape or the shrink button closes it.
 fn build_texture_fullscreen(app: &App) -> Option<Element<'_, Message>> {
     let snapshot = app.texture_fullscreen.as_ref()?;
-    let viewport = canvas(
-        crate::ui::texture_preview::TextureViewport {
-            handle: snapshot.handle.clone(),
-            image_width: snapshot.width,
-            image_height: snapshot.height,
-            render_image: true,
-            show_grid: false,
-            grid_divisions: 0,
-            show_uv: false,
-            uv_triangles: Vec::new(),
-        },
-    )
+    let viewport = canvas(crate::ui::texture_preview::TextureViewport {
+        handle: snapshot.handle.clone(),
+        image_width: snapshot.width,
+        image_height: snapshot.height,
+        render_image: true,
+        show_grid: false,
+        grid_divisions: 0,
+        show_uv: false,
+        uv_triangles: Vec::new(),
+    })
     .width(Length::Fill)
     .height(Length::Fill);
     let layer = container(
@@ -3219,7 +3253,9 @@ fn build_texture_fullscreen(app: &App) -> Option<Element<'_, Message>> {
     .style(|_theme: &iced::Theme| iced::widget::container::Style {
         // 75%-opaque black: the interface stays faintly visible behind the
         // fullscreen preview.
-        background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.75))),
+        background: Some(iced::Background::Color(Color::from_rgba(
+            0.0, 0.0, 0.0, 0.75,
+        ))),
         ..Default::default()
     });
     // Presses on the canvas are captured by the pan/zoom program, so the
@@ -3327,7 +3363,9 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
         state.plan.0.width,
         state.plan.0.height,
     )));
-    body = body.push(fonts::caption_wrapped(t::dialog_target(state.target.display)));
+    body = body.push(fonts::caption_wrapped(t::dialog_target(
+        state.target.display,
+    )));
     body = body.push(
         row![
             fonts::header(t::field_name()),
@@ -3362,38 +3400,42 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
     // button; the fullscreen layer shows the untouched full-resolution
     // pixels straight from the dialog state.
     let expand = w::styled_tooltip(
-        button(icons::expand().size(14).width(Length::Fill).height(Length::Fill).center())
-            .on_press(Message::OpenTextureFullscreen(TextureSnapshot {
-                handle: state.after_handle.clone(),
-                width: state.plan.0.width,
-                height: state.plan.0.height,
-                label: format!(
-                    "{} ({}x{})",
-                    state.source_name, state.plan.0.width, state.plan.0.height
-                ),
-            }))
-            .width(Length::Fixed(28.0))
-            .height(Length::Fixed(28.0))
-            .padding(0.0)
-            .style(animation_subtle_button_style),
+        button(
+            icons::expand()
+                .size(14)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center(),
+        )
+        .on_press(Message::OpenTextureFullscreen(TextureSnapshot {
+            handle: state.after_handle.clone(),
+            width: state.plan.0.width,
+            height: state.plan.0.height,
+            label: format!(
+                "{} ({}x{})",
+                state.source_name, state.plan.0.width, state.plan.0.height
+            ),
+        }))
+        .width(Length::Fixed(28.0))
+        .height(Length::Fixed(28.0))
+        .padding(0.0)
+        .style(animation_subtle_button_style),
         fonts::caption(t::preview_full_quality()),
         tooltip::Position::Left,
     );
     body = body.push(
-        container(
-            stack![
-                image(state.preview_handle.clone())
-                    .content_fit(iced::ContentFit::Contain)
-                    .width(Length::Fill)
-                    .height(Length::Fixed(220.0)),
-                container(expand)
-                    .width(Length::Fill)
-                    .height(Length::Fixed(220.0))
-                    .align_x(Alignment::End)
-                    .align_y(Alignment::Start)
-                    .padding(6),
-            ],
-        )
+        container(stack![
+            image(state.preview_handle.clone())
+                .content_fit(iced::ContentFit::Contain)
+                .width(Length::Fill)
+                .height(Length::Fixed(220.0)),
+            container(expand)
+                .width(Length::Fill)
+                .height(Length::Fixed(220.0))
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start)
+                .padding(6),
+        ])
         .width(Length::Fill)
         .height(Length::Fixed(220.0))
         .style(|theme: &iced::Theme| container::Style {
@@ -3456,7 +3498,9 @@ fn build_bulk_dialog(app: &App) -> Option<Element<'_, Message>> {
         }
     }
     if state.entries.len() > 10 {
-        list = list.push(fonts::caption(t::bulk_more_entries(state.entries.len() - 10)));
+        list = list.push(fonts::caption(t::bulk_more_entries(
+            state.entries.len() - 10,
+        )));
     }
     let mut body = Column::new().spacing(6).width(Length::Fill);
     body = body.push(fonts::body_wrapped(t::bulk_summary(
@@ -3468,7 +3512,9 @@ fn build_bulk_dialog(app: &App) -> Option<Element<'_, Message>> {
         body = body.push(fonts::caption_wrapped(t::bulk_skipped(skipped, failed)));
     }
     if state.ignored_non_txd > 0 {
-        body = body.push(fonts::caption_wrapped(t::bulk_ignored(state.ignored_non_txd)));
+        body = body.push(fonts::caption_wrapped(t::bulk_ignored(
+            state.ignored_non_txd,
+        )));
     }
     body = body.push(
         Scrollable::new(list)
@@ -3538,7 +3584,9 @@ fn build_compare_dialog(app: &App) -> Option<Element<'_, Message>> {
         }
 
         let mut results = Column::new().spacing(4).width(Length::Fill);
-        results = results.push(fonts::strong(t::compare_missing_heading(report.missing.len())));
+        results = results.push(fonts::strong(t::compare_missing_heading(
+            report.missing.len(),
+        )));
         if report.missing.is_empty() {
             results = results.push(fonts::caption(t::compare_no_missing()));
         } else {
@@ -3640,9 +3688,11 @@ fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
     )));
 
     if let Some(note) = &issue.container_note {
-        body = body.push(fonts::body_wrapped(t::save_check_container(note.to_string())).color(
-            compat_verdict_accent(crate::compat::games::Verdict::Unsupported),
-        ));
+        body = body.push(
+            fonts::body_wrapped(t::save_check_container(note.to_string())).color(
+                compat_verdict_accent(crate::compat::games::Verdict::Unsupported),
+            ),
+        );
     }
 
     if !issue.anomalies.is_empty() {
@@ -3659,7 +3709,9 @@ fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
         body = body.push(list);
     }
     if issue.warnings > 0 {
-        body = body.push(fonts::caption_wrapped(t::save_check_warnings(issue.warnings)));
+        body = body.push(fonts::caption_wrapped(t::save_check_warnings(
+            issue.warnings,
+        )));
     }
 
     let repairing = pending.fix && issue.has_fixable();
@@ -3816,8 +3868,11 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
         fonts::caption_wrapped(t::import_check_note()),
         Space::new().height(Length::Fixed(8.0)),
         row![
-            button(fonts::body(t::import_check_import_anyway())
-                .color(compat_verdict_accent(crate::compat::games::Verdict::Unsupported)))
+            button(
+                fonts::body(t::import_check_import_anyway()).color(compat_verdict_accent(
+                    crate::compat::games::Verdict::Unsupported
+                ))
+            )
             .on_press(Message::ImportCheckConfirmed)
             .style(button::primary),
             button(fonts::body(t::import_check_cancel())).on_press(Message::ImportCheckCancelled),
@@ -3861,7 +3916,8 @@ fn build_folder_import(app: &App) -> Option<Element<'_, Message>> {
                 .on_press(Message::ConfirmFolderImport(FolderDuplicatePolicy::Replace)),
         );
     }
-    actions = actions.push(button(fonts::body(t::button_cancel())).on_press(Message::CancelFolderImport));
+    actions =
+        actions.push(button(fonts::body(t::button_cancel())).on_press(Message::CancelFolderImport));
 
     let mut content = column![
         fonts::body_wrapped(t::folder_import_path(plan.folder.display().to_string())),
@@ -4176,8 +4232,7 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
         .spacing(8)
         .align_y(Alignment::Center);
 
-        let introduction = fonts::body(t::validator_intro())
-        .width(Length::Fill);
+        let introduction = fonts::body(t::validator_intro()).width(Length::Fill);
 
         // Advisory content hint: a suggestion with its evidence, never
         // applied automatically.
@@ -4193,9 +4248,9 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
                     }
                 };
                 let mut body = column![
-                    fonts::body(headline).color(
-                        compat_verdict_accent(crate::compat::games::Verdict::Supported)
-                    ),
+                    fonts::body(headline).color(compat_verdict_accent(
+                        crate::compat::games::Verdict::Supported
+                    )),
                     fonts::caption(hint.reasons.join(" · ")),
                 ]
                 .spacing(2);
@@ -4469,9 +4524,12 @@ fn compat_legend(max_width: f32) -> Element<'static, Message> {
         for (verdict, label, tip) in chunk {
             let accent = compat_verdict_accent(*verdict);
             let chip: Element<'static, Message> = w::styled_tooltip(
-                row![icon_for(*verdict).color(accent), fonts::caption(label.clone())]
-                    .spacing(4)
-                    .align_y(Alignment::Center),
+                row![
+                    icon_for(*verdict).color(accent),
+                    fonts::caption(label.clone())
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center),
                 fonts::caption(tip.clone()),
                 tooltip::Position::Top,
             )
@@ -4595,19 +4653,34 @@ fn build_context_menu(
         );
     }
 
-    items.push(context_button(
-                t::context_export(), Message::EntryContextAction(EntryAction::Export)).into());
-    items.push(context_button(
-                t::context_rename(), Message::EntryContextAction(EntryAction::Rename)).into());
     items.push(
         context_button(
-                t::context_copy_name(),
+            t::context_export(),
+            Message::EntryContextAction(EntryAction::Export),
+        )
+        .into(),
+    );
+    items.push(
+        context_button(
+            t::context_rename(),
+            Message::EntryContextAction(EntryAction::Rename),
+        )
+        .into(),
+    );
+    items.push(
+        context_button(
+            t::context_copy_name(),
             Message::EntryContextAction(EntryAction::CopyName),
         )
         .into(),
     );
-    items.push(context_button(
-                t::context_delete(), Message::EntryContextAction(EntryAction::Delete)).into());
+    items.push(
+        context_button(
+            t::context_delete(),
+            Message::EntryContextAction(EntryAction::Delete),
+        )
+        .into(),
+    );
 
     let card = container(
         iced::widget::Column::with_children(items)
@@ -4746,49 +4819,47 @@ fn search_prediction_dropdown(
     surface: Color,
     divider: Color,
 ) -> Element<'_, Message> {
-    let prediction_button =
-        |name: String, message: Message, active: bool, hint: Option<String>| {
-            let label = if let Some(hint) = hint {
-                row![fonts::caption(hint), fonts::body(name)]
-                    .spacing(6)
-                    .align_y(Alignment::Center)
-            } else {
-                row![fonts::body(name)].align_y(Alignment::Center)
-            };
-            let hover_bg = with_alpha(accent, 0.16);
-            let active_bg = with_alpha(accent, 0.28);
-            button(
-                container(label)
-                    .width(Length::Fill)
-                    .align_x(Alignment::Start)
-                    .padding([2, 8]),
-            )
-            .height(Length::Fixed(PREDICTION_ROW_HEIGHT))
-            .width(Length::Fill)
-            .style(move |theme, status| {
-                let highlighted =
-                    matches!(status, button::Status::Hovered | button::Status::Pressed);
-                let background = if highlighted {
-                    Some(iced::Background::Color(hover_bg))
-                } else if active {
-                    Some(iced::Background::Color(active_bg))
-                } else {
-                    None
-                };
-                let palette = theme.extended_palette();
-                iced::widget::button::Style {
-                    background,
-                    text_color: w::readable_text_color(surface, palette.background.base.text),
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: 3.0.into(),
-                    },
-                    ..Default::default()
-                }
-            })
-            .on_press(message)
+    let prediction_button = |name: String, message: Message, active: bool, hint: Option<String>| {
+        let label = if let Some(hint) = hint {
+            row![fonts::caption(hint), fonts::body(name)]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        } else {
+            row![fonts::body(name)].align_y(Alignment::Center)
         };
+        let hover_bg = with_alpha(accent, 0.16);
+        let active_bg = with_alpha(accent, 0.28);
+        button(
+            container(label)
+                .width(Length::Fill)
+                .align_x(Alignment::Start)
+                .padding([2, 8]),
+        )
+        .height(Length::Fixed(PREDICTION_ROW_HEIGHT))
+        .width(Length::Fill)
+        .style(move |theme, status| {
+            let highlighted = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            let background = if highlighted {
+                Some(iced::Background::Color(hover_bg))
+            } else if active {
+                Some(iced::Background::Color(active_bg))
+            } else {
+                None
+            };
+            let palette = theme.extended_palette();
+            iced::widget::button::Style {
+                background,
+                text_color: w::readable_text_color(surface, palette.background.base.text),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: 3.0.into(),
+                },
+                ..Default::default()
+            }
+        })
+        .on_press(message)
+    };
 
     let mut list = Column::new().spacing(2);
     let match_count = app.search_predictions.len();

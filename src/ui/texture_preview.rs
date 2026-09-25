@@ -6,9 +6,9 @@ use std::path::Path;
 use iced::widget::{canvas, image};
 use iced::{Color, Point, Rectangle, Size, Theme, Vector, mouse};
 
+use crate::i18n::t;
 use crate::inspector::scene3d::mesh::SceneMesh;
 use crate::inspector::scene3d::scene::Scene;
-use crate::i18n::t;
 use crate::parser::DecodedTexture;
 
 pub type UvTriangle = [[f32; 2]; 3];
@@ -384,12 +384,7 @@ fn grid_line_offsets(length: f32, divisions: u32) -> Vec<(f32, bool)> {
 /// `max_dim`. Clamps at the right/bottom edge so odd dimensions stay
 /// correct. Used for the inline dialog previews; the fullscreen view shows
 /// the untouched full-resolution pixels.
-pub fn downscaled_rgba(
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-    max_dim: u32,
-) -> (u32, u32, Vec<u8>) {
+pub fn downscaled_rgba(rgba: &[u8], width: u32, height: u32, max_dim: u32) -> (u32, u32, Vec<u8>) {
     if width == 0 || height == 0 || rgba.len() < (width as usize * height as usize * 4) {
         return (0, 0, Vec::new());
     }
@@ -782,11 +777,14 @@ mod tests {
 
         // The middle button grabs and pans exactly like the left one, so
         // the same navigation works in every viewport instance.
-        let middle_press =
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle));
+        let middle_press = canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle));
         assert!(
             <TextureViewport as canvas::Program<()>>::update(
-                &viewport, &mut state, &middle_press, bounds, cursor,
+                &viewport,
+                &mut state,
+                &middle_press,
+                bounds,
+                cursor,
             )
             .is_none()
         );
@@ -795,7 +793,11 @@ mod tests {
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Middle));
         assert!(
             <TextureViewport as canvas::Program<()>>::update(
-                &viewport, &mut state, &middle_release, bounds, cursor,
+                &viewport,
+                &mut state,
+                &middle_release,
+                bounds,
+                cursor,
             )
             .is_none()
         );

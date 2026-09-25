@@ -259,7 +259,10 @@ impl RasterProfile {
             push(
                 "PLATFORM_UNRECOGNIZED",
                 Severity::Error,
-                format!("platform id {} is not a PC raster platform (8/9)", self.platform_id),
+                format!(
+                    "platform id {} is not a PC raster platform (8/9)",
+                    self.platform_id
+                ),
             );
         }
         if self.width == 0 || self.height == 0 {
@@ -286,9 +289,7 @@ impl RasterProfile {
                     ),
                 );
             }
-            if self.is_dxt()
-                && (!self.width.is_multiple_of(4) || !self.height.is_multiple_of(4))
-            {
+            if self.is_dxt() && (!self.width.is_multiple_of(4) || !self.height.is_multiple_of(4)) {
                 push(
                     "DXT_DIMS_UNALIGNED",
                     Severity::Error,
@@ -318,7 +319,10 @@ impl RasterProfile {
             push(
                 "AUTOMIPMAP_WITH_LEVELS",
                 Severity::Error,
-                format!("AUTOMIPMAP set with {} explicit levels — TXD won't load", self.mip_levels),
+                format!(
+                    "AUTOMIPMAP set with {} explicit levels — TXD won't load",
+                    self.mip_levels
+                ),
             );
         }
         let max_dim = self.width.max(self.height);

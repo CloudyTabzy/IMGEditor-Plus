@@ -47,8 +47,7 @@ impl RecentFile {
         let name = self.display_name();
         let dir = self.display_dir();
         let prefix = format!("{number}. ");
-        let available =
-            max_chars.saturating_sub(prefix.chars().count() + name.chars().count() + 3);
+        let available = max_chars.saturating_sub(prefix.chars().count() + name.chars().count() + 3);
         let dir_chars = dir.chars().count();
         let trimmed = if dir_chars <= available {
             dir.to_string()
@@ -333,7 +332,8 @@ impl Config {
     /// Remember the game folder for an archive (MRU order).
     pub fn set_archive_game_root(&mut self, archive: &Path, root: &Path) {
         let canonical = canonical_or_given(archive);
-        self.archive_game_roots.retain(|(saved, _)| saved != &canonical);
+        self.archive_game_roots
+            .retain(|(saved, _)| saved != &canonical);
         self.archive_game_roots
             .insert(0, (canonical, root.to_path_buf()));
         self.archive_game_roots.truncate(ARCHIVE_GAME_ROOTS_MAX);
@@ -342,7 +342,8 @@ impl Config {
     /// Forget an archive's game folder so the automatic guess applies again.
     pub fn clear_archive_game_root(&mut self, archive: &Path) {
         let canonical = canonical_or_given(archive);
-        self.archive_game_roots.retain(|(saved, _)| saved != &canonical);
+        self.archive_game_roots
+            .retain(|(saved, _)| saved != &canonical);
     }
 
     /// The game folder used for an archive: the user's choice, otherwise
@@ -355,9 +356,7 @@ impl Config {
 
     /// The saved validator target for an archive path, if any.
     pub fn archive_target(&self, path: &Path) -> Option<&str> {
-        let canonical = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         self.archive_targets
             .iter()
             .find(|(saved, _)| saved == &canonical)
@@ -366,10 +365,9 @@ impl Config {
 
     /// Remember the validator target for an archive path (MRU order).
     pub fn set_archive_target(&mut self, path: &Path, game: &str) {
-        let canonical = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
-        self.archive_targets.retain(|(saved, _)| saved != &canonical);
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.archive_targets
+            .retain(|(saved, _)| saved != &canonical);
         self.archive_targets
             .insert(0, (canonical, game.to_string()));
         self.archive_targets.truncate(ARCHIVE_TARGETS_MAX);
@@ -1263,10 +1261,7 @@ mod tests {
             "GitHub Dark".parse::<ThemeMode>().unwrap(),
             ThemeMode::DarkGithub
         );
-        assert_eq!(
-            "Ayu Dark".parse::<ThemeMode>().unwrap(),
-            ThemeMode::DarkAyu
-        );
+        assert_eq!("Ayu Dark".parse::<ThemeMode>().unwrap(), ThemeMode::DarkAyu);
         assert_eq!("Ayu".parse::<ThemeMode>().unwrap(), ThemeMode::DarkAyu);
         assert_eq!(ThemeMode::DarkAyu.as_str(), "Ayu Dark");
     }
@@ -1302,8 +1297,10 @@ mod tests {
 
         // No APPDATA at all falls back to the working directory.
         let fallback = Config::resolve_path(None, None);
-        assert!(fallback.ends_with("IMGEditor\\settings.ini")
-            || fallback.ends_with("IMGEditor/settings.ini"));
+        assert!(
+            fallback.ends_with("IMGEditor\\settings.ini")
+                || fallback.ends_with("IMGEditor/settings.ini")
+        );
     }
 
     #[test]

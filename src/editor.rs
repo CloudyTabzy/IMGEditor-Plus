@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::archive::{ArchiveInfo, EntryInfo};
+use crate::i18n::t;
 use crate::parser::{ImgVersion, import_entry};
 use crate::sort::SortChain;
-use crate::i18n::t;
 
 #[derive(Debug, Default)]
 pub struct Editor {
@@ -377,10 +377,12 @@ impl Editor {
     /// alone cannot be the identity), otherwise by name for untitled
     /// archives.
     fn archive_already_open(&self, name: &str, path: Option<&Path>) -> bool {
-        self.archives.iter().any(|archive| match (archive.path.as_deref(), path) {
-            (Some(open), Some(candidate)) => same_file(open, candidate),
-            _ => archive.file_name == name,
-        })
+        self.archives
+            .iter()
+            .any(|archive| match (archive.path.as_deref(), path) {
+                (Some(open), Some(candidate)) => same_file(open, candidate),
+                _ => archive.file_name == name,
+            })
     }
 }
 

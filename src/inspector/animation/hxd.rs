@@ -842,7 +842,11 @@ mod tests {
         // around it and the unmatched clip keeps an empty (positional) name.
         let names = record.sequence_names_for_agr(
             "C_Player",
-            &[signature(100, 1.0), signature(400, 1.0), signature(200, 1.0)],
+            &[
+                signature(100, 1.0),
+                signature(400, 1.0),
+                signature(200, 1.0),
+            ],
         );
         assert_eq!(names, ["RUN", "", "IDLE"]);
 

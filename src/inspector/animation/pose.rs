@@ -365,7 +365,11 @@ pub fn scene_from_pose(model: &ModelAsset, buffers: &PoseBuffers) -> Scene {
             vertices,
             // Preserve one scene/cache slot per model mesh so animated GPU
             // uploads stay index-aligned, but suppress helper draw calls.
-            indices: if hidden { Vec::new() } else { mesh.indices.clone() },
+            indices: if hidden {
+                Vec::new()
+            } else {
+                mesh.indices.clone()
+            },
             diffuse: mesh.diffuse.clone(),
             aabb: if hidden {
                 Aabb::default()
@@ -396,14 +400,7 @@ pub fn clip_ground_offset(
     samples: usize,
     buffers: &mut PoseBuffers,
 ) -> Vec3 {
-    clip_ground_offset_with_display_offset(
-        model,
-        clip,
-        binding,
-        samples,
-        Vec3::ZERO,
-        buffers,
-    )
+    clip_ground_offset_with_display_offset(model, clip, binding, samples, Vec3::ZERO, buffers)
 }
 
 /// As [`clip_ground_offset`], but measures the clip after applying the

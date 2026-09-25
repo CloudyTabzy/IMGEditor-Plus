@@ -15,8 +15,12 @@
 
 use glam::{Mat3, Mat4, Quat, Vec3};
 
-use super::clip::{AnimationClip, AnimationLibrary, Interpolation, PropertyTrack, SourceRate, TrackChannel};
-use super::model::{MeshAsset, ModelAsset, ModelError, NodeTransform, SceneNode, SkinBinding, VertexSkin};
+use super::clip::{
+    AnimationClip, AnimationLibrary, Interpolation, PropertyTrack, SourceRate, TrackChannel,
+};
+use super::model::{
+    MeshAsset, ModelAsset, ModelError, NodeTransform, SceneNode, SkinBinding, VertexSkin,
+};
 use super::{ClipId, NodeId};
 use crate::inspector::scene3d::camera::BaseOrientation;
 use crate::inspector::scene3d::mesh::Vertex;
@@ -45,11 +49,7 @@ fn frame_local(frame: &crate::parser::dff::DffFrame) -> NodeTransform {
         frame.basis[2][2],
     ]);
     NodeTransform {
-        translation: Vec3::new(
-            frame.position[0],
-            frame.position[1],
-            frame.position[2],
-        ),
+        translation: Vec3::new(frame.position[0], frame.position[1], frame.position[2]),
         rotation: Quat::from_mat3(&matrix).normalize(),
         scale: Vec3::splat(1.0),
     }
@@ -70,9 +70,7 @@ fn stored_matrix_to_mat4(stored: &[[f32; 4]; 4]) -> Mat4 {
 /// explicit per-bone records whose `index` is the frame index and whose
 /// array position pairs with the matrix.
 fn skin_binding(skin: &DffSkin, vertex_count: usize) -> Result<SkinBinding, ModelError> {
-    if skin.vertex_weights.len() != vertex_count
-        || skin.vertex_indices.len() != vertex_count
-    {
+    if skin.vertex_weights.len() != vertex_count || skin.vertex_indices.len() != vertex_count {
         return Err(ModelError::WeightCountMismatch {
             mesh: String::new(),
             weights: skin.vertex_weights.len(),
@@ -117,11 +115,7 @@ fn skin_binding(skin: &DffSkin, vertex_count: usize) -> Result<SkinBinding, Mode
     }
 
     let mut weights: Vec<VertexSkin> = Vec::with_capacity(vertex_count);
-    for (indices, vertex_weights) in skin
-        .vertex_indices
-        .iter()
-        .zip(skin.vertex_weights.iter())
-    {
+    for (indices, vertex_weights) in skin.vertex_indices.iter().zip(skin.vertex_weights.iter()) {
         let mut influences: VertexSkin = smallvec::smallvec![];
         for (slot, &bone_slot) in indices.iter().enumerate() {
             let weight = vertex_weights[slot];
@@ -344,7 +338,10 @@ pub fn library_from_ifp(file: &crate::parser::ifp::IfpFile, name: &str) -> Anima
             if varying || offset {
                 tracks.push(PropertyTrack {
                     target: object.name.clone(),
-                    channel: TrackChannel::Translation { times, values: translations },
+                    channel: TrackChannel::Translation {
+                        times,
+                        values: translations,
+                    },
                     interpolation: Interpolation::Linear,
                 });
             }
@@ -396,10 +393,7 @@ mod tests {
 
     fn sa_ped_ifp() -> Option<Vec<u8>> {
         let root = crate::test_paths::corpus_root()?;
-        let path = root
-            .join("GTA San Andreas")
-            .join("anim")
-            .join("ped.ifp");
+        let path = root.join("GTA San Andreas").join("anim").join("ped.ifp");
         std::fs::read(path).ok()
     }
 

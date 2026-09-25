@@ -20,6 +20,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{Config, ThemeMode};
 use crate::editor::Editor;
+use crate::file_association::AssociationState;
+use crate::i18n::{Language, LanguageSetting, t};
 use crate::inspector::animation::transport::PlaybackState;
 use crate::inspector::scene3d::mesh::SceneTexture;
 use crate::inspector::viewer3d::{self, ViewerEvent};
@@ -35,8 +37,6 @@ use crate::ui::fonts;
 use crate::ui::icons;
 use crate::ui::keymap::{Shortcut, detect_pressed, shortcut_display};
 use crate::ui::theme::resolve_theme;
-use crate::file_association::AssociationState;
-use crate::i18n::{Language, LanguageSetting, t};
 use crate::ui::title_bar::{self, ChromeMessage, TitleDrag};
 use crate::ui::tokens::motion::DurationPreset;
 use crate::ui::widgets as w;
@@ -773,7 +773,7 @@ pub enum Message {
         version: crate::parser::ImgVersion,
         remove_existing: bool,
     },
-        /// Show a toast produced by a background task.
+    /// Show a toast produced by a background task.
     ShowToast(String),
     /// Window close button pressed; may open the unsaved-changes guard.
     WindowCloseRequested(iced::window::Id),
@@ -984,7 +984,7 @@ impl SortPreset {
 
     /// Display name for the dropdown. Kept here (not in `view.rs`)
     /// so the preset list reads top-to-bottom in one place.
-        pub fn label(self) -> String {
+    pub fn label(self) -> String {
         match self {
             SortPreset::NameAZ => t::sort_preset_name_az(),
             SortPreset::NameZA => t::sort_preset_name_za(),
@@ -1252,7 +1252,11 @@ pub struct TextureSnapshot {
 
 impl std::fmt::Debug for TextureSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TextureSnapshot({:?}, {}x{})", self.label, self.width, self.height)
+        write!(
+            f,
+            "TextureSnapshot({:?}, {}x{})",
+            self.label, self.width, self.height
+        )
     }
 }
 
@@ -1597,9 +1601,8 @@ struct AgrCached {
     models: Vec<(usize, String)>,
 }
 
-type AgrCache = std::sync::Arc<
-    quick_cache::sync::Cache<AgrCacheKey, std::sync::Arc<AgrCached>, AgrWeight>,
->;
+type AgrCache =
+    std::sync::Arc<quick_cache::sync::Cache<AgrCacheKey, std::sync::Arc<AgrCached>, AgrWeight>>;
 
 /// Weighs a cached AGR pair by its estimated CPU memory: mesh buffers,
 /// decoded RGBA textures, skin influences, and clip key data.
@@ -1610,9 +1613,9 @@ impl quick_cache::Weighter<AgrCacheKey, std::sync::Arc<AgrCached>> for AgrWeight
     fn weight(&self, _key: &AgrCacheKey, val: &std::sync::Arc<AgrCached>) -> u64 {
         let mut bytes = 0u64;
         for mesh in &val.model.meshes {
-            bytes +=
-                (mesh.vertices.len() * std::mem::size_of::<crate::inspector::scene3d::mesh::Vertex>())
-                    as u64;
+            bytes += (mesh.vertices.len()
+                * std::mem::size_of::<crate::inspector::scene3d::mesh::Vertex>())
+                as u64;
             bytes += (mesh.indices.len() * 4) as u64;
             if let Some(skin) = &mesh.skin {
                 bytes += (skin.joints.len() * 16 + skin.inverse_bind.len() * 64) as u64;
@@ -1912,14 +1915,12 @@ impl App {
         let result_path = path.clone();
         Task::perform(
             async move {
-                tokio::task::spawn_blocking(move || {
-                    match ArchiveInfo::open(path) {
-                        Ok(archive) if archive.version == ImgVersion::Unknown => {
-                            OpenArchiveOutcome::Unsupported
-                        }
-                        Ok(archive) => OpenArchiveOutcome::Opened(Box::new(archive)),
-                        Err(error) => OpenArchiveOutcome::Failed(error.to_string()),
+                tokio::task::spawn_blocking(move || match ArchiveInfo::open(path) {
+                    Ok(archive) if archive.version == ImgVersion::Unknown => {
+                        OpenArchiveOutcome::Unsupported
                     }
+                    Ok(archive) => OpenArchiveOutcome::Opened(Box::new(archive)),
+                    Err(error) => OpenArchiveOutcome::Failed(error.to_string()),
                 })
                 .await
                 .unwrap_or_else(|error| {
@@ -2964,9 +2965,7 @@ impl App {
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| {
-                crate::ui::app::is_ifp_animation_name(&entry.file_name)
-            })
+            .filter(|(_, entry)| crate::ui::app::is_ifp_animation_name(&entry.file_name))
             .map(|(index, entry)| (index, entry.file_name.to_string()))
             .collect();
 
@@ -3044,10 +3043,8 @@ impl App {
                         &model_name,
                     )
                     .map_err(|error| format!("model: {error}"))?;
-                    let library = crate::inspector::animation::gta::library_from_ifp(
-                        &ifp_file,
-                        &ifp_name,
-                    );
+                    let library =
+                        crate::inspector::animation::gta::library_from_ifp(&ifp_file, &ifp_name);
                     let summary = t::anim_summary_ifp(
                         ifp_name.as_str(),
                         model_name.as_str(),
@@ -3064,12 +3061,7 @@ impl App {
                 .await
                 .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
             },
-            move |result| {
-                Message::ViewerAgrLoadCompleted {
-                    serial,
-                    result,
-                }
-            },
+            move |result| Message::ViewerAgrLoadCompleted { serial, result },
         )
     }
 
@@ -3360,7 +3352,9 @@ impl App {
             Some(resolved) if root.is_some() => {
                 t::toast_game_folder_set(name.as_str(), resolved.display().to_string())
             }
-            Some(resolved) => t::toast_game_folder_automatic(name.as_str(), resolved.display().to_string()),
+            Some(resolved) => {
+                t::toast_game_folder_automatic(name.as_str(), resolved.display().to_string())
+            }
             None => t::toast_game_folder_none(name.as_str()),
         });
 
@@ -4396,8 +4390,7 @@ impl App {
                 }
                 if ready.entries.is_empty() {
                     self.toast = Some(
-                        if ready.ignored_non_txd == ready.selected_count
-                            && ready.selected_count > 0
+                        if ready.ignored_non_txd == ready.selected_count && ready.selected_count > 0
                         {
                             t::toast_convert_only_txd()
                         } else {
@@ -4561,7 +4554,10 @@ impl App {
                         let packed = outcome.stats.packed_bytes;
                         self.editor.replace_archive(index, outcome.archive);
                         self.toast = if reclaimed > 0 {
-                            Some(t::toast_packed(format_byte_count(reclaimed), format_byte_count(packed)))
+                            Some(t::toast_packed(
+                                format_byte_count(reclaimed),
+                                format_byte_count(packed),
+                            ))
                         } else {
                             Some(t::toast_packed_nothing(format_byte_count(packed)))
                         };
@@ -4625,7 +4621,7 @@ impl App {
                 self.request_archive_close(index)
             }
             Message::CloseArchiveTab(index) => self.request_archive_close(index),
-                        Message::WindowChrome(message) => self.update_window_chrome(message),
+            Message::WindowChrome(message) => self.update_window_chrome(message),
             Message::ShowToast(text) => {
                 self.toast = Some(text);
                 Task::none()
@@ -4859,7 +4855,9 @@ impl App {
             Message::FolderScanCompleted { index, result } => {
                 match result {
                     Ok(plan) if plan.files.is_empty() => {
-                        self.toast = Some(t::toast_no_files_in_folder(plan.folder.display().to_string()));
+                        self.toast = Some(t::toast_no_files_in_folder(
+                            plan.folder.display().to_string(),
+                        ));
                     }
                     Ok(plan) => {
                         if self.folder_import_target_matches(
@@ -5073,9 +5071,15 @@ impl App {
                         if target_matches
                             && let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
                         {
-                            archive.add_log(t::log_entry_list_exported(count, path.display().to_string()));
+                            archive.add_log(t::log_entry_list_exported(
+                                count,
+                                path.display().to_string(),
+                            ));
                         }
-                        self.toast = Some(t::toast_entry_list_exported(count, path.display().to_string()));
+                        self.toast = Some(t::toast_entry_list_exported(
+                            count,
+                            path.display().to_string(),
+                        ));
                         dev_logger::breadcrumb(&format!(
                             "entry-list export completed: {} ({count} entries)",
                             path.display()
@@ -5179,13 +5183,10 @@ impl App {
                     archive_path.as_ref(),
                     archive_generation,
                 );
-                let state_matches = self
-                    .compare_state
-                    .as_ref()
-                    .is_some_and(|state| {
-                        state.target.request_id == request_id
-                            && state.target.manifest_path == manifest_path
-                    });
+                let state_matches = self.compare_state.as_ref().is_some_and(|state| {
+                    state.target.request_id == request_id
+                        && state.target.manifest_path == manifest_path
+                });
                 if !target_matches || !state_matches {
                     let current_request = self
                         .compare_state
@@ -5355,7 +5356,9 @@ impl App {
                     .editor
                     .selected_archive()
                     .and_then(|index| self.editor.archives().get(index))
-                    .and_then(|archive| crate::parser::entry_name_problem(&new_name, archive.version))
+                    .and_then(|archive| {
+                        crate::parser::entry_name_problem(&new_name, archive.version)
+                    })
                 {
                     self.toast = Some(t::toast_rename_rejected(problem));
                     return Task::none();
@@ -5512,7 +5515,10 @@ impl App {
                 lines.push(format!(
                     "{}: {}",
                     t::inspect_offset(),
-                    t::inspect_offset_value(inspection.offset_bytes / 2048, inspection.offset_bytes)
+                    t::inspect_offset_value(
+                        inspection.offset_bytes / 2048,
+                        inspection.offset_bytes
+                    )
                 ));
                 lines.push(format!("{}: {}", t::inspect_source(), inspection.source));
                 for (key, value) in &inspection.summary {
@@ -5646,7 +5652,8 @@ impl App {
                             let stem = match stem {
                                 Some(s) => s,
                                 None => {
-                                    self.toast = Some(t::toast_basename_unknown(entry.file_name.as_str()));
+                                    self.toast =
+                                        Some(t::toast_basename_unknown(entry.file_name.as_str()));
                                     return Task::none();
                                 }
                             };
@@ -5695,7 +5702,8 @@ impl App {
                         ) {
                             Ok(d) => d,
                             Err(e) => {
-                                self.toast = Some(t::toast_read_failed(name.as_str(), e.to_string()));
+                                self.toast =
+                                    Some(t::toast_read_failed(name.as_str(), e.to_string()));
                                 return Task::none();
                             }
                         };
@@ -5708,8 +5716,8 @@ impl App {
                             self.viewer_rxs.push(rx);
                         } else {
                             let game_root = archive_path
-                    .as_deref()
-                    .and_then(|p| self.config.game_root_for(p));
+                                .as_deref()
+                                .and_then(|p| self.config.game_root_for(p));
                             let rx = viewer3d::spawn_render_window(data, name.clone(), game_root);
                             self.viewer_rxs.push(rx);
                         }
@@ -5794,14 +5802,14 @@ impl App {
                             url,
                         };
                         if !suppressed {
-                            self.show_update_status = Some(t::update_available(version.to_string()));
+                            self.show_update_status =
+                                Some(t::update_available(version.to_string()));
                         }
                     }
                     UpdateResult::UpToDate => {
                         self.update_state = UpdateState::UpToDate;
                         if !suppressed {
-                            self.show_update_status =
-                                Some(t::update_latest());
+                            self.show_update_status = Some(t::update_latest());
                         }
                     }
                     UpdateResult::Error(err) => {
@@ -6525,11 +6533,7 @@ impl App {
                                 .unwrap_or_default();
                             archive.add_log(format!(
                                 "  {}",
-                                t::save_check_anomaly(
-                                    code.to_string(),
-                                    count.to_string(),
-                                    example,
-                                )
+                                t::save_check_anomaly(code.to_string(), count.to_string(), example,)
                             ));
                         }
                         archive.compat_report = Some(report);
@@ -6941,7 +6945,10 @@ impl App {
                         Err(err) => {
                             let line = format!(
                                 "[{now}] {}",
-                                t::log_texture_export_failed(nif_basename.as_str(), err.to_string())
+                                t::log_texture_export_failed(
+                                    nif_basename.as_str(),
+                                    err.to_string()
+                                )
                             );
                             archive.add_log(line.clone());
                             self.toast = Some(line);
@@ -7076,9 +7083,11 @@ impl App {
                 let game_root = archive_path
                     .as_deref()
                     .and_then(|p| self.config.game_root_for(p));
-                let ide_map_hit: Option<BuiltIdeMap> = game_root
-                    .as_ref()
-                    .and_then(|root| self.ide_maps.get(root).map(|map| (root.clone(), Arc::clone(map))));
+                let ide_map_hit: Option<BuiltIdeMap> = game_root.as_ref().and_then(|root| {
+                    self.ide_maps
+                        .get(root)
+                        .map(|map| (root.clone(), Arc::clone(map)))
+                });
                 // The resolver keys its NFT catalog lookup by the model's
                 // file stem (`PLAYER`), not the file name (`PLAYER.nif`).
                 let model_stem = std::path::Path::new(&model_display)
@@ -7251,9 +7260,7 @@ impl App {
                             .agr_playback
                             .as_ref()
                             .and_then(|playback| playback.last_clip_name.clone())
-                            .and_then(|name| {
-                                library.clips.iter().find(|clip| clip.name == name)
-                            })
+                            .and_then(|name| library.clips.iter().find(|clip| clip.name == name))
                             .or_else(|| {
                                 library
                                     .clips
@@ -7347,8 +7354,7 @@ impl App {
                             let Some(playback) = self.agr_playback.as_mut() else {
                                 return false;
                             };
-                            let Some(archive) =
-                                self.editor.archives().get(playback.archive_index)
+                            let Some(archive) = self.editor.archives().get(playback.archive_index)
                             else {
                                 return false;
                             };
@@ -7404,13 +7410,16 @@ impl App {
                 let game_root = archive_path
                     .as_deref()
                     .and_then(|p| self.config.game_root_for(p));
-                let ide_map_hit: Option<BuiltIdeMap> = if model_kind == Some(RenderableModelKind::Col) {
-                    None
-                } else {
-                    game_root
-                        .as_ref()
-                        .and_then(|root| self.ide_maps.get(root).map(|map| (root.clone(), Arc::clone(map))))
-                };
+                let ide_map_hit: Option<BuiltIdeMap> =
+                    if model_kind == Some(RenderableModelKind::Col) {
+                        None
+                    } else {
+                        game_root.as_ref().and_then(|root| {
+                            self.ide_maps
+                                .get(root)
+                                .map(|map| (root.clone(), Arc::clone(map)))
+                        })
+                    };
                 let scene_cache = Arc::clone(&self.scene_cache);
                 Task::perform(
                     async move {
@@ -8542,26 +8551,14 @@ impl App {
                 t::menu_file_save_as(menu_shortcut(Shortcut::SaveAs)),
                 Message::SaveArchiveAs,
             ),
-            (
-                t::menu_file_pack(),
-                Message::PackArchive,
-            ),
-            (
-                t::menu_file_set_game_folder(),
-                Message::PickGameFolder,
-            ),
-            (
-                t::menu_file_reset_game_folder(),
-                Message::ResetGameFolder,
-            ),
+            (t::menu_file_pack(), Message::PackArchive),
+            (t::menu_file_set_game_folder(), Message::PickGameFolder),
+            (t::menu_file_reset_game_folder(), Message::ResetGameFolder),
             (
                 t::menu_file_close_tab(menu_shortcut(Shortcut::Close)),
                 Message::CloseSelectedArchive,
             ),
-            (
-                t::menu_file_sort_by(),
-                Message::OpenSortManager,
-            ),
+            (t::menu_file_sort_by(), Message::OpenSortManager),
         ]);
 
         let edit_menu = dropdown(vec![
@@ -8569,10 +8566,7 @@ impl App {
                 t::menu_edit_import(menu_shortcut(Shortcut::Import)),
                 Message::ImportFiles,
             ),
-            (
-                t::menu_edit_import_folder(),
-                Message::ImportFolder,
-            ),
+            (t::menu_edit_import_folder(), Message::ImportFolder),
             (
                 t::menu_edit_export_all(menu_shortcut(Shortcut::ExportAll)),
                 Message::ExportAll,
@@ -8589,10 +8583,7 @@ impl App {
                 t::menu_edit_compare_list(menu_shortcut(Shortcut::CompareWithList)),
                 Message::CompareWithList,
             ),
-            (
-                t::menu_edit_load_agr(),
-                Message::PickAgrFile,
-            ),
+            (t::menu_edit_load_agr(), Message::PickAgrFile),
         ]);
 
         let selection_menu = dropdown(vec![
@@ -8617,7 +8608,11 @@ impl App {
         let option_items: Vec<(String, Message)> = ThemeMode::ALL
             .iter()
             .map(|mode| {
-                let marker = if *mode == self.config.theme { "● " } else { "○ " };
+                let marker = if *mode == self.config.theme {
+                    "● "
+                } else {
+                    "○ "
+                };
                 let label = format!("{marker}{}", theme_display_name(*mode));
                 (label, Message::SetTheme(*mode))
             })
@@ -8629,51 +8624,99 @@ impl App {
         let view_toggle = |on: bool| if on { "● " } else { "○ " };
         let mut view_items = vec![
             (
-                format!("{}{}", view_toggle(self.config.show_navigation_gizmo), t::menu_view_navigation_gizmo()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.config.show_navigation_gizmo),
+                    t::menu_view_navigation_gizmo()
+                ),
                 Message::SetNavigationGizmoVisible(!self.config.show_navigation_gizmo),
             ),
             (
-                format!("{}{}", view_toggle(self.config.show_search_bar), t::menu_view_search_bar()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.config.show_search_bar),
+                    t::menu_view_search_bar()
+                ),
                 Message::ToggleSearchBar(!self.config.show_search_bar),
             ),
             (
-                format!("{}{}", view_toggle(self.config.search_selection_context), t::menu_view_search_selection_context()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.config.search_selection_context),
+                    t::menu_view_search_selection_context()
+                ),
                 Message::ToggleSearchSelectionContext(!self.config.search_selection_context),
             ),
             (
-                format!("{}{}", view_toggle(self.config.literal_file_types), t::menu_view_literal_file_types()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.config.literal_file_types),
+                    t::menu_view_literal_file_types()
+                ),
                 Message::ToggleLiteralFileTypes(!self.config.literal_file_types),
             ),
             (
-                format!("{}{}", view_toggle(self.compat_highlight_enabled), t::menu_view_highlight_validator_rows()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.compat_highlight_enabled),
+                    t::menu_view_highlight_validator_rows()
+                ),
                 Message::SetCompatHighlight(!self.compat_highlight_enabled),
             ),
             (
-                format!("{}{}", view_toggle(self.config.context_selection_accumulates), t::menu_view_context_accumulates()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.config.context_selection_accumulates),
+                    t::menu_view_context_accumulates()
+                ),
                 Message::ToggleContextAccumulate(!self.config.context_selection_accumulates),
             ),
             (
-                format!("{}{}", view_toggle(self.config.autoscroll_momentum_enabled), t::menu_view_autoscroll_momentum()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.config.autoscroll_momentum_enabled),
+                    t::menu_view_autoscroll_momentum()
+                ),
                 Message::ToggleAutoscrollMomentum(!self.config.autoscroll_momentum_enabled),
             ),
             (
-                format!("{}{}", view_toggle(self.config.motion_enabled), t::menu_view_motion_effects()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.config.motion_enabled),
+                    t::menu_view_motion_effects()
+                ),
                 Message::ToggleMotionEffects(!self.config.motion_enabled),
             ),
             (
-                format!("{}{}", view_toggle(self.config.selection_pulse_enabled), t::menu_view_selection_pulse()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.config.selection_pulse_enabled),
+                    t::menu_view_selection_pulse()
+                ),
                 Message::ToggleSelectionPulse(!self.config.selection_pulse_enabled),
             ),
             (
-                format!("{}{}", view_toggle(self.config.click_ripple_enabled), t::menu_view_click_ripples()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.config.click_ripple_enabled),
+                    t::menu_view_click_ripples()
+                ),
                 Message::ToggleClickRipple(!self.config.click_ripple_enabled),
             ),
             (
-                format!("{}{}", view_toggle(self.config.icon_micro_motion_enabled), t::menu_view_icon_micro_motion()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.config.icon_micro_motion_enabled),
+                    t::menu_view_icon_micro_motion()
+                ),
                 Message::ToggleIconMicroMotion(!self.config.icon_micro_motion_enabled),
             ),
             (
-                format!("{}{}", view_toggle(self.animation_demo_active()), t::menu_view_animation_demo()),
+                format!(
+                    "{}{}",
+                    view_toggle(self.animation_demo_active()),
+                    t::menu_view_animation_demo()
+                ),
                 if self.animation_demo_active() {
                     Message::AnimationDemoExit
                 } else {
@@ -8684,7 +8727,11 @@ impl App {
         if self.file_association != AssociationState::Unsupported {
             let associated = self.file_association == AssociationState::Registered;
             view_items.push((
-                format!("{}{}", view_toggle(associated), t::menu_view_explorer_association()),
+                format!(
+                    "{}{}",
+                    view_toggle(associated),
+                    t::menu_view_explorer_association()
+                ),
                 Message::SetFileAssociation(!associated),
             ));
         }
@@ -8695,10 +8742,7 @@ impl App {
                 t::menu_help_check_updates(menu_shortcut(Shortcut::CheckUpdates)),
                 Message::CheckUpdatesManual,
             ),
-            (
-                t::menu_help_repository(),
-                Message::VisitRepository,
-            ),
+            (t::menu_help_repository(), Message::VisitRepository),
             (t::menu_help_about(), Message::ShowAbout),
         ]);
 
@@ -8742,9 +8786,12 @@ impl App {
         // The Language menu keeps an icon so it stays recognizable after
         // switching to a language the user cannot read.
         let language_label: iced::Element<'static, Message> = container(
-            iced::widget::row![icons::language().size(14), fonts::header(t::menu_language())]
-                .spacing(6)
-                .align_y(iced::Alignment::Center),
+            iced::widget::row![
+                icons::language().size(14),
+                fonts::header(t::menu_language())
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center),
         )
         .padding([0, 12])
         .height(iced::Length::Fill)
@@ -9015,7 +9062,10 @@ pub fn run_app(config: Config, startup_file: Option<PathBuf>) -> iced::Result {
     iced::application(
         move || {
             let cfg = (*boot_config_for_boot).clone();
-            (App::new(cfg.clone()), App::startup_task(&cfg, startup_file.clone()))
+            (
+                App::new(cfg.clone()),
+                App::startup_task(&cfg, startup_file.clone()),
+            )
         },
         App::update,
         App::view,
@@ -9151,8 +9201,13 @@ fn plan_replace(
         .get(job.texture_index)
         .ok_or_else(|| "this entry's texture list changed; reopen it".to_string())?;
     let before_rgba = old.decode_rgba().map_err(|error| error.to_string())?;
-    let plan =
-        crate::compat::convert::plan_import(&image, job.target, &job.archive_name, format, options)?;
+    let plan = crate::compat::convert::plan_import(
+        &image,
+        job.target,
+        &job.archive_name,
+        format,
+        options,
+    )?;
     Ok(ReplacePlanReady {
         archive_index: job.archive_index,
         entry_index: job.entry_index,
@@ -9341,15 +9396,25 @@ mod tests {
         for language in Language::SELECTABLE {
             crate::i18n::set_language(language);
             for id in crate::i18n::t::MESSAGE_IDS {
-                let (chrome, limit) = if id.starts_with("menu-") && !matches!(
-                    *id,
-                    "menu-file" | "menu-recent" | "menu-edit" | "menu-selection"
-                        | "menu-view" | "menu-themes" | "menu-help" | "menu-language"
-                ) {
+                let (chrome, limit) = if id.starts_with("menu-")
+                    && !matches!(
+                        *id,
+                        "menu-file"
+                            | "menu-recent"
+                            | "menu-edit"
+                            | "menu-selection"
+                            | "menu-view"
+                            | "menu-themes"
+                            | "menu-help"
+                            | "menu-language"
+                    ) {
                     // Toggle rows carry a "● " marker.
                     (MENU_ITEM_CHROME + menu_label_width("● "), MENU_MAX_WIDTH)
                 } else if id.starts_with("context-") && *id != "context-more-selected" {
-                    (crate::ui::view::CONTEXT_MENU_CHROME, crate::ui::view::CONTEXT_MENU_MAX_WIDTH)
+                    (
+                        crate::ui::view::CONTEXT_MENU_CHROME,
+                        crate::ui::view::CONTEXT_MENU_MAX_WIDTH,
+                    )
                 } else {
                     continue;
                 };
@@ -9361,9 +9426,15 @@ mod tests {
             }
         }
         crate::i18n::set_language(Language::English);
-        assert!(too_wide.is_empty(), "labels would wrap:
-{}", too_wide.join("
-"));
+        assert!(
+            too_wide.is_empty(),
+            "labels would wrap:
+{}",
+            too_wide.join(
+                "
+"
+            )
+        );
     }
 
     fn test_app() -> App {
@@ -9534,8 +9605,7 @@ mod tests {
             Default::default(),
         )
         .expect("encode fixture");
-        let native =
-            crate::parser::txd_writer::native_from_encoded(&encoded, 9, "tex", "");
+        let native = crate::parser::txd_writer::native_from_encoded(&encoded, 9, "tex", "");
         let txd = crate::parser::txd_writer::single_texture_txd(
             native,
             crate::compat::convert::target_rw_version(
@@ -11349,7 +11419,10 @@ mod tests {
         assert_eq!(app.config.language, spanish);
         assert_eq!(crate::i18n::current(), Language::Spanish);
         assert_eq!(theme_display_name(ThemeMode::System), "Oscuro");
-        assert_eq!(theme_display_name(ThemeMode::DarkCatppuccin), "Catppuccin Mocha");
+        assert_eq!(
+            theme_display_name(ThemeMode::DarkCatppuccin),
+            "Catppuccin Mocha"
+        );
         // The menu bar builds in every language.
         let _ = app.menubar();
 
@@ -11381,7 +11454,11 @@ mod tests {
         let missing = dir.path().join("gone.img");
         let mut app = test_app();
         let _ = app.update(Message::OpenFromCommandLine(missing));
-        assert!(app.toast.as_deref().is_some_and(|toast| toast.starts_with("File not found")));
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.starts_with("File not found"))
+        );
         assert!(app.editor.archives().is_empty());
     }
 
@@ -11399,15 +11476,25 @@ mod tests {
         let chosen = dir.path().join("elsewhere");
 
         let mut app = test_app();
-        let _ = app.editor.add_opened_archive(ArchiveInfo::open(&path).unwrap());
+        let _ = app
+            .editor
+            .add_opened_archive(ArchiveInfo::open(&path).unwrap());
 
         let _ = app.update(Message::GameFolderPicked(Some(chosen.clone())));
         assert_eq!(app.config.game_root_for(&path), Some(chosen));
-        assert!(app.toast.as_deref().is_some_and(|toast| toast.contains("elsewhere")));
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("elsewhere"))
+        );
 
         let _ = app.update(Message::ResetGameFolder);
         assert_eq!(app.config.game_root_for(&path), Some(dir.path().join("SA")));
-        assert!(app.toast.as_deref().is_some_and(|toast| toast.ends_with("(automatic)")));
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.ends_with("(automatic)"))
+        );
     }
 
     #[test]
@@ -11928,10 +12015,13 @@ mod tests {
 
         // Near the list end the reveal clamps to the bottom of the list.
         let row = commit(&mut app, "entry039", 0);
-        let content_height = app.editor.archives()[0].selected_indices.len() as f32
-            * crate::ui::view::ROW_HEIGHT;
+        let content_height =
+            app.editor.archives()[0].selected_indices.len() as f32 * crate::ui::view::ROW_HEIGHT;
         let max_y = (content_height - viewport_height).max(0.0);
-        assert!(row as f32 * crate::ui::view::ROW_HEIGHT > max_y, "clamp engages");
+        assert!(
+            row as f32 * crate::ui::view::ROW_HEIGHT > max_y,
+            "clamp engages"
+        );
         assert_eq!(app.scroll_y, max_y);
     }
 

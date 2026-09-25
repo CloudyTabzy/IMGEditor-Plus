@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use crate::archive::ArchiveInfo;
-use crate::parser::{read_entry_data_from_source, ImgVersion};
+use crate::parser::{ImgVersion, read_entry_data_from_source};
 
 use super::raster::LogicalFormat;
 use crate::i18n::t;
@@ -303,7 +303,11 @@ pub fn classify(stats: &ProbeStats, version: ImgVersion) -> Option<TargetHint> {
         return Some(TargetHint {
             game_id: "bully",
             confidence,
-            reasons: vec![t::compat_hint_gamebryo(gamebryo, stats.nft_entries, stats.nif_entries)],
+            reasons: vec![t::compat_hint_gamebryo(
+                gamebryo,
+                stats.nft_entries,
+                stats.nif_entries,
+            )],
             sampled_textures: stats.textures,
         });
     }
@@ -341,10 +345,7 @@ pub fn classify(stats: &ProbeStats, version: ImgVersion) -> Option<TargetHint> {
             } else {
                 HintConfidence::Medium
             },
-            reasons: vec![
-                t::compat_hint_pal(percent(pal8)),
-                t::compat_hint_d3d8(),
-            ],
+            reasons: vec![t::compat_hint_pal(percent(pal8)), t::compat_hint_d3d8()],
             sampled_textures: stats.textures,
         });
     }
@@ -363,10 +364,7 @@ pub fn classify(stats: &ProbeStats, version: ImgVersion) -> Option<TargetHint> {
             } else {
                 HintConfidence::Medium
             },
-            reasons: vec![
-                t::compat_hint_vc16(percent(vc16)),
-                t::compat_hint_d3d8(),
-            ],
+            reasons: vec![t::compat_hint_vc16(percent(vc16)), t::compat_hint_d3d8()],
             sampled_textures: stats.textures,
         });
     }

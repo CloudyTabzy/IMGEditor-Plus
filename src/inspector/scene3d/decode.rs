@@ -60,7 +60,9 @@ impl CollisionMeshBuilder {
         let triangle_count = indices.len() / 3;
         if positions.is_empty()
             || triangle_count == 0
-            || !positions.iter().all(|position| position.iter().all(|value| value.is_finite()))
+            || !positions
+                .iter()
+                .all(|position| position.iter().all(|value| value.is_finite()))
             || !self.can_append(positions.len(), triangle_count)
         {
             return;
@@ -147,24 +149,18 @@ impl CollisionMeshBuilder {
             [3, 4, 0],
         ];
         for [a, b, c] in FACES {
-            self.indices.extend_from_slice(&[
-                base + a,
-                base + b,
-                base + c,
-            ]);
+            self.indices
+                .extend_from_slice(&[base + a, base + b, base + c]);
         }
     }
 
     fn append_sphere(&mut self, sphere: &crate::parser::col::ColSphere) {
-        let vertex_count = (COLLISION_SPHERE_RINGS + 1)
-            .saturating_mul(COLLISION_SPHERE_SEGMENTS + 1);
+        let vertex_count =
+            (COLLISION_SPHERE_RINGS + 1).saturating_mul(COLLISION_SPHERE_SEGMENTS + 1);
         let triangle_count = COLLISION_SPHERE_RINGS.saturating_mul(COLLISION_SPHERE_SEGMENTS * 2);
         if !sphere.radius.is_finite()
             || sphere.radius <= 0.0
-            || !sphere
-                .center
-                .iter()
-                .all(|value| value.is_finite())
+            || !sphere.center.iter().all(|value| value.is_finite())
             || !self.can_append(vertex_count, triangle_count)
         {
             return;
@@ -227,10 +223,8 @@ impl CollisionMeshBuilder {
             }
         }
         for normal in &mut normals {
-            let length = (normal[0] * normal[0]
-                + normal[1] * normal[1]
-                + normal[2] * normal[2])
-                .sqrt();
+            let length =
+                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
             if length > 1e-6 {
                 normal[0] /= length;
                 normal[1] /= length;
@@ -626,9 +620,7 @@ mod tests {
         bytes.extend_from_slice(&[0; 4]);
         let mut body = Vec::new();
         body.extend_from_slice(&[0; 24]);
-        for value in [
-            2.0f32, 0.0, 0.0, 0.0, -2.0, -2.0, -2.0, 2.0, 2.0, 2.0,
-        ] {
+        for value in [2.0f32, 0.0, 0.0, 0.0, -2.0, -2.0, -2.0, 2.0, 2.0, 2.0] {
             body.extend_from_slice(&value.to_le_bytes());
         }
         body.extend_from_slice(&1u32.to_le_bytes());
@@ -678,7 +670,10 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{name} should be readable: {error}"));
             let scene = parse_and_build_scene_from_col(&bytes, BaseOrientation::Zup)
                 .unwrap_or_else(|error| panic!("{name} should build a scene: {error:?}"));
-            assert!(scene.has_geometry(), "{name} should have renderable geometry");
+            assert!(
+                scene.has_geometry(),
+                "{name} should have renderable geometry"
+            );
             assert!(scene.total_triangles() > 0, "{name} should have triangles");
             assert!(scene.aabb.bounding_radius().is_finite());
         }

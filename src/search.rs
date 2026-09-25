@@ -94,8 +94,7 @@ pub fn fuzzy_score(name_lower: &str, query_lower: &str) -> Option<i64> {
 /// [`TYPO_MIN_SIMILARITY`].
 pub fn typo_score(name_lower: &str, query_lower: &str) -> Option<i64> {
     let similarity = fuzzt::algorithms::jaro_winkler(name_lower, query_lower);
-    (similarity >= TYPO_MIN_SIMILARITY)
-        .then(|| (similarity * 1000.0) as i64 - TYPO_TIER_OFFSET)
+    (similarity >= TYPO_MIN_SIMILARITY).then(|| (similarity * 1000.0) as i64 - TYPO_TIER_OFFSET)
 }
 
 #[cfg(test)]
@@ -153,11 +152,7 @@ mod tests {
         // "polcie" is still a subsequence of "police", so compare the
         // rescue tier against the weakest subsequence match instead.
         let rescued = typo_score("police.dff", "pilce").unwrap();
-        let weakest = score(
-            "police.dff",
-            "e",
-        )
-        .unwrap();
+        let weakest = score("police.dff", "e").unwrap();
         assert!(rescued < weakest);
     }
 

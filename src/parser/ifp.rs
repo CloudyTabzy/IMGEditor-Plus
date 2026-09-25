@@ -158,7 +158,11 @@ fn parse_anp3(bytes: &[u8]) -> Result<IfpFile, String> {
         position: 8, // magic + declared size
     };
     let package = reader.fixed_name("ANP3 package name")?;
-    let animation_count = bounded(reader.u32("ANP3 animation count")?, MAX_ANIMATIONS, "animations")?;
+    let animation_count = bounded(
+        reader.u32("ANP3 animation count")?,
+        MAX_ANIMATIONS,
+        "animations",
+    )?;
     let mut animations = Vec::with_capacity(animation_count);
     for _ in 0..animation_count {
         let name = reader.fixed_name("ANP3 animation name")?;
@@ -209,12 +213,9 @@ fn parse_anp3(bytes: &[u8]) -> Result<IfpFile, String> {
                         ];
                         let translation = if frame_type == 4 {
                             [
-                                reader.i16("ANP3 key translation X")? as f32
-                                    / TRANSLATION_SCALE,
-                                reader.i16("ANP3 key translation Y")? as f32
-                                    / TRANSLATION_SCALE,
-                                reader.i16("ANP3 key translation Z")? as f32
-                                    / TRANSLATION_SCALE,
+                                reader.i16("ANP3 key translation X")? as f32 / TRANSLATION_SCALE,
+                                reader.i16("ANP3 key translation Y")? as f32 / TRANSLATION_SCALE,
+                                reader.i16("ANP3 key translation Z")? as f32 / TRANSLATION_SCALE,
                             ]
                         } else {
                             [0.0; 3]
@@ -251,10 +252,7 @@ fn parse_anp3(bytes: &[u8]) -> Result<IfpFile, String> {
 /// Read one 4-byte-aligned ANPK section: `(magic u32, size u32, body)`.
 /// Returns the magic and the body range; the cursor is left at the start
 /// of the body (callers advance past it or hand it to a sub-reader).
-fn read_section<'a>(
-    reader: &mut Reader<'a>,
-    depth: usize,
-) -> Result<(u32, &'a [u8]), String> {
+fn read_section<'a>(reader: &mut Reader<'a>, depth: usize) -> Result<(u32, &'a [u8]), String> {
     if depth > 8 {
         return Err("IFP section nesting is too deep".to_string());
     }
@@ -264,11 +262,7 @@ fn read_section<'a>(
             .try_into()
             .expect("bounded read"),
     );
-    let size = bounded(
-        reader.u32("section size")?,
-        reader.bytes.len(),
-        "section",
-    )?;
+    let size = bounded(reader.u32("section size")?, reader.bytes.len(), "section")?;
     let body = reader.take(size, "section body")?;
     Ok((magic, body))
 }
@@ -334,9 +328,7 @@ fn parse_dgan(body: &[u8]) -> Result<Vec<IfpObject>, String> {
     };
     let (info_magic, _info_body) = read_section(&mut reader, 1)?;
     if &info_magic.to_le_bytes() != b"INFO" {
-        return Err(format!(
-            "expected INFO inside DGAN, got 0x{info_magic:08X}"
-        ));
+        return Err(format!("expected INFO inside DGAN, got 0x{info_magic:08X}"));
     }
     reader.position = reader.position.div_ceil(4) * 4;
 
@@ -362,9 +354,7 @@ fn parse_cpan(body: &[u8]) -> Result<IfpObject, String> {
     };
     let (anim_magic, anim_body) = read_section(&mut reader, 1)?;
     if &anim_magic.to_le_bytes() != b"ANIM" {
-        return Err(format!(
-            "expected ANIM inside CPAN, got 0x{anim_magic:08X}"
-        ));
+        return Err(format!("expected ANIM inside CPAN, got 0x{anim_magic:08X}"));
     }
     let mut anim = Reader {
         bytes: anim_body,

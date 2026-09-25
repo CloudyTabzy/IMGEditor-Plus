@@ -455,8 +455,7 @@ pub fn calibrate_bindings(
                 // Keep adversarial but parseable track names from overflowing
                 // while calculating the ordering hint. Real files use small
                 // non-negative indices, but diagnostics should remain total.
-                let deviation =
-                    (bone as f64 - curve as f64 - expected as f64).abs() as f32;
+                let deviation = (bone as f64 - curve as f64 - expected as f64).abs() as f32;
                 1.5 * deviation
             }
             _ => 0.0,
@@ -508,7 +507,8 @@ pub fn calibrate_bindings(
         if let (Some(curve), Some(bone)) = (
             track_number(target),
             node_names.get(&node).and_then(|name| track_number(name)),
-        ) && let Some(offset) = bone.checked_sub(curve) {
+        ) && let Some(offset) = bone.checked_sub(curve)
+        {
             offsets.push(offset);
         }
     }
@@ -570,9 +570,8 @@ pub fn calibrate_bindings(
                 && let Some(raw_angle) = rotation_min_angle(channels, &node.local)
                 && raw_angle <= MAX_BIND_ANGLE_DEG
             {
-                let match_value =
-                    match_cost(raw_angle, target, node_name, median_offset)
-                        + costs[cell(row + 1, column + 1)];
+                let match_value = match_cost(raw_angle, target, node_name, median_offset)
+                    + costs[cell(row + 1, column + 1)];
                 // Prefer a valid match on exact ties. This avoids dropping
                 // the first curve when all channels are at identity in a
                 // sparse test clip.
@@ -880,16 +879,10 @@ mod tests {
             provenance: "synthetic".into(),
         };
 
-        let first = bind_clip_with_calibration(
-            &model,
-            &clip,
-            &calibrate_bindings(&model, &library),
-        );
-        let second = bind_clip_with_calibration(
-            &model,
-            &clip,
-            &calibrate_bindings(&model, &library),
-        );
+        let first =
+            bind_clip_with_calibration(&model, &clip, &calibrate_bindings(&model, &library));
+        let second =
+            bind_clip_with_calibration(&model, &clip, &calibrate_bindings(&model, &library));
         assert_eq!(first.node_for_track(0), Some(NodeId(2)));
         assert_eq!(first.node_for_track(1), Some(NodeId(3)));
         assert_eq!(first.node_for_track(0), second.node_for_track(0));
@@ -998,11 +991,8 @@ mod tests {
             provenance: "Bully AGR (PC, experimental reader)".into(),
         };
 
-        let binding = bind_clip_with_calibration(
-            &model,
-            &clip,
-            &calibrate_bindings(&model, &library),
-        );
+        let binding =
+            bind_clip_with_calibration(&model, &clip, &calibrate_bindings(&model, &library));
         assert_eq!(binding.bound_count(), 8);
         assert!(binding.diagnostics.is_empty());
         for index in 0..8 {
@@ -1132,11 +1122,8 @@ mod tests {
             provenance: "Bully AGR (PC, experimental reader)".into(),
         };
 
-        let binding = bind_clip_with_calibration(
-            &model,
-            &clip,
-            &calibrate_bindings(&model, &library),
-        );
+        let binding =
+            bind_clip_with_calibration(&model, &clip, &calibrate_bindings(&model, &library));
         assert_eq!(binding.bound_count(), 8);
         assert!(binding.diagnostics.is_empty());
         for index in 0..8 {
@@ -1168,7 +1155,9 @@ mod tests {
                 parent: Some(NodeId(index)),
                 name: format!("track_{index:03}"),
                 local: NodeTransform {
-                    rotation: Quat::from_rotation_z((index + 1) as f32 * std::f32::consts::FRAC_PI_4),
+                    rotation: Quat::from_rotation_z(
+                        (index + 1) as f32 * std::f32::consts::FRAC_PI_4,
+                    ),
                     ..NodeTransform::IDENTITY
                 },
                 mesh: None,
@@ -1242,11 +1231,8 @@ mod tests {
             provenance: "Bully AGR (PC, experimental reader)".into(),
         };
 
-        let binding = bind_clip_with_calibration(
-            &model,
-            &clip,
-            &calibrate_bindings(&model, &library),
-        );
+        let binding =
+            bind_clip_with_calibration(&model, &clip, &calibrate_bindings(&model, &library));
         assert_eq!(
             binding.bound_count(),
             6,

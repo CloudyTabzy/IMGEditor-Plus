@@ -5,11 +5,11 @@
 //! makes the compatibility behavior easy to test and lets large manifests be
 //! processed away from the event loop.
 
+use crate::i18n::t;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Path;
-use crate::i18n::t;
 
 /// Refuse unbounded input from a user-selected manifest. Real archive lists
 /// are normally a few megabytes at most; this still leaves room for very

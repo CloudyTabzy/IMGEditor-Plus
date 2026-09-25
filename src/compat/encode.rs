@@ -264,9 +264,7 @@ pub fn encode_texture(
             rgba.len()
         ));
     }
-    let source_alpha = rgba[..expected]
-        .chunks_exact(4)
-        .any(|pixel| pixel[3] < 255);
+    let source_alpha = rgba[..expected].chunks_exact(4).any(|pixel| pixel[3] < 255);
 
     let levels = mip_chain(rgba, width, height);
     let mut palette = Vec::new();
@@ -281,23 +279,20 @@ pub fn encode_texture(
             palette = pal;
             indices
         }
-        EncodeFormat::Rgb565 => levels
-            .iter()
-            .map(|(_, _, px)| encode_565(px))
-            .collect(),
-        EncodeFormat::Argb1555 => levels
-            .iter()
-            .map(|(_, _, px)| encode_1555(px))
-            .collect(),
-        EncodeFormat::Argb4444 => levels
-            .iter()
-            .map(|(_, _, px)| encode_4444(px))
-            .collect(),
+        EncodeFormat::Rgb565 => levels.iter().map(|(_, _, px)| encode_565(px)).collect(),
+        EncodeFormat::Argb1555 => levels.iter().map(|(_, _, px)| encode_1555(px)).collect(),
+        EncodeFormat::Argb4444 => levels.iter().map(|(_, _, px)| encode_4444(px)).collect(),
         EncodeFormat::Rgb888 => levels.iter().map(|(_, _, px)| encode_888(px)).collect(),
         EncodeFormat::Argb8888 => levels.iter().map(|(_, _, px)| encode_8888(px)).collect(),
-        EncodeFormat::Dxt1 => encode_dxt_levels(&levels, texpresso::Format::Bc1, options, source_alpha),
-        EncodeFormat::Dxt3 => encode_dxt_levels(&levels, texpresso::Format::Bc2, options, source_alpha),
-        EncodeFormat::Dxt5 => encode_dxt_levels(&levels, texpresso::Format::Bc3, options, source_alpha),
+        EncodeFormat::Dxt1 => {
+            encode_dxt_levels(&levels, texpresso::Format::Bc1, options, source_alpha)
+        }
+        EncodeFormat::Dxt3 => {
+            encode_dxt_levels(&levels, texpresso::Format::Bc2, options, source_alpha)
+        }
+        EncodeFormat::Dxt5 => {
+            encode_dxt_levels(&levels, texpresso::Format::Bc3, options, source_alpha)
+        }
     };
 
     let header = header_spec(format, platform_id).with_mips(mipmaps.len().max(1) as u8);
@@ -314,7 +309,11 @@ pub fn encode_texture(
 /// Downsample to the full mip chain with a box filter, halving until
 /// 1x1. Odd dimensions round up (RenderWare levels never go below 1).
 pub fn mip_chain(rgba: &[u8], width: u32, height: u32) -> Vec<(u32, u32, Vec<u8>)> {
-    let mut levels = vec![(width, height, rgba[..width as usize * height as usize * 4].to_vec())];
+    let mut levels = vec![(
+        width,
+        height,
+        rgba[..width as usize * height as usize * 4].to_vec(),
+    )];
     loop {
         let (w, h, ref px) = *levels.last().expect("level exists");
         if w == 1 && h == 1 {
@@ -374,9 +373,8 @@ fn encode_888(px: &[u8]) -> Vec<u8> {
 fn encode_565(px: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(px.len() / 2);
     for p in px.chunks_exact(4) {
-        let v = ((u16::from(p[0] >> 3)) << 11)
-            | ((u16::from(p[1] >> 2)) << 5)
-            | u16::from(p[2] >> 3);
+        let v =
+            ((u16::from(p[0] >> 3)) << 11) | ((u16::from(p[1] >> 2)) << 5) | u16::from(p[2] >> 3);
         out.extend_from_slice(&v.to_le_bytes());
     }
     out
@@ -486,8 +484,8 @@ mod tests {
     /// Encode then decode through the game decoder; return mean
     /// absolute error per channel.
     fn round_trip_error(format: EncodeFormat, rgba: &[u8], w: u32, h: u32) -> f32 {
-        let encoded = encode_texture(rgba, w, h, format, 9, EncodeOptions::default())
-            .expect("encode");
+        let encoded =
+            encode_texture(rgba, w, h, format, 9, EncodeOptions::default()).expect("encode");
         let level = &encoded.mipmaps[0];
         let descriptor = RasterDescriptor {
             width: w,
@@ -584,10 +582,7 @@ mod tests {
             pixel[2] = (seed >> 8) as u8;
             pixel[3] = 255;
         }
-        eprintln!(
-            "logical cores: {:?}",
-            std::thread::available_parallelism()
-        );
+        eprintln!("logical cores: {:?}", std::thread::available_parallelism());
         for (label, algorithm) in [
             ("range", texpresso::Algorithm::RangeFit),
             ("cluster", texpresso::Algorithm::ClusterFit),

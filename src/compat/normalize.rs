@@ -281,7 +281,11 @@ mod tests {
 
         let fixes = plan_fixes(&archive);
         assert_eq!(fixes.len(), 1);
-        assert!(fixes[0].detail.contains("0x5 -> 0x3"), "{}", fixes[0].detail);
+        assert!(
+            fixes[0].detail.contains("0x5 -> 0x3"),
+            "{}",
+            fixes[0].detail
+        );
         assert!(fixes[0].detail.contains("depth 32 -> 16"));
 
         assert_eq!(apply_fixes(&mut archive), 1);
@@ -307,7 +311,10 @@ mod tests {
         assert_eq!(apply_fixes(&mut archive), 1);
         let patched = archive.entries[0].override_bytes.as_ref().unwrap();
         let header = walk_native_headers(patched);
-        assert_eq!(header[0].raster_format, 0x8200, "nibble fixed, mip bit kept");
+        assert_eq!(
+            header[0].raster_format, 0x8200,
+            "nibble fixed, mip bit kept"
+        );
     }
 
     #[test]
@@ -331,12 +338,18 @@ mod tests {
     fn healthy_and_unevidenced_headers_are_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         // Clean DXT1: no plan.
-        let good = archive_with(&dir.path().join("good.txd"), &txd_with(0x0200, 0x3154_5844, 16));
+        let good = archive_with(
+            &dir.path().join("good.txd"),
+            &txd_with(0x0200, 0x3154_5844, 16),
+        );
         assert!(plan_fixes(&good).is_empty());
 
         // DXT5 has no corpus evidence for a nibble: reported nowhere,
         // patched nowhere.
-        let dxt5 = archive_with(&dir.path().join("dxt5.txd"), &txd_with(0x0500, 0x3554_5844, 32));
+        let dxt5 = archive_with(
+            &dir.path().join("dxt5.txd"),
+            &txd_with(0x0500, 0x3554_5844, 32),
+        );
         assert!(plan_fixes(&dxt5).is_empty());
         let mut dxt5 = dxt5;
         assert_eq!(apply_fixes(&mut dxt5), 0);

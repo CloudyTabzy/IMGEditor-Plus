@@ -3,10 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
-use crate::parser::{
-    ImgParser, ImgVersion, V1ByteOrder, export_entry_to_file, import_entry,
-};
 use crate::parser::pc_v1::PcV1Parser;
+use crate::parser::{ImgParser, ImgVersion, V1ByteOrder, export_entry_to_file, import_entry};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Xbox360Parser;
@@ -102,7 +100,10 @@ mod tests {
         assert_eq!(archive.entries[0].sector, 1);
         assert_eq!(archive.entries[1].offset, 1);
         assert_eq!(archive.entries[1].sector, 2);
-        assert_eq!(read_entry_data(&archive, &archive.entries[0]).unwrap(), vec![b'A'; 2048]);
+        assert_eq!(
+            read_entry_data(&archive, &archive.entries[0]).unwrap(),
+            vec![b'A'; 2048]
+        );
         assert_eq!(
             read_entry_data(&archive, &archive.entries[1]).unwrap(),
             vec![b'B'; 4096]

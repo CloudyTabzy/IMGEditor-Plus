@@ -16,7 +16,7 @@
 //! header + palette + length-prefixed mips][0x03 extension]]...`
 
 use crate::compat::encode::EncodedTexture;
-use crate::parser::txd::{rw, MipmapLevel, NativeSplice, NativeTexture, TxdFile};
+use crate::parser::txd::{MipmapLevel, NativeSplice, NativeTexture, TxdFile, rw};
 
 /// The version word `write_txd` uses when the caller has no original
 /// (RW 3.6.0.3). Replacement always preserves the file's own version.
@@ -84,7 +84,8 @@ fn write_native_ver(texture: &NativeTexture, version: u32) -> Vec<u8> {
 pub fn write_txd(txd: &TxdFile) -> Vec<u8> {
     let version = txd.rw_version;
     let mut dict_struct = Vec::with_capacity(4);
-    dict_struct.extend_from_slice(&(txd.textures.len().min(u16::MAX as usize) as u16).to_le_bytes());
+    dict_struct
+        .extend_from_slice(&(txd.textures.len().min(u16::MAX as usize) as u16).to_le_bytes());
     dict_struct.extend_from_slice(&txd.device_id.to_le_bytes());
     let mut body = section(rw::STRUCT, version, &dict_struct);
     for texture in &txd.textures {
@@ -156,13 +157,7 @@ pub fn replace_textures(
                 );
                 let native_size =
                     read_u32(bytes, native_header + 4).ok_or("missing native size")?;
-                (
-                    start,
-                    end,
-                    replacement,
-                    Some(native_header),
-                    native_size,
-                )
+                (start, end, replacement, Some(native_header), native_size)
             }
             NativeSplice::Native { start, end } => {
                 let version = read_u32(bytes, start + 8).unwrap_or(RW_VERSION_DEFAULT);
@@ -208,7 +203,11 @@ pub fn replace_textures(
     for edit in &edits {
         if let Some(header) = edit.native_header {
             let out_offset = (header as i64 + shift) as usize;
-            write_u32(&mut out, out_offset + 4, (edit.native_size as i64 + edit.delta) as u32)?;
+            write_u32(
+                &mut out,
+                out_offset + 4,
+                (edit.native_size as i64 + edit.delta) as u32,
+            )?;
         }
         shift += edit.delta;
     }
@@ -246,7 +245,8 @@ fn spliced_struct_body(original_body: &[u8], old: &NativeTexture, new: &NativeTe
     }
     let old_consumed = 88
         + old.palette.len()
-        + old.mipmaps
+        + old
+            .mipmaps
             .iter()
             .map(|mip| 4 + mip.data.len())
             .sum::<usize>();
@@ -329,7 +329,7 @@ pub fn native_from_encoded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compat::encode::{encode_texture, EncodeFormat, EncodeOptions};
+    use crate::compat::encode::{EncodeFormat, EncodeOptions, encode_texture};
 
     fn encoded_sample(format: EncodeFormat, platform: u32) -> EncodedTexture {
         let mut px = Vec::new();
@@ -427,7 +427,8 @@ mod tests {
             textures: vec![first, second],
         });
 
-        let edit0 = native_from_encoded(&encoded_sample(EncodeFormat::Argb8888, 8), 8, "edited0", "");
+        let edit0 =
+            native_from_encoded(&encoded_sample(EncodeFormat::Argb8888, 8), 8, "edited0", "");
         let edit1 = native_from_encoded(&encoded_sample(EncodeFormat::Dxt1, 9), 9, "edited1", "");
 
         // One pass, with deliberately unsorted indices.
@@ -475,10 +476,16 @@ mod tests {
         let archives = [
             ("iii-world", root.join("Gta_3_img/models/gta3.img")),
             ("iii-txd", root.join("Gta_3_img/models/txd.img")),
-            ("vc", root.join("Grand Theft Auto Vice City/models/gta3.img")),
+            (
+                "vc",
+                root.join("Grand Theft Auto Vice City/models/gta3.img"),
+            ),
             ("sa-gta3", root.join("GTA San Andreas/models/gta3.img")),
             ("sa-player", root.join("GTA San Andreas/models/player.img")),
-            ("sa-cutscene", root.join("GTA San Andreas/models/cutscene.img")),
+            (
+                "sa-cutscene",
+                root.join("GTA San Andreas/models/cutscene.img"),
+            ),
         ];
 
         let mut checked = 0usize;
@@ -515,14 +522,9 @@ mod tests {
                     .or_insert(0) += 1;
                 for (texture_index, texture) in parsed.textures.iter().enumerate() {
                     let rewritten = replace_texture(&bytes, texture_index, texture.clone())
-                        .unwrap_or_else(|error| {
-                            panic!("{label} / {}: {error}", entry.file_name)
-                        });
+                        .unwrap_or_else(|error| panic!("{label} / {}: {error}", entry.file_name));
                     if rewritten != bytes {
-                        let first = rewritten
-                            .iter()
-                            .zip(bytes.iter())
-                            .position(|(a, b)| a != b);
+                        let first = rewritten.iter().zip(bytes.iter()).position(|(a, b)| a != b);
                         panic!(
                             "{label} / {} texture {texture_index} identity splice mismatch at {:?} ({} vs {} bytes)",
                             entry.file_name,

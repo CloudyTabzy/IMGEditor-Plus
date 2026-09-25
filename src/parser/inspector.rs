@@ -5,8 +5,8 @@ use compact_str::CompactString;
 use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
-use crate::parser::{SECTOR_SIZE, read_entry_header_standalone};
 use crate::i18n::t;
+use crate::parser::{SECTOR_SIZE, read_entry_header_standalone};
 
 #[derive(Debug, Clone, Default)]
 pub struct EntryInspection {
@@ -477,7 +477,11 @@ mod tests {
         archive.entries.push(entry);
 
         let first = inspect_entry_cached(&mut archive, 0).unwrap();
-        let cached = archive.inspection_cache.get(&0).map(|c| (*c).clone()).unwrap();
+        let cached = archive
+            .inspection_cache
+            .get(&0)
+            .map(|c| (*c).clone())
+            .unwrap();
         assert_eq!(first.file_name, cached.file_name);
     }
 

@@ -54,7 +54,7 @@ pub enum SortKey {
 }
 
 impl std::fmt::Display for SortKey {
-        /// The translated label, so the Iced `PickList` can use the type as
+    /// The translated label, so the Iced `PickList` can use the type as
     /// an option directly. Persistence uses [`SortKey::display_name`].
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.label())
@@ -418,9 +418,7 @@ impl SortByKey for SortKey {
                     Some(primary) => {
                         let a_primary = a_type == primary;
                         let b_primary = b_type == primary;
-                        b_primary
-                            .cmp(&a_primary)
-                            .then_with(|| a_type.cmp(b_type))
+                        b_primary.cmp(&a_primary).then_with(|| a_type.cmp(b_type))
                     }
                     None => a_type.cmp(b_type),
                 }

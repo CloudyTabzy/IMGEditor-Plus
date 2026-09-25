@@ -1216,10 +1216,8 @@ mod tests {
                 has_shadow: false,
             }],
         };
-        let path = std::env::temp_dir().join(format!(
-            "imgeditor-col-ply-test-{}.ply",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("imgeditor-col-ply-test-{}.ply", std::process::id()));
 
         write_ply_from_col(&path, &col).expect("primitive COL should export to PLY");
         let output = std::fs::read_to_string(&path).expect("PLY should be readable");

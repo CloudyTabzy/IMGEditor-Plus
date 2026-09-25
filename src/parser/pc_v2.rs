@@ -366,8 +366,7 @@ impl PcV2Parser {
             out.seek(SeekFrom::Start(data_start))?;
         }
         let mut source_file = None;
-        for (index, (entry, layout_entry)) in
-            archive.entries.iter().zip(layout.iter()).enumerate()
+        for (index, (entry, layout_entry)) in archive.entries.iter().zip(layout.iter()).enumerate()
         {
             if archive.progress.is_cancelled() {
                 archive.progress.finish();

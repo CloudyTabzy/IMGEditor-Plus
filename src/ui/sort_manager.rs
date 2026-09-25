@@ -92,14 +92,10 @@ pub struct SortPreview<'a> {
     pub entries: &'a [EntryInfo],
     pub primary_type: Option<&'a str>,
     pub literal_types: bool,
-    pub ide_labels: &'a std::collections::HashMap<
-        compact_str::CompactString,
-        compact_str::CompactString,
-    >,
-    pub col_labels: &'a std::collections::HashMap<
-        compact_str::CompactString,
-        compact_str::CompactString,
-    >,
+    pub ide_labels:
+        &'a std::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
+    pub col_labels:
+        &'a std::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
 }
 
 /// Build the Sort Manager modal. Returns the inner content
@@ -205,13 +201,11 @@ fn editor_pane<'a>(
                             color: Some(colors.text),
                         }
                     }))
-                    .push(
-                        text(t::sort_intro())
-                            .size(12)
-                            .style(move |_| iced::widget::text::Style {
-                                color: Some(colors.muted),
-                            }),
-                    )
+                    .push(text(t::sort_intro()).size(12).style(move |_| {
+                        iced::widget::text::Style {
+                            color: Some(colors.muted),
+                        }
+                    }))
                     .spacing(2)
                     // The title column takes the leftover width and wraps,
                     // so a long translated intro never pushes the preset
@@ -466,13 +460,11 @@ fn preview_pane<'a>(
     colors: SortManagerColors,
 ) -> Element<'a, Message> {
     if entries.is_empty() {
-        return container(
-            text(t::sort_preview_empty())
-                .size(12)
-                .style(move |_| iced::widget::text::Style {
-                    color: Some(colors.muted),
-                }),
-        )
+        return container(text(t::sort_preview_empty()).size(12).style(move |_| {
+            iced::widget::text::Style {
+                color: Some(colors.muted),
+            }
+        }))
         .center_y(Length::Fill)
         .into();
     }
@@ -511,10 +503,7 @@ fn preview_pane<'a>(
 /// applying a preset doesn't close the dialog, so the user can
 /// compare it against the previous setup before clicking Apply.
 fn preset_picker<'a>() -> Element<'a, Message> {
-    let options: Vec<String> = SortPreset::ALL
-        .iter()
-        .map(|p| p.label())
-        .collect();
+    let options: Vec<String> = SortPreset::ALL.iter().map(|p| p.label()).collect();
     PickList::new(options, None::<String>, move |selected: String| {
         // Map the selected display name back to the preset
         // variant. Fall back to NameAZ on mismatch so a
@@ -544,4 +533,3 @@ fn dir_label(d: SortDirection) -> String {
         SortDirection::Descending => t::sort_descending_short(),
     }
 }
-

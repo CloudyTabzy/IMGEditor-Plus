@@ -51,7 +51,9 @@ impl SaveIssue {
     /// incompatible verdicts and broken headers gate; lossless
     /// conversions and warnings are reported but do not gate.
     pub fn needs_review(&self) -> bool {
-        self.incompatible > 0 || self.unknown > 0 || self.container_note.is_some()
+        self.incompatible > 0
+            || self.unknown > 0
+            || self.container_note.is_some()
             || !self.anomalies.is_empty()
     }
 
@@ -92,15 +94,15 @@ pub fn evaluate_save(report: &ScanReport, archive: &ArchiveInfo) -> SaveIssue {
                     .and_then(|examples| examples.first())
                     .cloned()
                     .unwrap_or_default();
-                issue
-                    .anomalies
-                    .push((code.to_string(), *count, example));
+                issue.anomalies.push((code.to_string(), *count, example));
             }
             Some(Severity::Warn) => issue.warnings += count,
             _ => {}
         }
     }
-    issue.anomalies.sort_by_key(|(_, count, _)| std::cmp::Reverse(*count));
+    issue
+        .anomalies
+        .sort_by_key(|(_, count, _)| std::cmp::Reverse(*count));
 
     issue.fixable_reports = FIXABLE_CODES
         .iter()
@@ -217,7 +219,9 @@ mod tests {
             .or_default()
             .push("bad.txd: DXT3 fourcc with 888 header".to_string());
         report.anomaly_counts.insert("NFT_NON_POT", 5);
-        report.anomaly_severity.insert("NFT_NON_POT", Severity::Warn);
+        report
+            .anomaly_severity
+            .insert("NFT_NON_POT", Severity::Warn);
 
         let issue = evaluate_save(&report, &archive(Some("gta3"), ImgVersion::One));
         assert!(issue.needs_review());

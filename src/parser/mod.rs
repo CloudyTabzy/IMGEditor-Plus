@@ -23,8 +23,8 @@ pub mod xbox360;
 
 pub use inspector::{EntryInspection, inspect_entry_cached, inspect_entry_standalone};
 pub use iparser::ImgParser;
-pub(crate) use pc_v1::V1ByteOrder;
 pub use pc_v1::PcV1Parser;
+pub(crate) use pc_v1::V1ByteOrder;
 pub use pc_v2::PcV2Parser;
 pub use texture_decoder::DecodedTexture;
 pub use unknown::UnknownParser;
@@ -145,10 +145,7 @@ pub fn encode_entry_name(name: &str) -> [u8; MAX_ENTRY_NAME_BYTES] {
     encode_entry_name_with_limit(name, MAX_ENTRY_NAME_LEN)
 }
 
-pub fn encode_entry_name_with_limit(
-    name: &str,
-    max_bytes: usize,
-) -> [u8; MAX_ENTRY_NAME_BYTES] {
+pub fn encode_entry_name_with_limit(name: &str, max_bytes: usize) -> [u8; MAX_ENTRY_NAME_BYTES] {
     let mut raw = [0u8; MAX_ENTRY_NAME_BYTES];
     let mut len = 0;
     let max_bytes = max_bytes.min(MAX_ENTRY_NAME_BYTES);
@@ -241,11 +238,7 @@ pub(crate) fn validate_entry_output_name(name: &str) -> anyhow::Result<()> {
         anyhow::bail!("entry name is not a single safe filename: {name}");
     }
 
-    let device_name = name
-        .split('.')
-        .next()
-        .unwrap_or(name)
-        .to_ascii_uppercase();
+    let device_name = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
     if matches!(
         device_name.as_str(),
         "CON"
@@ -484,7 +477,10 @@ pub(crate) fn stream_entry_data(
     Ok(())
 }
 
-fn checked_source_entry_range(entry: &EntryInfo, source_len: usize) -> anyhow::Result<std::ops::Range<usize>> {
+fn checked_source_entry_range(
+    entry: &EntryInfo,
+    source_len: usize,
+) -> anyhow::Result<std::ops::Range<usize>> {
     let start = u64::from(entry.offset)
         .checked_mul(SECTOR_SIZE)
         .ok_or_else(|| anyhow::anyhow!("entry {} byte offset overflows", entry.file_name))?;
@@ -583,7 +579,10 @@ pub fn import_entry_with_result(
     let metadata = std::fs::metadata(path)?;
     if !metadata.is_file() {
         let reason = t::import_skip_not_file();
-        archive.add_log(t::log_import_skipped(path.display().to_string(), reason.as_str()));
+        archive.add_log(t::log_import_skipped(
+            path.display().to_string(),
+            reason.as_str(),
+        ));
         return Ok(ImportEntryResult::Skipped { reason });
     }
 
@@ -694,8 +693,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let archive = ArchiveInfo::new("test", false, ImgVersion::One);
         let entry = EntryInfo::new("../escape.dff");
-        let error = export_entry_to_file(&archive, &entry, &dir.path().join("output"))
-            .unwrap_err();
+        let error = export_entry_to_file(&archive, &entry, &dir.path().join("output")).unwrap_err();
         assert!(error.to_string().contains("safe filename"));
     }
 
@@ -720,8 +718,8 @@ mod tests {
 
         std::fs::write(&source, vec![2u8; SECTOR_SIZE as usize + 1]).unwrap();
         let mut out = Vec::new();
-        let error = stream_entry_data(&mut out, &entry, layout_size, None, None, &mut None)
-            .unwrap_err();
+        let error =
+            stream_entry_data(&mut out, &entry, layout_size, None, None, &mut None).unwrap_err();
         assert!(error.to_string().contains("changed size during save"));
     }
 
@@ -739,8 +737,7 @@ mod tests {
         std::fs::write(&archive_path, &bytes).unwrap();
         let mut first = EntryInfo::new("first.dff");
         first.sector = 1;
-        let header =
-            read_entry_header_standalone(&first, Some(&archive_path), None, 8192).unwrap();
+        let header = read_entry_header_standalone(&first, Some(&archive_path), None, 8192).unwrap();
         assert_eq!(header.len(), SECTOR_SIZE as usize);
         assert!(header.iter().all(|&byte| byte == b'A'));
     }
@@ -774,7 +771,10 @@ mod tests {
 
         for path in [&cyrillic, &long] {
             let result = import_entry_with_result(&mut archive, path, false).unwrap();
-            assert!(matches!(result, ImportEntryResult::Skipped { .. }), "{path:?}");
+            assert!(
+                matches!(result, ImportEntryResult::Skipped { .. }),
+                "{path:?}"
+            );
         }
         assert!(archive.entries.is_empty());
     }
@@ -783,7 +783,10 @@ mod tests {
     fn entry_name_problem_accepts_only_printable_ascii_within_capacity() {
         assert_eq!(entry_name_problem("player.dff", ImgVersion::Two), None);
         assert_eq!(entry_name_problem("my file (2).txd", ImgVersion::One), None);
-        assert_eq!(entry_name_problem("", ImgVersion::Two), Some(t::entry_name_empty()));
+        assert_eq!(
+            entry_name_problem("", ImgVersion::Two),
+            Some(t::entry_name_empty())
+        );
         assert_eq!(
             entry_name_problem("модель.dff", ImgVersion::Two),
             Some(t::entry_name_not_ascii())
@@ -797,7 +800,10 @@ mod tests {
             entry_name_problem(&"x".repeat(capacity + 1), ImgVersion::Two),
             Some(t::entry_name_too_long(capacity))
         );
-        assert_eq!(entry_name_problem(&"x".repeat(capacity), ImgVersion::Two), None);
+        assert_eq!(
+            entry_name_problem(&"x".repeat(capacity), ImgVersion::Two),
+            None
+        );
     }
 
     #[test]

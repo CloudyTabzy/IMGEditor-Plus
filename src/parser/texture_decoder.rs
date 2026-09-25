@@ -793,18 +793,17 @@ pub fn decode_native_raster(
     // paletted GTA III texture renders with red and blue exchanged.
     // See docs/research-inu-tools-gta.md.
     let palette_storage;
-    let palette: &[u8] = if palette_type != 0
-        && (platform_id == PLATFORM_D3D8 || platform_id == PLATFORM_D3D9)
-    {
-        let mut swapped = palette.to_vec();
-        for entry in swapped.chunks_exact_mut(4) {
-            entry.swap(0, 2);
-        }
-        palette_storage = swapped;
-        &palette_storage
-    } else {
-        palette
-    };
+    let palette: &[u8] =
+        if palette_type != 0 && (platform_id == PLATFORM_D3D8 || platform_id == PLATFORM_D3D9) {
+            let mut swapped = palette.to_vec();
+            for entry in swapped.chunks_exact_mut(4) {
+                entry.swap(0, 2);
+            }
+            palette_storage = swapped;
+            &palette_storage
+        } else {
+            palette
+        };
     if palette_type == 1 {
         return decode_pal8(data, palette, width, height);
     }
@@ -1044,54 +1043,42 @@ mod tests {
             match selector {
                 0 => alpha0,
                 1 => alpha1,
-                2 => {
-                    if alpha0 > alpha1 {
-                        (6 * a0 + a1 + 3) / 7
-                    } else {
-                        (4 * a0 + a1 + 2) / 5
-                    }
-                    .min(255) as u8
+                2 => if alpha0 > alpha1 {
+                    (6 * a0 + a1 + 3) / 7
+                } else {
+                    (4 * a0 + a1 + 2) / 5
                 }
-                3 => {
-                    if alpha0 > alpha1 {
-                        (5 * a0 + 2 * a1 + 3) / 7
-                    } else {
-                        (3 * a0 + 2 * a1 + 2) / 5
-                    }
-                    .min(255) as u8
+                .min(255) as u8,
+                3 => if alpha0 > alpha1 {
+                    (5 * a0 + 2 * a1 + 3) / 7
+                } else {
+                    (3 * a0 + 2 * a1 + 2) / 5
                 }
-                4 => {
-                    if alpha0 > alpha1 {
-                        (4 * a0 + 3 * a1 + 3) / 7
-                    } else {
-                        (2 * a0 + 3 * a1 + 2) / 5
-                    }
-                    .min(255) as u8
+                .min(255) as u8,
+                4 => if alpha0 > alpha1 {
+                    (4 * a0 + 3 * a1 + 3) / 7
+                } else {
+                    (2 * a0 + 3 * a1 + 2) / 5
                 }
-                5 => {
-                    if alpha0 > alpha1 {
-                        (3 * a0 + 4 * a1 + 3) / 7
-                    } else {
-                        (a0 + 4 * a1 + 2) / 5
-                    }
-                    .min(255) as u8
+                .min(255) as u8,
+                5 => if alpha0 > alpha1 {
+                    (3 * a0 + 4 * a1 + 3) / 7
+                } else {
+                    (a0 + 4 * a1 + 2) / 5
                 }
-                6 => {
-                    if alpha0 > alpha1 {
-                        (2 * a0 + 5 * a1 + 3) / 7
-                    } else {
-                        0
-                    }
-                    .min(255) as u8
+                .min(255) as u8,
+                6 => if alpha0 > alpha1 {
+                    (2 * a0 + 5 * a1 + 3) / 7
+                } else {
+                    0
                 }
-                7 => {
-                    if alpha0 > alpha1 {
-                        (a0 + 6 * a1 + 3) / 7
-                    } else {
-                        255
-                    }
-                    .min(255) as u8
+                .min(255) as u8,
+                7 => if alpha0 > alpha1 {
+                    (a0 + 6 * a1 + 3) / 7
+                } else {
+                    255
                 }
+                .min(255) as u8,
                 _ => unreachable!(),
             }
         };

@@ -1003,10 +1003,8 @@ fn parse_block(type_name: &str, raw: &[u8], endian: Endian) -> NifResult<BlockPa
             "NiMaterialProperty" => {
                 read_ni_material_property(&mut r).map(BlockPayload::NiMaterialProperty)
             }
-            "NiTexturingProperty" => {
-                read_ni_texturing_property(&mut r)
-                    .map(|property| BlockPayload::NiTexturingProperty(Box::new(property)))
-            }
+            "NiTexturingProperty" => read_ni_texturing_property(&mut r)
+                .map(|property| BlockPayload::NiTexturingProperty(Box::new(property))),
             "NiAlphaProperty" => read_ni_alpha_property(&mut r).map(BlockPayload::NiAlphaProperty),
             "NiZBufferProperty" => {
                 read_ni_zbuffer_property(&mut r).map(BlockPayload::NiZBufferProperty)
@@ -2007,7 +2005,6 @@ pub(crate) mod tests {
             reader.read_i32_array(usize::MAX, "references"),
             Err(NifError::InvalidField("references", _))
         ));
-
     }
 
     #[test]

@@ -150,7 +150,11 @@ pub fn chord_matches(chord: KeyChord, pressed_physical: Physical, pressed_mods: 
     true
 }
 
-pub fn shortcut_matches(shortcut: Shortcut, pressed_physical: Physical, pressed_mods: Modifiers) -> bool {
+pub fn shortcut_matches(
+    shortcut: Shortcut,
+    pressed_physical: Physical,
+    pressed_mods: Modifiers,
+) -> bool {
     if chord_matches(shortcut_chord(shortcut), pressed_physical, pressed_mods) {
         return true;
     }
@@ -159,7 +163,8 @@ pub fn shortcut_matches(shortcut: Shortcut, pressed_physical: Physical, pressed_
 }
 
 pub fn detect_pressed(pressed_physical: Physical, pressed_mods: Modifiers) -> Option<Shortcut> {
-    all_shortcuts().into_iter()
+    all_shortcuts()
+        .into_iter()
         .find(|s| shortcut_matches(*s, pressed_physical, pressed_mods))
 }
 

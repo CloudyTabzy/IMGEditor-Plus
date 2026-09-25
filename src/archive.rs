@@ -130,8 +130,8 @@ fn new_texture_preview_cache(active_entry: &Arc<AtomicUsize>) -> Arc<TexturePrev
         TexturePreviewLifecycle::new(Arc::clone(active_entry)),
     ))
 }
-use crate::sort::{SortChain, SortDirection, SortKey};
 use crate::i18n::t;
+use crate::sort::{SortChain, SortDirection, SortKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportStatus {
@@ -337,10 +337,7 @@ impl EntryInfo {
         Self::new_with_name_capacity(file_name, entry_name_capacity(version))
     }
 
-    fn new_with_name_capacity(
-        file_name: impl Into<CompactString>,
-        name_capacity: usize,
-    ) -> Self {
+    fn new_with_name_capacity(file_name: impl Into<CompactString>, name_capacity: usize) -> Self {
         let file_name: CompactString = file_name.into();
         let file_name_lower = CompactString::new(file_name.to_lowercase());
         let file_name_raw = if name_capacity == crate::parser::MAX_ENTRY_NAME_LEN {
@@ -462,8 +459,7 @@ pub struct ArchiveInfo {
 
 impl ArchiveInfo {
     pub fn new(file_name: impl Into<String>, create_new: bool, version: ImgVersion) -> Self {
-        let texture_cache_active_entry =
-            Arc::new(AtomicUsize::new(NO_ACTIVE_TEXTURE_PREVIEW));
+        let texture_cache_active_entry = Arc::new(AtomicUsize::new(NO_ACTIVE_TEXTURE_PREVIEW));
         let mut archive = Self {
             path: None,
             file_name: file_name.into(),
@@ -508,8 +504,7 @@ impl ArchiveInfo {
 
     pub fn open(path: impl Into<PathBuf>) -> anyhow::Result<Self> {
         let path = crate::parser::canonical_img_path(&path.into());
-        let texture_cache_active_entry =
-            Arc::new(AtomicUsize::new(NO_ACTIVE_TEXTURE_PREVIEW));
+        let texture_cache_active_entry = Arc::new(AtomicUsize::new(NO_ACTIVE_TEXTURE_PREVIEW));
 
         let mut archive = Self {
             path: Some(path.clone()),
@@ -628,7 +623,10 @@ impl ArchiveInfo {
                     }
                 }
             }
-            scored.into_iter().map(|(score, i, e)| (i, e, Some(score))).collect()
+            scored
+                .into_iter()
+                .map(|(score, i, e)| (i, e, Some(score)))
+                .collect()
         };
 
         // Build the IDE/COL sort context once per sort so the
@@ -659,12 +657,14 @@ impl ArchiveInfo {
         // chain only breaks ties. The legacy single-column `sort` field
         // is only used to drive the "primary type" bubble via
         // `primary_type` above; the full chain takes over from there.
-        matches.sort_by(|(_, a, a_score), (_, b, b_score)| match (a_score, b_score) {
-            (Some(a_score), Some(b_score)) => {
-                b_score.cmp(a_score).then_with(|| self.sort_chain.cmp(a, b, &sort_ctx))
-            }
-            _ => self.sort_chain.cmp(a, b, &sort_ctx),
-        });
+        matches.sort_by(
+            |(_, a, a_score), (_, b, b_score)| match (a_score, b_score) {
+                (Some(a_score), Some(b_score)) => b_score
+                    .cmp(a_score)
+                    .then_with(|| self.sort_chain.cmp(a, b, &sort_ctx)),
+                _ => self.sort_chain.cmp(a, b, &sort_ctx),
+            },
+        );
 
         for (display_row, (entry_index, _, _)) in matches.into_iter().enumerate() {
             self.selected_lookup.insert(entry_index, display_row);
@@ -1013,10 +1013,7 @@ mod tests {
         );
         archive.invalidate_type_cache();
         // Alphabetical: "NFT" < "NIF".
-        assert_eq!(
-            archive.unique_file_types(true),
-            ["NFT", "NIF"].as_slice()
-        );
+        assert_eq!(archive.unique_file_types(true), ["NFT", "NIF"].as_slice());
     }
 
     #[test]
@@ -1026,8 +1023,10 @@ mod tests {
         // tie); literal extensions put DFF before NIF.
         archive.entries.push(EntryInfo::new("a.nif"));
         archive.entries.push(EntryInfo::new("b.dff"));
-        archive.sort_chain =
-            SortChain::new(vec![SortPriority::new(SortKey::Type, SortDirection::Ascending)]);
+        archive.sort_chain = SortChain::new(vec![SortPriority::new(
+            SortKey::Type,
+            SortDirection::Ascending,
+        )]);
 
         archive.update_selected_list("", false);
         assert_eq!(archive.selected_indices.as_slice(), &[0, 1]);
@@ -1095,10 +1094,7 @@ mod tests {
 
         // Scattered initials still match the subsequence scan.
         archive.update_selected_list("pff", false);
-        assert!(
-            archive.selected_indices.contains(&0),
-            "p.c.dff subsequence"
-        );
+        assert!(archive.selected_indices.contains(&0), "p.c.dff subsequence");
     }
 
     #[test]

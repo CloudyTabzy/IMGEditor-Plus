@@ -5,7 +5,6 @@ use iced::Task;
 use crate::i18n::t;
 use crate::parser::ImgVersion;
 
-
 #[derive(Debug, Clone)]
 pub struct SaveArchiveChoice {
     pub path: PathBuf,
@@ -36,7 +35,10 @@ pub fn open_compare_manifest(directory: Option<PathBuf>) -> Task<Option<PathBuf>
         async move {
             let mut dialog = rfd::AsyncFileDialog::new()
                 .set_title(t::file_dialog_compare())
-                .add_filter(t::file_dialog_filter_entry_list(), &["img.compare", "compare"]);
+                .add_filter(
+                    t::file_dialog_filter_entry_list(),
+                    &["img.compare", "compare"],
+                );
             if let Some(directory) = directory.filter(|path| path.is_dir()) {
                 dialog = dialog.set_directory(directory);
             }
@@ -160,7 +162,10 @@ pub fn pick_image_file() -> Task<Option<PathBuf>> {
         async {
             rfd::AsyncFileDialog::new()
                 .set_title(t::file_dialog_choose_image())
-                .add_filter(t::file_dialog_filter_images(), &["png", "dds", "bmp", "tga"])
+                .add_filter(
+                    t::file_dialog_filter_images(),
+                    &["png", "dds", "bmp", "tga"],
+                )
                 .pick_file()
                 .await
                 .map(|handle| handle.path().to_path_buf())
@@ -213,7 +218,10 @@ pub fn save_compare_manifest(
         async move {
             let mut dialog = rfd::AsyncFileDialog::new()
                 .set_title(t::file_dialog_export_list())
-                .add_filter(t::file_dialog_filter_entry_list(), &["img.compare", "compare"])
+                .add_filter(
+                    t::file_dialog_filter_entry_list(),
+                    &["img.compare", "compare"],
+                )
                 .set_file_name(file_name);
             if let Some(directory) = directory.filter(|path| path.is_dir()) {
                 dialog = dialog.set_directory(directory);

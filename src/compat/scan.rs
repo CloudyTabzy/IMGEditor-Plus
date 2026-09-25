@@ -11,11 +11,11 @@ use anyhow::Context;
 use crate::archive::ArchiveInfo;
 use crate::inspector::nif::{self, Endian};
 use crate::parser::txd::parse_txd;
-use crate::parser::{canonical_img_path, read_entry_data_from_source, ImgVersion};
+use crate::parser::{ImgVersion, canonical_img_path, read_entry_data_from_source};
 #[cfg(test)]
 use crate::parser::{iparser::ImgParser, pc_v2::PcV2Parser};
 
-use super::games::{classify, ALL_GAMES};
+use super::games::{ALL_GAMES, classify};
 use super::raster::{LogicalFormat, RasterProfile, Severity};
 use crate::i18n::t;
 
@@ -199,93 +199,93 @@ fn profile_txd_entry(
         return Ok(());
     };
     let parsed = match parse_txd(&bytes) {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                report.parse_failures += 1;
-                record_anomaly(
-                    report,
-                    "TXD_PARSE_FAIL",
-                    Severity::Error,
-                    &entry.file_name,
-                    err,
-                );
-                return Ok(());
-            }
-        };
+        Ok(parsed) => parsed,
+        Err(err) => {
+            report.parse_failures += 1;
+            record_anomaly(
+                report,
+                "TXD_PARSE_FAIL",
+                Severity::Error,
+                &entry.file_name,
+                err,
+            );
+            return Ok(());
+        }
+    };
 
-        // Per-entry verdicts for the chosen target power the row
-        // highlights in the UI. Computed alongside the aggregate pass.
-        let target = options.target.and_then(crate::compat::games::profile_by_id);
-        let mut entry_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
-        let mut entry_worst: Option<crate::compat::games::Verdict> = None;
+    // Per-entry verdicts for the chosen target power the row
+    // highlights in the UI. Computed alongside the aggregate pass.
+    let target = options.target.and_then(crate::compat::games::profile_by_id);
+    let mut entry_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut entry_worst: Option<crate::compat::games::Verdict> = None;
 
-        for texture in &parsed.textures {
-            report.textures += 1;
-            let profile = RasterProfile::from_native(texture);
+    for texture in &parsed.textures {
+        report.textures += 1;
+        let profile = RasterProfile::from_native(texture);
 
-            let mut class_label = profile.logical.label().to_string();
-            if profile.logical == LogicalFormat::R888 && profile.storage_bpp == 4 {
-                class_label.push_str(" (32bpp storage)");
-            }
-            *report.class_counts.entry(class_label).or_default() += 1;
+        let mut class_label = profile.logical.label().to_string();
+        if profile.logical == LogicalFormat::R888 && profile.storage_bpp == 4 {
+            class_label.push_str(" (32bpp storage)");
+        }
+        *report.class_counts.entry(class_label).or_default() += 1;
 
-            for anomaly in profile.anomalies() {
-                record_anomaly(
-                    report,
-                    anomaly.code,
-                    anomaly.severity,
-                    texture.diffuse_name.as_str(),
-                    anomaly.detail,
-                );
-            }
+        for anomaly in profile.anomalies() {
+            record_anomaly(
+                report,
+                anomaly.code,
+                anomaly.severity,
+                texture.diffuse_name.as_str(),
+                anomaly.detail,
+            );
+        }
 
-            for game in ALL_GAMES {
-                let verdict = classify(game, &profile);
-                *report
-                    .verdicts
-                    .entry(game.id)
-                    .or_default()
-                    .entry(verdict.verdict.label())
-                    .or_default() += 1;
-            }
+        for game in ALL_GAMES {
+            let verdict = classify(game, &profile);
+            *report
+                .verdicts
+                .entry(game.id)
+                .or_default()
+                .entry(verdict.verdict.label())
+                .or_default() += 1;
+        }
 
-            if let Some(target) = target {
-                let verdict = classify(target, &profile).verdict;
-                *entry_counts.entry(verdict.label()).or_default() += 1;
-                entry_worst = Some(match entry_worst {
-                    Some(previous) => previous.max(verdict),
-                    None => verdict,
-                });
-            }
+        if let Some(target) = target {
+            let verdict = classify(target, &profile).verdict;
+            *entry_counts.entry(verdict.label()).or_default() += 1;
+            entry_worst = Some(match entry_worst {
+                Some(previous) => previous.max(verdict),
+                None => verdict,
+            });
+        }
 
-            if options.decode_pixels {
-                match texture.decode_rgba() {
-                    Ok(rgba) if unique_color_count(&rgba) <= 256 => {
-                        *report.palette_reconstructible.get_or_insert(0) += 1;
-                    }
-                    Ok(_) => {}
-                    Err(err) => {
-                         record_anomaly(
-                             report,
-                             "TXD_DECODE_FAIL",
-                             Severity::Error,
-                             texture.diffuse_name.as_str(),
-                             format!("{err}"),
-                         );
-                    }
+        if options.decode_pixels {
+            match texture.decode_rgba() {
+                Ok(rgba) if unique_color_count(&rgba) <= 256 => {
+                    *report.palette_reconstructible.get_or_insert(0) += 1;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    record_anomaly(
+                        report,
+                        "TXD_DECODE_FAIL",
+                        Severity::Error,
+                        texture.diffuse_name.as_str(),
+                        format!("{err}"),
+                    );
                 }
             }
         }
+    }
 
-        if let (Some(_), Some(worst)) = (target, entry_worst) {
-            report.entry_verdicts.push(EntryVerdict {
-                entry_index,
-                file_name: entry.file_name.to_string(),
-                textures: parsed.textures.len(),
-                worst,
-                counts: entry_counts,
-            });
-        }
+    if let (Some(_), Some(worst)) = (target, entry_worst) {
+        report.entry_verdicts.push(EntryVerdict {
+            entry_index,
+            file_name: entry.file_name.to_string(),
+            textures: parsed.textures.len(),
+            worst,
+            counts: entry_counts,
+        });
+    }
     Ok(())
 }
 
@@ -354,7 +354,10 @@ impl ImportFileCheck {
 /// Check one file on disk against a target game without importing it.
 /// TXDs go through the RenderWare raster path, Gamebryo files through
 /// the NiPixelData path; anything else is reported as skipped.
-pub fn check_import_file(path: &Path, target: &crate::compat::games::GameProfile) -> ImportFileCheck {
+pub fn check_import_file(
+    path: &Path,
+    target: &crate::compat::games::GameProfile,
+) -> ImportFileCheck {
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -467,7 +470,13 @@ fn read_entry_bytes(
             Ok(bytes) => Ok(Some(bytes)),
             Err(err) => {
                 report.parse_failures += 1;
-                record_anomaly(report, code, Severity::Error, &entry.file_name, format!("{err}"));
+                record_anomaly(
+                    report,
+                    code,
+                    Severity::Error,
+                    &entry.file_name,
+                    format!("{err}"),
+                );
                 Ok(None)
             }
         },
@@ -601,7 +610,10 @@ fn profile_nft_entry(
         }
         match decode_ni_pixel_tail(raw, header.endian) {
             Some(info) => {
-                *report.nft_formats.entry(info.format_name().to_string()).or_default() += 1;
+                *report
+                    .nft_formats
+                    .entry(info.format_name().to_string())
+                    .or_default() += 1;
                 if info.paletted() {
                     report.nft_paletted += 1;
                 }
@@ -642,7 +654,10 @@ fn profile_nft_entry(
                     "NFT_PIXELDATA_UNPARSED",
                     Severity::Info,
                     &entry.file_name,
-                    format!("format {fmt} ({}), dims not decodable", nif_format_name(fmt)),
+                    format!(
+                        "format {fmt} ({}), dims not decodable",
+                        nif_format_name(fmt)
+                    ),
                 );
                 *report
                     .nft_formats
@@ -717,10 +732,7 @@ fn decode_ni_pixel_tail(raw: &[u8], endian: Endian) -> Option<NftPixelInfo> {
     let mut data_start = None;
     let mut d = end.saturating_sub(8);
     while d + 8 <= end {
-        let (px, faces) = match (
-            read_u32_at(raw, d, endian),
-            read_u32_at(raw, d + 4, endian),
-        ) {
+        let (px, faces) = match (read_u32_at(raw, d, endian), read_u32_at(raw, d + 4, endian)) {
             (Some(px), Some(faces)) => (px, faces),
             _ => break,
         };
@@ -766,9 +778,8 @@ fn decode_ni_pixel_tail(raw: &[u8], endian: Endian) -> Option<NftPixelInfo> {
         let w = read_u32_at(raw, entry_start, endian)?;
         let h = read_u32_at(raw, entry_start + 4, endian)?;
         let off = read_u32_at(raw, entry_start + 8, endian)?;
-        let plausible = (1..=8192).contains(&w)
-            && (1..=8192).contains(&h)
-            && (off as u64) < num_pixels as u64;
+        let plausible =
+            (1..=8192).contains(&w) && (1..=8192).contains(&h) && (off as u64) < num_pixels as u64;
         if !plausible {
             break;
         }
@@ -844,11 +855,7 @@ trait SeverityRank {
 
 impl SeverityRank for Severity {
     fn max_by_rank(self, other: Self) -> Self {
-        if self >= other {
-            self
-        } else {
-            other
-        }
+        if self >= other { self } else { other }
     }
 }
 
@@ -875,7 +882,9 @@ pub fn run_cli_args(args: &[String]) -> anyhow::Result<()> {
             "--target" => {
                 target = Some(
                     iter.next()
-                        .ok_or_else(|| anyhow::anyhow!("--target needs a game id (gta3|vc|sa|bully)"))?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("--target needs a game id (gta3|vc|sa|bully)")
+                        })?
                         .as_str(),
                 );
             }
@@ -902,9 +911,9 @@ pub fn run_cli_args(args: &[String]) -> anyhow::Result<()> {
 }
 
 /// CLI entry point: print a human-readable report.
-pub fn run_cli(path: &Path, options: &ScanOptions, target: Option<&str>) -> anyhow::Result<()> {    let report = scan_archive(path, options).with_context(|| {
-        format!("scanning {}", path.display())
-    })?;
+pub fn run_cli(path: &Path, options: &ScanOptions, target: Option<&str>) -> anyhow::Result<()> {
+    let report =
+        scan_archive(path, options).with_context(|| format!("scanning {}", path.display()))?;
 
     println!("Archive: {} ({})", report.archive_path, report.archive_kind);
     println!(
@@ -1103,15 +1112,21 @@ mod tests {
         progress.start();
         progress.request_cancel();
         let mut report = ScanReport::default();
-        let error = profile_entries(&archive, &mut report, &ScanOptions::default(), Some(&progress))
-            .expect_err("cancelled validation must fail");
+        let error = profile_entries(
+            &archive,
+            &mut report,
+            &ScanOptions::default(),
+            Some(&progress),
+        )
+        .expect_err("cancelled validation must fail");
         progress.finish();
         assert!(format!("{error}").contains("cancelled"));
         assert!(!archive.progress.in_use(), "cancel must release the slot");
     }
 
     #[test]
-    fn scanner_profiles_fixtures_and_counts_verdicts() {        let dir = tempfile::tempdir().unwrap();
+    fn scanner_profiles_fixtures_and_counts_verdicts() {
+        let dir = tempfile::tempdir().unwrap();
         let path = fixture_archive(dir.path());
         let report = scan_archive(&path, &ScanOptions::default()).unwrap();
 
@@ -1165,7 +1180,11 @@ mod tests {
         std::fs::write(&path, &img).unwrap();
 
         let report = scan_archive(&path, &ScanOptions::default()).unwrap();
-        assert!(report.anomaly_counts.contains_key("CONTRADICTORY_DXT_HEADER"));
+        assert!(
+            report
+                .anomaly_counts
+                .contains_key("CONTRADICTORY_DXT_HEADER")
+        );
         let gta3 = report.verdicts.get("gta3").unwrap();
         assert!(
             gta3.get("convertible (lossless)").copied().unwrap_or(0) >= 1,
@@ -1304,7 +1323,11 @@ mod tests {
     #[test]
     fn scanner_profiles_bully_nft_entries() {
         let dir = tempfile::tempdir().unwrap();
-        let nft_full = nif_nft_bytes(&nif_pixel_data_block(4, &[(8, 8), (4, 4), (2, 2), (1, 1)], -1));
+        let nft_full = nif_nft_bytes(&nif_pixel_data_block(
+            4,
+            &[(8, 8), (4, 4), (2, 2), (1, 1)],
+            -1,
+        ));
         let nft_short = nif_nft_bytes(&nif_pixel_data_block(4, &[(8, 8), (4, 4), (2, 2)], -1));
         let nft_pal = nif_nft_bytes(&nif_pixel_data_block(2, &[(32, 32)], 2));
         let nft_nonpot = nif_nft_bytes(&nif_pixel_data_block(4, &[(48, 48)], -1));
@@ -1372,10 +1395,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bully.entry_verdicts.len(), 4, "one verdict per NFT entry");
-        assert!(bully
-            .entry_verdicts
-            .iter()
-            .all(|entry| entry.worst == Verdict::Native));
+        assert!(
+            bully
+                .entry_verdicts
+                .iter()
+                .all(|entry| entry.worst == Verdict::Native)
+        );
 
         let gta3 = scan_archive(
             &path,
@@ -1386,10 +1411,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(gta3.entry_verdicts.len(), 4);
-        assert!(gta3
-            .entry_verdicts
-            .iter()
-            .all(|entry| entry.worst == Verdict::Unsupported));
+        assert!(
+            gta3.entry_verdicts
+                .iter()
+                .all(|entry| entry.worst == Verdict::Unsupported)
+        );
     }
 
     #[test]
@@ -1528,11 +1554,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let nft = dir.path().join("skin.nft");
-        std::fs::write(
-            &nft,
-            nif_nft_bytes(&nif_pixel_data_block(4, &[(8, 8)], -1)),
-        )
-        .unwrap();
+        std::fs::write(&nft, nif_nft_bytes(&nif_pixel_data_block(4, &[(8, 8)], -1))).unwrap();
         let garbage = dir.path().join("readme.txt");
         std::fs::write(&garbage, b"not a texture").unwrap();
 
