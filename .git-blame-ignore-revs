@@ -1,0 +1,5 @@
+# Formatting-only commits. `git config blame.ignoreRevsFile .git-blame-ignore-revs`
+# makes local blame skip them; GitHub reads this file automatically.
+
+# Apply rustfmt to the whole crate
+3d1871e562e45c17f45cfbdf28af5f7830b1807c
