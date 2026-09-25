@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use iced::Task;
 
+use crate::i18n::t;
 use crate::parser::ImgVersion;
+
 
 #[derive(Debug, Clone)]
 pub struct SaveArchiveChoice {
@@ -15,8 +17,8 @@ pub fn open_file() -> Task<Option<PathBuf>> {
     Task::perform(
         async {
             rfd::AsyncFileDialog::new()
-                .set_title("Open IMG archive")
-                .add_filter("IMG Archive", &["img", "dir"])
+                .set_title(t::file_dialog_open_archive())
+                .add_filter(t::file_dialog_filter_img(), &["img", "dir"])
                 .pick_file()
                 .await
                 .map(|handle| handle.path().to_path_buf())
@@ -33,8 +35,8 @@ pub fn open_compare_manifest(directory: Option<PathBuf>) -> Task<Option<PathBuf>
     Task::perform(
         async move {
             let mut dialog = rfd::AsyncFileDialog::new()
-                .set_title("Compare with entry list")
-                .add_filter("IMG entry list", &["img.compare", "compare"]);
+                .set_title(t::file_dialog_compare())
+                .add_filter(t::file_dialog_filter_entry_list(), &["img.compare", "compare"]);
             if let Some(directory) = directory.filter(|path| path.is_dir()) {
                 dialog = dialog.set_directory(directory);
             }
@@ -64,8 +66,8 @@ pub fn open_agr_file() -> Task<Option<PathBuf>> {
     Task::perform(
         async {
             rfd::AsyncFileDialog::new()
-                .set_title("Open Bully animation group")
-                .add_filter("Bully animation group", &["agr"])
+                .set_title(t::file_dialog_open_agr())
+                .add_filter(t::file_dialog_filter_agr(), &["agr"])
                 .pick_file()
                 .await
                 .map(|handle| handle.path().to_path_buf())
@@ -84,9 +86,9 @@ pub fn import_files() -> Task<Vec<PathBuf>> {
     Task::perform(
         async {
             rfd::AsyncFileDialog::new()
-                .set_title("Import files")
+                .set_title(t::file_dialog_import_files())
                 .add_filter(
-                    "Importable files",
+                    t::file_dialog_filter_importable(),
                     &["dff", "txd", "col", "ifp", "ipl", "ide", "dat"],
                 )
                 .pick_files()
@@ -108,7 +110,7 @@ pub fn import_folder() -> Task<Option<PathBuf>> {
     Task::perform(
         async {
             rfd::AsyncFileDialog::new()
-                .set_title("Select folder to import")
+                .set_title(t::file_dialog_import_folder())
                 .pick_folder()
                 .await
                 .map(|handle| handle.path().to_path_buf())
@@ -128,7 +130,7 @@ pub fn import_folder() -> Task<Option<PathBuf>> {
 pub fn pick_game_folder(current: Option<PathBuf>) -> Task<Option<PathBuf>> {
     Task::perform(
         async move {
-            let mut dialog = rfd::AsyncFileDialog::new().set_title("Select the game folder");
+            let mut dialog = rfd::AsyncFileDialog::new().set_title(t::file_dialog_game_folder());
             if let Some(current) = current.filter(|path| path.is_dir()) {
                 dialog = dialog.set_directory(current);
             }
@@ -157,8 +159,8 @@ pub fn pick_image_file() -> Task<Option<PathBuf>> {
     Task::perform(
         async {
             rfd::AsyncFileDialog::new()
-                .set_title("Choose an image")
-                .add_filter("Images", &["png", "dds", "bmp", "tga"])
+                .set_title(t::file_dialog_choose_image())
+                .add_filter(t::file_dialog_filter_images(), &["png", "dds", "bmp", "tga"])
                 .pick_file()
                 .await
                 .map(|handle| handle.path().to_path_buf())
@@ -182,8 +184,8 @@ pub fn save_archive(default_path: PathBuf, version: ImgVersion) -> Task<Option<S
     Task::perform(
         async move {
             rfd::AsyncFileDialog::new()
-                .set_title("Save IMG archive")
-                .add_filter("IMG Archive", &["img"])
+                .set_title(t::file_dialog_save_archive())
+                .add_filter(t::file_dialog_filter_img(), &["img"])
                 .set_file_name(file_name)
                 .save_file()
                 .await
@@ -210,8 +212,8 @@ pub fn save_compare_manifest(
     Task::perform(
         async move {
             let mut dialog = rfd::AsyncFileDialog::new()
-                .set_title("Export entry list")
-                .add_filter("IMG entry list", &["img.compare", "compare"])
+                .set_title(t::file_dialog_export_list())
+                .add_filter(t::file_dialog_filter_entry_list(), &["img.compare", "compare"])
                 .set_file_name(file_name);
             if let Some(directory) = directory.filter(|path| path.is_dir()) {
                 dialog = dialog.set_directory(directory);
@@ -246,7 +248,7 @@ pub fn save_folder() -> Task<Option<PathBuf>> {
     Task::perform(
         async {
             rfd::AsyncFileDialog::new()
-                .set_title("Select export folder")
+                .set_title(t::file_dialog_export_folder())
                 .pick_folder()
                 .await
                 .map(|handle| handle.path().to_path_buf())

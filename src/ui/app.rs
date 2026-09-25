@@ -237,21 +237,6 @@ pub enum OpenArchiveOutcome {
     Failed(String),
 }
 
-pub const ABOUT_TEXT: &str = concat!(
-    "IMG Editor Plus v",
-    env!("CARGO_PKG_VERSION"),
-    "\n\nA pure Rust desktop editor for GTA IMG archives.\n\n",
-    "Made by CloudyTabzy & Agents\n",
-    "Based on the original ",
-    "IMG Editor by Grinch_\n",
-    "(https://github.com/user-grinch/IMGEditor)\n\n",
-    "Supported formats:\n",
-    "- GTA III\n",
-    "- GTA Vice City\n",
-    "- GTA San Andreas\n",
-    "- Bully Scholarship Edition"
-);
-
 /// Short, session-stable tips shown in the empty workspace. These point to
 /// useful features that are easy to miss without opening an archive first.
 pub(crate) const EMPTY_STATE_PRO_TIPS: [&str; 15] = [
@@ -1001,13 +986,13 @@ impl SortPreset {
 
     /// Display name for the dropdown. Kept here (not in `view.rs`)
     /// so the preset list reads top-to-bottom in one place.
-    pub fn display_name(self) -> &'static str {
+        pub fn label(self) -> String {
         match self {
-            SortPreset::NameAZ => "Name (A→Z)",
-            SortPreset::NameZA => "Name (Z→A)",
-            SortPreset::TypeThenName => "Type, then name",
-            SortPreset::SizeDesc => "Size (big → small)",
-            SortPreset::OffsetAsc => "Offset (low → high)",
+            SortPreset::NameAZ => t::sort_preset_name_az(),
+            SortPreset::NameZA => t::sort_preset_name_za(),
+            SortPreset::TypeThenName => t::sort_preset_type_then_name(),
+            SortPreset::SizeDesc => t::sort_preset_size_desc(),
+            SortPreset::OffsetAsc => t::sort_preset_offset_asc(),
         }
     }
 
@@ -5921,20 +5906,20 @@ impl App {
                             url,
                         };
                         if !suppressed {
-                            self.show_update_status = Some(format!("Update available: {version}"));
+                            self.show_update_status = Some(t::update_available(version.to_string()));
                         }
                     }
                     UpdateResult::UpToDate => {
                         self.update_state = UpdateState::UpToDate;
                         if !suppressed {
                             self.show_update_status =
-                                Some("You are using the latest version.".into());
+                                Some(t::update_latest());
                         }
                     }
                     UpdateResult::Error(err) => {
                         self.update_state = UpdateState::Error(err.clone());
                         if !suppressed {
-                            self.show_update_status = Some(format!("Update check failed: {err}"));
+                            self.show_update_status = Some(t::update_failed(err.to_string()));
                         }
                     }
                 }
@@ -11354,6 +11339,24 @@ mod tests {
 
         let _ = app.update(Message::SetLanguage(LanguageSetting::System));
         assert_eq!(crate::i18n::current(), Language::English);
+    }
+
+    #[test]
+    fn dialogs_build_in_every_language() {
+        for language in [Language::English, Language::Spanish, Language::Russian, Language::Pseudo] {
+            let mut app = test_app_with_entries();
+            let _ = app.update(Message::SetLanguage(LanguageSetting::Fixed(language)));
+            app.show_about = true;
+            app.show_welcome = true;
+            app.show_unsupported = Some(PathBuf::from("mystery.img"));
+            app.show_update_status = Some(t::update_latest());
+            app.pending_close = Some(PendingClose::Archive(0));
+            app.validator_popup_open = true;
+            app.show_sort_manager = true;
+            app.sort_draft = Some(crate::sort::SortChain::default());
+            let _ = app.view();
+        }
+        crate::i18n::set_language(Language::English);
     }
 
     #[test]

@@ -37,6 +37,8 @@ use iced::widget::{
 use iced::{Alignment, Border, Color, Element, Length, Padding};
 
 use crate::archive::EntryInfo;
+use crate::i18n::t;
+
 use crate::sort::{SortChain, SortContext, SortDirection, SortKey, SortPriority, sort_entries};
 use crate::ui::app::{Message, SortPreset, SortSlotIndex};
 use crate::ui::design::Design;
@@ -117,8 +119,8 @@ pub fn build<'a>(
         col_labels,
     } = preview;
     let title = match archive_name {
-        Some(name) => format!("Sort by — {name}"),
-        None => "Sort by — (no archive open)".to_string(),
+        Some(name) => t::dialog_sort_title(name),
+        None => t::dialog_sort_title_no_archive(),
     };
 
     let colors = SortManagerColors::from_design(design);
@@ -173,7 +175,7 @@ fn editor_pane<'a>(
 ) -> Element<'a, Message> {
     let slots: Element<'a, Message> = if draft.is_empty() {
         container(
-            text("No keys yet. Add a key below to start sorting.")
+            text(t::sort_empty())
                 .size(13)
                 .style(move |_| iced::widget::text::Style {
                     color: Some(colors.muted),
@@ -204,15 +206,18 @@ fn editor_pane<'a>(
                         }
                     }))
                     .push(
-                        text("Set priority rules, then apply them to the current archive.")
+                        text(t::sort_intro())
                             .size(12)
                             .style(move |_| iced::widget::text::Style {
                                 color: Some(colors.muted),
                             }),
                     )
-                    .spacing(2),
+                    .spacing(2)
+                    // The title column takes the leftover width and wraps,
+                    // so a long translated intro never pushes the preset
+                    // picker and close button out of the pane.
+                    .width(LEN_FILL),
             )
-            .push(Space::new().width(LEN_FILL))
             .push(Container::new(preset_picker()).width(LEN_FIXED_180))
             .push(
                 button(text("×").size(16))
@@ -300,7 +305,7 @@ fn slot_row<'a>(
     let key_picker = pick_list(SortKey::ALL, Some(prio.key), move |new_key: SortKey| {
         Message::SortSetSlotKey(slot_idx, new_key)
     })
-    .placeholder("Select key…")
+    .placeholder(t::sort_select_key())
     .text_size(13)
     .width(LEN_FIXED_140);
 
@@ -374,9 +379,9 @@ fn slot_row<'a>(
 fn controls_row<'a>(draft: &'a SortChain, colors: SortManagerColors) -> Element<'a, Message> {
     let add_disabled = draft.len() >= crate::sort::SORT_CHAIN_MAX;
     let add_btn = button(text(if add_disabled {
-        "+ Add key (max reached)"
+        t::sort_add_key_max()
     } else {
-        "+ Add key"
+        t::sort_add_key()
     }))
     .on_press_maybe(if add_disabled {
         None
@@ -385,12 +390,12 @@ fn controls_row<'a>(draft: &'a SortChain, colors: SortManagerColors) -> Element<
     })
     .padding(Padding::from([4, 12]));
 
-    let reset_btn = button(text("Reset"))
+    let reset_btn = button(text(t::button_reset()))
         .on_press(Message::SortResetDraft)
         .padding(Padding::from([4, 12]));
 
     let enabled_count = draft.enabled_count();
-    let summary = text(format!("{} of {} keys active", enabled_count, draft.len()))
+    let summary = text(t::sort_keys_active(enabled_count, draft.len()))
         .size(12)
         .style(move |_| iced::widget::text::Style {
             color: Some(colors.muted),
@@ -412,13 +417,13 @@ fn controls_row<'a>(draft: &'a SortChain, colors: SortManagerColors) -> Element<
 fn footer_row<'a>() -> Element<'a, Message> {
     Row::new()
         .push(
-            button(text("Cancel"))
+            button(text(t::button_cancel()))
                 .on_press(Message::CloseSortManager)
                 .padding(Padding::from([6, 16])),
         )
         .push(Space::new().width(LEN_FILL))
         .push(
-            button(text("Apply"))
+            button(text(t::button_apply()))
                 .on_press(Message::SortApplyDraft)
                 .padding(Padding::from([6, 16]))
                 .style(move |theme, status| {
@@ -433,7 +438,7 @@ fn footer_row<'a>() -> Element<'a, Message> {
 
 /// The small "Live preview" header on the right pane.
 fn preview_title<'a>(colors: SortManagerColors) -> Element<'a, Message> {
-    text("Live preview (first 10 entries)")
+    text(t::sort_preview_heading())
         .size(13)
         .style(move |_| iced::widget::text::Style {
             color: Some(colors.muted),
@@ -462,7 +467,7 @@ fn preview_pane<'a>(
 ) -> Element<'a, Message> {
     if entries.is_empty() {
         return container(
-            text("(no entries in the current archive)")
+            text(t::sort_preview_empty())
                 .size(12)
                 .style(move |_| iced::widget::text::Style {
                     color: Some(colors.muted),
@@ -508,7 +513,7 @@ fn preview_pane<'a>(
 fn preset_picker<'a>() -> Element<'a, Message> {
     let options: Vec<String> = SortPreset::ALL
         .iter()
-        .map(|p| p.display_name().to_string())
+        .map(|p| p.label())
         .collect();
     PickList::new(options, None::<String>, move |selected: String| {
         // Map the selected display name back to the preset
@@ -518,38 +523,25 @@ fn preset_picker<'a>() -> Element<'a, Message> {
         let preset = SortPreset::ALL
             .iter()
             .copied()
-            .find(|p| p.display_name() == selected)
+            .find(|p| p.label() == selected)
             .unwrap_or(SortPreset::NameAZ);
         Message::SortSelectPreset(preset)
     })
-    .placeholder("Apply preset…")
+    .placeholder(t::sort_apply_preset())
     .text_size(12)
+    // A shrink-width pick list sizes itself to its options, not the
+    // placeholder, which then clips in longer languages.
+    .width(LEN_FILL)
     .into()
 }
 
 /// Convert a `SortDirection` to a short label for the toggle
 /// button. Kept here (not in `sort.rs`) because it's purely a
 /// UI concern — the engine only cares about enum variants.
-fn dir_label(d: SortDirection) -> &'static str {
+fn dir_label(d: SortDirection) -> String {
     match d {
-        SortDirection::Ascending => "Asc ▲",
-        SortDirection::Descending => "Desc ▼",
+        SortDirection::Ascending => t::sort_ascending_short(),
+        SortDirection::Descending => t::sort_descending_short(),
     }
 }
 
-/// One-line hint string for a slot. Shows up as a tooltip in
-/// the real Iced UI; for now we just inline it under the
-/// slot so the user can see what the key does. Used by the
-/// "explain" helper below the slot list.
-#[allow(dead_code)]
-pub fn explain_slot(prio: &SortPriority) -> String {
-    format!(
-        "{} {} — entries with equal {} are ordered by the next key",
-        prio.key.display_name(),
-        match prio.direction {
-            SortDirection::Ascending => "ascending",
-            SortDirection::Descending => "descending",
-        },
-        prio.key.display_name().to_ascii_lowercase(),
-    )
-}

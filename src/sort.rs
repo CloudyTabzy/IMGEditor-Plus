@@ -54,11 +54,10 @@ pub enum SortKey {
 }
 
 impl std::fmt::Display for SortKey {
-    /// Display the human-readable name. Lets the Iced `PickList` and
-    /// other widgets use the type as a labelled option without an
-    /// explicit `String` conversion at every call site.
+        /// The translated label, so the Iced `PickList` can use the type as
+    /// an option directly. Persistence uses [`SortKey::display_name`].
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.display_name())
+        f.write_str(&self.label())
     }
 }
 
@@ -76,7 +75,8 @@ impl SortKey {
         SortKey::ColFile,
     ];
 
-    /// Human-readable label for the picker.
+        /// Stable English name, written to and read from settings.ini. The UI
+    /// shows [`SortKey::label`] instead.
     pub fn display_name(self) -> &'static str {
         match self {
             SortKey::Name => "Name",
@@ -86,6 +86,22 @@ impl SortKey {
             SortKey::Offset => "Offset",
             SortKey::IdeFile => "IDE file",
             SortKey::ColFile => "COL file",
+        }
+    }
+}
+
+impl SortKey {
+    /// The name shown in the UI, in the current language.
+    pub fn label(self) -> String {
+        use crate::i18n::t;
+        match self {
+            SortKey::Name => t::sort_key_name(),
+            SortKey::Extension => t::sort_key_extension(),
+            SortKey::Type => t::sort_key_type(),
+            SortKey::Size => t::sort_key_size(),
+            SortKey::Offset => t::sort_key_offset(),
+            SortKey::IdeFile => t::sort_key_ide_file(),
+            SortKey::ColFile => t::sort_key_col_file(),
         }
     }
 }

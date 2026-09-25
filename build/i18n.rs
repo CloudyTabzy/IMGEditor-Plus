@@ -24,13 +24,26 @@ const SOURCE_LANGUAGE: &str = "en";
 const TRANSLATIONS: &[&str] = &["es", "ru"];
 
 struct Message {
-    /// Variables the message reads, including through message references.
-    variables: BTreeSet<String>,
+    /// Variables the message reads, including through message references,
+    /// in order of first appearance: the generated function takes its
+    /// arguments in this order, as a reader of the English text expects.
+    variables: Vec<String>,
     /// Messages this one references (`{ other-message }`).
     references: BTreeSet<String>,
     /// Readable rendering of the value, for the generated doc comment.
     text: String,
     line: usize,
+}
+
+impl Message {
+    /// Record a variable once, keeping first-appearance order.
+    fn add_variable(&mut self, name: &str) -> bool {
+        let new = !self.variables.iter().any(|known| known == name);
+        if new {
+            self.variables.push(name.to_string());
+        }
+        new
+    }
 }
 
 struct Catalog {
@@ -98,7 +111,7 @@ fn load(language: &str) -> Catalog {
             );
         };
         let mut info = Message {
-            variables: BTreeSet::new(),
+            variables: Vec::new(),
             references: BTreeSet::new(),
             text: String::new(),
             line,
@@ -131,14 +144,14 @@ fn resolve_references(catalog: &mut Catalog) {
         let mut changed = false;
         let ids: Vec<String> = catalog.messages.keys().cloned().collect();
         for id in ids {
-            let inherited: BTreeSet<String> = catalog.messages[&id]
+            let inherited: Vec<String> = catalog.messages[&id]
                 .references
                 .iter()
                 .flat_map(|reference| catalog.messages[reference].variables.clone())
                 .collect();
             let message = catalog.messages.get_mut(&id).expect("id came from the map");
             for variable in inherited {
-                changed |= message.variables.insert(variable);
+                changed |= message.add_variable(&variable);
             }
         }
         if !changed {
@@ -156,7 +169,11 @@ fn check_translation(english: &Catalog, translation: &Catalog) {
                 "is not in en.ftl (renamed or removed?); delete it or add it to English first",
             );
         };
-        let unknown: Vec<&String> = message.variables.difference(&source.variables).collect();
+        let unknown: Vec<&String> = message
+            .variables
+            .iter()
+            .filter(|variable| !source.variables.contains(variable))
+            .collect();
         if !unknown.is_empty() {
             fail(
                 translation,
@@ -205,7 +222,7 @@ fn walk_expression(expression: &ast::Expression<&str>, info: &mut Message) {
 fn walk_inline(inline: &ast::InlineExpression<&str>, info: &mut Message) {
     match inline {
         ast::InlineExpression::VariableReference { id } => {
-            info.variables.insert(id.name.to_string());
+            info.add_variable(id.name);
         }
         ast::InlineExpression::MessageReference { id, .. } => {
             info.references.insert(id.name.to_string());

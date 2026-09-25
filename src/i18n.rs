@@ -339,6 +339,43 @@ mod tests {
     }
 
     #[test]
+    fn plurals_and_multiline_messages_format_as_written() {
+        assert_eq!(
+            t::bulk_entry("a.txd", 1, "DXT1"),
+            "a.txd - 1 texture -> DXT1"
+        );
+        assert_eq!(
+            t::bulk_entry("a.txd", 3, "DXT1"),
+            "a.txd - 3 textures -> DXT1"
+        );
+        assert_eq!(
+            t::unsaved_window(2, "gta3, player"),
+            "2 archives have unsaved changes: gta3, player"
+        );
+        // Blank lines inside a multi-line message survive parsing.
+        let about = t::about_body("9.9.9");
+        assert!(
+            about.starts_with("IMG Editor Plus v9.9.9\n\nA pure Rust"),
+            "{about}"
+        );
+        assert!(about.ends_with("- Bully Scholarship Edition"), "{about}");
+        set_language(Language::Spanish);
+        assert_eq!(
+            t::bulk_entry("a.txd", 1, "DXT1"),
+            "a.txd - 1 textura -> DXT1"
+        );
+        set_language(Language::English);
+    }
+
+    #[test]
+    fn sort_keys_show_translated_but_persist_in_english() {
+        set_language(Language::Russian);
+        assert_eq!(crate::sort::SortKey::Size.to_string(), "Размер");
+        assert_eq!(crate::sort::SortKey::Size.display_name(), "Size");
+        set_language(Language::English);
+    }
+
+    #[test]
     fn placeables_carry_no_bidi_isolation_marks() {
         let mut args = FluentArgs::new();
         args.set("shortcut", "Ctrl + N");

@@ -13,7 +13,7 @@ use crate::inspector::scene3d::pipeline::RenderFlags;
 use crate::parser::{EntryInspection, ImgVersion};
 use crate::tasks::FolderDuplicatePolicy;
 use crate::ui::app::{
-    ABOUT_TEXT, App, EntryAction, InspectorTab, Message, Pane, RippleTarget, TextureSnapshot,
+        App, EntryAction, InspectorTab, Message, Pane, RippleTarget, TextureSnapshot,
     is_animation_group_name, renderable_model_kind,
 };
 use crate::i18n::t;
@@ -745,7 +745,7 @@ impl App {
             col = col.push(
                 button(w::icon_label(
                     icons::close().size(14),
-                    fonts::body("Cancel"),
+                    fonts::body(t::button_cancel()),
                 ))
                 .on_press(Message::CancelActive),
             );
@@ -1832,11 +1832,11 @@ impl App {
         let theme = self.theme();
         let palette = theme.extended_palette();
         let mut texture_meta = row![
-            row![fonts::header("Name:"), fonts::body(tex.name.clone())]
+            row![fonts::header(t::field_name()), fonts::body(tex.name.clone())]
                 .spacing(3)
                 .align_y(Alignment::Center),
             row![
-                fonts::header("Format:"),
+                fonts::header(t::field_format()),
                 fonts::body(format!(
                     "{} ({}×{})",
                     tex.format_name, tex.width, tex.height
@@ -2971,18 +2971,18 @@ fn build_about(app: &App) -> Option<Element<'_, Message>> {
     let about_content = column![
         logo_element(),
         Space::new().height(Length::Fixed(8.0)),
-        fonts::body(ABOUT_TEXT)
+        fonts::body(t::about_body(env!("CARGO_PKG_VERSION")))
             .width(Length::Fill)
             .align_x(iced::alignment::Horizontal::Center),
         Space::new().height(Length::Fixed(8.0)),
         row![
             button(w::icon_label(
                 icons::external_viewer().size(14),
-                fonts::body("Visit repository"),
+                fonts::body(t::about_visit_repository()),
             ))
             .on_press(Message::VisitRepository)
             .style(button::primary),
-            button(w::icon_label(icons::close().size(14), fonts::body("Close")))
+            button(w::icon_label(icons::close().size(14), fonts::body(t::button_close())))
                 .on_press(Message::HideAbout),
         ]
         .spacing(8)
@@ -2993,7 +2993,7 @@ fn build_about(app: &App) -> Option<Element<'_, Message>> {
     .align_x(Alignment::Center);
 
     Some(modal_box(
-        "About",
+        t::dialog_about_title(),
         container(about_content)
             .width(Length::Fixed(400.0))
             .align_x(iced::alignment::Horizontal::Center),
@@ -3005,27 +3005,26 @@ fn build_welcome(app: &App) -> Option<Element<'_, Message>> {
         return None;
     }
     Some(modal_box(
-        "Welcome",
+        t::dialog_welcome_title(),
         column![
             container(logo_element())
                 .width(Length::Fixed(350.0))
                 .align_x(iced::alignment::Horizontal::Center),
             Space::new().height(Length::Fixed(8.0)),
-            fonts::display(format!(
-                "Welcome to {} v{}",
+            fonts::display(t::welcome_heading(
                 crate::ui::theme::APP_NAME,
-                env!("CARGO_PKG_VERSION")
+                env!("CARGO_PKG_VERSION"),
             )),
-            fonts::body("A GTA archive editor for III, VC, San Andreas, Bully SE."),
+            fonts::body_wrapped(t::welcome_tagline()),
             Space::new().height(Length::Fixed(8.0)),
             checkbox(app.welcome_persist)
-                .label("Don't show this message again")
+                .label(t::welcome_dont_show())
                 .on_toggle(Message::ToggleWelcomePersist),
             checkbox(!app.config.update_check_enabled)
-                .label("Disable update checking")
+                .label(t::welcome_disable_updates())
                 .on_toggle(Message::ToggleUpdateDisabled),
             Space::new().height(Length::Fixed(8.0)),
-            button(fonts::strong("Get started"))
+            button(fonts::strong(t::welcome_get_started()))
                 .on_press(Message::HideWelcome)
                 .style(button::primary),
         ]
@@ -3036,13 +3035,13 @@ fn build_welcome(app: &App) -> Option<Element<'_, Message>> {
 fn build_unsupported(app: &App) -> Option<Element<'_, Message>> {
     let path = app.show_unsupported.clone()?;
     Some(modal_box(
-        "Unsupported format",
+        t::dialog_unsupported_title(),
         column![
-            fonts::body("IMG format not supported."),
-            fonts::caption(format!("Path: {}", path.display())),
-            fonts::caption("Supported formats: GTA III, Vice City, San Andreas, Bully SE."),
+            fonts::body_wrapped(t::unsupported_body()),
+            fonts::caption_wrapped(t::unsupported_path(path.display().to_string())),
+            fonts::caption_wrapped(t::unsupported_supported()),
             Space::new().height(Length::Fixed(8.0)),
-            button(fonts::body("Close")).on_press(Message::HideUnsupported),
+            button(fonts::body(t::button_close())).on_press(Message::HideUnsupported),
         ]
         .spacing(6),
     ))
@@ -3077,11 +3076,11 @@ fn format_options_for(app: &App, archive_index: usize) -> Vec<FormatOption> {
         .into_iter()
         .map(|choice| FormatOption {
             format: choice.format,
-            label: format!(
-                "{} ({})",
-                choice.format.label(),
-                if choice.native { "native" } else { "opt-in" }
-            ),
+            label: if choice.native {
+                t::format_option_native(choice.format.label())
+            } else {
+                t::format_option_opt_in(choice.format.label())
+            },
         })
         .collect()
 }
@@ -3138,7 +3137,7 @@ fn preview_column(
             .height(Length::Fixed(26.0))
             .padding(0.0)
             .style(animation_subtle_button_style),
-        fonts::caption("View at full quality"),
+        fonts::caption(t::preview_full_quality()),
         tooltip::Position::Left,
     );
     let framed = container(
@@ -3199,9 +3198,9 @@ fn build_texture_fullscreen(app: &App) -> Option<Element<'_, Message>> {
     let layer = container(
         column![
             row![
-                fonts::caption(format!("{} — full quality", snapshot.label)),
+                fonts::caption(t::preview_full_quality_title(snapshot.label.as_str())),
                 Space::new().width(Length::Fill),
-                fonts::caption("Scroll to zoom · drag to pan · Esc to close"),
+                fonts::caption(t::preview_navigation_hint()),
                 button(
                     icons::shrink()
                         .size(14)
@@ -3270,17 +3269,19 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
         .cloned();
     let note = format_note_for(app, state.archive_index, state.chooser);
     let mut body = Column::new().spacing(6).width(Length::Fill);
-    body = body.push(fonts::body_wrapped(format!(
-        "Replacing '{}' - source: {} ({}x{})",
-        state.texture_name, state.source_name, state.plan.0.width, state.plan.0.height
+    body = body.push(fonts::body_wrapped(t::replace_summary(
+        state.texture_name.as_str(),
+        state.source_name.as_str(),
+        state.plan.0.width,
+        state.plan.0.height,
     )));
-    body = body.push(fonts::caption(format!(
-        "Target: {} · {}",
-        state.target.display, state.archive_name
+    body = body.push(fonts::caption_wrapped(t::dialog_target_archive(
+        state.target.display,
+        state.archive_name.as_str(),
     )));
     body = body.push(
         row![
-            fonts::header("Format:"),
+            fonts::header(t::field_format()),
             iced::widget::pick_list(options, selected, |option| {
                 Message::ReplaceFormatChanged(option.format)
             })
@@ -3289,24 +3290,24 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
         .spacing(6)
         .align_y(Alignment::Center),
     );
-    body = body.push(fonts::caption(note.to_string()));
+    body = body.push(fonts::caption_wrapped(note.to_string()));
     if state.chooser.is_dxt() {
         body = body.push(
             checkbox(state.high_quality)
-                .label("High-quality DXT (cluster fit, slower)")
+                .label(t::dxt_high_quality())
                 .on_toggle(Message::ReplaceHighQualityToggled),
         );
     }
     body = body.push(
         row![
             preview_column(
-                "Current",
+                &t::preview_current(),
                 state.before_handle.clone(),
                 state.before_dims.0,
                 state.before_dims.1,
             ),
             preview_column(
-                "After (encoded)",
+                &t::preview_after(),
                 state.after_handle.clone(),
                 state.plan.0.width,
                 state.plan.0.height,
@@ -3315,14 +3316,12 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
         .spacing(10),
     );
     body = body.push(plan_warnings(&state.plan.0.warnings));
-    body = body.push(fonts::caption(
-        "Stored in memory as an override; the archive file changes when you save.",
-    ));
+    body = body.push(fonts::caption_wrapped(t::replace_override_note()));
     body = body.push(Space::new().height(Length::Fixed(8.0)));
     let confirm: Element<'_, Message> = if state.planning {
-        button(fonts::body("Planning…")).into()
+        button(fonts::body(t::button_planning())).into()
     } else {
-        button(fonts::strong("Replace texture"))
+        button(fonts::strong(t::replace_confirm()))
             .on_press(Message::ReplaceConfirmed)
             .style(button::primary)
             .into()
@@ -3330,12 +3329,12 @@ fn build_replace_dialog(app: &App) -> Option<Element<'_, Message>> {
     body = body.push(
         row![
             confirm,
-            button(fonts::body("Cancel")).on_press(Message::ReplaceCancelled)
+            button(fonts::body(t::button_cancel())).on_press(Message::ReplaceCancelled)
         ]
         .spacing(8),
     );
     Some(modal_box(
-        "Replace texture",
+        t::dialog_replace_title(),
         container(body).width(Length::Fixed(420.0)),
     ))
 }
@@ -3350,15 +3349,16 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
         .cloned();
     let note = format_note_for(app, state.archive_index, state.chooser);
     let mut body = Column::new().spacing(6).width(Length::Fill);
-    body = body.push(fonts::body_wrapped(format!(
-        "New TXD from {} ({}x{})",
-        state.source_name, state.plan.0.width, state.plan.0.height
+    body = body.push(fonts::body_wrapped(t::new_txd_summary(
+        state.source_name.as_str(),
+        state.plan.0.width,
+        state.plan.0.height,
     )));
-    body = body.push(fonts::caption(format!("Target: {}", state.target.display)));
+    body = body.push(fonts::caption_wrapped(t::dialog_target(state.target.display)));
     body = body.push(
         row![
-            fonts::header("Name:"),
-            text_input("texture name", &state.texture_name)
+            fonts::header(t::field_name()),
+            text_input(&t::new_txd_name_placeholder(), &state.texture_name)
                 .on_input(Message::NewTxdNameChanged)
                 .width(Length::Fixed(260.0)),
             fonts::caption(".txd"),
@@ -3368,7 +3368,7 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
     );
     body = body.push(
         row![
-            fonts::header("Format:"),
+            fonts::header(t::field_format()),
             iced::widget::pick_list(options, selected, |option| {
                 Message::NewTxdFormatChanged(option.format)
             })
@@ -3377,11 +3377,11 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
         .spacing(6)
         .align_y(Alignment::Center),
     );
-    body = body.push(fonts::caption(note.to_string()));
+    body = body.push(fonts::caption_wrapped(note.to_string()));
     if state.chooser.is_dxt() {
         body = body.push(
             checkbox(state.high_quality)
-                .label("High-quality DXT (cluster fit, slower)")
+                .label(t::dxt_high_quality())
                 .on_toggle(Message::NewTxdHighQualityToggled),
         );
     }
@@ -3403,7 +3403,7 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
             .height(Length::Fixed(28.0))
             .padding(0.0)
             .style(animation_subtle_button_style),
-        fonts::caption("View at full quality"),
+        fonts::caption(t::preview_full_quality()),
         tooltip::Position::Left,
     );
     body = body.push(
@@ -3438,9 +3438,9 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
     body = body.push(plan_warnings(&state.plan.0.warnings));
     body = body.push(Space::new().height(Length::Fixed(8.0)));
     let confirm: Element<'_, Message> = if state.planning {
-        button(fonts::body("Planning…")).into()
+        button(fonts::body(t::button_planning())).into()
     } else {
-        button(fonts::strong("Add to archive"))
+        button(fonts::strong(t::new_txd_confirm()))
             .on_press(Message::NewTxdConfirmed)
             .style(button::primary)
             .into()
@@ -3448,12 +3448,12 @@ fn build_new_txd_dialog(app: &App) -> Option<Element<'_, Message>> {
     body = body.push(
         row![
             confirm,
-            button(fonts::body("Cancel")).on_press(Message::NewTxdCancelled)
+            button(fonts::body(t::button_cancel())).on_press(Message::NewTxdCancelled)
         ]
         .spacing(8),
     );
     Some(modal_box(
-        "Import image as TXD",
+        t::dialog_new_txd_title(),
         container(body).width(Length::Fixed(420.0)),
     ))
 }
@@ -3475,59 +3475,46 @@ fn build_bulk_dialog(app: &App) -> Option<Element<'_, Message>> {
                 .iter()
                 .map(|(_, _, plan)| plan.0.format_label.as_str())
                 .collect();
-            list = list.push(fonts::caption_wrapped(format!(
-                "{} - {} texture(s) -> {}",
-                entry.file_name,
+            list = list.push(fonts::caption_wrapped(t::bulk_entry(
+                entry.file_name.as_str(),
                 entry.textures.len(),
-                formats.into_iter().collect::<Vec<_>>().join(", ")
+                formats.into_iter().collect::<Vec<_>>().join(", "),
             )));
         }
     }
     if state.entries.len() > 10 {
-        list = list.push(fonts::caption(format!(
-            "… and {} more entries",
-            state.entries.len() - 10
-        )));
+        list = list.push(fonts::caption(t::bulk_more_entries(state.entries.len() - 10)));
     }
     let mut body = Column::new().spacing(6).width(Length::Fill);
-    body = body.push(fonts::body_wrapped(format!(
-        "{} textures across {} entries of {} will be re-encoded for the target.",
+    body = body.push(fonts::body_wrapped(t::bulk_summary(
         total_textures,
         state.entries.len(),
-        state.source_label
+        state.source_label.as_str(),
     )));
     if skipped > 0 || failed > 0 {
-        body = body.push(fonts::caption_wrapped(format!(
-            "{skipped} already native (skipped), {failed} unreadable (skipped)."
-        )));
+        body = body.push(fonts::caption_wrapped(t::bulk_skipped(skipped, failed)));
     }
     if state.ignored_non_txd > 0 {
-        body = body.push(fonts::caption_wrapped(format!(
-            "{} of the selected entries {} not TXD containers and stay untouched.",
-            state.ignored_non_txd,
-            if state.ignored_non_txd == 1 { "is" } else { "are" }
-        )));
+        body = body.push(fonts::caption_wrapped(t::bulk_ignored(state.ignored_non_txd)));
     }
     body = body.push(
         Scrollable::new(list)
             .height(Length::Fixed(150.0))
             .width(Length::Fill),
     );
-    body = body.push(fonts::caption(
-        "Untouched textures and names stay verbatim; the archive changes when you save.",
-    ));
+    body = body.push(fonts::caption_wrapped(t::bulk_verbatim_note()));
     body = body.push(Space::new().height(Length::Fixed(8.0)));
     body = body.push(
         row![
-            button(fonts::strong("Convert"))
+            button(fonts::strong(t::button_convert()))
                 .on_press(Message::BulkConvertConfirmed)
                 .style(button::primary),
-            button(fonts::body("Cancel")).on_press(Message::BulkConvertCancelled),
+            button(fonts::body(t::button_cancel())).on_press(Message::BulkConvertCancelled),
         ]
         .spacing(8),
     );
     Some(modal_box(
-        "Convert to target dialect",
+        t::dialog_bulk_title(),
         container(body).width(Length::Fixed(460.0)),
     ))
 }
@@ -3541,84 +3528,70 @@ fn build_compare_dialog(app: &App) -> Option<Element<'_, Message>> {
 
     if let Some(report) = state.report.as_ref() {
         let manifest = state.manifest.as_ref()?;
-        body = body.push(fonts::caption_wrapped(format!(
-            "Manifest: {}",
-            state.target.manifest_path.display()
+        body = body.push(fonts::caption_wrapped(t::compare_manifest(
+            state.target.manifest_path.display().to_string(),
         )));
-        body = body.push(fonts::body_wrapped(format!(
-            "Archive: {} · {} archive entries",
-            state.target.archive_name, report.archive_entry_count
+        body = body.push(fonts::body_wrapped(t::compare_archive(
+            state.target.archive_name.as_str(),
+            report.archive_entry_count,
         )));
-        body = body.push(fonts::caption_wrapped(format!(
-            "{} manifest name(s) ({} unique) · {} matched · {} missing ({} unique)",
+        body = body.push(fonts::caption_wrapped(t::compare_stats(
             report.manifest_entry_count,
             report.unique_manifest_count,
             report.matched_count,
             report.missing.len(),
-            report.unique_missing_count
+            report.unique_missing_count,
         )));
         body = body.push(
             checkbox(state.case_sensitive)
-                .label("Case-sensitive matching")
+                .label(t::compare_case_sensitive())
                 .on_toggle(Message::CompareCaseSensitivityToggled),
         );
         body = body.push(
             checkbox(state.show_archive_only)
-                .label("Show archive-only entries")
+                .label(t::compare_show_archive_only())
                 .on_toggle(Message::CompareShowArchiveOnlyToggled),
         );
 
         if report.duplicate_manifest_count > 0 || manifest.ignored_blank_lines > 0 {
             let mut details = Vec::new();
             if report.duplicate_manifest_count > 0 {
-                details.push(format!(
-                    "{} duplicate manifest line(s)",
-                    report.duplicate_manifest_count
-                ));
+                details.push(t::compare_duplicate_lines(report.duplicate_manifest_count));
             }
             if manifest.ignored_blank_lines > 0 {
-                details.push(format!(
-                    "{} blank line(s) ignored",
-                    manifest.ignored_blank_lines
-                ));
+                details.push(t::compare_blank_lines(manifest.ignored_blank_lines));
             }
             body = body.push(fonts::caption_wrapped(details.join(" · ")));
         }
 
         let mut results = Column::new().spacing(4).width(Length::Fill);
-        results = results.push(fonts::strong(format!(
-            "Missing from archive ({})",
-            report.missing.len()
-        )));
+        results = results.push(fonts::strong(t::compare_missing_heading(report.missing.len())));
         if report.missing.is_empty() {
-            results = results.push(fonts::caption("No missing entries found."));
+            results = results.push(fonts::caption(t::compare_no_missing()));
         } else {
             for name in report.missing.iter().take(500) {
                 results = results.push(fonts::caption_wrapped(name.clone()));
             }
             if report.missing.len() > 500 {
-                results = results.push(fonts::caption_wrapped(format!(
-                    "… and {} more missing name(s)",
-                    report.missing.len() - 500
+                results = results.push(fonts::caption_wrapped(t::compare_more_missing(
+                    report.missing.len() - 500,
                 )));
             }
         }
         if state.show_archive_only {
             results = results.push(Space::new().height(Length::Fixed(6.0)));
-            results = results.push(fonts::strong(format!(
-                "Archive-only entries ({})",
-                report.archive_only.len()
+            results = results.push(fonts::strong(t::compare_archive_only_heading(
+                report.archive_only.len(),
             )));
             if report.archive_only.is_empty() {
-                results = results.push(fonts::caption("No archive-only entries found."));
+                results = results.push(fonts::caption(t::compare_no_archive_only()));
             } else {
                 for name in report.archive_only.iter().take(500) {
                     results = results.push(fonts::caption_wrapped(name.clone()));
                 }
                 if report.archive_only.len() > 500 {
-                    results = results.push(fonts::caption_wrapped(format!(
-                        "… and {} more archive-only name(s)",
-                        report.archive_only.len() - 500
+                    results = results.push(fonts::caption_wrapped(t::compare_more_archive_only(
+                        report.archive_only.len() - 500,
                     )));
                 }
             }
@@ -3629,14 +3602,14 @@ fn build_compare_dialog(app: &App) -> Option<Element<'_, Message>> {
                 .width(Length::Fill),
         );
 
-        let mut copy = button(fonts::body("Copy missing names"));
+        let mut copy = button(fonts::body(t::compare_copy_missing()));
         if !report.missing.is_empty() {
             copy = copy.on_press(Message::CopyCompareMissing);
         }
         body = body.push(
             row![
                 copy,
-                button(fonts::body("Close")).on_press(Message::CloseCompare),
+                button(fonts::body(t::button_close())).on_press(Message::CloseCompare),
             ]
             .spacing(8),
         );
@@ -3647,13 +3620,12 @@ fn build_compare_dialog(app: &App) -> Option<Element<'_, Message>> {
                     canvas::Canvas::new(LoadingSpinner::new(app.compare_phase))
                         .width(Length::Fixed(48.0))
                         .height(Length::Fixed(48.0)),
-                    fonts::header("Comparing entry list"),
-                    fonts::caption_wrapped(format!(
-                        "Reading {} and checking it against {}…",
-                        state.target.manifest_path.display(),
-                        state.target.archive_name
+                    fonts::header(t::compare_running_heading()),
+                    fonts::caption_wrapped(t::compare_running_body(
+                        state.target.manifest_path.display().to_string(),
+                        state.target.archive_name.as_str(),
                     )),
-                    button(fonts::body("Cancel")).on_press(Message::CloseCompare),
+                    button(fonts::body(t::button_cancel())).on_press(Message::CloseCompare),
                 ]
                 .spacing(8)
                 .align_x(Alignment::Center),
@@ -3664,7 +3636,7 @@ fn build_compare_dialog(app: &App) -> Option<Element<'_, Message>> {
     }
 
     Some(modal_box(
-        "Compare with list",
+        t::dialog_compare_title(),
         container(body).width(Length::Fixed(440.0)),
     ))
 }
@@ -3678,21 +3650,24 @@ fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
         .get(pending.index)
         .and_then(|archive| archive.target_game)
         .and_then(crate::compat::games::profile_by_id)
-        .map(|game| game.display)
-        .unwrap_or("the target");
+        .map(|game| game.display.to_string())
+        .unwrap_or_else(t::target_unset);
 
     let mut body = Column::new().spacing(6).width(Length::Fill);
-    body = body.push(fonts::body(format!(
-        "{} textures, {} entries - checked against {target}.",
-        issue.textures, issue.entry_count
+    body = body.push(fonts::body_wrapped(t::save_check_summary(
+        issue.textures,
+        issue.entry_count,
+        target.as_str(),
     )));
-    body = body.push(fonts::caption(format!(
-        "{} native/supported · {} convertible (lossless) · {} incompatible · {} unknown",
-        issue.fine, issue.convertible, issue.incompatible, issue.unknown
+    body = body.push(fonts::caption_wrapped(t::save_check_counts(
+        issue.fine,
+        issue.convertible,
+        issue.incompatible,
+        issue.unknown,
     )));
 
     if let Some(note) = &issue.container_note {
-        body = body.push(fonts::body_wrapped(format!("Container: {note}")).color(
+        body = body.push(fonts::body_wrapped(t::save_check_container(note.to_string())).color(
             compat_verdict_accent(crate::compat::games::Verdict::Unsupported),
         ));
     }
@@ -3700,57 +3675,51 @@ fn build_save_report(app: &App) -> Option<Element<'_, Message>> {
     if !issue.anomalies.is_empty() {
         let mut list = Column::new().spacing(3).width(Length::Fill);
         for (code, count, example) in issue.anomalies.iter().take(8) {
-            list = list.push(fonts::caption_wrapped(format!(
-                "{code}: {count} (e.g. {example})"
+            list = list.push(fonts::caption_wrapped(t::save_check_anomaly(
+                code.to_string(),
+                count.to_string(),
+                example.to_string(),
             )));
         }
         body = body.push(Space::new().height(Length::Fixed(4.0)));
-        body = body.push(fonts::strong(
-            "Broken headers (fixable without re-encoding):",
-        ));
+        body = body.push(fonts::strong(t::save_check_broken_headers()));
         body = body.push(list);
     }
     if issue.warnings > 0 {
-        body = body.push(fonts::caption(format!(
-            "{} warning-level anomalies (reported, not blocking).",
-            issue.warnings
-        )));
+        body = body.push(fonts::caption_wrapped(t::save_check_warnings(issue.warnings)));
     }
 
     let repairing = pending.fix && issue.has_fixable();
     if issue.has_fixable() {
         body = body.push(
             checkbox(pending.fix)
-                .label(format!(
-                    "Repair inconsistent DXT headers before saving ({} report(s), lossless)",
-                    issue.fixable_reports
-                ))
+                .label(t::save_check_repair(issue.fixable_reports))
                 .on_toggle(Message::SaveCheckFixToggled),
         );
     }
     body = body.push(Space::new().height(Length::Fixed(4.0)));
-    body = body.push(fonts::caption(if repairing {
-        "Repair patches DXT header fields in place; no pixel is re-encoded."
+    body = body.push(fonts::caption_wrapped(if repairing {
+        t::save_check_repair_note()
     } else {
-        "Saving writes every entry verbatim; no texture is re-encoded or converted."
+        t::save_check_verbatim_note()
     }));
     body = body.push(Space::new().height(Length::Fixed(8.0)));
     body = body.push(
         row![
             button(fonts::body(if repairing {
-                "Fix & Save"
+                t::save_check_fix_and_save()
             } else {
-                "Save anyway"
+                t::save_check_save_anyway()
             }))
             .on_press(Message::SaveCheckConfirmed)
             .style(button::primary),
-            button(fonts::body("Cancel")).on_press(Message::SaveCheckCancelled),
+            button(fonts::body(t::button_cancel())).on_press(Message::SaveCheckCancelled),
         ]
         .spacing(8),
     );
 
     Some(modal_box(
-        "Save check",
+        t::dialog_save_check_title(),
         container(body).width(Length::Fixed(480.0)),
     ))
 }
@@ -3764,24 +3733,22 @@ fn build_unsaved_dialog(app: &App) -> Option<Element<'_, Message>> {
         crate::ui::app::PendingClose::Archive(index) => {
             let archive = app.editor.archives().get(index)?;
             let body = column![
-                fonts::body_wrapped(format!("'{}' has unsaved changes.", archive.file_name)),
-                fonts::caption(
-                    "Closing without saving discards them; the archive file on disk is untouched."
-                ),
+                fonts::body_wrapped(t::unsaved_archive(archive.file_name.as_str())),
+                fonts::caption_wrapped(t::unsaved_archive_note()),
                 Space::new().height(Length::Fixed(8.0)),
                 row![
-                    button(fonts::strong("Save"))
+                    button(fonts::strong(t::button_save()))
                         .on_press(Message::CloseGuardSave)
                         .style(button::primary),
-                    button(fonts::body("Discard")).on_press(Message::CloseGuardDiscard),
-                    button(fonts::body("Cancel")).on_press(Message::CloseGuardCancel),
+                    button(fonts::body(t::button_discard())).on_press(Message::CloseGuardDiscard),
+                    button(fonts::body(t::button_cancel())).on_press(Message::CloseGuardCancel),
                 ]
                 .spacing(8),
             ]
             .spacing(6)
             .width(Length::Fill);
             Some(modal_box(
-                "Unsaved changes",
+                t::dialog_unsaved_title(),
                 container(body).width(Length::Fixed(440.0)),
             ))
         }
@@ -3794,25 +3761,21 @@ fn build_unsaved_dialog(app: &App) -> Option<Element<'_, Message>> {
                 .map(|archive| archive.file_name.clone())
                 .collect();
             let body = column![
-                fonts::body_wrapped(format!(
-                    "{} archive(s) have unsaved changes: {}",
-                    dirty.len(),
-                    dirty.join(", ")
-                )),
-                fonts::caption("Quitting now discards them; the files on disk are untouched."),
+                fonts::body_wrapped(t::unsaved_window(dirty.len(), dirty.join(", "))),
+                fonts::caption_wrapped(t::unsaved_window_note()),
                 Space::new().height(Length::Fixed(8.0)),
                 row![
-                    button(fonts::strong("Discard changes and quit"))
+                    button(fonts::strong(t::unsaved_discard_and_quit()))
                         .on_press(Message::CloseGuardDiscard)
                         .style(button::primary),
-                    button(fonts::body("Cancel")).on_press(Message::CloseGuardCancel),
+                    button(fonts::body(t::button_cancel())).on_press(Message::CloseGuardCancel),
                 ]
                 .spacing(8),
             ]
             .spacing(6)
             .width(Length::Fill);
             Some(modal_box(
-                "Unsaved changes",
+                t::dialog_unsaved_title(),
                 container(body).width(Length::Fixed(440.0)),
             ))
         }
@@ -3829,8 +3792,8 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
         .get(pending.index)
         .and_then(|archive| archive.target_game)
         .and_then(crate::compat::games::profile_by_id)
-        .map(|game| game.display)
-        .unwrap_or("the selected target");
+        .map(|game| game.display.to_string())
+        .unwrap_or_else(t::target_unset_selected);
 
     let flagged = pending.flagged();
     let total_files = pending.paths.len();
@@ -3843,9 +3806,9 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
             .first()
             .map(|(name, verdict, note)| {
                 if note.is_empty() {
-                    format!("{name}: {}", verdict.label())
+                    t::import_check_offender(name.to_string(), verdict.label())
                 } else {
-                    format!("{name}: {} - {note}", verdict.label())
+                    t::import_check_offender_note(name.to_string(), verdict.label(), note.to_string())
                 }
             })
             .unwrap_or_default();
@@ -3853,37 +3816,34 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
             column![
                 fonts::strong(check.file_name.clone())
                     .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
-                fonts::caption_wrapped(format!("{} texture(s): {}", check.textures, detail)),
+                fonts::caption_wrapped(t::import_check_file(check.textures, detail)),
             ]
             .spacing(1),
         );
     }
     if flagged.len() > 12 {
-        lines = lines.push(fonts::caption(format!(
-            "...and {} more flagged file(s).",
-            flagged.len() - 12
-        )));
+        lines = lines.push(fonts::caption(t::import_check_more(flagged.len() - 12)));
     }
 
     let body = column![
-        fonts::body_wrapped(format!(
-            "{} of {} file(s) need a decision for {target}: {incompatible} incompatible texture(s), {unknown} unknown.",
+        fonts::body_wrapped(t::import_check_summary(
             flagged.len(),
-            total_files
+            total_files,
+            target.as_str(),
+            incompatible,
+            unknown,
         )),
         Space::new().height(Length::Fixed(4.0)),
         lines,
         Space::new().height(Length::Fixed(4.0)),
-        fonts::caption(
-            "Imports are verbatim either way - the format only matters if the game must load these textures."
-        ),
+        fonts::caption_wrapped(t::import_check_note()),
         Space::new().height(Length::Fixed(8.0)),
         row![
-            button(fonts::body("Import anyway")
+            button(fonts::body(t::import_check_import_anyway())
                 .color(compat_verdict_accent(crate::compat::games::Verdict::Unsupported)))
             .on_press(Message::ImportCheckConfirmed)
             .style(button::primary),
-            button(fonts::body("Cancel import")).on_press(Message::ImportCheckCancelled),
+            button(fonts::body(t::import_check_cancel())).on_press(Message::ImportCheckCancelled),
         ]
         .spacing(8),
     ]
@@ -3891,7 +3851,7 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
     .width(Length::Fill);
 
     Some(modal_box(
-        "Import check",
+        t::dialog_import_check_title(),
         container(body).width(Length::Fixed(460.0)),
     ))
 }
@@ -3899,79 +3859,70 @@ fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
 fn build_folder_import(app: &App) -> Option<Element<'_, Message>> {
     let (_, plan) = app.pending_folder_import.as_ref()?;
     let duplicate_text = if plan.duplicate_count == 0 {
-        "No duplicate names detected.".to_string()
+        t::folder_import_no_duplicates()
     } else {
-        format!(
-            "{} duplicate name(s) detected. Choose how to handle them.",
-            plan.duplicate_count
-        )
+        t::folder_import_duplicates(plan.duplicate_count)
     };
     let scan_text = if plan.scan_skipped.is_empty() {
         None
     } else {
-        Some(format!(
-            "{} item(s) could not be inspected and will be skipped.",
-            plan.scan_skipped.len()
-        ))
+        Some(t::folder_import_skipped(plan.scan_skipped.len()))
     };
 
     let mut actions = Row::new().spacing(8).push(
         button(fonts::body(if plan.duplicate_count == 0 {
-            "Import files"
+            t::folder_import_files()
         } else {
-            "Import (skip duplicates)"
+            t::folder_import_skip_duplicates()
         }))
         .on_press(Message::ConfirmFolderImport(FolderDuplicatePolicy::Skip))
         .style(button::primary),
     );
     if plan.duplicate_count > 0 {
         actions = actions.push(
-            button(fonts::body("Replace duplicates"))
+            button(fonts::body(t::folder_import_replace_duplicates()))
                 .on_press(Message::ConfirmFolderImport(FolderDuplicatePolicy::Replace)),
         );
     }
-    actions = actions.push(button(fonts::body("Cancel")).on_press(Message::CancelFolderImport));
+    actions = actions.push(button(fonts::body(t::button_cancel())).on_press(Message::CancelFolderImport));
 
     let mut content = column![
-        fonts::body_wrapped(format!("Folder: {}", plan.folder.display())),
-        fonts::body(format!(
-            "{} regular file(s) • {}",
+        fonts::body_wrapped(t::folder_import_path(plan.folder.display().to_string())),
+        fonts::body(t::folder_import_summary(
             plan.files.len(),
-            crate::ui::app::format_byte_count(plan.total_bytes)
+            crate::ui::app::format_byte_count(plan.total_bytes),
         )),
-        fonts::caption(
-            "Only files directly inside this folder are included; subfolders are not scanned."
-        ),
-        fonts::caption(duplicate_text),
+        fonts::caption_wrapped(t::folder_import_top_level()),
+        fonts::caption_wrapped(duplicate_text),
     ]
     .spacing(6);
     if let Some(scan_text) = scan_text {
-        content = content.push(fonts::caption(scan_text));
+        content = content.push(fonts::caption_wrapped(scan_text));
     }
     content = content
         .push(Space::new().height(Length::Fixed(8.0)))
         .push(actions);
 
-    Some(modal_box("Import folder", content))
+    Some(modal_box(t::dialog_folder_import_title(), content))
 }
 
 fn build_update_status(app: &App) -> Option<Element<'_, Message>> {
     let msg = app.show_update_status.clone()?;
     Some(modal_box(
-        "Update check",
+        t::dialog_update_title(),
         column![
-            fonts::body(msg),
+            fonts::body_wrapped(msg),
             Space::new().height(Length::Fixed(8.0)),
             checkbox(app.config.update_notify_disabled)
-                .label("Do not show this message again")
+                .label(t::update_dont_show())
                 .on_toggle(Message::ToggleUpdateNotifyDisabled),
             Space::new().height(Length::Fixed(8.0)),
             row![
-                button(fonts::body("Open releases"))
+                button(fonts::body(t::update_open_releases()))
                     .on_press(Message::VisitRepository)
                     .style(button::primary),
                 Space::new().width(Length::Fixed(8.0)),
-                button(fonts::body("Close")).on_press(Message::HideUpdateStatus),
+                button(fonts::body(t::button_close())).on_press(Message::HideUpdateStatus),
             ]
         ]
         .spacing(6),
@@ -4082,7 +4033,7 @@ fn build_quit_fade(app: &App) -> Option<Element<'_, Message>> {
 /// fixed-width container, like the other dialogs): the card column is
 /// `Length::Shrink`, and Fill-width content inside it collapses to an
 /// empty rounded box with no buttons.
-fn modal_box<'a>(title: &'a str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+fn modal_box<'a>(title: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     let content: Element<'a, Message> = content.into();
     let content = column![
         fonts::display(title)
@@ -4203,17 +4154,17 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         })
-                        .unwrap_or_else(|| "no textures".to_string());
-                    format!("Last run: {counts}")
+                        .unwrap_or_else(t::validator_no_textures);
+                    t::validator_last_run(counts)
                 });
 
             let mut card_body = Column::new().spacing(6).width(Length::Fill);
             let mut header = row![fonts::strong(game.display).width(Length::Fill)];
             if current_target == Some(game.id) {
-                header = header.push(fonts::caption("current target"));
+                header = header.push(fonts::caption(t::validator_current_target()));
             }
             header = header.push(
-                button(fonts::body(format!("Validate for {}", game.display)))
+                button(fonts::body(t::validator_validate_for(game.display)))
                     .on_press(Message::ValidateArchiveFor(game.id))
                     .style(button::primary),
             );
@@ -4221,10 +4172,10 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
             if let Some(last_run) = last_run {
                 card_body = card_body.push(fonts::caption(last_run));
             }
-            card_body = card_body.push(fonts::caption("Native (retail-verified):"));
+            card_body = card_body.push(fonts::caption(t::validator_native_heading()));
             card_body = card_body.push(native_lines);
             if has_unknown {
-                card_body = card_body.push(fonts::caption("Unknown / not game-native:"));
+                card_body = card_body.push(fonts::caption(t::validator_unknown_heading()));
                 card_body = card_body.push(unknown_lines);
             }
 
@@ -4246,7 +4197,7 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
         }
 
         let title_row = row![
-            fonts::display("Validate textures").width(Length::Fill),
+            fonts::display(t::dialog_validator_title()).width(Length::Fill),
             button(icons::close().size(16))
                 .on_press(Message::CloseValidatorPopup)
                 .style(button::text),
@@ -4254,11 +4205,7 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
         .spacing(8)
         .align_y(Alignment::Center);
 
-        let introduction = fonts::body(
-            "Pick the game this archive targets. The validator flags every texture \
-             outside that engine's retail-accepted formats, and lists the unknowns \
-             that could plausibly load but are not game-native.",
-        )
+        let introduction = fonts::body(t::validator_intro())
         .width(Length::Fill);
 
         // Advisory content hint: a suggestion with its evidence, never
@@ -4268,12 +4215,14 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
                 let display = crate::compat::games::profile_by_id(hint.game_id)
                     .map(|game| game.display)
                     .unwrap_or(hint.game_id);
-                let confidence = match hint.confidence {
-                    crate::compat::hint::HintConfidence::High => "looks like",
-                    crate::compat::hint::HintConfidence::Medium => "possibly",
+                let headline = match hint.confidence {
+                    crate::compat::hint::HintConfidence::High => t::validator_hint_likely(display),
+                    crate::compat::hint::HintConfidence::Medium => {
+                        t::validator_hint_possible(display)
+                    }
                 };
                 let mut body = column![
-                    fonts::body(format!("Content {confidence} {display}")).color(
+                    fonts::body(headline).color(
                         compat_verdict_accent(crate::compat::games::Verdict::Supported)
                     ),
                     fonts::caption(hint.reasons.join(" · ")),
@@ -4285,15 +4234,15 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
                             .map(|game| game.display)
                             .unwrap_or(current);
                         body =
-                            body.push(fonts::caption(format!("current target: {current_display}")));
+                            body.push(fonts::caption(t::validator_hint_current(current_display)));
                     }
                     body = body.push(
-                        button(fonts::body(format!("Use {display} as target")))
+                        button(fonts::body(t::validator_use_as_target(display)))
                             .on_press(Message::ValidateArchiveFor(hint.game_id))
                             .style(button::primary),
                     );
                 } else {
-                    body = body.push(fonts::caption("(already the target)"));
+                    body = body.push(fonts::caption(t::validator_already_target()));
                 }
                 Container::new(body)
                     .width(Length::Fill)
@@ -4317,9 +4266,9 @@ fn build_validator_popup(app: &App) -> Option<Element<'_, Message>> {
             row![
                 Space::new().width(Length::Fill),
                 checkbox(highlight_enabled)
-                    .label("Highlight rows")
+                    .label(t::validator_highlight_rows())
                     .on_toggle(Message::SetCompatHighlight),
-                button(fonts::body("Close")).on_press(Message::CloseValidatorPopup),
+                button(fonts::body(t::button_close())).on_press(Message::CloseValidatorPopup),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -4512,31 +4461,31 @@ fn compat_legend(max_width: f32) -> Element<'static, Message> {
         }
     };
 
-    let entries: [(Verdict, &'static str, &'static str); 5] = [
+    let entries: [(Verdict, String, String); 5] = [
         (
             Verdict::Native,
-            "native",
-            "Authored by this engine - no action needed.",
+            t::legend_native(),
+            t::legend_native_description(),
         ),
         (
             Verdict::Supported,
-            "supported / convertible",
-            "Loads, but is not the game's data dialect; a lossless rewrite may be offered.",
+            t::legend_supported(),
+            t::legend_supported_description(),
         ),
         (
             Verdict::LossyConvertible,
-            "lossy convert",
-            "Can be used only after a pixel-changing conversion (compression or quantization).",
+            t::legend_lossy(),
+            t::legend_lossy_description(),
         ),
         (
             Verdict::Untested,
-            "unknown",
-            "No evidence either way - not known to be incompatible. Treat with care.",
+            t::legend_unknown(),
+            t::legend_unknown_description(),
         ),
         (
             Verdict::Unsupported,
-            "incompatible",
-            "The selected engine cannot consume this format.",
+            t::legend_incompatible(),
+            t::legend_incompatible_description(),
         ),
     ];
 
@@ -4549,10 +4498,10 @@ fn compat_legend(max_width: f32) -> Element<'static, Message> {
         for (verdict, label, tip) in chunk {
             let accent = compat_verdict_accent(*verdict);
             let chip: Element<'static, Message> = w::styled_tooltip(
-                row![icon_for(*verdict).color(accent), fonts::caption(*label)]
+                row![icon_for(*verdict).color(accent), fonts::caption(label.clone())]
                     .spacing(4)
                     .align_y(Alignment::Center),
-                fonts::caption(*tip),
+                fonts::caption(tip.clone()),
                 tooltip::Position::Top,
             )
             .into();

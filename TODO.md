@@ -36,10 +36,13 @@ scheme (+1 minor). Bump `Cargo.toml` and the README heading before tagging.
   "System language" default and instant switching (`i18n/README.md`).
   - [x] Phase 1: infrastructure, all menus, entry context menu, title bar,
     Russian heading font fallback, debug-only pseudo-locale.
-  - [ ] Phase 2: dialogs (unsaved changes, save report, folder import,
-    replace texture, sort manager, compare, about, welcome…).
+  - [x] Phase 2: every dialog (about, welcome, unsaved changes, save and
+    import checks, folder import, converters, compare, update check,
+    validator, sort manager) and the Windows file-dialog titles; dialog
+    text wraps instead of clipping, plurals replace "(s)".
   - [ ] Phase 3: toasts (≈120), inspector/export panels, status bar,
-    empty states, tooltips.
+    empty states and pro tips, tooltips, plus text the `compat` module
+    generates (verdict labels, format notes, warnings, hint reasons).
   - [ ] Phase 4: native review of `es.ftl` and `ru.ftl` (drafts today).
 - **Fixes** — Save As no longer deletes the source archive; saves rename the
   new file into place before removing anything; imported files that change
