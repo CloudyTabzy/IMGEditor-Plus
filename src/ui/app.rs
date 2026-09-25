@@ -8911,6 +8911,10 @@ impl App {
             Item::with_menu(language_label, language_menu),
         ])
         .height(iced::Length::Fill)
+        // iced_aw keeps a menu open after an item is chosen unless told
+        // otherwise; close it like a native menu bar does.
+        .close_on_item_click_global(true)
+        .close_on_background_click_global(true)
         // The bar sits on the title-bar gradient; iced_aw's default rounded
         // bar background would show as a pill under themes whose base color
         // differs from the gradient.
