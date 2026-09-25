@@ -2689,10 +2689,10 @@ pub fn build(app: &App) -> Element<'_, Message> {
         let pro_tip = crate::ui::app::EMPTY_STATE_PRO_TIPS
             .get(app.empty_state_tip_index)
             .copied()
-            .unwrap_or(crate::ui::app::EMPTY_STATE_PRO_TIPS[0]);
+            .unwrap_or(crate::ui::app::EMPTY_STATE_PRO_TIPS[0])();
         let pro_tip = container(
             column![
-                iced::widget::text("Pro tip:")
+                iced::widget::text(t::pro_tip_label())
                     .size(16.0)
                     .font(fonts::INTER_BOLD),
                 fonts::body_wrapped(pro_tip).align_x(iced::alignment::Horizontal::Center),

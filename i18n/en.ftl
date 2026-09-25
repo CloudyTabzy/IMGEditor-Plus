@@ -425,3 +425,266 @@ file-dialog-filter-images = Images
 file-dialog-save-archive = Save IMG archive
 file-dialog-export-list = Export entry list
 file-dialog-export-folder = Select export folder
+
+## Toasts: archives and selection
+
+toast-no-archive-selected = No archive selected.
+toast-archive-closed = The archive is no longer open.
+toast-target-archive-closed = The target archive is no longer open.
+toast-target-archive-deselected = The target archive is no longer selected.
+toast-validated-archive-closed = The validated archive was closed.
+toast-entry-unavailable = The selected entry is no longer available.
+toast-task-running = Another task is still running.
+toast-operation-running = An archive operation is already running.
+toast-open-archive-to-validate = Open an archive first to validate it.
+toast-open-archive-to-import = Open an archive first to import into it.
+toast-open-archive-to-import-folder = Open an archive first to import a folder.
+toast-open-img-for-model = Open an IMG archive first; the model comes from it.
+toast-already-open = Already open: { $path }
+# $error is a technical detail and stays in English.
+toast-open-failed = Failed to open archive: { $error }
+toast-file-gone = File no longer exists: { $path }
+toast-file-not-found = File not found: { $path }
+toast-compare-empty-archive = The selected archive has no entries to compare.
+
+## Toasts: saving and packing
+
+toast-archive-saved = Archive saved.
+toast-save-cancelled = Save cancelled.
+toast-save-failed = Save failed: { $error }
+toast-save-before-pack = Save the archive before packing it.
+toast-packed = Archive packed — reclaimed { $reclaimed } ({ $size } on disk).
+toast-packed-nothing = Archive packed — no space reclaimed ({ $size } on disk).
+toast-pack-failed = Pack failed: { $error }
+toast-headers-repaired =
+    { $count ->
+        [one] Repaired { $count } texture header; saving.
+       *[other] Repaired { $count } texture headers; saving.
+    }
+
+## Toasts: game folder
+
+toast-game-folder-set = Game folder for { $archive }: { $path }
+toast-game-folder-automatic = Game folder for { $archive }: { $path } (automatic)
+toast-game-folder-none = { $archive } has no game folder.
+toast-game-folder-needs-save = Save the archive first; the game folder is stored per archive file.
+
+## Toasts: 3D viewer and animation
+
+toast-select-model = Select a NIF, DFF, or COL entry first.
+toast-viewer-unsupported = The in-app 3D viewer supports .nif, .dff, and .col ({ $entry }).
+toast-select-ifp = Select an .ifp entry first.
+toast-no-model-for-agr = No matching .nif model found for { $animation } in this archive.
+toast-no-model-for-agr-open = No matching .nif model found for { $animation } in the open archive.
+toast-loading-animation = Loading { $animation } on { $model }…
+toast-loading-animation-hxd = Loading { $animation } on { $model }… (HXD catalog found)
+toast-playback-stalled = Playback paused after a long stall.
+toast-demo-loaded = Synthetic animation demo loaded (no game data).
+toast-demo-closed = Animation demo closed.
+toast-animation-ready = Animation ready: { $summary }
+toast-animation-failed = Animation load failed: { $error }
+toast-3d-load-failed = 3D load failed: { $error }
+anim-summary-ifp =
+    { $animation } on { $model } ({ $clips ->
+        [one] { $clips } clip
+       *[other] { $clips } clips
+    }, GTA IFP)
+anim-summary-agr =
+    { $animation } on { $model } ({ $clips ->
+        [one] { $clips } clip
+       *[other] { $clips } clips
+    })
+anim-summary-agr-named =
+    { $animation } on { $model } ({ $clips ->
+        [one] { $clips } clip
+       *[other] { $clips } clips
+    }, HXD-named)
+
+## Toasts: textures and conversion
+
+toast-select-texture = Select a texture entry first.
+toast-no-target = No target set for this archive. Pick the game it is for in Validate textures.
+toast-target-error = { $error } Pick the game this archive is for in Validate textures.
+toast-replace-busy = A replacement is already being prepared.
+toast-preparing-replacement = Preparing replacement…
+toast-replace-failed = Replace failed: { $error }
+toast-import-busy = An import is already being prepared.
+toast-preparing-import = Preparing import…
+toast-txd-name-required = Give the new TXD a name.
+toast-entry-exists = An entry named '{ $name }' already exists.
+toast-entry-added = Added '{ $name }' - save the archive to write it.
+toast-set-target-first = Set a game target first (Validate textures).
+toast-select-entries-to-convert = Select the entries to convert first.
+toast-archive-changed-planning = The archive changed while the conversion was being planned; please retry.
+toast-convert-only-txd = Only TXD entries can be converted - none of the selected entries are TXD texture containers.
+toast-convert-all-native = Every selected texture is already native for the target.
+toast-archive-changed-after-plan = The archive changed after this conversion was planned; please retry.
+toast-archive-changed-during = The archive changed during conversion; stale results were discarded.
+toast-converted =
+    { $count ->
+        [one] Converted { $count } entry - save the archive to write it.
+       *[other] Converted { $count } entries - save the archive to write them.
+    }
+toast-conversion-failed = Conversion failed: { $error }
+toast-no-decoded-textures = No decoded textures to export.
+toast-decoded =
+    { $count ->
+        [one] Decoded { $count } texture
+       *[other] Decoded { $count } textures
+    }
+toast-decoded-not-retained =
+    { $count ->
+        [one] Decoded { $count } texture, but the preview could not be kept
+       *[other] Decoded { $count } textures, but the preview could not be kept
+    }
+toast-pick-embedded-folder = Pick a folder to export embedded textures from { $model }
+toast-basename-unknown = Cannot determine the base name of { $entry }
+toast-read-failed = Failed to read { $name }: { $error }
+
+## Toasts: import and export
+
+toast-import-cancelled = Import cancelled.
+toast-imported =
+    { $count ->
+        [one] Imported { $count } file.
+       *[other] Imported { $count } files.
+    }
+toast-imported-unchecked =
+    { $count ->
+        [one] Imported { $count } file - no validator target set, formats were not checked.
+       *[other] Imported { $count } files - no validator target set, formats were not checked.
+    }
+toast-import-failed = Import failed: { $error }
+toast-no-files-in-folder = No regular files found in { $folder }.
+toast-folder-scan-failed = Folder scan failed: { $error }
+toast-folder-import-failed = Folder import failed: { $error }
+toast-folder-import-done = Folder import complete: { $imported } imported, { $skipped } skipped, { $failed } failed.
+toast-folder-import-cancelled = Folder import cancelled: { $imported } imported, { $skipped } skipped, { $failed } failed.
+toast-see-log = See the archive log for details.
+toast-exported =
+    { $count ->
+        [one] Exported { $count } entry.
+       *[other] Exported { $count } entries.
+    }
+toast-export-failed = Export failed: { $error }
+toast-entry-list-exported =
+    { $count ->
+        [one] Exported { $count } entry name to { $path }.
+       *[other] Exported { $count } entry names to { $path }.
+    }
+toast-entry-list-export-failed = Entry-list export failed: { $error }
+toast-compare-failed = Entry-list comparison failed: { $error }
+toast-no-missing-to-copy = There are no missing entries to copy.
+toast-copied-missing =
+    { $count ->
+        [one] Copied { $count } missing entry name.
+       *[other] Copied { $count } missing entry names.
+    }
+
+## Toasts: clipboard, dragging and other actions
+
+toast-copied-entry-details = Copied the selected entry's details.
+toast-copied-logs = Copied the log.
+toast-copied-name = Copied name: { $name }
+toast-drag-cancelled = Drag cancelled.
+toast-moved-entries =
+    { $count ->
+        [one] Moved { $count } entry to archive #{ $archive }.
+       *[other] Moved { $count } entries to archive #{ $archive }.
+    }
+toast-autoscroll = Autoscroll active: move the pointer to scroll. Click, middle-click, right-click, use the wheel, or press a key to stop.
+toast-association-added = IMG Editor Plus is now in Explorer's "Open with" for .img/.dir. To make it the default, pick it in the Settings page that opened.
+toast-association-removed = Removed the .img/.dir association.
+toast-association-failed = File association failed: { $error }
+toast-validation-cancelled = Validation cancelled.
+toast-validation-failed = Validation failed: { $error }
+toast-no-compat-issues = No compatibility issues found - { $summary }
+# $verdicts is the per-verdict count list, e.g. "native 12, unknown 1".
+validation-summary =
+    Validated { $txds ->
+        [one] { $txds } TXD
+       *[other] { $txds } TXDs
+    } ({ $textures ->
+        [one] { $textures } texture
+       *[other] { $textures } textures
+    }) for { $game }: { $verdicts }; { $errors ->
+        [one] { $errors } error
+       *[other] { $errors } errors
+    }, { $warnings ->
+        [one] { $warnings } warning
+       *[other] { $warnings } warnings
+    }
+
+## Archive log (the Logs box in the Export tab)
+
+log-viewer-ready = In-app 3D viewer ready
+log-viewer-ready-cached = In-app 3D viewer ready (cached)
+log-viewer-opened = 3D viewer opened: { $name }
+log-viewer-failed = 3D viewer failed: { $reason }
+log-viewer-closed = 3D viewer closed
+log-external-viewer = Opening external 3D viewer for { $name }
+log-exported =
+    { $count ->
+        [one] Exported { $count } entry
+       *[other] Exported { $count } entries
+    }
+log-export-failed = Export failed: { $error }
+log-entry-list-exported =
+    { $count ->
+        [one] Exported entry list ({ $count } name) to { $path }
+       *[other] Exported entry list ({ $count } names) to { $path }
+    }
+log-compat-check = Compatibility check: { $summary }
+log-decoded =
+    { $count ->
+        [one] Decoded { $count } texture preview
+       *[other] Decoded { $count } texture previews
+    }
+log-texture-export-failed = { $model } export failed: { $error }
+# "Exported <what>" in the Export tab's recent list.
+recent-exported = Exported { $what }
+recent-exported-files =
+    { $count ->
+        [one] { $count } file
+       *[other] { $count } files
+    }
+
+## Empty workspace pro tips (they name menus and keys; keep those in step
+## with the translated menu labels)
+
+pro-tip-label = Pro tip:
+pro-tip-search = Press Ctrl+F to focus Search, then use Up/Down and Enter to jump to a match.
+pro-tip-search-context = Search predictions reveal a match in its archive context; View → Search selection context enables isolated results.
+pro-tip-context-menu = Right-click an entry for 3D view, textures, export, rename, and other actions.
+pro-tip-autoscroll = Middle-click the entry list for browser-style autoscroll; optional momentum is under View.
+pro-tip-tab-keys = Press 1, 2, or 3 to switch to Export, 3D view, or Texture.
+pro-tip-close-tab = Middle-click an archive tab to close it quickly.
+pro-tip-uv-overlay = Texture UV overlays are available when the selected model supplies matching geometry.
+pro-tip-wire-grid = In 3D view, Wire overlay exposes triangle edges and Grid floor helps judge scale.
+pro-tip-save-keys = Use Ctrl+S for a quick save and Ctrl+Shift+S to save an archive under a new name.
+pro-tip-unique-exports = Exported textures use unique filenames automatically, so batch exports never overwrite one another.
+pro-tip-agr = Edit → Load .agr animation file plays an animation in the 3D view; Space toggles playback and ←/→ step frames.
+pro-tip-model-picker = While an animation plays, the dock's Model picker re-plays it on any compatible model in the archive.
+pro-tip-fullscreen-preview = The expand icon on an import or replace preview opens it fullscreen: scroll to zoom, drag to pan, Esc to close.
+pro-tip-bulk-convert = Convert selection to target dialect bulk re-encodes the selected TXDs — pick the game in Validate textures first.
+pro-tip-entry-lists = Ctrl+L exports an entry list and Ctrl+P compares one against the archive to spot missing names.
+toast-no-dff-to-animate = No DFF model found in this archive to animate.
+toast-replace-needs-txd = Replacement works on TXD entries; that entry is not one.
+toast-texture-replaced = Texture replaced - save the archive to write it.
+toast-bully-texture-writing = Bully (Gamebryo) texture writing is not supported yet.
+toast-archive-file-missing = The archive file no longer exists. Use Save as… first.
+toast-folder-scan-target-changed = The target archive changed while the folder was being scanned.
+toast-folder-import-discarded = Folder import discarded because the target archive changed.
+toast-compare-discarded = Comparison discarded because the archive changed; please retry.
+toast-drop-needs-archive = Open an archive first to drop non-IMG files into it.
+toast-no-game-root = Could not determine the game folder from the archive path.
+toast-textures-exported =
+    { $count ->
+        [one] Exported { $count } texture.
+       *[other] Exported { $count } textures.
+    }
+toast-textures-export-failed = Texture export failed: { $error }
+error-write-file = Failed to write { $path }: { $error }
+error-read-entry = Failed to read entry: { $error }
+error-texture-decode = Texture decode failed: { $error }
+error-texture-preview-unsupported = Texture preview supports TXD and NFT entries; '{ $entry }' is not a supported texture container.

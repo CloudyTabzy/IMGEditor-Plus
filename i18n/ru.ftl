@@ -345,3 +345,195 @@ file-dialog-filter-images = Изображения
 file-dialog-save-archive = Сохранить архив IMG
 file-dialog-export-list = Экспорт списка записей
 file-dialog-export-folder = Выберите папку для экспорта
+
+## Toasts: archives and selection
+
+toast-no-archive-selected = Архив не выбран.
+toast-archive-closed = Архив уже закрыт.
+toast-target-archive-closed = Целевой архив уже закрыт.
+toast-target-archive-deselected = Целевой архив больше не выбран.
+toast-validated-archive-closed = Проверяемый архив был закрыт.
+toast-entry-unavailable = Выбранная запись больше недоступна.
+toast-task-running = Другая задача ещё выполняется.
+toast-operation-running = Операция с архивом уже выполняется.
+toast-open-archive-to-validate = Сначала откройте архив, чтобы проверить его.
+toast-open-archive-to-import = Сначала откройте архив, в который нужно импортировать.
+toast-open-archive-to-import-folder = Сначала откройте архив, чтобы импортировать папку.
+toast-open-img-for-model = Сначала откройте архив IMG — модель берётся из него.
+toast-already-open = Уже открыт: { $path }
+toast-open-failed = Не удалось открыть архив: { $error }
+toast-file-gone = Файл больше не существует: { $path }
+toast-file-not-found = Файл не найден: { $path }
+toast-compare-empty-archive = В выбранном архиве нет записей для сравнения.
+
+## Toasts: saving and packing
+
+toast-archive-saved = Архив сохранён.
+toast-save-cancelled = Сохранение отменено.
+toast-save-failed = Не удалось сохранить: { $error }
+toast-save-before-pack = Сохраните архив, прежде чем упаковывать его.
+toast-packed = Архив упакован — освобождено { $reclaimed } (на диске { $size }).
+toast-packed-nothing = Архив упакован — место не освобождено (на диске { $size }).
+toast-pack-failed = Не удалось упаковать: { $error }
+toast-headers-repaired =
+    { $count ->
+        [one] Исправлен { $count } заголовок текстуры; сохранение.
+        [few] Исправлено { $count } заголовка текстур; сохранение.
+        [many] Исправлено { $count } заголовков текстур; сохранение.
+       *[other] Исправлено { $count } заголовка текстуры; сохранение.
+    }
+
+## Toasts: game folder
+
+toast-game-folder-set = Папка игры для { $archive }: { $path }
+toast-game-folder-automatic = Папка игры для { $archive }: { $path } (автоматически)
+toast-game-folder-none = У { $archive } нет папки игры.
+toast-game-folder-needs-save = Сначала сохраните архив: папка игры хранится для каждого файла архива.
+
+## Toasts: 3D viewer and animation
+
+toast-select-model = Сначала выберите запись NIF, DFF или COL.
+toast-viewer-unsupported = Встроенный 3D-просмотрщик поддерживает .nif, .dff и .col ({ $entry }).
+toast-select-ifp = Сначала выберите запись .ifp.
+toast-no-model-for-agr = Для { $animation } в этом архиве не найдена подходящая модель .nif.
+toast-no-model-for-agr-open = Для { $animation } в открытом архиве не найдена подходящая модель .nif.
+toast-loading-animation = Загрузка { $animation } на { $model }…
+toast-loading-animation-hxd = Загрузка { $animation } на { $model }… (найден каталог HXD)
+toast-playback-stalled = Воспроизведение приостановлено после долгой задержки.
+toast-demo-loaded = Загружено синтетическое демо анимации (без данных игры).
+toast-demo-closed = Демо анимации закрыто.
+toast-animation-ready = Анимация готова: { $summary }
+toast-animation-failed = Не удалось загрузить анимацию: { $error }
+toast-3d-load-failed = Не удалось загрузить в 3D: { $error }
+anim-summary-ifp = { $animation } на { $model } (клипов: { $clips }, GTA IFP)
+anim-summary-agr = { $animation } на { $model } (клипов: { $clips })
+anim-summary-agr-named = { $animation } на { $model } (клипов: { $clips }, имена из HXD)
+
+## Toasts: textures and conversion
+
+toast-select-texture = Сначала выберите запись с текстурами.
+toast-no-target = Для этого архива не выбрана цель. Выберите его игру в окне «Проверка текстур».
+toast-target-error = { $error } Выберите игру этого архива в окне «Проверка текстур».
+toast-replace-busy = Замена уже готовится.
+toast-preparing-replacement = Подготовка замены…
+toast-replace-failed = Не удалось заменить: { $error }
+toast-import-busy = Импорт уже готовится.
+toast-preparing-import = Подготовка импорта…
+toast-txd-name-required = Укажите имя нового TXD.
+toast-entry-exists = Запись «{ $name }» уже существует.
+toast-entry-added = Добавлено «{ $name }» — сохраните архив, чтобы записать изменения.
+toast-set-target-first = Сначала выберите целевую игру («Проверка текстур»).
+toast-select-entries-to-convert = Сначала выберите записи для преобразования.
+toast-archive-changed-planning = Архив изменился во время подготовки преобразования; повторите попытку.
+toast-convert-only-txd = Преобразовать можно только записи TXD, а среди выбранных нет контейнеров текстур TXD.
+toast-convert-all-native = Все выбранные текстуры уже в родном формате целевой игры.
+toast-archive-changed-after-plan = Архив изменился после подготовки преобразования; повторите попытку.
+toast-archive-changed-during = Архив изменился во время преобразования; устаревшие результаты отброшены.
+toast-converted =
+    { $count ->
+        [one] Преобразована { $count } запись — сохраните архив, чтобы записать изменения.
+        [few] Преобразованы { $count } записи — сохраните архив, чтобы записать изменения.
+        [many] Преобразовано { $count } записей — сохраните архив, чтобы записать изменения.
+       *[other] Преобразовано { $count } записи — сохраните архив, чтобы записать изменения.
+    }
+toast-conversion-failed = Не удалось преобразовать: { $error }
+toast-no-decoded-textures = Нет декодированных текстур для экспорта.
+toast-decoded = Декодировано текстур: { $count }
+toast-decoded-not-retained = Декодировано текстур: { $count }, но сохранить предпросмотр не удалось
+toast-pick-embedded-folder = Выберите папку для экспорта встроенных текстур из { $model }
+toast-basename-unknown = Не удалось определить базовое имя { $entry }
+toast-read-failed = Не удалось прочитать { $name }: { $error }
+
+## Toasts: import and export
+
+toast-import-cancelled = Импорт отменён.
+toast-imported = Импортировано файлов: { $count }.
+toast-imported-unchecked = Импортировано файлов: { $count }. Целевая игра не выбрана, поэтому форматы не проверялись.
+toast-import-failed = Не удалось импортировать: { $error }
+toast-no-files-in-folder = В { $folder } нет обычных файлов.
+toast-folder-scan-failed = Не удалось просканировать папку: { $error }
+toast-folder-import-failed = Не удалось импортировать папку: { $error }
+toast-folder-import-done = Импорт папки завершён. Импортировано: { $imported }, пропущено: { $skipped }, с ошибками: { $failed }.
+toast-folder-import-cancelled = Импорт папки отменён. Импортировано: { $imported }, пропущено: { $skipped }, с ошибками: { $failed }.
+toast-see-log = Подробности — в журнале архива.
+toast-exported = Экспортировано записей: { $count }.
+toast-export-failed = Не удалось экспортировать: { $error }
+toast-entry-list-exported = Экспортировано имён записей: { $count } — в { $path }.
+toast-entry-list-export-failed = Не удалось экспортировать список записей: { $error }
+toast-compare-failed = Не удалось сравнить список записей: { $error }
+toast-no-missing-to-copy = Нет отсутствующих записей для копирования.
+toast-copied-missing = Скопировано отсутствующих имён: { $count }.
+
+## Toasts: clipboard, dragging and other actions
+
+toast-copied-entry-details = Сведения о выбранной записи скопированы.
+toast-copied-logs = Журнал скопирован.
+toast-copied-name = Имя скопировано: { $name }
+toast-drag-cancelled = Перетаскивание отменено.
+toast-moved-entries = Перемещено записей: { $count } — в архив № { $archive }.
+toast-autoscroll = Автопрокрутка включена: двигайте указатель для прокрутки. Чтобы остановить, щёлкните любой кнопкой мыши, покрутите колесо или нажмите клавишу.
+toast-association-added = IMG Editor Plus добавлен в меню «Открыть с помощью» Проводника для .img/.dir. Чтобы сделать его программой по умолчанию, выберите его на открывшейся странице «Параметров».
+toast-association-removed = Сопоставление .img/.dir удалено.
+toast-association-failed = Не удалось изменить сопоставление файлов: { $error }
+toast-validation-cancelled = Проверка отменена.
+toast-validation-failed = Не удалось выполнить проверку: { $error }
+toast-no-compat-issues = Проблем совместимости не найдено — { $summary }
+validation-summary = Проверено для { $game } — TXD: { $txds }, текстур: { $textures }: { $verdicts }; ошибок: { $errors }, предупреждений: { $warnings }
+
+## Archive log
+
+log-viewer-ready = Встроенный 3D-просмотрщик готов
+log-viewer-ready-cached = Встроенный 3D-просмотрщик готов (из кэша)
+log-viewer-opened = 3D-просмотрщик открыт: { $name }
+log-viewer-failed = Ошибка 3D-просмотрщика: { $reason }
+log-viewer-closed = 3D-просмотрщик закрыт
+log-external-viewer = Открытие внешнего 3D-просмотрщика для { $name }
+log-exported = Экспортировано записей: { $count }
+log-export-failed = Не удалось экспортировать: { $error }
+log-entry-list-exported = Список записей экспортирован (имён: { $count }) в { $path }
+log-compat-check = Проверка совместимости: { $summary }
+log-decoded = Декодировано предпросмотров текстур: { $count }
+log-texture-export-failed = Не удалось экспортировать { $model }: { $error }
+recent-exported = Экспортировано: { $what }
+recent-exported-files =
+    { $count ->
+        [one] { $count } файл
+        [few] { $count } файла
+        [many] { $count } файлов
+       *[other] { $count } файла
+    }
+
+## Empty workspace pro tips
+
+pro-tip-label = Совет:
+pro-tip-search = Нажмите Ctrl+F, чтобы перейти к поиску, затем используйте стрелки вверх/вниз и Enter для перехода к совпадению.
+pro-tip-search-context = Подсказки поиска показывают совпадение в контексте архива; Вид → Контекст выделения в поиске показывает только результаты.
+pro-tip-context-menu = Щёлкните запись правой кнопкой мыши, чтобы открыть её в 3D, посмотреть текстуры, экспортировать, переименовать и не только.
+pro-tip-autoscroll = Щёлкните список записей средней кнопкой мыши для автопрокрутки как в браузере; инерция включается в меню «Вид».
+pro-tip-tab-keys = Нажмите 1, 2 или 3, чтобы перейти на вкладку «Экспорт», «3D-вид» или «Текстура».
+pro-tip-close-tab = Щёлкните вкладку архива средней кнопкой мыши, чтобы быстро закрыть её.
+pro-tip-uv-overlay = Наложение UV на текстуру доступно, когда выбранная модель содержит подходящую геометрию.
+pro-tip-wire-grid = В 3D-виде каркас показывает рёбра треугольников, а сетка пола помогает оценить масштаб.
+pro-tip-save-keys = Ctrl+S — быстрое сохранение, Ctrl+Shift+S — сохранить архив под новым именем.
+pro-tip-unique-exports = Экспортируемые текстуры автоматически получают уникальные имена, поэтому пакетный экспорт ничего не перезаписывает.
+pro-tip-agr = Правка → Загрузить анимацию .agr воспроизводит анимацию в 3D-виде; пробел ставит на паузу и продолжает, а ←/→ листают кадры.
+pro-tip-model-picker = Во время воспроизведения выбор модели на панели проигрывает анимацию на любой совместимой модели из архива.
+pro-tip-fullscreen-preview = Значок развёртывания на предпросмотре импорта или замены открывает его на весь экран: колесо — масштаб, перетаскивание — сдвиг, Esc — закрыть.
+pro-tip-bulk-convert = «Преобразовать выделение для целевой игры» перекодирует выбранные TXD разом — сначала выберите игру в окне «Проверка текстур».
+pro-tip-entry-lists = Ctrl+L экспортирует список записей, а Ctrl+P сравнивает его с архивом, чтобы найти отсутствующие имена.
+toast-no-dff-to-animate = В этом архиве нет модели DFF для анимации.
+toast-replace-needs-txd = Замена работает только с записями TXD, а эта запись — не TXD.
+toast-texture-replaced = Текстура заменена — сохраните архив, чтобы записать изменения.
+toast-bully-texture-writing = Запись текстур Bully (Gamebryo) пока не поддерживается.
+toast-archive-file-missing = Файла архива больше нет на диске. Сначала воспользуйтесь «Сохранить как…».
+toast-folder-scan-target-changed = Целевой архив изменился во время сканирования папки.
+toast-folder-import-discarded = Импорт папки отменён: целевой архив изменился.
+toast-compare-discarded = Сравнение отменено: архив изменился; повторите попытку.
+toast-drop-needs-archive = Сначала откройте архив, чтобы перетаскивать в него файлы, отличные от IMG.
+toast-no-game-root = Не удалось определить папку игры по пути к архиву.
+toast-textures-exported = Экспортировано текстур: { $count }.
+toast-textures-export-failed = Не удалось экспортировать текстуры: { $error }
+error-write-file = Не удалось записать { $path }: { $error }
+error-read-entry = Не удалось прочитать запись: { $error }
+error-texture-decode = Не удалось декодировать текстуру: { $error }
+error-texture-preview-unsupported = Предпросмотр текстур поддерживает записи TXD и NFT; «{ $entry }» — не поддерживаемый контейнер текстур.

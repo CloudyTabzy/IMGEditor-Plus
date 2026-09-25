@@ -239,22 +239,22 @@ pub enum OpenArchiveOutcome {
 
 /// Short, session-stable tips shown in the empty workspace. These point to
 /// useful features that are easy to miss without opening an archive first.
-pub(crate) const EMPTY_STATE_PRO_TIPS: [&str; 15] = [
-    "Press Ctrl+F to focus Search, then use Up/Down and Enter to jump to a match.",
-    "Search predictions reveal a match in its archive context; View → Search selection context enables isolated results.",
-    "Right-click an entry for 3D view, textures, export, rename, and other actions.",
-    "Middle-click the entry list for Browser-style autoscroll; optional momentum is under View.",
-    "Press 1, 2, or 3 to switch to Export, 3D view, or Texture.",
-    "Middle-click an archive tab to close it quickly.",
-    "Texture UV overlays are available when the selected model supplies matching geometry.",
-    "In 3D view, Wire overlay exposes triangle edges and Grid floor helps judge scale.",
-    "Use Ctrl+S for a quick save and Ctrl+Shift+S to save an archive under a new name.",
-    "Exported textures use unique filenames automatically, so batch exports never overwrite one another.",
-    "Edit → Load .agr animation file plays an animation in the 3D view; Space toggles playback and ←/→ step frames.",
-    "While an animation plays, the dock's Model picker re-plays it on any compatible model in the archive.",
-    "The expand icon on an import or replace preview opens it fullscreen: scroll to zoom, drag to pan, Esc to close.",
-    "Convert selection to target dialect bulk re-encodes the selected TXDs — pick the game in Validate textures first.",
-    "Ctrl+L exports an entry list and Ctrl+P compares one against the archive to spot missing names.",
+pub(crate) const EMPTY_STATE_PRO_TIPS: [fn() -> String; 15] = [
+    t::pro_tip_search,
+    t::pro_tip_search_context,
+    t::pro_tip_context_menu,
+    t::pro_tip_autoscroll,
+    t::pro_tip_tab_keys,
+    t::pro_tip_close_tab,
+    t::pro_tip_uv_overlay,
+    t::pro_tip_wire_grid,
+    t::pro_tip_save_keys,
+    t::pro_tip_unique_exports,
+    t::pro_tip_agr,
+    t::pro_tip_model_picker,
+    t::pro_tip_fullscreen_preview,
+    t::pro_tip_bulk_convert,
+    t::pro_tip_entry_lists,
 ];
 
 fn empty_state_tip_index() -> usize {
@@ -777,6 +777,8 @@ pub enum Message {
         version: crate::parser::ImgVersion,
         remove_existing: bool,
     },
+        /// Show a toast produced by a background task.
+    ShowToast(String),
     /// Window close button pressed; may open the unsaved-changes guard.
     WindowCloseRequested(iced::window::Id),
     /// Custom title bar: move, resize, and caption buttons.
@@ -2326,7 +2328,7 @@ impl App {
         });
         if let Some(advance) = self.viewer3d_handle.advance_animation(now) {
             if advance.paused_by_gap {
-                self.toast = Some("Playback paused after a long stall.".into());
+                self.toast = Some(t::toast_playback_stalled());
             }
             if let Some(marker) = advance.markers.last().cloned() {
                 self.viewer3d_handle
@@ -2347,7 +2349,7 @@ impl App {
         );
         self.viewer_load = None;
         self.selected_inspector_tab = InspectorTab::Model3D;
-        self.toast = Some("Synthetic animation demo loaded (no game data).".into());
+        self.toast = Some(t::toast_demo_loaded());
         dev_logger::breadcrumb("user: start synthetic animation demo");
         Task::none()
     }
@@ -2358,11 +2360,11 @@ impl App {
     /// pick (or fix) the archive's game target.
     fn open_validator_popup(&mut self) -> Task<Message> {
         let Some(archive_index) = self.editor.selected_archive() else {
-            self.toast = Some("Open an archive first to validate it.".into());
+            self.toast = Some(t::toast_open_archive_to_validate());
             return Task::none();
         };
         if self.editor.archives()[archive_index].progress.in_use() {
-            self.toast = Some("Another task is still running.".into());
+            self.toast = Some(t::toast_task_running());
             return Task::none();
         }
         self.validator_popup_open = true;
@@ -2864,11 +2866,11 @@ impl App {
 
     fn load_selected_model(&mut self, target_tab: InspectorTab) -> Task<Message> {
         let Some(archive_index) = self.editor.selected_archive() else {
-            self.toast = Some("Select a NIF, DFF, or COL entry first.".into());
+            self.toast = Some(t::toast_select_model());
             return Task::none();
         };
         let Some(entry_index) = self.editor.selected_entry() else {
-            self.toast = Some("Select a NIF, DFF, or COL entry first.".into());
+            self.toast = Some(t::toast_select_model());
             return Task::none();
         };
         let Some(entry) = self
@@ -2877,7 +2879,7 @@ impl App {
             .get(archive_index)
             .and_then(|archive| archive.entries.get(entry_index))
         else {
-            self.toast = Some("The selected entry is no longer available.".into());
+            self.toast = Some(t::toast_entry_unavailable());
             return Task::none();
         };
         if is_animation_group_name(&entry.file_name) {
@@ -2885,10 +2887,7 @@ impl App {
         }
         if !is_renderable_model_name(&entry.file_name) {
             self.set_active_texture_preview_target(None);
-            self.toast = Some(format!(
-                "In-app 3D viewer supports .nif, .dff, and .col ({}).",
-                entry.file_name
-            ));
+            self.toast = Some(t::toast_viewer_unsupported(entry.file_name.as_str()));
             return Task::none();
         }
 
@@ -2926,7 +2925,7 @@ impl App {
                 self.scene_cache.weight() as f64 / (1024.0 * 1024.0),
             ));
             if let Some(archive) = self.editor.selected_archive_mut() {
-                archive.add_log("In-app 3D viewer ready (cached)".to_string());
+                archive.add_log(t::log_viewer_ready_cached());
             }
             return Task::none();
         }
@@ -2959,7 +2958,7 @@ impl App {
             return Task::none();
         };
         if !crate::ui::app::is_ifp_animation_name(&ifp_entry.file_name) {
-            self.toast = Some("Select an .ifp entry first.".into());
+            self.toast = Some(t::toast_select_ifp());
             return Task::none();
         }
 
@@ -2994,8 +2993,7 @@ impl App {
                     .position(|entry| entry.file_name_lower.ends_with(".dff"))
             });
         let Some(dff_entry_index) = dff_entry_index else {
-            self.toast =
-                Some("No DFF model found in this archive to animate.".into());
+            self.toast = Some(t::toast_no_dff_to_animate());
             return Task::none();
         };
         let Some(dff_entry) = archive.entries.get(dff_entry_index) else {
@@ -3054,9 +3052,10 @@ impl App {
                         &ifp_file,
                         &ifp_name,
                     );
-                    let summary = format!(
-                        "{ifp_name} on {model_name} ({} clips, GTA IFP)",
-                        library.clips.len()
+                    let summary = t::anim_summary_ifp(
+                        ifp_name.as_str(),
+                        model_name.as_str(),
+                        library.clips.len(),
                     );
                     Ok(AgrLoadOutcome {
                         model: Arc::new(model),
@@ -3119,18 +3118,16 @@ impl App {
             })
             .or_else(|| find_agr_model_entry(&archive.entries, &agr_name));
         let Some(model_entry) = model_entry else {
-            self.toast = Some(format!(
-                "No matching .nif model found for {agr_name} in this archive."
-            ));
+            self.toast = Some(t::toast_no_model_for_agr(agr_name.as_str()));
             return Task::none();
         };
         let model_name = archive.entries[model_entry].file_name.clone();
-        let named = if hxd.is_none() {
-            String::new()
+        let loading_toast = if hxd.is_none() {
+            t::toast_loading_animation(agr_name.as_str(), model_name.as_str())
         } else {
-            " (HXD catalog found)".to_string()
+            t::toast_loading_animation_hxd(agr_name.as_str(), model_name.as_str())
         };
-        self.toast = Some(format!("Loading {agr_name} on {model_name}…{named}"));
+        self.toast = Some(loading_toast);
         self.agr_serial += 1;
         Task::done(Message::ViewerAgrLoadRequest {
             archive_index,
@@ -3150,7 +3147,7 @@ impl App {
     /// applies when a matching catalog record is found next to the file.
     fn load_loose_agr(&mut self, path: std::path::PathBuf) -> Task<Message> {
         let Some(archive_index) = self.editor.selected_archive() else {
-            self.toast = Some("Open an IMG archive first; the model comes from it.".into());
+            self.toast = Some(t::toast_open_img_for_model());
             return Task::none();
         };
         let Some(archive) = self.editor.archives().get(archive_index) else {
@@ -3176,18 +3173,16 @@ impl App {
             })
             .or_else(|| find_agr_model_entry(&archive.entries, &agr_name));
         let Some(model_entry) = model_entry else {
-            self.toast = Some(format!(
-                "No matching .nif model found for {agr_name} in the open archive."
-            ));
+            self.toast = Some(t::toast_no_model_for_agr_open(agr_name.as_str()));
             return Task::none();
         };
         let model_name = archive.entries[model_entry].file_name.clone();
-        let named = if hxd.is_none() {
-            String::new()
+        let loading_toast = if hxd.is_none() {
+            t::toast_loading_animation(agr_name.as_str(), model_name.as_str())
         } else {
-            " (HXD catalog found)".to_string()
+            t::toast_loading_animation_hxd(agr_name.as_str(), model_name.as_str())
         };
-        self.toast = Some(format!("Loading {agr_name} on {model_name}…{named}"));
+        self.toast = Some(loading_toast);
         self.agr_serial += 1;
         Task::done(Message::ViewerAgrLoadRequest {
             archive_index,
@@ -3343,7 +3338,7 @@ impl App {
     /// is on screen reloads straight away.
     fn apply_game_folder(&mut self, root: Option<PathBuf>) -> Task<Message> {
         let Some(index) = self.editor.selected_archive() else {
-            self.toast = Some("No archive selected.".into());
+            self.toast = Some(t::toast_no_archive_selected());
             return Task::none();
         };
         let Some((path, name)) = self
@@ -3352,7 +3347,7 @@ impl App {
             .get(index)
             .and_then(|archive| Some((archive.path.clone()?, archive.file_name.clone())))
         else {
-            self.toast = Some("Save the archive first; the game folder is stored per archive file.".into());
+            self.toast = Some(t::toast_game_folder_needs_save());
             return Task::none();
         };
         match &root {
@@ -3367,10 +3362,10 @@ impl App {
         }
         self.toast = Some(match self.config.game_root_for(&path) {
             Some(resolved) if root.is_some() => {
-                format!("Game folder for {name}: {}", resolved.display())
+                t::toast_game_folder_set(name.as_str(), resolved.display().to_string())
             }
-            Some(resolved) => format!("Game folder for {name}: {} (automatic)", resolved.display()),
-            None => format!("{name} has no game folder."),
+            Some(resolved) => t::toast_game_folder_automatic(name.as_str(), resolved.display().to_string()),
+            None => t::toast_game_folder_none(name.as_str()),
         });
 
         let showing_this_archive = self
@@ -3637,14 +3632,14 @@ impl App {
                             self.config.recent_files.touch(&path);
                             self.save_config();
                         } else {
-                            self.toast = Some(format!("Already open: {}", path.display()));
+                            self.toast = Some(t::toast_already_open(path.display().to_string()));
                         }
                     }
                     OpenArchiveOutcome::Unsupported => {
                         self.show_unsupported = Some(path);
                     }
                     OpenArchiveOutcome::Failed(error) => {
-                        self.toast = Some(format!("Failed to open archive: {error}"));
+                        self.toast = Some(t::toast_open_failed(error.to_string()));
                     }
                 }
                 Task::none()
@@ -3659,7 +3654,7 @@ impl App {
                 if !path.exists() {
                     self.config.recent_files.remove(&path);
                     self.save_config();
-                    self.toast = Some(format!("File no longer exists: {}", path.display()));
+                    self.toast = Some(t::toast_file_gone(path.display().to_string()));
                     return Task::none();
                 }
                 self.open_archive_path(path)
@@ -3668,7 +3663,7 @@ impl App {
             Message::SaveArchive => {
                 self.toast = None;
                 let Some((_index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast = Some("No archive selected.".into());
+                    self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
                 let Some(path) = archive.path.clone() else {
@@ -3683,7 +3678,7 @@ impl App {
 
             Message::SaveArchiveAs => {
                 let Some((_index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast = Some("No archive selected.".into());
+                    self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
                 let default_path = archive
@@ -3696,7 +3691,7 @@ impl App {
 
             Message::SaveArchiveAsResult(Some(choice)) => {
                 let Some((_index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast = Some("No archive selected.".into());
+                    self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
                 // "Save as" writes a copy and keeps the source archive,
@@ -3710,7 +3705,7 @@ impl App {
                     return Task::none();
                 };
                 let Some(archive) = self.editor.archives().get(pending.index).cloned() else {
-                    self.toast = Some("The archive is no longer open.".into());
+                    self.toast = Some(t::toast_archive_closed());
                     return Task::none();
                 };
                 if pending.fix
@@ -3765,7 +3760,7 @@ impl App {
             } => {
                 let patched = patches.len();
                 let Some(archive) = self.editor.archives_mut().get_mut(index) else {
-                    self.toast = Some("The archive is no longer open.".into());
+                    self.toast = Some(t::toast_archive_closed());
                     return Task::none();
                 };
                 for (entry_index, bytes) in patches.0 {
@@ -3776,7 +3771,7 @@ impl App {
                 if patched > 0 {
                     archive.dirty = true;
                     archive.invalidate_entry_caches_keeping_report();
-                    self.toast = Some(format!("Repaired {patched} texture header(s); saving."));
+                    self.toast = Some(t::toast_headers_repaired(patched));
                 }
                 let archive = archive.clone();
                 self.run_save(archive, path, version, remove_existing)
@@ -3784,15 +3779,15 @@ impl App {
             Message::TextureReplaceRequested => {
                 // Ignore a second request while one is already in flight.
                 if self.replace_request.is_some() || self.replace_plan_in_flight {
-                    self.toast = Some("A replacement is already being prepared.".into());
+                    self.toast = Some(t::toast_replace_busy());
                     return Task::none();
                 }
                 let Some(archive_index) = self.editor.selected_archive() else {
-                    self.toast = Some("No archive selected.".into());
+                    self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
                 let Some(entry_index) = self.editor.selected_entry() else {
-                    self.toast = Some("Select a texture entry first.".into());
+                    self.toast = Some(t::toast_select_texture());
                     return Task::none();
                 };
                 let Some(archive) = self.editor.archives().get(archive_index) else {
@@ -3802,21 +3797,15 @@ impl App {
                     .file_name_lower
                     .ends_with(".txd")
                 {
-                    self.toast =
-                        Some("Replacement works on TXD entries; that entry is not one.".into());
+                    self.toast = Some(t::toast_replace_needs_txd());
                     return Task::none();
                 }
                 let Some(target_id) = archive.target_game else {
-                    self.toast = Some(
-                        "No target set for this archive. Pick the game it is for in Validate textures."
-                            .into(),
-                    );
+                    self.toast = Some(t::toast_no_target());
                     return self.open_validator_popup();
                 };
                 if let Err(error) = crate::compat::convert::writable_target(target_id) {
-                    self.toast = Some(format!(
-                        "{error} Pick the game this archive is for in Validate textures."
-                    ));
+                    self.toast = Some(t::toast_target_error(error.to_string()));
                     return self.open_validator_popup();
                 }
                 self.replace_request = Some((archive_index, entry_index));
@@ -3851,7 +3840,7 @@ impl App {
                 let archive_name = archive.file_name.clone();
                 let texture_index = self.selected_texture;
                 self.replace_plan_in_flight = true;
-                self.toast = Some("Preparing replacement...".into());
+                self.toast = Some(t::toast_preparing_replacement());
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
@@ -4095,7 +4084,7 @@ impl App {
                     Ok(AppliedBytes(bytes)) => {
                         let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
                         else {
-                            self.toast = Some("The archive is no longer open.".into());
+                            self.toast = Some(t::toast_archive_closed());
                             return Task::none();
                         };
                         if let Some(entry) = archive.entries.get_mut(entry_index) {
@@ -4103,12 +4092,11 @@ impl App {
                         }
                         archive.dirty = true;
                         archive.invalidate_entry_caches_keeping_report();
-                        self.toast =
-                            Some("Texture replaced - save the archive to write it.".into());
+                        self.toast = Some(t::toast_texture_replaced());
                         return self.decode_texture_entry(entry_index);
                     }
                     Err(error) => {
-                        self.toast = Some(format!("Replace failed: {error}"));
+                        self.toast = Some(t::toast_replace_failed(error.to_string()));
                     }
                 }
                 Task::none()
@@ -4121,27 +4109,22 @@ impl App {
             }
             Message::ImportImageAsTxdRequested => {
                 let Some(archive_index) = self.editor.selected_archive() else {
-                    self.toast = Some("No archive selected.".into());
+                    self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
                 let Some(archive) = self.editor.archives().get(archive_index) else {
                     return Task::none();
                 };
                 let Some(target_id) = archive.target_game else {
-                    self.toast = Some(
-                        "No target set for this archive. Pick the game it is for in Validate textures."
-                            .into(),
-                    );
+                    self.toast = Some(t::toast_no_target());
                     return self.open_validator_popup();
                 };
                 if let Err(error) = crate::compat::convert::writable_target(target_id) {
-                    self.toast = Some(format!(
-                        "{error} Pick the game this archive is for in Validate textures."
-                    ));
+                    self.toast = Some(t::toast_target_error(error.to_string()));
                     return self.open_validator_popup();
                 }
                 if self.new_txd_picker_open || self.new_txd_plan_in_flight {
-                    self.toast = Some("An import is already being prepared.".into());
+                    self.toast = Some(t::toast_import_busy());
                     return Task::none();
                 }
                 self.new_txd_picker_open = true;
@@ -4172,7 +4155,7 @@ impl App {
                 };
                 let archive_name = archive.file_name.clone();
                 self.new_txd_plan_in_flight = true;
-                self.toast = Some("Preparing import...".into());
+                self.toast = Some(t::toast_preparing_import());
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
@@ -4346,7 +4329,7 @@ impl App {
                 };
                 let mut name = state.texture_name.trim().to_string();
                 if name.is_empty() {
-                    self.toast = Some("Give the new TXD a name.".into());
+                    self.toast = Some(t::toast_txd_name_required());
                     self.pending_new_txd = Some(state);
                     return Task::none();
                 }
@@ -4356,7 +4339,7 @@ impl App {
                 let bytes =
                     crate::compat::convert::build_new_txd(&state.plan.0, state.target, &name);
                 let Some(archive) = self.editor.archives_mut().get_mut(state.archive_index) else {
-                    self.toast = Some("The archive is no longer open.".into());
+                    self.toast = Some(t::toast_archive_closed());
                     return Task::none();
                 };
                 if archive
@@ -4364,7 +4347,7 @@ impl App {
                     .iter()
                     .any(|entry| entry.file_name.eq_ignore_ascii_case(&name))
                 {
-                    self.toast = Some(format!("An entry named '{name}' already exists."));
+                    self.toast = Some(t::toast_entry_exists(name.as_str()));
                     self.pending_new_txd = Some(state);
                     return Task::none();
                 }
@@ -4382,7 +4365,7 @@ impl App {
                 archive.dirty = true;
                 archive.invalidate_entry_caches_keeping_report();
                 let archive_index = state.archive_index;
-                self.toast = Some(format!("Added '{name}' - save the archive to write it.",));
+                self.toast = Some(t::toast_entry_added(name.as_str()));
                 if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
                     for entry in archive.entries.iter_mut() {
                         entry.selected = false;
@@ -4404,19 +4387,18 @@ impl App {
             }
             Message::BulkConvertRequested => {
                 let Some(archive_index) = self.editor.selected_archive() else {
-                    self.toast = Some("No archive selected.".into());
+                    self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
                 let Some(archive) = self.editor.archives().get(archive_index) else {
                     return Task::none();
                 };
                 let Some(target_id) = archive.target_game else {
-                    self.toast = Some("Set a game target first (Validate textures).".into());
+                    self.toast = Some(t::toast_set_target_first());
                     return Task::none();
                 };
                 let Ok(target) = crate::compat::convert::writable_target(target_id) else {
-                    self.toast =
-                        Some("Bully (Gamebryo) texture writing is not supported yet.".into());
+                    self.toast = Some(t::toast_bully_texture_writing());
                     return Task::none();
                 };
                 // The user's selection is the per-entry `selected` flag.
@@ -4431,7 +4413,7 @@ impl App {
                     .map(|(index, _)| index)
                     .collect();
                 if selected.is_empty() {
-                    self.toast = Some("Select the entries to convert first.".into());
+                    self.toast = Some(t::toast_select_entries_to_convert());
                     return Task::none();
                 }
                 let selected_entries: Vec<(usize, EntryInfo)> = selected
@@ -4480,10 +4462,7 @@ impl App {
                         && archive.file_name == ready.source_label
                         && archive.path == ready.source_path
                 }) {
-                    self.toast = Some(
-                        "The archive changed while conversion was being planned; please retry."
-                            .into(),
-                    );
+                    self.toast = Some(t::toast_archive_changed_planning());
                     return Task::none();
                 }
                 if ready.entries.is_empty() {
@@ -4491,9 +4470,9 @@ impl App {
                         if ready.ignored_non_txd == ready.selected_count
                             && ready.selected_count > 0
                         {
-                            "Only TXD entries can be converted - none of the selected entries are TXD texture containers.".into()
+                            t::toast_convert_only_txd()
                         } else {
-                            "Every selected texture is already native for the target.".into()
+                            t::toast_convert_all_native()
                         },
                     );
                     return Task::none();
@@ -4515,17 +4494,14 @@ impl App {
                 };
                 let archive_index = state.archive_index;
                 let Some(archive) = self.editor.archives().get(archive_index) else {
-                    self.toast = Some("The archive is no longer open.".into());
+                    self.toast = Some(t::toast_archive_closed());
                     return Task::none();
                 };
                 if archive.generation() != state.archive_generation
                     || archive.file_name != state.source_label
                     || archive.path != state.source_path
                 {
-                    self.toast = Some(
-                        "The archive changed after this conversion was planned; please retry."
-                            .into(),
-                    );
+                    self.toast = Some(t::toast_archive_changed_after_plan());
                     return Task::none();
                 }
                 let archive_path = archive.path.clone();
@@ -4567,17 +4543,14 @@ impl App {
                         let texture_count: usize = patches.len();
                         let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
                         else {
-                            self.toast = Some("The archive is no longer open.".into());
+                            self.toast = Some(t::toast_archive_closed());
                             return Task::none();
                         };
                         if archive.generation() != archive_generation
                             || archive.file_name != source_label
                             || archive.path != source_path
                         {
-                            self.toast = Some(
-                                "The archive changed during conversion; stale results were discarded."
-                                    .into(),
-                            );
+                            self.toast = Some(t::toast_archive_changed_during());
                             return Task::none();
                         }
                         for (entry_index, bytes) in patches {
@@ -4587,13 +4560,11 @@ impl App {
                         }
                         archive.dirty = true;
                         archive.invalidate_entry_caches_keeping_report();
-                        self.toast = Some(format!(
-                            "Converted {texture_count} entries - save the archive to write them.",
-                        ));
+                        self.toast = Some(t::toast_converted(texture_count));
                         let _ = self.refresh_inspection();
                     }
                     Err(error) => {
-                        self.toast = Some(format!("Conversion failed: {error}"));
+                        self.toast = Some(t::toast_conversion_failed(error.to_string()));
                     }
                 }
                 Task::none()
@@ -4607,7 +4578,7 @@ impl App {
                 // A guard-initiated save that got cancelled cancels the
                 // whole close request.
                 self.close_after_save = None;
-                self.toast = Some("Save cancelled.".into());
+                self.toast = Some(t::toast_save_cancelled());
                 Task::none()
             }
 
@@ -4618,7 +4589,7 @@ impl App {
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
                             Self::adopt_target(&self.config, archive);
                         }
-                        self.toast = Some("Archive saved.".into());
+                        self.toast = Some(t::toast_archive_saved());
                         // The unsaved-changes guard may have saved in
                         // order to close: finish the close now.
                         if self.close_after_save == Some(index) {
@@ -4628,7 +4599,7 @@ impl App {
                     }
                     Err(err) => {
                         self.close_after_save = None;
-                        self.toast = Some(format!("Save failed: {err}"));
+                        self.toast = Some(t::toast_save_failed(err.to_string()));
                     }
                 };
                 Task::none()
@@ -4636,20 +4607,19 @@ impl App {
             Message::PackArchive => {
                 self.toast = None;
                 let Some((_index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast = Some("No archive selected.".into());
+                    self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
                 if archive.progress.in_use() {
-                    self.toast = Some("An archive operation is already running.".into());
+                    self.toast = Some(t::toast_operation_running());
                     return Task::none();
                 }
                 let Some(path) = archive.path.clone() else {
-                    self.toast = Some("Save the archive before packing it.".into());
+                    self.toast = Some(t::toast_save_before_pack());
                     return Task::none();
                 };
                 if !path.exists() {
-                    self.toast =
-                        Some("The archive file no longer exists. Use Save as… first.".into());
+                    self.toast = Some(t::toast_archive_file_missing());
                     return Task::none();
                 }
                 let version = archive.version;
@@ -4662,20 +4632,13 @@ impl App {
                         let packed = outcome.stats.packed_bytes;
                         self.editor.replace_archive(index, outcome.archive);
                         self.toast = if reclaimed > 0 {
-                            Some(format!(
-                                "Archive packed — reclaimed {} ({} on disk).",
-                                format_byte_count(reclaimed),
-                                format_byte_count(packed)
-                            ))
+                            Some(t::toast_packed(format_byte_count(reclaimed), format_byte_count(packed)))
                         } else {
-                            Some(format!(
-                                "Archive packed — no space reclaimed ({} on disk).",
-                                format_byte_count(packed)
-                            ))
+                            Some(t::toast_packed_nothing(format_byte_count(packed)))
                         };
                     }
                     Err(err) => {
-                        self.toast = Some(format!("Pack failed: {err}"));
+                        self.toast = Some(t::toast_pack_failed(err.to_string()));
                     }
                 }
                 Task::none()
@@ -4733,7 +4696,11 @@ impl App {
                 self.request_archive_close(index)
             }
             Message::CloseArchiveTab(index) => self.request_archive_close(index),
-            Message::WindowChrome(message) => self.update_window_chrome(message),
+                        Message::WindowChrome(message) => self.update_window_chrome(message),
+            Message::ShowToast(text) => {
+                self.toast = Some(text);
+                Task::none()
+            }
             Message::WindowCloseRequested(window) => {
                 if self.editor.archives().iter().any(|archive| archive.dirty) {
                     self.pending_close = Some(PendingClose::Window(window));
@@ -4854,7 +4821,7 @@ impl App {
                     return Task::none();
                 }
                 let Some((index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast = Some("Open an archive first to import into it.".into());
+                    self.toast = Some(t::toast_open_archive_to_import());
                     return Task::none();
                 };
                 self.begin_import(index, archive, paths, None)
@@ -4887,7 +4854,7 @@ impl App {
                     return Task::none();
                 };
                 let Some(archive) = self.editor.archives().get(pending.index).cloned() else {
-                    self.toast = Some("The target archive is no longer open.".into());
+                    self.toast = Some(t::toast_target_archive_closed());
                     return Task::none();
                 };
                 match pending.folder {
@@ -4899,7 +4866,7 @@ impl App {
             }
             Message::ImportCheckCancelled => {
                 self.pending_import = None;
-                self.toast = Some("Import cancelled.".into());
+                self.toast = Some(t::toast_import_cancelled());
                 Task::none()
             }
             Message::ImportCompleted {
@@ -4920,15 +4887,13 @@ impl App {
                         }
                         self.refresh_imported_verdicts(index);
                         self.toast = Some(if checked {
-                            format!("Imported {count} files.")
+                            t::toast_imported(count)
                         } else {
-                            format!(
-                                "Imported {count} files - no validator target set, formats were not checked."
-                            )
+                            t::toast_imported_unchecked(count)
                         });
                     }
                     Err(error) => {
-                        self.toast = Some(format!("Import failed: {error}"));
+                        self.toast = Some(t::toast_import_failed(error.to_string()));
                     }
                 }
                 Task::none()
@@ -4937,14 +4902,14 @@ impl App {
             Message::ImportFolder => {
                 self.toast = None;
                 if self.editor.selected_archive().is_none() {
-                    self.toast = Some("Open an archive first to import a folder.".into());
+                    self.toast = Some(t::toast_open_archive_to_import_folder());
                     return Task::none();
                 }
                 dialogs::import_folder().map(Message::ImportFolderResult)
             }
             Message::ImportFolderResult(Some(folder)) => {
                 let Some((index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast = Some("Open an archive first to import a folder.".into());
+                    self.toast = Some(t::toast_open_archive_to_import_folder());
                     return Task::none();
                 };
                 Self::scan_import_folder_task(index, archive, folder)
@@ -4965,10 +4930,7 @@ impl App {
             Message::FolderScanCompleted { index, result } => {
                 match result {
                     Ok(plan) if plan.files.is_empty() => {
-                        self.toast = Some(format!(
-                            "No regular files found in {}.",
-                            plan.folder.display()
-                        ));
+                        self.toast = Some(t::toast_no_files_in_folder(plan.folder.display().to_string()));
                     }
                     Ok(plan) => {
                         if self.folder_import_target_matches(
@@ -4978,14 +4940,11 @@ impl App {
                         ) {
                             self.pending_folder_import = Some((index, plan));
                         } else {
-                            self.toast = Some(
-                                "The target archive changed while the folder was being scanned."
-                                    .into(),
-                            );
+                            self.toast = Some(t::toast_folder_scan_target_changed());
                         }
                     }
                     Err(error) => {
-                        self.toast = Some(format!("Folder scan failed: {error}"));
+                        self.toast = Some(t::toast_folder_scan_failed(error.to_string()));
                     }
                 }
                 Task::none()
@@ -4999,15 +4958,15 @@ impl App {
                     &plan.target_archive_name,
                     plan.target_archive_path.as_ref(),
                 ) {
-                    self.toast = Some("The target archive is no longer selected.".into());
+                    self.toast = Some(t::toast_target_archive_deselected());
                     return Task::none();
                 }
                 let Some(archive) = self.editor.archives().get(index).cloned() else {
-                    self.toast = Some("The target archive is no longer open.".into());
+                    self.toast = Some(t::toast_target_archive_closed());
                     return Task::none();
                 };
                 if archive.progress.in_use() {
-                    self.toast = Some("An archive operation is already running.".into());
+                    self.toast = Some(t::toast_operation_running());
                     return Task::none();
                 }
                 self.begin_import(
@@ -5029,10 +4988,7 @@ impl App {
                             &outcome.target_archive_name,
                             outcome.target_archive_path.as_ref(),
                         ) {
-                            self.toast = Some(
-                                "Folder import discarded because the target archive changed."
-                                    .into(),
-                            );
+                            self.toast = Some(t::toast_folder_import_discarded());
                             return Task::none();
                         }
                         let summary = outcome.summary;
@@ -5045,7 +5001,7 @@ impl App {
                         self.toast = Some(format_folder_import_summary(&summary));
                     }
                     Err(error) => {
-                        self.toast = Some(format!("Folder import failed: {error}"));
+                        self.toast = Some(t::toast_folder_import_failed(error.to_string()));
                     }
                 }
                 Task::none()
@@ -5093,21 +5049,21 @@ impl App {
                                 names
                                     .first()
                                     .cloned()
-                                    .unwrap_or_else(|| "1 file".to_string())
+                                    .unwrap_or_else(|| t::recent_exported_files(1))
                             } else {
-                                format!("{count} files")
+                                t::recent_exported_files(count)
                             };
                             archive
                                 .recent_exports
-                                .push(format!("[{now}] Exported {summary}"));
-                            archive.add_log(format!("Exported {count} entries"));
-                            self.toast = Some(format!("Exported {count} entries."));
+                                .push(format!("[{now}] {}", t::recent_exported(summary)));
+                            archive.add_log(t::log_exported(count));
+                            self.toast = Some(t::toast_exported(count));
                         }
                         Err(err) => {
                             archive.export_status = ExportStatus::Idle;
                             archive.last_export_count = 0;
-                            archive.add_log(format!("Export failed: {err}"));
-                            self.toast = Some(format!("Export failed: {err}"));
+                            archive.add_log(t::log_export_failed(err.to_string()));
+                            self.toast = Some(t::toast_export_failed(err.to_string()));
                         }
                     }
                 }
@@ -5119,7 +5075,7 @@ impl App {
             Message::ExportEntryListResult(Some(path)) => {
                 self.manifest_export_picker_open = false;
                 let Some((archive_index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast = Some("No archive selected.".into());
+                    self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
                 let archive_name = archive.file_name.to_string();
@@ -5188,23 +5144,17 @@ impl App {
                         if target_matches {
                             if let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
                             {
-                                archive.add_log(format!(
-                                    "Exported entry list ({count} names) to {}",
-                                    path.display()
-                                ));
+                                archive.add_log(t::log_entry_list_exported(count, path.display().to_string()));
                             }
                         }
-                        self.toast = Some(format!(
-                            "Exported {count} entry names to {}.",
-                            path.display()
-                        ));
+                        self.toast = Some(t::toast_entry_list_exported(count, path.display().to_string()));
                         dev_logger::breadcrumb(&format!(
                             "entry-list export completed: {} ({count} entries)",
                             path.display()
                         ));
                     }
                     Err(error) => {
-                        self.toast = Some(format!("Entry-list export failed: {error}"));
+                        self.toast = Some(t::toast_entry_list_export_failed(error.to_string()));
                     }
                 }
                 Task::none()
@@ -5215,7 +5165,7 @@ impl App {
             Message::CompareManifestResult(Some(path)) => {
                 self.compare_picker_open = false;
                 let Some((archive_index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast = Some("No archive selected.".into());
+                    self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
                 let target = CompareTarget {
@@ -5316,10 +5266,7 @@ impl App {
                     if current_request == Some(request_id) {
                         self.compare_state = None;
                         self.compare_phase = 0.0;
-                        self.toast = Some(
-                            "Comparison discarded because the archive changed; please retry."
-                                .into(),
-                        );
+                        self.toast = Some(t::toast_compare_discarded());
                     }
                     dev_logger::breadcrumb("entry-list comparison discarded as stale");
                     return Task::none();
@@ -5340,7 +5287,7 @@ impl App {
                     Err(error) => {
                         self.compare_state = None;
                         self.compare_phase = 0.0;
-                        self.toast = Some(format!("Entry-list comparison failed: {error}"));
+                        self.toast = Some(t::toast_compare_failed(error.to_string()));
                     }
                 }
                 Task::none()
@@ -5367,11 +5314,11 @@ impl App {
                     return Task::none();
                 };
                 if report.missing.is_empty() {
-                    self.toast = Some("There are no missing entries to copy.".into());
+                    self.toast = Some(t::toast_no_missing_to_copy());
                     return Task::none();
                 }
                 let count = report.missing.len();
-                self.toast = Some(format!("Copied {count} missing entry name(s)."));
+                self.toast = Some(t::toast_copied_missing(count));
                 iced::clipboard::write::<Message>(report.missing.join("\r\n"))
             }
             Message::CloseCompare => {
@@ -5417,7 +5364,7 @@ impl App {
                 if self.pending_save.is_some() {
                     self.pending_save = None;
                     self.close_after_save = None;
-                    self.toast = Some("Save cancelled.".into());
+                    self.toast = Some(t::toast_save_cancelled());
                     return Task::none();
                 }
                 if self.pending_replace.is_some() {
@@ -5628,7 +5575,7 @@ impl App {
                     lines.push(format!("{key}: {value}"));
                 }
                 let text = lines.join("\n");
-                self.toast = Some("Copied selected entry details".to_string());
+                self.toast = Some(t::toast_copied_entry_details());
                 iced::clipboard::write::<Message>(text)
             }
             Message::CopyLogs => {
@@ -5640,7 +5587,7 @@ impl App {
                     return Task::none();
                 };
                 let text = archive.logs.join("\n");
-                self.toast = Some("Copied logs".to_string());
+                self.toast = Some(t::toast_copied_logs());
                 iced::clipboard::write::<Message>(text)
             }
 
@@ -5719,7 +5666,7 @@ impl App {
                             && let Some(entry) = archive.entries.get(entry_index)
                         {
                             let name = entry.file_name.to_string();
-                            self.toast = Some(format!("Copied name: {}", name));
+                            self.toast = Some(t::toast_copied_name(name.as_str()));
                             return iced::clipboard::write::<Message>(name);
                         }
                         Task::none()
@@ -5755,10 +5702,7 @@ impl App {
                             let stem = match stem {
                                 Some(s) => s,
                                 None => {
-                                    self.toast = Some(format!(
-                                        "Cannot determine basename of {}",
-                                        entry.file_name
-                                    ));
+                                    self.toast = Some(t::toast_basename_unknown(entry.file_name.as_str()));
                                     return Task::none();
                                 }
                             };
@@ -5807,7 +5751,7 @@ impl App {
                         ) {
                             Ok(d) => d,
                             Err(e) => {
-                                self.toast = Some(format!("Failed to read {name}: {e}"));
+                                self.toast = Some(t::toast_read_failed(name.as_str(), e.to_string()));
                                 return Task::none();
                             }
                         };
@@ -5827,7 +5771,7 @@ impl App {
                         }
 
                         if let Some(archive) = self.editor.selected_archive_mut() {
-                            archive.add_log(format!("Opening external 3D viewer for {name}"));
+                            archive.add_log(t::log_external_viewer(name.as_str()));
                         }
                         Task::none()
                     }
@@ -6160,7 +6104,7 @@ impl App {
                 self.viewer3d_handle.clear();
                 self.agr_playback = None;
                 self.selected_inspector_tab = InspectorTab::Model3D;
-                self.toast = Some("Animation demo closed.".into());
+                self.toast = Some(t::toast_demo_closed());
                 Task::none()
             }
             Message::AnimationSelectIfp(ifp_entry_index) => {
@@ -6410,10 +6354,7 @@ impl App {
                 self.autoscroll_momentum.begin(self.last_pointer_position);
                 if !self.autoscroll_notice_shown {
                     self.autoscroll_notice_shown = true;
-                    self.toast = Some(
-                        "Autoscroll active: move the pointer to scroll. Click, middle-click, right-click, use the wheel, or press a key to stop."
-                            .to_string(),
-                    );
+                    self.toast = Some(t::toast_autoscroll());
                     self.toast_extended_duration = true;
                 }
                 Task::none()
@@ -6553,11 +6494,11 @@ impl App {
             }
             Message::ValidateArchiveFor(target_id) => {
                 let Some(archive_index) = self.editor.selected_archive() else {
-                    self.toast = Some("Open an archive first to validate it.".into());
+                    self.toast = Some(t::toast_open_archive_to_validate());
                     return Task::none();
                 };
                 if self.editor.archives()[archive_index].progress.in_use() {
-                    self.toast = Some("Another task is still running.".into());
+                    self.toast = Some(t::toast_task_running());
                     return Task::none();
                 }
                 // Picking a game both selects and persists the archive's
@@ -6606,7 +6547,7 @@ impl App {
                     Ok(report) => {
                         let Some(archive) = self.editor.archives_mut().get_mut(archive_index)
                         else {
-                            self.toast = Some("The validated archive was closed.".into());
+                            self.toast = Some(t::toast_validated_archive_closed());
                             return Task::none();
                         };
                         let errors = report.error_count();
@@ -6625,12 +6566,16 @@ impl App {
                                     .collect::<Vec<_>>()
                                     .join(", ")
                             })
-                            .unwrap_or_else(|| "no textures".to_string());
-                        let summary = format!(
-                            "Validated {} TXDs ({} textures) for {display}: {verdict_summary}; {errors} errors, {warnings} warnings",
-                            report.txd_entries, report.textures
+                            .unwrap_or_else(t::validator_no_textures);
+                        let summary = t::validation_summary(
+                            report.txd_entries,
+                            report.textures,
+                            display,
+                            verdict_summary,
+                            errors,
+                            warnings,
                         );
-                        archive.add_log(format!("Compatibility check: {summary}"));
+                        archive.add_log(t::log_compat_check(summary.as_str()));
                         for (code, count) in &report.anomaly_counts {
                             archive.add_log(format!(
                                 "  {code}: {count} (e.g. {})",
@@ -6647,7 +6592,7 @@ impl App {
                         // instead of the snappy default).
                         self.toast_extended_duration = true;
                         self.toast = Some(if errors == 0 && warnings == 0 {
-                            format!("No compatibility issues found - {summary}")
+                            t::toast_no_compat_issues(summary)
                         } else {
                             summary
                         });
@@ -6692,11 +6637,11 @@ impl App {
                         }
                     }
                     Err(err) if err.contains("cancelled") => {
-                        self.toast = Some("Validation cancelled.".into());
+                        self.toast = Some(t::toast_validation_cancelled());
                     }
                     Err(err) => {
                         self.toast_extended_duration = true;
-                        self.toast = Some(format!("Validation failed: {err}"));
+                        self.toast = Some(t::toast_validation_failed(err.to_string()));
                     }
                 }
                 Task::none()
@@ -6707,8 +6652,7 @@ impl App {
                     return self.open_archive_path(path);
                 }
                 let Some((index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast =
-                        Some("Open an archive first to drop non-IMG files into it.".into());
+                    self.toast = Some(t::toast_drop_needs_archive());
                     return Task::none();
                 };
                 self.begin_import(index, archive, vec![path], None)
@@ -6741,14 +6685,12 @@ impl App {
                             }
                             let count = textures.len();
                             let retained = archive.texture_cache.contains_key(&index);
-                            archive.add_log(format!("Decoded {count} texture preview(s)"));
+                            archive.add_log(t::log_decoded(count));
                             if is_active {
                                 self.toast = Some(if retained {
-                                    format!("Decoded {count} texture(s)")
+                                    t::toast_decoded(count)
                                 } else {
-                                    format!(
-                                        "Decoded {count} texture(s), but the preview could not be retained"
-                                    )
+                                    t::toast_decoded_not_retained(count)
                                 });
                             }
                         }
@@ -6789,7 +6731,7 @@ impl App {
                     .get(archive_index)
                     .and_then(|a| a.texture_cache.get(&entry_index));
                 let Some(textures) = textures else {
-                    self.toast = Some("No decoded textures to export.".into());
+                    self.toast = Some(t::toast_no_decoded_textures());
                     return Task::none();
                 };
 
@@ -6829,7 +6771,7 @@ impl App {
                                     tga.push(chunk[3]);
                                 }
                                 std::fs::write(&path, tga).map_err(|e| {
-                                    format!("Failed to write {}: {e}", path.display())
+                                    t::error_write_file(path.display().to_string(), e.to_string())
                                 })?;
                             }
                             Ok(())
@@ -6838,10 +6780,10 @@ impl App {
                         .unwrap_or_else(|e| Err(format!("task panicked: {e}")))
                     },
                     move |result| {
-                        if result.is_ok() {
-                            let _ = format!("Exported {count} texture(s)");
-                        }
-                        Message::Noop
+                        Message::ShowToast(match result {
+                            Ok(()) => t::toast_textures_exported(count),
+                            Err(error) => t::toast_textures_export_failed(error),
+                        })
                     },
                 )
             }
@@ -6893,11 +6835,10 @@ impl App {
                 self.toast = Some(match (enable, result) {
                     (true, Ok(())) => {
                         crate::file_association::open_default_apps_settings();
-                        "IMG Editor Plus is now in Explorer's \"Open with\" for .img/.dir.                          To make it the default, pick it in the Settings page that opened."
-                            .into()
+                        t::toast_association_added()
                     }
-                    (false, Ok(())) => "Removed the .img/.dir association.".into(),
-                    (_, Err(error)) => format!("File association failed: {error}"),
+                    (false, Ok(())) => t::toast_association_removed(),
+                    (_, Err(error)) => t::toast_association_failed(error.to_string()),
                 });
                 Task::none()
             }
@@ -6905,7 +6846,7 @@ impl App {
                 if path.exists() {
                     self.open_archive_path(path)
                 } else {
-                    self.toast = Some(format!("File not found: {}", path.display()));
+                    self.toast = Some(t::toast_file_not_found(path.display().to_string()));
                     Task::none()
                 }
             }
@@ -6987,9 +6928,7 @@ impl App {
                 nif_basename,
             } => {
                 let _ = entry_index;
-                self.toast = Some(format!(
-                    "Pick a folder to export embedded textures from {nif_basename}"
-                ));
+                self.toast = Some(t::toast_pick_embedded_folder(nif_basename.as_str()));
                 let nb = nif_basename.clone();
                 dialogs::save_folder().map(move |folder| {
                     Message::ExportEmbeddedTexturesFolderResult {
@@ -7013,8 +6952,7 @@ impl App {
                     .as_deref()
                     .and_then(|p| self.config.game_root_for(p));
                 let Some(game_root) = game_root else {
-                    self.toast =
-                        Some("Could not determine game root from archive path".to_string());
+                    self.toast = Some(t::toast_no_game_root());
                     return Task::none();
                 };
                 let nb_for_callback = nif_basename.clone();
@@ -7056,7 +6994,10 @@ impl App {
                             self.toast = Some(report.summary());
                         }
                         Err(err) => {
-                            let line = format!("[{}] {} export failed: {err}", now, nif_basename);
+                            let line = format!(
+                                "[{now}] {}",
+                                t::log_texture_export_failed(nif_basename.as_str(), err.to_string())
+                            );
                             archive.add_log(line.clone());
                             self.toast = Some(line);
                         }
@@ -7296,14 +7237,16 @@ impl App {
                                 &clip_names,
                             );
                             let summary = if named > 0 {
-                                format!(
-                                    "{agr_display} on {model_display} ({} clips, HXD-named)",
-                                    library.clips.len()
+                                t::anim_summary_agr_named(
+                                    agr_display.as_str(),
+                                    model_display.as_str(),
+                                    library.clips.len(),
                                 )
                             } else {
-                                format!(
-                                    "{agr_display} on {model_display} ({} clips)",
-                                    library.clips.len()
+                                t::anim_summary_agr(
+                                    agr_display.as_str(),
+                                    model_display.as_str(),
+                                    library.clips.len(),
                                 )
                             };
                             let models = crate::inspector::animation::hxd::candidate_models(
@@ -7415,7 +7358,7 @@ impl App {
                         }
                         self.selected_inspector_tab = InspectorTab::Model3D;
                         self.active_viewer_entry = None;
-                        self.toast = Some(format!("Animation ready: {summary}"));
+                        self.toast = Some(t::toast_animation_ready(summary.as_str()));
                         dev_logger::breadcrumb(&format!("AGR load ok: {summary}"));
                         // Publish the freshly decoded pair so replays of the
                         // same AGR+model install instantly.
@@ -7479,7 +7422,7 @@ impl App {
                             self.agr_playback = None;
                         }
                         dev_logger::breadcrumb(&format!("AGR load failed: {error}"));
-                        self.toast = Some(format!("Animation load failed: {error}"));
+                        self.toast = Some(t::toast_animation_failed(error.to_string()));
                     }
                 }
                 Task::none()
@@ -7763,12 +7706,12 @@ impl App {
                         self.viewer3d_handle.set_scene(scene);
                         self.active_viewer_entry = Some((archive_index, entry_index));
                         if let Some(archive) = self.editor.selected_archive_mut() {
-                            archive.add_log("In-app 3D viewer ready".to_string());
+                            archive.add_log(t::log_viewer_ready());
                         }
                     }
                     Err(e) => {
                         dev_logger::breadcrumb(&format!("3D load failed: {e}"));
-                        self.toast = Some(format!("3D load failed: {e}"));
+                        self.toast = Some(t::toast_3d_load_failed(e.to_string()));
                     }
                 }
                 Task::none()
@@ -7971,7 +7914,7 @@ impl App {
                 };
                 if !state.has_valid_target() {
                     // Drop on the source or empty space = cancel.
-                    self.toast = Some("Drag cancelled".to_string());
+                    self.toast = Some(t::toast_drag_cancelled());
                     return Task::none();
                 }
                 let Some(target) = state.hover_target else {
@@ -7982,7 +7925,7 @@ impl App {
             }
             Message::ArchiveDragCancelled => {
                 self.drag_state = None;
-                self.toast = Some("Drag cancelled".to_string());
+                self.toast = Some(t::toast_drag_cancelled());
                 Task::none()
             }
         }
@@ -8142,11 +8085,7 @@ impl App {
         }
 
         self.context_menu = None;
-        self.toast = Some(format!(
-            "Moved {} entries to archive #{}",
-            moved_count,
-            target + 1
-        ));
+        self.toast = Some(t::toast_moved_entries(moved_count, target + 1));
     }
 
     fn decode_texture_entry(&mut self, entry_index: usize) -> Task<Message> {
@@ -8196,7 +8135,7 @@ impl App {
                                 let data = crate::parser::read_entry_data_from_source(
                                     &entry_clone,
                                     archive_path.as_deref(),
-                                ).map_err(|e| format!("Failed to read entry: {e}"))?;
+                                ).map_err(|e| t::error_read_entry(e.to_string()))?;
                                 let extension = std::path::Path::new(entry_clone.file_name.as_str())
                                     .extension()
                                     .and_then(|ext| ext.to_str())
@@ -8212,7 +8151,7 @@ impl App {
                                         for tex in &txd.textures {
                                             let rgba = tex
                                                 .decode_rgba()
-                                                .map_err(|e| format!("Texture decode failed: {e}"))?;
+                                                .map_err(|e| t::error_texture_decode(e.to_string()))?;
                                             decoded.push(DecodedTexture {
                                                 name: tex.diffuse_name.clone(),
                                                 width: tex.width,
@@ -8247,10 +8186,7 @@ impl App {
                                             |source_path| archive_texture_index.read(source_path),
                                         )
                                     }
-                                    _ => Err(format!(
-                                        "Texture preview supports TXD and NFT entries; '{}' is not a supported texture container.",
-                                        entry_clone.file_name
-                                    )),
+                                    _ => Err(t::error_texture_preview_unsupported(entry_clone.file_name.as_str())),
                                 }
                             },
                         )
@@ -8301,7 +8237,7 @@ impl App {
             return Task::none();
         }
         let Some((_index, archive)) = self.editor.clone_selected_archive() else {
-            self.toast = Some("No archive selected.".into());
+            self.toast = Some(t::toast_no_archive_selected());
             return Task::none();
         };
         let archive_name = archive.file_name.to_string();
@@ -8332,11 +8268,11 @@ impl App {
             return Task::none();
         }
         let Some((_index, archive)) = self.editor.clone_selected_archive() else {
-            self.toast = Some("No archive selected.".into());
+            self.toast = Some(t::toast_no_archive_selected());
             return Task::none();
         };
         if archive.entries.is_empty() {
-            self.toast = Some("The selected archive has no entries to compare.".into());
+            self.toast = Some(t::toast_compare_empty_archive());
             return Task::none();
         }
         self.compare_picker_open = true;
@@ -8386,14 +8322,14 @@ impl App {
             loop {
                 match rx.try_recv() {
                     Ok(ViewerEvent::Opened { name }) => {
-                        logs.push(format!("3D viewer opened: {name}"));
+                        logs.push(t::log_viewer_opened(name.as_str()));
                     }
                     Ok(ViewerEvent::Failed { reason }) => {
                         toast = Some(reason.clone());
-                        logs.push(format!("3D viewer failed: {reason}"));
+                        logs.push(t::log_viewer_failed(reason.as_str()));
                     }
                     Ok(ViewerEvent::Closed) => {
-                        logs.push("3D viewer closed".to_string());
+                        logs.push(t::log_viewer_closed());
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break true,
@@ -9006,20 +8942,17 @@ pub(crate) fn format_byte_count(bytes: u64) -> String {
 }
 
 fn format_folder_import_summary(summary: &FolderImportSummary) -> String {
-    let prefix = if summary.cancelled {
-        "Folder import cancelled"
+    let (imported, skipped, failed) = (summary.imported, summary.skipped, summary.failed);
+    let mut text = if summary.cancelled {
+        t::toast_folder_import_cancelled(imported, skipped, failed)
     } else {
-        "Folder import complete"
+        t::toast_folder_import_done(imported, skipped, failed)
     };
-    let details = if summary.failed > 0 || !summary.details.is_empty() {
-        " See the archive log for details."
-    } else {
-        ""
-    };
-    format!(
-        "{prefix}: {} imported, {} skipped, {} failed.{details}",
-        summary.imported, summary.skipped, summary.failed
-    )
+    if summary.failed > 0 || !summary.details.is_empty() {
+        text.push(' ');
+        text.push_str(&t::toast_see_log());
+    }
+    text
 }
 
 fn menu_button_with_icon<'a>(
@@ -10780,7 +10713,7 @@ mod tests {
         assert!(
             app.toast
                 .as_deref()
-                .is_some_and(|toast| toast.contains("Converted 1 entries")),
+                .is_some_and(|toast| toast.contains("Converted 1 entry -")),
             "{:?}",
             app.toast
         );
