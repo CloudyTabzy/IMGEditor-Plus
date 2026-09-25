@@ -936,6 +936,15 @@ log-folder-import = Folder import: { $imported } imported, { $skipped } skipped,
 log-folder-import-detail = Folder import detail: { $detail }
 folder-import-cancelled-detail = Import cancelled; remaining files were skipped.
 folder-import-duplicate = { $name }: duplicate skipped
+# Why an imported or renamed entry name was refused. Shown after "Skipped x:"
+# or "Cannot rename:", so these start lowercase.
+entry-name-empty = the name is empty
+entry-name-not-ascii = the name has characters the games cannot read (use A–Z, 0–9 and basic punctuation)
+entry-name-too-long = the name is longer than { $limit } bytes
+import-skip-no-extension = the file has no extension
+import-skip-not-file = not a regular file
+log-import-skipped = Skipped { $name }: { $reason }
+toast-rename-rejected = Cannot rename: { $reason }
 
 ## Entry details: source and format summary
 

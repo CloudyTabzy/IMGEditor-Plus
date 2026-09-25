@@ -755,6 +755,13 @@ log-folder-import = Импорт папки: импортировано — { $i
 log-folder-import-detail = Подробности импорта папки: { $detail }
 folder-import-cancelled-detail = Импорт отменён; оставшиеся файлы пропущены.
 folder-import-duplicate = { $name }: дубликат пропущен
+entry-name-empty = имя пустое
+entry-name-not-ascii = в имени есть символы, которые игры не читают (используйте латиницу A–Z, цифры 0–9 и простые знаки препинания)
+entry-name-too-long = имя слишком длинное (максимум байт: { $limit })
+import-skip-no-extension = у файла нет расширения
+import-skip-not-file = это не обычный файл
+log-import-skipped = Пропущен { $name }: { $reason }
+toast-rename-rejected = Не удалось переименовать: { $reason }
 
 ## Entry details: source and format summary
 

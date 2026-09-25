@@ -931,6 +931,13 @@ log-folder-import = Ordnerimport: { $imported } importiert, { $skipped } übersp
 log-folder-import-detail = Details zum Ordnerimport: { $detail }
 folder-import-cancelled-detail = Import abgebrochen; die restlichen Dateien wurden übersprungen.
 folder-import-duplicate = { $name }: Duplikat übersprungen
+entry-name-empty = der Name ist leer
+entry-name-not-ascii = der Name enthält Zeichen, die die Spiele nicht lesen können (verwende A–Z, 0–9 und einfache Satzzeichen)
+entry-name-too-long = der Name ist länger als { $limit } Bytes
+import-skip-no-extension = die Datei hat keine Erweiterung
+import-skip-not-file = keine reguläre Datei
+log-import-skipped = { $name } übersprungen: { $reason }
+toast-rename-rejected = Umbenennen nicht möglich: { $reason }
 
 ## Entry details: source and format summary
 

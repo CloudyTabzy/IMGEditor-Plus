@@ -5421,6 +5421,17 @@ impl App {
             }
             Message::CommitRename => {
                 let new_name = self.rename_buffer.clone();
+                // Keep the rename box open so the name can be fixed; storing
+                // it would make the saved archive unreadable.
+                if let Some(problem) = self
+                    .editor
+                    .selected_archive()
+                    .and_then(|index| self.editor.archives().get(index))
+                    .and_then(|archive| crate::parser::entry_name_problem(&new_name, archive.version))
+                {
+                    self.toast = Some(t::toast_rename_rejected(problem));
+                    return Task::none();
+                }
                 self.editor.rename_selected(&new_name);
                 self.rename_buffer.clear();
                 self.rename_focused = false;
@@ -9812,6 +9823,19 @@ mod tests {
         let _ = app.update(Message::CommitRename);
 
         assert!(app.rename_buffer.is_empty());
+    }
+
+    #[test]
+    fn commit_rename_refuses_names_the_games_cannot_read() {
+        let mut app = test_app_with_entries();
+        app.editor.set_selected_entry(Some(0));
+        app.rename_buffer = "модель.dff".to_string();
+
+        let _ = app.update(Message::CommitRename);
+
+        assert_eq!(app.editor.archives()[0].entries[0].file_name, "first.dff");
+        assert_eq!(app.rename_buffer, "модель.dff");
+        assert!(app.toast.is_some());
     }
 
     #[test]

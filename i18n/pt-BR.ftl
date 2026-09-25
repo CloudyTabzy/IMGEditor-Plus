@@ -988,6 +988,13 @@ log-folder-import = Importação de pasta: { $imported } importados, { $skipped 
 log-folder-import-detail = Detalhes da importação de pasta: { $detail }
 folder-import-cancelled-detail = Importação cancelada; os arquivos restantes foram ignorados.
 folder-import-duplicate = { $name }: duplicado ignorado
+entry-name-empty = o nome está vazio
+entry-name-not-ascii = o nome tem caracteres que os jogos não conseguem ler (use A–Z, 0–9 e pontuação básica)
+entry-name-too-long = o nome passa de { $limit } bytes
+import-skip-no-extension = o arquivo não tem extensão
+import-skip-not-file = não é um arquivo comum
+log-import-skipped = { $name } ignorado: { $reason }
+toast-rename-rejected = Não foi possível renomear: { $reason }
 
 ## Entry details: source and format summary
 

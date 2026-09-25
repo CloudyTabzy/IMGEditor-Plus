@@ -726,6 +726,13 @@ log-folder-import = Impor folder: { $imported } diimpor, { $skipped } dilewati, 
 log-folder-import-detail = Detail impor folder: { $detail }
 folder-import-cancelled-detail = Impor dibatalkan; berkas yang tersisa dilewati.
 folder-import-duplicate = { $name }: duplikat dilewati
+entry-name-empty = nama kosong
+entry-name-not-ascii = nama berisi karakter yang tidak dapat dibaca game (gunakan A–Z, 0–9, dan tanda baca dasar)
+entry-name-too-long = nama melebihi { $limit } byte
+import-skip-no-extension = berkas tidak memiliki ekstensi
+import-skip-not-file = bukan berkas biasa
+log-import-skipped = { $name } dilewati: { $reason }
+toast-rename-rejected = Tidak dapat mengganti nama: { $reason }
 
 ## Entry details: source and format summary
 

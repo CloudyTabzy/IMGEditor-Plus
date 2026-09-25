@@ -5,6 +5,7 @@ use compact_str::CompactString;
 use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
+use crate::i18n::t;
 
 pub mod col;
 pub mod db;
@@ -163,6 +164,24 @@ pub fn encode_entry_name_with_limit(
     }
 
     raw
+}
+
+/// Why `name` cannot be an entry name in a `version` archive, or `None` when
+/// it can. The games read entry names as printable ASCII, and the parsers
+/// refuse anything else on open, so storing e.g. a Cyrillic name would make
+/// the saved archive unreadable.
+pub fn entry_name_problem(name: &str, version: ImgVersion) -> Option<String> {
+    if name.is_empty() {
+        return Some(t::entry_name_empty());
+    }
+    if !name.bytes().all(|byte| (0x20..=0x7E).contains(&byte)) {
+        return Some(t::entry_name_not_ascii());
+    }
+    let limit = entry_name_capacity(version);
+    if name.len() > limit {
+        return Some(t::entry_name_too_long(limit));
+    }
+    None
 }
 
 pub fn entry_name_capacity(version: ImgVersion) -> usize {
@@ -557,14 +576,14 @@ pub fn import_entry_with_result(
 ) -> anyhow::Result<ImportEntryResult> {
     if path.extension().is_none() {
         return Ok(ImportEntryResult::Skipped {
-            reason: "file has no extension".to_string(),
+            reason: t::import_skip_no_extension(),
         });
     }
 
     let metadata = std::fs::metadata(path)?;
     if !metadata.is_file() {
-        let reason = "Not a regular file".to_string();
-        archive.add_log(format!("Skipping {}. {reason}.", path.display()));
+        let reason = t::import_skip_not_file();
+        archive.add_log(t::log_import_skipped(path.display().to_string(), reason.as_str()));
         return Ok(ImportEntryResult::Skipped { reason });
     }
 
@@ -573,10 +592,8 @@ pub fn import_entry_with_result(
         .and_then(|name| name.to_str())
         .ok_or_else(|| anyhow::anyhow!("import path is not valid UTF-8"))?;
 
-    let name_capacity = entry_name_capacity(archive.version);
-    if file_name.len() > name_capacity {
-        let reason = format!("name exceeds {name_capacity} bytes");
-        archive.add_log(format!("Skipping {file_name}. {reason}."));
+    if let Some(reason) = entry_name_problem(file_name, archive.version) {
+        archive.add_log(t::log_import_skipped(file_name, reason.as_str()));
         return Ok(ImportEntryResult::Skipped { reason });
     }
 
@@ -742,8 +759,45 @@ mod tests {
             archive
                 .logs
                 .iter()
-                .any(|log| log.contains("Not a regular file"))
+                .any(|log| log.contains(&t::import_skip_not_file()))
         );
+    }
+
+    #[test]
+    fn import_skips_names_the_games_cannot_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let cyrillic = dir.path().join("текстура.txd");
+        std::fs::write(&cyrillic, b"data").unwrap();
+        let long = dir.path().join("a_name_well_past_24_bytes.txd");
+        std::fs::write(&long, b"data").unwrap();
+        let mut archive = ArchiveInfo::new("test", true, ImgVersion::Two);
+
+        for path in [&cyrillic, &long] {
+            let result = import_entry_with_result(&mut archive, path, false).unwrap();
+            assert!(matches!(result, ImportEntryResult::Skipped { .. }), "{path:?}");
+        }
+        assert!(archive.entries.is_empty());
+    }
+
+    #[test]
+    fn entry_name_problem_accepts_only_printable_ascii_within_capacity() {
+        assert_eq!(entry_name_problem("player.dff", ImgVersion::Two), None);
+        assert_eq!(entry_name_problem("my file (2).txd", ImgVersion::One), None);
+        assert_eq!(entry_name_problem("", ImgVersion::Two), Some(t::entry_name_empty()));
+        assert_eq!(
+            entry_name_problem("модель.dff", ImgVersion::Two),
+            Some(t::entry_name_not_ascii())
+        );
+        assert_eq!(
+            entry_name_problem("tab\tname.dff", ImgVersion::Two),
+            Some(t::entry_name_not_ascii())
+        );
+        let capacity = entry_name_capacity(ImgVersion::Two);
+        assert_eq!(
+            entry_name_problem(&"x".repeat(capacity + 1), ImgVersion::Two),
+            Some(t::entry_name_too_long(capacity))
+        );
+        assert_eq!(entry_name_problem(&"x".repeat(capacity), ImgVersion::Two), None);
     }
 
     #[test]
