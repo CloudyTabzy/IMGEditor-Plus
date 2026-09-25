@@ -688,3 +688,215 @@ error-write-file = Failed to write { $path }: { $error }
 error-read-entry = Failed to read entry: { $error }
 error-texture-decode = Texture decode failed: { $error }
 error-texture-preview-unsupported = Texture preview supports TXD and NFT entries; '{ $entry }' is not a supported texture container.
+
+## Entry table and search
+
+table-name = Name
+table-size = Size
+# Size column for entries still read from the archive (sectors × 2 KB).
+table-size-kb = { $size } KB
+table-no-matches = No entries match the current filter.
+search-label = Search:
+search-did-you-mean = Did you mean
+sort-tip-name-asc = Sorted by file name (A → Z).
+sort-tip-name-desc = Sorted by file name (Z → A).
+sort-tip-name-inactive = Sort by file name (A → Z).
+sort-tip-type-primary = Sorted by file type, { $type } first.
+sort-tip-type-alphabetical = Sorted by file type alphabetically.
+sort-tip-type-inactive = Sort by file type (alphabetical).
+sort-tip-size-desc = Sorted by size (largest first).
+sort-tip-size-asc = Sorted by size (smallest first).
+sort-tip-size-inactive = Sort by size (largest first).
+version-unknown = Unknown
+
+## Toolbar tooltips
+
+toolbar-new = New
+toolbar-open = Open
+toolbar-save = Save
+toolbar-pack = Pack archive
+toolbar-import = Import
+toolbar-import-folder = Import folder
+toolbar-export-selected = Export selected
+toolbar-delete-selected = Delete selected
+toolbar-validate = Validate textures
+toolbar-image-as-txd = Import image as TXD
+toolbar-convert-selection = Convert selection to target dialect
+
+## Empty workspace and status bar
+
+empty-heading = Open or create an archive to get started.
+empty-drop-hint = Or drag and drop an .img or .dir file here to open it.
+status-selected = Selected: { $count }
+
+## Inspector tabs
+
+tab-export = Export
+tab-3d-view = 3D view
+tab-texture = Texture
+
+## Export tab
+
+export-format = Format
+export-entries = Entries
+export-entries-value = { $total } (visible: { $visible })
+export-game-folder = Game folder
+export-game-folder-automatic = { $path } (automatic)
+export-game-folder-none = none
+export-game-folder-unsaved = none (unsaved archive)
+export-progress = Progress
+export-ready = Ready to export
+export-open-folder = Open export folder
+export-selected-entry = Selected entry:
+export-logs = Logs:
+export-recent = Recent exports:
+button-copy = Copy
+
+## Entry details (Export tab, and the Copy button's clipboard text)
+
+inspect-name = Name
+inspect-type = Type
+inspect-size = Size
+inspect-offset = Offset
+inspect-source = Source
+inspect-size-mb = { $mb } MB ({ $bytes } bytes, { $sectors } sectors)
+inspect-size-kb = { $kb } KB ({ $bytes } bytes, { $sectors } sectors)
+inspect-size-bytes = { $bytes } bytes ({ $sectors } sectors)
+inspect-offset-value = sector { $sector } (byte { $byte })
+inspect-hex-preview = Preview (hex):
+
+## 3D view tab
+
+viewer-no-archive = No archive open.
+viewer-try-demo = Try the synthetic animation demo
+viewer-select-model = Select a .nif, .dff, or .col entry to preview it in 3D.
+viewer-gpu-unavailable = GPU viewer unavailable
+viewer-gpu-hint = Try clearing the preview or selecting a smaller model.
+viewer-clear-error = Clear viewer error
+viewer-selected-model = selected model
+viewer-preparing = Preparing 3D preview
+viewer-preparing-detail = Reading geometry and resolving textures…
+viewer-preparing-cache-note = Future previews of this model will be instant.
+viewer-ready = Ready to preview this model in 3D.
+viewer-unsupported-entry = The in-app viewer renders .nif, .dff, and .col entries. { $entry } is not a supported model — use the right-click menu for another viewer.
+viewer-load-selected-hint = Use ‘{ viewer-load-selected }’ above to preview this model.
+viewer-right-click-hint = Select a .nif, .dff, or .col entry, then right-click → { context-open-3d }.
+viewer-toolbar-label = 3D:
+viewer-preparing-selected = Preparing selected model…
+viewer-load-selected = Load selected
+viewer-load-selected-tip = Load the selected model into the 3D viewer.
+viewer-reset = Reset view
+viewer-reset-tip = Re-fit the camera to the model. Shortcut: R
+viewer-clear = Clear
+viewer-clear-tip = Drop the loaded scene
+viewer-wireframe = Wire overlay
+viewer-wireframe-tip = Show triangle edges over the shaded model.
+viewer-cull = Cull backfaces
+viewer-cull-tip = Hide back-facing triangles to inspect surface winding.
+viewer-textured = Textured
+viewer-textured-tip = Use the model's decoded textures instead of a neutral material.
+viewer-alpha = Alpha blend
+viewer-alpha-tip = Respect texture alpha for cutouts and transparent materials.
+viewer-alpha-unavailable-tip = Enable { viewer-textured } on a model with textures to use alpha blending.
+viewer-center = Center origin
+viewer-center-tip = Recenter the model for inspection; disable to preserve world coordinates.
+viewer-grid = Grid floor
+viewer-grid-tip = Show the world reference grid and XYZ axes.
+viewer-stats =
+    { $vertices ->
+        [one] { $vertices } vertex
+       *[other] { $vertices } vertices
+    }   { $triangles ->
+        [one] { $triangles } triangle
+       *[other] { $triangles } triangles
+    }   { $textures ->
+        [one] { $textures } texture
+       *[other] { $textures } textures
+    }   { $width }×{ $height }   { $orientation }   { $origin }
+viewer-origin-centered = centered
+viewer-origin-world = world
+viewer-preparing-entry = Preparing { $entry }…
+viewer-no-scene = No scene loaded
+
+## Animation dock
+
+anim-preparing = Preparing animation
+anim-preparing-detail = Decoding clips and resolving textures…
+anim-preparing-cache-note = Future replays of this pair will be instant.
+anim-preparing-label = Preparing { $label }…
+anim-title = Animation
+anim-title-demo = Animation demo
+anim-demo-note = synthetic fixtures — no game data
+anim-exit-demo = Exit demo
+anim-loop = Loop playback
+anim-speed = Speed
+anim-pack = Animation pack
+anim-model-tip = Re-play this animation on another model
+anim-clip = Clip
+anim-play = Play (Space)
+anim-pause = Pause (Space)
+anim-jump-start = Jump to start (Home)
+anim-step-back = Step one frame back (←)
+anim-step-forward = Step one frame forward (→)
+anim-jump-end = Jump to end (End)
+anim-stop = Stop
+anim-rate-source = { $fps } fps source
+anim-rate-preview = { $fps } fps preview
+anim-frame = Frame
+anim-frame-rest = Rest
+anim-frame-rest-tip = Frame the rest pose
+anim-frame-pose = Pose
+anim-frame-pose-tip = Frame the current pose
+anim-frame-motion = Motion
+anim-frame-motion-tip = Frame the full motion
+anim-in-place-tip = In-place root — discard root translation
+anim-follow-tip = Follow root motion with the camera
+anim-skeleton-tip = Show the skeleton overlay
+anim-motion-path-tip = Show the root motion path
+anim-ground-tip = Plant the clip's lowest point on the floor
+anim-crossfade-tip = Crossfade when switching clips
+anim-keys-hint = Space play/pause · ←/→ step · Home/End range ends · drag to scrub
+
+## Texture tab
+
+texture-no-archive = No archive open.
+texture-select-entry = Select a TXD, NFT, NIF, or DFF entry to preview textures.
+texture-not-container = { $entry } is not a texture container. Preview is available for TXD, NFT, or rendered model entries.
+texture-no-companions = No companion textures were resolved for { $entry }.
+texture-load-model-hint = Load the selected model to resolve its textures.
+texture-load-model = Load selected model
+texture-not-decoded = { $kind } { $entry } is not yet decoded.
+texture-load-textures = Load selected { $kind } textures
+texture-none-decodable = No decodable textures in this container.
+texture-animation-model = Animation model { $entry } — switch models in the 3D dock
+texture-export =
+    { $count ->
+        [one] Export texture ({ $count })
+       *[other] Export textures ({ $count })
+    }
+texture-slot = Texture { $index }/{ $count }
+texture-alpha = Alpha:
+texture-yes = Yes
+texture-no = No
+texture-verdict-default = Verdict for a { $game } target.
+texture-pal8-ready = PAL8-ready ({ $colors } colors)
+texture-pal8-tip = Every pixel is one of these distinct colors, so an 8-bit palette stores this texture without quantization.
+texture-replace = Replace texture…
+texture-replace-hint = Imports PNG/DDS/BMP/TGA and re-encodes it for the archive's target.
+texture-uv-standalone-tip = Standalone texture preview. Select a matching DFF or NIF model to enable UV mapping.
+texture-uv-unavailable-tip = UV mapping is available after matching model geometry is loaded.
+texture-uv-tip = Show the UV triangles from the matching model geometry.
+texture-uv = Show UV map
+texture-uv-standalone = Texture-only preview · UV map needs matching model geometry
+texture-uv-unavailable = Load matching model geometry to enable UVs
+texture-uv-triangles =
+    { $count ->
+        [one] { $count } triangle
+       *[other] { $count } triangles
+    }
+texture-only-badge = Texture-only preview
+texture-grid = Grid
+texture-grid-tip = Show a reference grid over the texture preview.
+texture-grid-size-tip = Use a { $size }×{ $size } reference grid for the texture.
+texture-grid-size = Size:
+texture-fullscreen-tip = View fullscreen (full quality)

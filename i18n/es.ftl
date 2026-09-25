@@ -677,3 +677,214 @@ error-write-file = No se pudo escribir { $path }: { $error }
 error-read-entry = No se pudo leer la entrada: { $error }
 error-texture-decode = No se pudo decodificar la textura: { $error }
 error-texture-preview-unsupported = La vista previa de texturas admite entradas TXD y NFT; '{ $entry }' no es un contenedor de texturas compatible.
+
+## Entry table and search
+
+table-name = Nombre
+table-size = Tamaño
+table-size-kb = { $size } KB
+table-no-matches = Ninguna entrada coincide con el filtro actual.
+search-label = Buscar:
+search-did-you-mean = Quizás buscabas:
+sort-tip-name-asc = Ordenado por nombre de archivo (A → Z).
+sort-tip-name-desc = Ordenado por nombre de archivo (Z → A).
+sort-tip-name-inactive = Ordenar por nombre de archivo (A → Z).
+sort-tip-type-primary = Ordenado por tipo de archivo, primero { $type }.
+sort-tip-type-alphabetical = Ordenado por tipo de archivo alfabéticamente.
+sort-tip-type-inactive = Ordenar por tipo de archivo (alfabético).
+sort-tip-size-desc = Ordenado por tamaño (de mayor a menor).
+sort-tip-size-asc = Ordenado por tamaño (de menor a mayor).
+sort-tip-size-inactive = Ordenar por tamaño (de mayor a menor).
+version-unknown = Desconocido
+
+## Toolbar tooltips
+
+toolbar-new = Nuevo
+toolbar-open = Abrir
+toolbar-save = Guardar
+toolbar-pack = Compactar archivo
+toolbar-import = Importar
+toolbar-import-folder = Importar carpeta
+toolbar-export-selected = Exportar selección
+toolbar-delete-selected = Eliminar seleccionados
+toolbar-validate = Validar texturas
+toolbar-image-as-txd = Importar imagen como TXD
+toolbar-convert-selection = Convertir la selección al dialecto del destino
+
+## Empty workspace and status bar
+
+empty-heading = Abre o crea un archivo para empezar.
+empty-drop-hint = O arrastra y suelta aquí un archivo .img o .dir para abrirlo.
+status-selected = Seleccionadas: { $count }
+
+## Inspector tabs
+
+tab-export = Exportar
+tab-3d-view = Vista 3D
+tab-texture = Textura
+
+## Export tab
+
+export-format = Formato
+export-entries = Entradas
+export-entries-value = { $total } (visibles: { $visible })
+export-game-folder = Carpeta del juego
+export-game-folder-automatic = { $path } (automática)
+export-game-folder-none = ninguna
+export-game-folder-unsaved = ninguna (archivo sin guardar)
+export-progress = Progreso
+export-ready = Listo para exportar
+export-open-folder = Abrir carpeta de exportación
+export-selected-entry = Entrada seleccionada:
+export-logs = Registro:
+export-recent = Exportaciones recientes:
+button-copy = Copiar
+
+## Entry details
+
+inspect-name = Nombre
+inspect-type = Tipo
+inspect-size = Tamaño
+inspect-offset = Desplazamiento
+inspect-source = Origen
+inspect-size-mb = { $mb } MB ({ $bytes } bytes, { $sectors } sectores)
+inspect-size-kb = { $kb } KB ({ $bytes } bytes, { $sectors } sectores)
+inspect-size-bytes = { $bytes } bytes ({ $sectors } sectores)
+inspect-offset-value = sector { $sector } (byte { $byte })
+inspect-hex-preview = Vista previa (hex):
+
+## 3D view tab
+
+viewer-no-archive = No hay ningún archivo abierto.
+viewer-try-demo = Probar la demo de animación sintética
+viewer-select-model = Selecciona una entrada .nif, .dff o .col para verla en 3D.
+viewer-gpu-unavailable = El visor por GPU no está disponible
+viewer-gpu-hint = Prueba a borrar la vista previa o a seleccionar un modelo más pequeño.
+viewer-clear-error = Borrar el error del visor
+viewer-selected-model = el modelo seleccionado
+viewer-preparing = Preparando la vista previa 3D
+viewer-preparing-detail = Leyendo la geometría y resolviendo las texturas…
+viewer-preparing-cache-note = Las próximas vistas previas de este modelo serán instantáneas.
+viewer-ready = Listo para ver este modelo en 3D.
+viewer-unsupported-entry = El visor integrado muestra entradas .nif, .dff y .col. { $entry } no es un modelo compatible; usa el menú contextual para abrirlo en otro visor.
+viewer-load-selected-hint = Usa «{ viewer-load-selected }» arriba para ver este modelo.
+viewer-right-click-hint = Selecciona una entrada .nif, .dff o .col y haz clic derecho → { context-open-3d }.
+viewer-toolbar-label = 3D:
+viewer-preparing-selected = Preparando el modelo seleccionado…
+viewer-load-selected = Cargar selección
+viewer-load-selected-tip = Carga el modelo seleccionado en el visor 3D.
+viewer-reset = Restablecer vista
+viewer-reset-tip = Reencuadra la cámara en el modelo. Atajo: R
+viewer-clear = Borrar
+viewer-clear-tip = Descarta la escena cargada
+viewer-wireframe = Malla
+viewer-wireframe-tip = Muestra las aristas de los triángulos sobre el modelo sombreado.
+viewer-cull = Ocultar caras traseras
+viewer-cull-tip = Oculta los triángulos orientados hacia atrás para revisar el orden de las caras.
+viewer-textured = Con texturas
+viewer-textured-tip = Usa las texturas decodificadas del modelo en lugar de un material neutro.
+viewer-alpha = Transparencia
+viewer-alpha-tip = Respeta el canal alfa de las texturas para recortes y materiales transparentes.
+viewer-alpha-unavailable-tip = Activa «{ viewer-textured }» en un modelo con texturas para usar la transparencia.
+viewer-center = Centrar origen
+viewer-center-tip = Centra el modelo para inspeccionarlo; desactívalo para conservar las coordenadas del mundo.
+viewer-grid = Cuadrícula del suelo
+viewer-grid-tip = Muestra la cuadrícula de referencia del mundo y los ejes XYZ.
+viewer-stats =
+    { $vertices ->
+        [one] { $vertices } vértice
+       *[other] { $vertices } vértices
+    }   { $triangles ->
+        [one] { $triangles } triángulo
+       *[other] { $triangles } triángulos
+    }   { $textures ->
+        [one] { $textures } textura
+       *[other] { $textures } texturas
+    }   { $width }×{ $height }   { $orientation }   { $origin }
+viewer-origin-centered = centrado
+viewer-origin-world = mundo
+viewer-preparing-entry = Preparando { $entry }…
+viewer-no-scene = No hay ninguna escena cargada
+
+## Animation dock
+
+anim-preparing = Preparando la animación
+anim-preparing-detail = Decodificando clips y resolviendo texturas…
+anim-preparing-cache-note = Las próximas reproducciones de esta combinación serán instantáneas.
+anim-preparing-label = Preparando { $label }…
+anim-title = Animación
+anim-title-demo = Demo de animación
+anim-demo-note = datos sintéticos, sin datos del juego
+anim-exit-demo = Salir de la demo
+anim-loop = Repetir reproducción
+anim-speed = Velocidad
+anim-pack = Paquete de animaciones
+anim-model-tip = Reproduce esta animación en otro modelo
+anim-clip = Clip
+anim-play = Reproducir (Espacio)
+anim-pause = Pausa (Espacio)
+anim-jump-start = Ir al inicio (Inicio)
+anim-step-back = Retroceder un fotograma (←)
+anim-step-forward = Avanzar un fotograma (→)
+anim-jump-end = Ir al final (Fin)
+anim-stop = Detener
+anim-rate-source = { $fps } fps de origen
+anim-rate-preview = { $fps } fps de vista previa
+anim-frame = Encuadre
+anim-frame-rest = Reposo
+anim-frame-rest-tip = Encuadra la pose de reposo
+anim-frame-pose = Pose
+anim-frame-pose-tip = Encuadra la pose actual
+anim-frame-motion = Movimiento
+anim-frame-motion-tip = Encuadra todo el movimiento
+anim-in-place-tip = Raíz en el sitio: descarta la traslación de la raíz
+anim-follow-tip = La cámara sigue el movimiento de la raíz
+anim-skeleton-tip = Muestra el esqueleto superpuesto
+anim-motion-path-tip = Muestra la trayectoria de la raíz
+anim-ground-tip = Apoya el punto más bajo del clip en el suelo
+anim-crossfade-tip = Fundido al cambiar de clip
+anim-keys-hint = Espacio reproducir/pausa · ←/→ fotograma · Inicio/Fin extremos · arrastra para desplazarte
+
+## Texture tab
+
+texture-no-archive = No hay ningún archivo abierto.
+texture-select-entry = Selecciona una entrada TXD, NFT, NIF o DFF para ver sus texturas.
+texture-not-container = { $entry } no es un contenedor de texturas. La vista previa está disponible para entradas TXD, NFT o modelos renderizados.
+texture-no-companions = No se resolvieron texturas asociadas para { $entry }.
+texture-load-model-hint = Carga el modelo seleccionado para resolver sus texturas.
+texture-load-model = Cargar el modelo seleccionado
+texture-not-decoded = { $kind } { $entry } aún no está decodificado.
+texture-load-textures = Cargar las texturas del { $kind } seleccionado
+texture-none-decodable = Este contenedor no tiene texturas decodificables.
+texture-animation-model = Modelo de la animación { $entry }; cambia de modelo en el panel 3D
+texture-export =
+    { $count ->
+        [one] Exportar textura ({ $count })
+       *[other] Exportar texturas ({ $count })
+    }
+texture-slot = Textura { $index }/{ $count }
+texture-alpha = Alfa:
+texture-yes = Sí
+texture-no = No
+texture-verdict-default = Veredicto para el destino { $game }.
+texture-pal8-ready = Apta para PAL8 ({ $colors } colores)
+texture-pal8-tip = Cada píxel es uno de estos colores distintos, así que una paleta de 8 bits guarda esta textura sin cuantización.
+texture-replace = Reemplazar textura…
+texture-replace-hint = Importa PNG/DDS/BMP/TGA y lo vuelve a codificar para el destino del archivo.
+texture-uv-standalone-tip = Vista previa de la textura sola. Selecciona un modelo DFF o NIF compatible para activar el mapa UV.
+texture-uv-unavailable-tip = El mapa UV está disponible cuando se carga la geometría del modelo correspondiente.
+texture-uv-tip = Muestra los triángulos UV de la geometría del modelo correspondiente.
+texture-uv = Mostrar mapa UV
+texture-uv-standalone = Vista previa de la textura sola · el mapa UV necesita la geometría del modelo
+texture-uv-unavailable = Carga la geometría del modelo correspondiente para activar el UV
+texture-uv-triangles =
+    { $count ->
+        [one] { $count } triángulo
+       *[other] { $count } triángulos
+    }
+texture-only-badge = Solo textura
+texture-grid = Cuadrícula
+texture-grid-tip = Muestra una cuadrícula de referencia sobre la vista previa de la textura.
+texture-grid-size-tip = Usa una cuadrícula de referencia de { $size }×{ $size } para la textura.
+texture-grid-size = Tamaño:
+texture-fullscreen-tip = Ver a pantalla completa (calidad completa)

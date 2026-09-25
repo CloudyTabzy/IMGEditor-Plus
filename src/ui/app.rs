@@ -5559,18 +5559,19 @@ impl App {
                     return Task::none();
                 };
                 let mut lines = Vec::new();
-                lines.push(format!("Name: {}", inspection.file_name));
-                lines.push(format!("Type: {}", inspection.file_type));
+                lines.push(format!("{}: {}", t::inspect_name(), inspection.file_name));
+                lines.push(format!("{}: {}", t::inspect_type(), inspection.file_type));
                 lines.push(format!(
-                    "Size: {} bytes ({} sectors)",
-                    inspection.size_bytes, inspection.size_sectors
+                    "{}: {}",
+                    t::inspect_size(),
+                    t::inspect_size_bytes(inspection.size_bytes, inspection.size_sectors)
                 ));
                 lines.push(format!(
-                    "Offset: sector {} (byte {})",
-                    inspection.offset_bytes / 2048,
-                    inspection.offset_bytes
+                    "{}: {}",
+                    t::inspect_offset(),
+                    t::inspect_offset_value(inspection.offset_bytes / 2048, inspection.offset_bytes)
                 ));
-                lines.push(format!("Source: {}", inspection.source));
+                lines.push(format!("{}: {}", t::inspect_source(), inspection.source));
                 for (key, value) in &inspection.summary {
                     lines.push(format!("{key}: {value}"));
                 }

@@ -537,3 +537,196 @@ error-write-file = Не удалось записать { $path }: { $error }
 error-read-entry = Не удалось прочитать запись: { $error }
 error-texture-decode = Не удалось декодировать текстуру: { $error }
 error-texture-preview-unsupported = Предпросмотр текстур поддерживает записи TXD и NFT; «{ $entry }» — не поддерживаемый контейнер текстур.
+
+## Entry table and search
+
+table-name = Имя
+table-size = Размер
+table-size-kb = { $size } КБ
+table-no-matches = Нет записей, подходящих под текущий фильтр.
+search-label = Поиск:
+search-did-you-mean = Возможно, вы имели в виду:
+sort-tip-name-asc = Отсортировано по имени файла (А → Я).
+sort-tip-name-desc = Отсортировано по имени файла (Я → А).
+sort-tip-name-inactive = Сортировать по имени файла (А → Я).
+sort-tip-type-primary = Отсортировано по типу файла, сначала { $type }.
+sort-tip-type-alphabetical = Отсортировано по типу файла по алфавиту.
+sort-tip-type-inactive = Сортировать по типу файла (по алфавиту).
+sort-tip-size-desc = Отсортировано по размеру (сначала большие).
+sort-tip-size-asc = Отсортировано по размеру (сначала маленькие).
+sort-tip-size-inactive = Сортировать по размеру (сначала большие).
+version-unknown = Неизвестно
+
+## Toolbar tooltips
+
+toolbar-new = Создать
+toolbar-open = Открыть
+toolbar-save = Сохранить
+toolbar-pack = Упаковать архив
+toolbar-import = Импорт
+toolbar-import-folder = Импорт папки
+toolbar-export-selected = Экспортировать выбранное
+toolbar-delete-selected = Удалить выбранное
+toolbar-validate = Проверить текстуры
+toolbar-image-as-txd = Импорт изображения как TXD
+toolbar-convert-selection = Преобразовать выделение для целевой игры
+
+## Empty workspace and status bar
+
+empty-heading = Откройте или создайте архив, чтобы начать.
+empty-drop-hint = Или перетащите сюда файл .img или .dir, чтобы открыть его.
+status-selected = Выбрано: { $count }
+
+## Inspector tabs
+
+tab-export = Экспорт
+tab-3d-view = 3D-вид
+tab-texture = Текстура
+
+## Export tab
+
+export-format = Формат
+export-entries = Записей
+export-entries-value = { $total } (видно: { $visible })
+export-game-folder = Папка игры
+export-game-folder-automatic = { $path } (автоматически)
+export-game-folder-none = нет
+export-game-folder-unsaved = нет (архив не сохранён)
+export-progress = Ход выполнения
+export-ready = Готово к экспорту
+export-open-folder = Открыть папку экспорта
+export-selected-entry = Выбранная запись:
+export-logs = Журнал:
+export-recent = Недавний экспорт:
+button-copy = Копировать
+
+## Entry details
+
+inspect-name = Имя
+inspect-type = Тип
+inspect-size = Размер
+inspect-offset = Смещение
+inspect-source = Источник
+inspect-size-mb = { $mb } МБ ({ $bytes } байт, секторов: { $sectors })
+inspect-size-kb = { $kb } КБ ({ $bytes } байт, секторов: { $sectors })
+inspect-size-bytes = { $bytes } байт (секторов: { $sectors })
+inspect-offset-value = сектор { $sector } (байт { $byte })
+inspect-hex-preview = Предпросмотр (hex):
+
+## 3D view tab
+
+viewer-no-archive = Архив не открыт.
+viewer-try-demo = Попробовать синтетическое демо анимации
+viewer-select-model = Выберите запись .nif, .dff или .col, чтобы посмотреть её в 3D.
+viewer-gpu-unavailable = GPU-просмотрщик недоступен
+viewer-gpu-hint = Попробуйте очистить предпросмотр или выбрать модель поменьше.
+viewer-clear-error = Сбросить ошибку просмотрщика
+viewer-selected-model = выбранная модель
+viewer-preparing = Подготовка 3D-предпросмотра
+viewer-preparing-detail = Чтение геометрии и поиск текстур…
+viewer-preparing-cache-note = В следующий раз эта модель откроется мгновенно.
+viewer-ready = Модель готова к просмотру в 3D.
+viewer-unsupported-entry = Встроенный просмотрщик показывает записи .nif, .dff и .col. { $entry } — неподдерживаемая модель; откройте её в другом просмотрщике через контекстное меню.
+viewer-load-selected-hint = Нажмите «{ viewer-load-selected }» выше, чтобы посмотреть эту модель.
+viewer-right-click-hint = Выберите запись .nif, .dff или .col, затем правый клик → { context-open-3d }.
+viewer-toolbar-label = 3D:
+viewer-preparing-selected = Подготовка выбранной модели…
+viewer-load-selected = Загрузить выбранное
+viewer-load-selected-tip = Загрузить выбранную модель в 3D-просмотрщик.
+viewer-reset = Сбросить вид
+viewer-reset-tip = Заново навести камеру на модель. Клавиша: R
+viewer-clear = Очистить
+viewer-clear-tip = Выгрузить загруженную сцену
+viewer-wireframe = Каркас
+viewer-wireframe-tip = Показывать рёбра треугольников поверх затенённой модели.
+viewer-cull = Скрывать обратные грани
+viewer-cull-tip = Скрывать треугольники, повёрнутые назад, чтобы проверить порядок обхода граней.
+viewer-textured = Текстуры
+viewer-textured-tip = Использовать декодированные текстуры модели вместо нейтрального материала.
+viewer-alpha = Прозрачность
+viewer-alpha-tip = Учитывать альфа-канал текстур для вырезов и прозрачных материалов.
+viewer-alpha-unavailable-tip = Включите «{ viewer-textured }» на модели с текстурами, чтобы использовать прозрачность.
+viewer-center = Центрировать
+viewer-center-tip = Переместить модель в центр для осмотра; отключите, чтобы сохранить мировые координаты.
+viewer-grid = Сетка пола
+viewer-grid-tip = Показывать опорную сетку мира и оси XYZ.
+viewer-stats = Вершин: { $vertices }   треугольников: { $triangles }   текстур: { $textures }   { $width }×{ $height }   { $orientation }   { $origin }
+viewer-origin-centered = по центру
+viewer-origin-world = мировые координаты
+viewer-preparing-entry = Подготовка { $entry }…
+viewer-no-scene = Сцена не загружена
+
+## Animation dock
+
+anim-preparing = Подготовка анимации
+anim-preparing-detail = Декодирование клипов и поиск текстур…
+anim-preparing-cache-note = В следующий раз эта пара откроется мгновенно.
+anim-preparing-label = Подготовка { $label }…
+anim-title = Анимация
+anim-title-demo = Демо анимации
+anim-demo-note = синтетические данные — без данных игры
+anim-exit-demo = Выйти из демо
+anim-loop = Повторять воспроизведение
+anim-speed = Скорость
+anim-pack = Набор анимаций
+anim-model-tip = Проиграть эту анимацию на другой модели
+anim-clip = Клип
+anim-play = Воспроизвести (пробел)
+anim-pause = Пауза (пробел)
+anim-jump-start = В начало (Home)
+anim-step-back = На кадр назад (←)
+anim-step-forward = На кадр вперёд (→)
+anim-jump-end = В конец (End)
+anim-stop = Остановить
+anim-rate-source = { $fps } кадр/с (исходная)
+anim-rate-preview = { $fps } кадр/с (предпросмотр)
+anim-frame = Кадрировать
+anim-frame-rest = Покой
+anim-frame-rest-tip = Навести камеру на позу покоя
+anim-frame-pose = Поза
+anim-frame-pose-tip = Навести камеру на текущую позу
+anim-frame-motion = Движение
+anim-frame-motion-tip = Навести камеру на всё движение
+anim-in-place-tip = Корень на месте — отбросить перемещение корня
+anim-follow-tip = Камера следует за движением корня
+anim-skeleton-tip = Показывать скелет
+anim-motion-path-tip = Показывать траекторию корня
+anim-ground-tip = Ставить нижнюю точку клипа на пол
+anim-crossfade-tip = Плавный переход при смене клипа
+anim-keys-hint = Пробел — пуск/пауза · ←/→ — кадр · Home/End — края · перетаскивание — перемотка
+
+## Texture tab
+
+texture-no-archive = Архив не открыт.
+texture-select-entry = Выберите запись TXD, NFT, NIF или DFF, чтобы посмотреть текстуры.
+texture-not-container = { $entry } — не контейнер текстур. Предпросмотр доступен для записей TXD, NFT и отрисованных моделей.
+texture-no-companions = Для { $entry } не найдено связанных текстур.
+texture-load-model-hint = Загрузите выбранную модель, чтобы найти её текстуры.
+texture-load-model = Загрузить выбранную модель
+texture-not-decoded = { $kind } { $entry } ещё не декодирован.
+texture-load-textures = Загрузить текстуры выбранного { $kind }
+texture-none-decodable = В этом контейнере нет декодируемых текстур.
+texture-animation-model = Модель анимации { $entry } — сменить модель можно на панели 3D
+texture-export = Экспортировать текстуры ({ $count })
+texture-slot = Текстура { $index }/{ $count }
+texture-alpha = Альфа:
+texture-yes = Да
+texture-no = Нет
+texture-verdict-default = Оценка для цели { $game }.
+texture-pal8-ready = Подходит для PAL8 (цветов: { $colors })
+texture-pal8-tip = Каждый пиксель — один из этих цветов, поэтому 8-битная палитра сохранит текстуру без квантования.
+texture-replace = Заменить текстуру…
+texture-replace-hint = Импортирует PNG/DDS/BMP/TGA и перекодирует для целевой игры архива.
+texture-uv-standalone-tip = Отдельный предпросмотр текстуры. Выберите подходящую модель DFF или NIF, чтобы включить UV-развёртку.
+texture-uv-unavailable-tip = UV-развёртка станет доступна после загрузки геометрии подходящей модели.
+texture-uv-tip = Показывать UV-треугольники из геометрии подходящей модели.
+texture-uv = Показывать UV-развёртку
+texture-uv-standalone = Только текстура · для UV нужна геометрия подходящей модели
+texture-uv-unavailable = Загрузите геометрию подходящей модели, чтобы включить UV
+texture-uv-triangles = Треугольников: { $count }
+texture-only-badge = Только текстура
+texture-grid = Сетка
+texture-grid-tip = Показывать опорную сетку поверх предпросмотра текстуры.
+texture-grid-size-tip = Использовать опорную сетку { $size }×{ $size } для текстуры.
+texture-grid-size = Размер:
+texture-fullscreen-tip = На весь экран (полное качество)

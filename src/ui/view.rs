@@ -137,13 +137,13 @@ impl App {
         let design = self.design();
 
         let name_label = sort_label(
-            "Name",
+            &t::table_name(),
             archive.sort.column == SortColumn::Name,
             archive.sort.direction,
         );
         let type_label = archive.sort.type_header_label.clone();
         let size_label = sort_label(
-            "Size",
+            &t::table_size(),
             archive.sort.column == SortColumn::Size,
             archive.sort.direction,
         );
@@ -350,7 +350,7 @@ impl App {
         if let Some(bytes) = &entry.override_bytes {
             return crate::ui::app::format_byte_count(bytes.len() as u64);
         }
-        format!("{} KB", entry.sector * 2)
+        t::table_size_kb(entry.sector * 2)
     }
 
     fn build_entry_row<'a>(
@@ -589,15 +589,15 @@ impl App {
         let tab_bar = iced_aw::widget::tab_bar::TabBar::new(Message::Viewer3dSelectTab)
             .push(
                 InspectorTab::Export,
-                iced_aw::TabLabel::Text("Export".to_string()),
+                iced_aw::TabLabel::Text(t::tab_export()),
             )
             .push(
                 InspectorTab::Model3D,
-                iced_aw::TabLabel::Text("3D view".to_string()),
+                iced_aw::TabLabel::Text(t::tab_3d_view()),
             )
             .push(
                 InspectorTab::Texture,
-                iced_aw::TabLabel::Text("Texture".to_string()),
+                iced_aw::TabLabel::Text(t::tab_texture()),
             )
             .set_active_tab(&selected_tab)
             .tab_width(Length::FillPortion(1))
@@ -693,13 +693,14 @@ impl App {
             .animator
             .get_or(crate::ui::app::ANIM_PROGRESS, raw_progress);
         let display_progress = if in_use { progress } else { raw_progress };
-        let (progress_label, percent_text) = if in_use {
-            ("Progress", format!("{:.0}%", display_progress * 100.0))
+        let progress_label = t::export_progress();
+        let percent_text = if in_use {
+            format!("{:.0}%", display_progress * 100.0)
         } else {
             match archive.export_status {
-                ExportStatus::Ready => ("Progress", "Ready to export".to_string()),
-                ExportStatus::Done => ("Progress", "100%".to_string()),
-                _ => ("Progress", format!("{:.0}%", progress * 100.0)),
+                ExportStatus::Ready => t::export_ready(),
+                ExportStatus::Done => "100%".to_string(),
+                _ => format!("{:.0}%", progress * 100.0),
             }
         };
 
@@ -723,16 +724,16 @@ impl App {
             Some(path) => match self.config.archive_game_root(path) {
                 Some(root) => root.display().to_string(),
                 None => crate::config::automatic_game_root(path)
-                    .map(|root| format!("{} (automatic)", root.display()))
-                    .unwrap_or_else(|| "none".to_string()),
+                    .map(|root| t::export_game_folder_automatic(root.display().to_string()))
+                    .unwrap_or_else(t::export_game_folder_none),
             },
-            None => "none (unsaved archive)".to_string(),
+            None => t::export_game_folder_unsaved(),
         };
 
         let mut col = column![
-            label_value_owned("Format", version_text.to_string()),
-            label_value("Entries", format!("{total} (visible: {visible})")),
-            label_value("Game folder", game_folder),
+            label_value_owned(t::export_format(), version_text),
+            label_value(t::export_entries(), t::export_entries_value(total, visible)),
+            label_value(t::export_game_folder(), game_folder),
             w::hairline(design.divider()),
             label_value(progress_label, percent_text),
             progress_widget,
@@ -757,7 +758,7 @@ impl App {
             col = col.push(
                 button(w::icon_label(
                     icons::open_archive().size(14),
-                    fonts::body("Open export folder"),
+                    fonts::body(t::export_open_folder()),
                 ))
                 .on_press(Message::OpenLastExportFolder),
             );
@@ -769,9 +770,9 @@ impl App {
             && archive.entries.get(*index).is_some()
         {
             col = col.push(row![
-                fonts::header("Selected entry:"),
+                fonts::header(t::export_selected_entry()),
                 Space::new().width(Length::Fill),
-                copy_button("Copy", Message::CopySelectedEntryDetails),
+                copy_button(t::button_copy(), Message::CopySelectedEntryDetails),
             ]);
             col = col.push(Self::build_inspection_panel(
                 inspection,
@@ -781,9 +782,9 @@ impl App {
         }
 
         col = col.push(row![
-            fonts::header("Logs:"),
+            fonts::header(t::export_logs()),
             Space::new().width(Length::Fill),
-            copy_button("Copy", Message::CopyLogs),
+            copy_button(t::button_copy(), Message::CopyLogs),
         ]);
 
         let logs: Vec<String> = archive.logs.iter().rev().take(50).cloned().collect();
@@ -807,7 +808,7 @@ impl App {
 
         if !archive.recent_exports.is_empty() {
             col = col.push(w::hairline(design.divider()));
-            col = col.push(fonts::header("Recent exports:"));
+            col = col.push(fonts::header(t::export_recent()));
             let exports: Vec<String> = archive
                 .recent_exports
                 .iter()
@@ -837,8 +838,8 @@ impl App {
         else {
             return container(
                 column![
-                    fonts::caption("No archive open."),
-                    button(fonts::caption("Try the synthetic animation demo"))
+                    fonts::caption(t::viewer_no_archive()),
+                    button(fonts::caption(t::viewer_try_demo()))
                         .on_press(Message::AnimationDemoStart),
                 ]
                 .spacing(8)
@@ -853,8 +854,8 @@ impl App {
         let Some(entry_index) = self.editor.selected_entry() else {
             return container(
                 column![
-                    fonts::caption("Select a .nif, .dff, or .col entry to preview it in 3D."),
-                    button(fonts::caption("Try the synthetic animation demo"))
+                    fonts::caption_wrapped(t::viewer_select_model()),
+                    button(fonts::caption(t::viewer_try_demo()))
                         .on_press(Message::AnimationDemoStart),
                 ]
                 .spacing(8)
@@ -867,7 +868,7 @@ impl App {
             .into();
         };
         let Some(entry) = archive.entries.get(entry_index) else {
-            return container(fonts::caption("The selected entry is no longer available."))
+            return container(fonts::caption(t::toast_entry_unavailable()))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Alignment::Center)
@@ -889,10 +890,10 @@ impl App {
         let body: Element<'_, Message> = if let Some(error) = gpu_error {
             container(
                 column![
-                    fonts::header("GPU viewer unavailable"),
+                    fonts::header(t::viewer_gpu_unavailable()),
                     fonts::caption(error),
-                    fonts::caption("Try clearing the preview or selecting a smaller model."),
-                    button(fonts::body("Clear viewer error")).on_press(Message::Viewer3dClear),
+                    fonts::caption_wrapped(t::viewer_gpu_hint()),
+                    button(fonts::body(t::viewer_clear_error())).on_press(Message::Viewer3dClear),
                 ]
                 .spacing(8)
                 .align_x(Alignment::Center),
@@ -908,16 +909,19 @@ impl App {
                 crate::ui::viewer3d_widget::Scene3dWidget::new(self.viewer3d_handle.clone());
             widget.into()
         } else if loading {
-            let entry_name = self.viewer_loading_entry_name().unwrap_or("selected model");
+            let entry_name = self
+                .viewer_loading_entry_name()
+                .map(str::to_string)
+                .unwrap_or_else(t::viewer_selected_model);
             container(
                 column![
                     canvas::Canvas::new(LoadingSpinner::new(self.viewer_load_phase))
                         .width(Length::Fixed(48.0))
                         .height(Length::Fixed(48.0)),
-                    fonts::header("Preparing 3D preview"),
+                    fonts::header(t::viewer_preparing()),
                     fonts::body(entry_name),
-                    fonts::caption("Reading geometry and resolving textures…"),
-                    fonts::caption("Future previews of this model will be instant."),
+                    fonts::caption(t::viewer_preparing_detail()),
+                    fonts::caption(t::viewer_preparing_cache_note()),
                 ]
                 .spacing(8)
                 .align_x(Alignment::Center),
@@ -929,7 +933,7 @@ impl App {
             .padding(16)
             .into()
         } else if is_model {
-            container(fonts::caption("Ready to preview this model in 3D."))
+            container(fonts::caption(t::viewer_ready()))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Alignment::Center)
@@ -937,10 +941,7 @@ impl App {
                 .padding(16)
                 .into()
         } else {
-            container(fonts::caption(format!(
-                "The in-app viewer renders .nif, .dff, and .col entries. {} is not a supported model — use the right-click menu for another viewer.",
-                entry_lower
-            )))
+            container(fonts::caption_wrapped(t::viewer_unsupported_entry(entry_lower.as_str())))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
@@ -951,11 +952,9 @@ impl App {
         let prompt: Element<'_, Message> = if loading {
             Space::new().height(Length::Fixed(0.0)).into()
         } else if !scene_matches && is_model {
-            fonts::caption("Use ‘Load selected’ above to preview this model.").into()
+            fonts::caption_wrapped(t::viewer_load_selected_hint()).into()
         } else if !scene_matches {
-            fonts::caption(
-                "Select a .nif, .dff, or .col entry, then right-click → Open in 3D viewer.",
-            )
+            fonts::caption_wrapped(t::viewer_right_click_hint())
             .into()
         } else {
             Space::new().height(Length::Fixed(0.0)).into()
@@ -995,10 +994,10 @@ impl App {
                     canvas::Canvas::new(LoadingSpinner::new(self.viewer_load_phase))
                         .width(Length::Fixed(48.0))
                         .height(Length::Fixed(48.0)),
-                    fonts::header("Preparing animation"),
+                    fonts::header(t::anim_preparing()),
                     fonts::body(pending_label.clone()),
-                    fonts::caption("Decoding clips and resolving textures…"),
-                    fonts::caption("Future replays of this pair will be instant."),
+                    fonts::caption(t::anim_preparing_detail()),
+                    fonts::caption(t::anim_preparing_cache_note()),
                 ]
                 .spacing(8)
                 .align_x(Alignment::Center),
@@ -1014,7 +1013,7 @@ impl App {
         };
         let dock = self.build_animation_dock();
         let stats: Element<'_, Message> = if pending {
-            container(fonts::caption(format!("Preparing {pending_label}…")))
+            container(fonts::caption(t::anim_preparing_label(pending_label.as_str())))
                 .width(Length::Fill)
                 .height(Length::Fixed(20.0))
                 .align_x(Alignment::Center)
@@ -1088,7 +1087,7 @@ impl App {
                 .style(move |theme, status| {
                     animation_toggle_style(theme, status, data.loop_repeat)
                 }),
-            fonts::caption("Loop playback"),
+            fonts::caption(t::anim_loop()),
             tooltip::Position::Top,
         );
         let speed_labels: Vec<String> = SPEED_CHOICES
@@ -1099,7 +1098,7 @@ impl App {
             Message::AnimationSetSpeed(speed_from_label(&label))
         })
         .text_size(12.0);
-        let speed_row = row![fonts::caption("Speed"), speed_picker]
+        let speed_row = row![fonts::caption(t::anim_speed()), speed_picker]
             .spacing(6)
             .align_y(Alignment::Center);
 
@@ -1145,14 +1144,12 @@ impl App {
         let mut header = Row::new().spacing(8).align_y(Alignment::Center);
         header = header.push(icons::animation().size(15));
         header = header.push(fonts::header(if demo {
-            "Animation demo"
+            t::anim_title_demo()
         } else {
-            "Animation"
+            t::anim_title()
         }));
         if demo {
-            header = header.push(muted_caption(
-                "synthetic fixtures — no game data".to_string(),
-            ));
+            header = header.push(muted_caption(t::anim_demo_note()));
         }
         // Binding badge and event marker live here so the transport row
         // keeps enough width for its readout without reflowing.
@@ -1164,7 +1161,7 @@ impl App {
         if demo {
             header = header.push(
                 button(
-                    w::icon_label(icons::close().size(13), fonts::caption("Exit demo"))
+                    w::icon_label(icons::close().size(13), fonts::caption(t::anim_exit_demo()))
                         .height(Length::Fill),
                 )
                 .on_press(Message::AnimationDemoExit)
@@ -1239,7 +1236,7 @@ impl App {
                         row![icons::film().size(13), picker]
                             .spacing(4)
                             .align_y(Alignment::Center),
-                        fonts::caption("Animation pack"),
+                        fonts::caption(t::anim_pack()),
                         tooltip::Position::Bottom,
                     )
                     .into(),
@@ -1300,7 +1297,7 @@ impl App {
                     row![
                         w::styled_tooltip(
                             icons::person().size(13),
-                            fonts::caption("Re-play this animation on another model"),
+                            fonts::caption(t::anim_model_tip()),
                             tooltip::Position::Top,
                         ),
                         picker,
@@ -1315,7 +1312,7 @@ impl App {
         let mut clip_row = row![
             w::styled_tooltip(
                 icons::film().size(13),
-                fonts::caption("Clip"),
+                fonts::caption(t::anim_clip()),
                 tooltip::Position::Top,
             ),
             clip_picker,
@@ -1330,7 +1327,7 @@ impl App {
         }
 
         let transport_button =
-            |icon: iced::widget::Text<'static>, message: Message, tip: &'static str| {
+            |icon: iced::widget::Text<'static>, message: Message, tip: String| {
                 w::styled_tooltip(
                     button(centered(icon.size(14)))
                         .on_press_maybe(press(message))
@@ -1345,9 +1342,9 @@ impl App {
                 )
             };
         let (play_icon, play_tip) = if data.playing {
-            (icons::pause(), "Pause (Space)")
+            (icons::pause(), t::anim_pause())
         } else {
-            (icons::play(), "Play (Space)")
+            (icons::play(), t::anim_play())
         };
         let play_button = w::styled_tooltip(
             button(centered(play_icon.size(14)))
@@ -1370,25 +1367,25 @@ impl App {
                 transport_button(
                     icons::skip_back(),
                     Message::AnimationJumpToStart,
-                    "Jump to start (Home)"
+                    t::anim_jump_start()
                 ),
                 transport_button(
                     icons::step_back(),
                     Message::AnimationStep(-1),
-                    "Step one frame back (←)"
+                    t::anim_step_back()
                 ),
                 play_button,
                 transport_button(
                     icons::step_forward(),
                     Message::AnimationStep(1),
-                    "Step one frame forward (→)"
+                    t::anim_step_forward()
                 ),
                 transport_button(
                     icons::skip_forward(),
                     Message::AnimationJumpToEnd,
-                    "Jump to end (End)"
+                    t::anim_jump_end()
                 ),
-                transport_button(icons::stop(), Message::AnimationStop, "Stop"),
+                transport_button(icons::stop(), Message::AnimationStop, t::anim_stop()),
             ]
             .spacing(2)
             .align_y(Alignment::Center),
@@ -1397,9 +1394,9 @@ impl App {
         .style(animation_group_surface);
 
         let rate = if data.rate_from_source {
-            format!("{:.0} fps source", data.step_rate)
+            t::anim_rate_source(format!("{:.0}", data.step_rate))
         } else {
-            format!("{:.0} fps preview", data.step_rate)
+            t::anim_rate_preview(format!("{:.0}", data.step_rate))
         };
         // Fixed-width, padded monospace readout: ticking digits must never
         // reflow the transport row, so both lines keep a constant character
@@ -1455,7 +1452,7 @@ impl App {
         .spacing(10)
         .align_y(Alignment::Center);
 
-        let frame_button = |label: &'static str, message: Message, tip: &'static str| {
+        let frame_button = |label: String, message: Message, tip: String| {
             w::styled_tooltip(
                 button(
                     fonts::caption(label)
@@ -1473,17 +1470,21 @@ impl App {
         };
         let framing = container(
             row![
-                fonts::caption("Frame"),
-                frame_button("Rest", Message::AnimationFrameRest, "Frame the rest pose"),
+                fonts::caption(t::anim_frame()),
                 frame_button(
-                    "Pose",
-                    Message::AnimationFramePose,
-                    "Frame the current pose"
+                    t::anim_frame_rest(),
+                    Message::AnimationFrameRest,
+                    t::anim_frame_rest_tip()
                 ),
                 frame_button(
-                    "Motion",
+                    t::anim_frame_pose(),
+                    Message::AnimationFramePose,
+                    t::anim_frame_pose_tip()
+                ),
+                frame_button(
+                    t::anim_frame_motion(),
                     Message::AnimationFrameMotion,
-                    "Frame the full motion"
+                    t::anim_frame_motion_tip()
                 ),
             ]
             .spacing(2)
@@ -1494,7 +1495,7 @@ impl App {
 
         let overlay_toggle = |icon: fn() -> iced::widget::Text<'static>,
                               active: bool,
-                              tip: &'static str,
+                              tip: String,
                               message: Message| {
             w::styled_tooltip(
                 button(centered(icon().size(14)))
@@ -1511,7 +1512,7 @@ impl App {
             overlay_toggle(
                 icons::person,
                 data.in_place,
-                "In-place root — discard root translation",
+                t::anim_in_place_tip(),
                 Message::AnimationSetRootPolicy(if data.in_place {
                     RootMotionPolicy::Source
                 } else {
@@ -1521,31 +1522,31 @@ impl App {
             overlay_toggle(
                 icons::follow,
                 data.follow_root,
-                "Follow root motion with the camera",
+                t::anim_follow_tip(),
                 Message::AnimationToggleFollowRoot(!data.follow_root),
             ),
             overlay_toggle(
                 icons::skeleton,
                 data.show_skeleton,
-                "Show the skeleton overlay",
+                t::anim_skeleton_tip(),
                 Message::AnimationToggleSkeleton(!data.show_skeleton),
             ),
             overlay_toggle(
                 icons::route,
                 data.show_motion_path,
-                "Show the root motion path",
+                t::anim_motion_path_tip(),
                 Message::AnimationToggleMotionPath(!data.show_motion_path),
             ),
             overlay_toggle(
                 icons::chevrons_down,
                 data.ground_clip,
-                "Plant the clip's lowest point on the floor",
+                t::anim_ground_tip(),
                 Message::AnimationToggleGroundClip(!data.ground_clip),
             ),
             overlay_toggle(
                 icons::crossfade,
                 data.crossfade,
-                "Crossfade when switching clips",
+                t::anim_crossfade_tip(),
                 Message::AnimationToggleCrossfade(!data.crossfade),
             ),
         ]
@@ -1557,9 +1558,7 @@ impl App {
             Space::new().width(Length::Fill),
             toggles,
             animation_vdivider(),
-            muted_caption(
-                "Space play/pause · ←/→ step · Home/End range ends · drag to scrub".to_string()
-            ),
+            muted_caption(t::anim_keys_hint()),
         ]
         .spacing(10)
         .align_y(Alignment::Center);
@@ -1616,18 +1615,15 @@ impl App {
             BaseOrientation::Xup => "X-up",
         };
         let origin_label = match origin_mode {
-            SceneOriginMode::Centered => "centered",
-            SceneOriginMode::World => "world",
+            SceneOriginMode::Centered => t::viewer_origin_centered(),
+            SceneOriginMode::World => t::viewer_origin_world(),
         };
         let line = if has_scene {
-            format!(
-                "{} vertices   {} triangles   {} textures   {}×{}   {}   {}",
-                vertices, triangles, textures, w, h, orient_label, origin_label
-            )
+            t::viewer_stats(vertices, triangles, textures, w, h, orient_label, origin_label)
         } else if let Some(entry_name) = self.viewer_loading_entry_name() {
-            format!("Preparing {entry_name}…")
+            t::viewer_preparing_entry(entry_name)
         } else {
-            "No scene loaded".to_string()
+            t::viewer_no_scene()
         };
         container(fonts::caption(line))
             .width(Length::Fill)
@@ -1639,7 +1635,7 @@ impl App {
     fn build_texture_tab(&self) -> Element<'_, Message> {
         let archive_index = self.editor.selected_archive().unwrap_or(0);
         let Some(archive) = self.editor.archives().get(archive_index) else {
-            return container(fonts::caption("No archive open."))
+            return container(fonts::caption(t::texture_no_archive()))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Alignment::Center)
@@ -1647,9 +1643,7 @@ impl App {
                 .into();
         };
         let Some(selected_entry) = self.editor.selected_entry() else {
-            return container(fonts::caption(
-                "Select a TXD, NFT, NIF, or DFF entry to preview textures.",
-            ))
+            return container(fonts::caption_wrapped(t::texture_select_entry()))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
@@ -1662,9 +1656,7 @@ impl App {
         let following_model = self.agr_texture_follow(archive_index, selected_entry);
         let entry_index = following_model.unwrap_or(selected_entry);
         let Some(entry) = archive.entries.get(entry_index) else {
-            return container(fonts::caption(
-                "Select a .txd, .nft, .nif, or .dff entry to preview textures.",
-            ))
+            return container(fonts::caption_wrapped(t::texture_select_entry()))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
@@ -1678,10 +1670,7 @@ impl App {
         let is_nif = lower.ends_with(".nif");
         let is_dff = lower.ends_with(".dff");
         if !is_txd && !is_nft && !is_nif && !is_dff {
-            return container(fonts::caption(format!(
-                "{} is not a texture container. Preview is available for TXD, NFT, or rendered model entries.",
-                entry_name
-            )))
+            return container(fonts::caption_wrapped(t::texture_not_container(entry_name.as_str())))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
@@ -1691,9 +1680,7 @@ impl App {
         let textures = archive.texture_cache.get(&entry_index);
         let Some(textures) = textures else {
             if following_model.is_some() {
-                return container(fonts::caption(format!(
-                    "No companion textures were resolved for {entry_name}."
-                )))
+                return container(fonts::caption_wrapped(t::texture_no_companions(entry_name.as_str())))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Alignment::Center)
@@ -1702,10 +1689,10 @@ impl App {
             }
             if is_nif || is_dff {
                 return column![
-                    fonts::caption("Load the selected model to resolve its textures."),
+                    fonts::caption_wrapped(t::texture_load_model_hint()),
                     button(w::icon_label(
                         icons::model().size(14),
-                        fonts::body("Load selected model"),
+                        fonts::body(t::texture_load_model()),
                     ))
                     .on_press(Message::Viewer3dLoadSelected),
                 ]
@@ -1716,10 +1703,10 @@ impl App {
             }
             let kind = if is_nft { "NFT" } else { "TXD" };
             return column![
-                fonts::caption(format!("{kind} {entry_name} is not yet decoded.")),
+                fonts::caption_wrapped(t::texture_not_decoded(kind, entry_name.as_str())),
                 button(w::icon_label(
                     icons::texture().size(14),
-                    fonts::body(format!("Load selected {kind} textures")),
+                    fonts::body(t::texture_load_textures(kind)),
                 ))
                 .on_press(Message::TextureDecodeRequested),
             ]
@@ -1729,7 +1716,7 @@ impl App {
             .into();
         };
         if textures.is_empty() {
-            return container(fonts::caption("No decodable textures in this container."))
+            return container(fonts::caption(t::texture_none_decodable()))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Alignment::Center)
@@ -1744,9 +1731,7 @@ impl App {
             .height(Length::Fill)
             .padding(8);
         if following_model.is_some() {
-            col = col.push(muted_caption(format!(
-                "Animation model {entry_name} — switch models in the 3D dock"
-            )));
+            col = col.push(muted_caption(t::texture_animation_model(entry_name.as_str())));
         }
         let mut action_row = Row::new()
             .spacing(6)
@@ -1757,7 +1742,7 @@ impl App {
             action_row = action_row.push(
                 button(w::icon_label(
                     icons::model().size(14),
-                    fonts::body("Load selected model"),
+                    fonts::body(t::texture_load_model()),
                 ))
                 .on_press(Message::Viewer3dLoadSelected),
             );
@@ -1765,7 +1750,7 @@ impl App {
         action_row = action_row.push(
             button(w::icon_label(
                 icons::export().size(14),
-                fonts::body(format!("Export textures ({})", textures.len())),
+                fonts::body(t::texture_export(textures.len())),
             ))
             .on_press(Message::TextureExport),
         );
@@ -1813,7 +1798,7 @@ impl App {
                 ));
             col = col.push(
                 row![
-                    fonts::caption(format!("Texture {}/{}", tex_idx + 1, textures.len())),
+                    fonts::caption(t::texture_slot(tex_idx + 1, textures.len())),
                     slot_rail,
                 ]
                 .spacing(6)
@@ -1845,8 +1830,12 @@ impl App {
             .spacing(3)
             .align_y(Alignment::Center),
             row![
-                fonts::header("Alpha:"),
-                fonts::body(if tex.has_alpha { "Yes" } else { "No" }),
+                fonts::header(t::texture_alpha()),
+                fonts::body(if tex.has_alpha {
+                    t::texture_yes()
+                } else {
+                    t::texture_no()
+                }),
             ]
             .spacing(3)
             .align_y(Alignment::Center),
@@ -1863,7 +1852,7 @@ impl App {
                 w::readable_text_color(background, palette.background.base.text),
             );
             let note = if report.note.is_empty() {
-                format!("Verdict for a {} target.", report.game_id)
+                t::texture_verdict_default(report.game_id)
             } else {
                 report.note.clone()
             };
@@ -1880,16 +1869,13 @@ impl App {
                 0.32,
             );
             let chip = w::badge(
-                format!("PAL8-ready ({colors} colors)"),
+                t::texture_pal8_ready(colors),
                 background,
                 w::readable_text_color(background, palette.background.base.text),
             );
             texture_meta = texture_meta.push(w::styled_tooltip(
                 chip,
-                fonts::caption(
-                    "Every pixel is one of these distinct colors, so an 8-bit palette \
-                     stores this texture without quantization.",
-                ),
+                fonts::caption(t::texture_pal8_tip()),
                 tooltip::Position::Top,
             ));
         }
@@ -1898,11 +1884,9 @@ impl App {
         if is_txd {
             col = col.push(
                 row![
-                    button(fonts::body("Replace texture…"))
+                    button(fonts::body(t::texture_replace()))
                         .on_press(Message::TextureReplaceRequested),
-                    fonts::caption(
-                        "Imports PNG/DDS/BMP/TGA and re-encodes it for the archive's target.",
-                    ),
+                    fonts::caption_wrapped(t::texture_replace_hint()),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -1920,25 +1904,25 @@ impl App {
                 .unwrap_or_default()
         });
         let uv_tooltip = if texture_only_preview {
-            "Standalone texture preview. Select a matching DFF or NIF model to enable UV mapping."
+            t::texture_uv_standalone_tip()
         } else if uv_triangles.is_empty() {
-            "UV mapping is available after matching model geometry is loaded."
+            t::texture_uv_unavailable_tip()
         } else {
-            "Show the UV triangles from the matching model geometry."
+            t::texture_uv_tip()
         };
         let uv_toggle = w::styled_tooltip(
             checkbox(self.show_texture_uv && !uv_triangles.is_empty())
-                .label("Show UV map")
+                .label(t::texture_uv())
                 .on_toggle_maybe((!uv_triangles.is_empty()).then_some(Message::TextureUvToggled)),
             fonts::caption(uv_tooltip),
             tooltip::Position::Top,
         );
         let uv_status = if texture_only_preview {
-            fonts::caption("Texture-only preview · UV map needs matching model geometry")
+            fonts::caption(t::texture_uv_standalone())
         } else if uv_triangles.is_empty() {
-            fonts::caption("Load matching model geometry to enable UVs")
+            fonts::caption(t::texture_uv_unavailable())
         } else {
-            fonts::caption(format!("{} triangles", uv_triangles.len()))
+            fonts::caption(t::texture_uv_triangles(uv_triangles.len()))
         };
         let texture_only_notice: Element<'_, Message> = if texture_only_preview {
             // Keep the notice semantic without hard-coding a blue surface:
@@ -1953,7 +1937,7 @@ impl App {
                 0.32,
             );
             w::badge(
-                "Texture-only preview".to_string(),
+                t::texture_only_badge(),
                 background,
                 w::readable_text_color(background, palette.background.base.text),
             )
@@ -1963,9 +1947,9 @@ impl App {
         };
         let grid_toggle = w::styled_tooltip(
             checkbox(self.show_texture_grid)
-                .label("Grid")
+                .label(t::texture_grid())
                 .on_toggle(Message::ViewTextureGridToggled),
-            fonts::caption("Show a reference grid over the texture preview."),
+            fonts::caption(t::texture_grid_tip()),
             tooltip::Position::Top,
         );
         let mut grid_size_row = Row::new().spacing(3).align_y(Alignment::Center);
@@ -1980,9 +1964,7 @@ impl App {
             };
             grid_size_row = grid_size_row.push(w::styled_tooltip(
                 size_button,
-                fonts::caption(format!(
-                    "Use a {divisions}×{divisions} reference grid for the texture."
-                )),
+                fonts::caption(t::texture_grid_size_tip(divisions)),
                 tooltip::Position::Top,
             ));
         }
@@ -1992,7 +1974,7 @@ impl App {
                 uv_toggle,
                 uv_status,
                 grid_toggle,
-                fonts::body("Size:"),
+                fonts::body(t::texture_grid_size()),
                 grid_size_row
             ]
             .spacing(6)
@@ -2054,7 +2036,7 @@ impl App {
                 .height(Length::Fixed(28.0))
                 .padding(0.0)
                 .style(animation_subtle_button_style),
-                fonts::caption("View fullscreen (full quality)"),
+                fonts::caption(t::texture_fullscreen_tip()),
                 tooltip::Position::Left,
             ),
         )
@@ -2087,8 +2069,8 @@ impl App {
         if !scene_matches {
             if loading {
                 return row![
-                    w::icon_label(icons::model().size(14), fonts::caption("3D:")),
-                    fonts::caption("Preparing selected model…"),
+                    w::icon_label(icons::model().size(14), fonts::caption(t::viewer_toolbar_label())),
+                    fonts::caption(t::viewer_preparing_selected()),
                 ]
                 .spacing(4)
                 .padding(2)
@@ -2096,15 +2078,15 @@ impl App {
                 .into();
             }
             return row![
-                w::icon_label(icons::model().size(14), fonts::caption("3D:")),
+                w::icon_label(icons::model().size(14), fonts::caption(t::viewer_toolbar_label())),
                 w::styled_tooltip(
                     button(w::icon_label(
                         icons::refresh().size(14),
-                        fonts::caption("Load selected"),
+                        fonts::caption(t::viewer_load_selected()),
                     ))
                     .on_press(Message::Viewer3dLoadSelected)
                     .height(Length::Fixed(28.0)),
-                    fonts::caption("Load the selected model into the 3D viewer."),
+                    fonts::caption(t::viewer_load_selected_tip()),
                     tooltip::Position::Bottom,
                 ),
             ]
@@ -2126,77 +2108,75 @@ impl App {
         let mut row = Row::new().spacing(4).padding(2).width(Length::Fill);
         row = row.push(w::icon_label(
             icons::model().size(14),
-            fonts::caption("3D:"),
+            fonts::caption(t::viewer_toolbar_label()),
         ));
         row = row.push(w::styled_tooltip(
             button(w::icon_label(
                 icons::refresh().size(14),
-                fonts::caption("Reset view"),
+                fonts::caption(t::viewer_reset()),
             ))
             .on_press(Message::Viewer3dReset)
             .height(button_height),
-            fonts::caption("Re-fit the camera to the model. Shortcut: R"),
+            fonts::caption(t::viewer_reset_tip()),
             tooltip::Position::Right,
         ));
         row = row.push(w::styled_tooltip(
             button(w::icon_label(
                 icons::close().size(14),
-                fonts::caption("Clear"),
+                fonts::caption(t::viewer_clear()),
             ))
             .on_press(Message::Viewer3dClear)
             .height(button_height),
-            fonts::caption("Drop the loaded scene"),
+            fonts::caption(t::viewer_clear_tip()),
             tooltip::Position::Right,
         ));
         row = row.push(w::styled_tooltip(
             checkbox(flags.contains(RenderFlags::WIREFRAME))
-                .label("Wire overlay")
+                .label(t::viewer_wireframe())
                 .on_toggle(|_| Message::Viewer3dToggleWireframe),
-            fonts::caption("Show triangle edges over the shaded model."),
+            fonts::caption(t::viewer_wireframe_tip()),
             tooltip::Position::Bottom,
         ));
         row = row.push(w::styled_tooltip(
             checkbox(flags.contains(RenderFlags::CULL_BACK))
-                .label("Cull backfaces")
+                .label(t::viewer_cull())
                 .on_toggle(|_| Message::Viewer3dToggleCullBackfaces),
-            fonts::caption("Hide back-facing triangles to inspect surface winding."),
+            fonts::caption(t::viewer_cull_tip()),
             tooltip::Position::Bottom,
         ));
         row = row.push(w::styled_tooltip(
             checkbox(flags.contains(RenderFlags::HAS_TEXTURE))
-                .label("Textured")
+                .label(t::viewer_textured())
                 .on_toggle(|_| Message::Viewer3dToggleTextured),
-            fonts::caption("Use the model's decoded textures instead of a neutral material."),
+            fonts::caption(t::viewer_textured_tip()),
             tooltip::Position::Bottom,
         ));
         let alpha_available = flags.contains(RenderFlags::HAS_TEXTURE) && has_textures;
         let alpha_checked = alpha_available && flags.contains(RenderFlags::ALPHA_BLEND);
         let alpha_hint = if alpha_available {
-            "Respect texture alpha for cutouts and transparent materials."
+            t::viewer_alpha_tip()
         } else {
-            "Enable Textured on a model with textures to use alpha blending."
+            t::viewer_alpha_unavailable_tip()
         };
         row = row.push(w::styled_tooltip(
             checkbox(alpha_checked)
-                .label("Alpha blend")
+                .label(t::viewer_alpha())
                 .on_toggle_maybe(alpha_available.then_some(|_| Message::Viewer3dToggleAlphaBlend)),
             fonts::caption(alpha_hint),
             tooltip::Position::Bottom,
         ));
         row = row.push(w::styled_tooltip(
             checkbox(origin_mode == SceneOriginMode::Centered)
-                .label("Center origin")
+                .label(t::viewer_center())
                 .on_toggle(|_| Message::Viewer3dToggleCenterOrigin),
-            fonts::caption(
-                "Recenter the model for inspection; disable to preserve world coordinates.",
-            ),
+            fonts::caption(t::viewer_center_tip()),
             tooltip::Position::Bottom,
         ));
         row = row.push(w::styled_tooltip(
             checkbox(flags.contains(RenderFlags::SHOW_GRID))
-                .label("Grid floor")
+                .label(t::viewer_grid())
                 .on_toggle(|_| Message::Viewer3dToggleGrid),
-            fonts::caption("Show the world reference grid and XYZ axes."),
+            fonts::caption(t::viewer_grid_tip()),
             tooltip::Position::Bottom,
         ));
         row.wrap().vertical_spacing(4).into()
@@ -2208,42 +2188,34 @@ impl App {
     ) -> Element<'_, Message> {
         let mut panel = Column::new().spacing(4);
 
-        panel = panel.push(label_value_owned("Name", inspection.file_name.to_string()));
+        panel = panel.push(label_value_owned(t::inspect_name(), inspection.file_name.to_string()));
         let type_label = if literal_types {
             literal_type_label(&inspection.file_name)
         } else {
             inspection.file_type.to_string()
         };
-        panel = panel.push(label_value_owned("Type", type_label));
+        panel = panel.push(label_value_owned(t::inspect_type(), type_label));
 
         let size_text = if inspection.size_bytes >= 1024 * 1024 {
-            format!(
-                "{:.2} MB ({} bytes, {} sectors)",
-                inspection.size_bytes as f64 / (1024.0 * 1024.0),
+            t::inspect_size_mb(
+                format!("{:.2}", inspection.size_bytes as f64 / (1024.0 * 1024.0)),
                 inspection.size_bytes,
-                inspection.size_sectors
+                inspection.size_sectors,
             )
         } else if inspection.size_bytes >= 1024 {
-            format!(
-                "{:.2} KB ({} bytes, {} sectors)",
-                inspection.size_bytes as f64 / 1024.0,
+            t::inspect_size_kb(
+                format!("{:.2}", inspection.size_bytes as f64 / 1024.0),
                 inspection.size_bytes,
-                inspection.size_sectors
+                inspection.size_sectors,
             )
         } else {
-            format!(
-                "{} bytes ({} sectors)",
-                inspection.size_bytes, inspection.size_sectors
-            )
+            t::inspect_size_bytes(inspection.size_bytes, inspection.size_sectors)
         };
-        panel = panel.push(label_value_owned("Size", size_text));
-        let offset_text = format!(
-            "sector {} (byte {})",
-            inspection.offset_bytes / 2048,
-            inspection.offset_bytes
-        );
-        panel = panel.push(label_value_owned("Offset", offset_text));
-        panel = panel.push(label_value_owned("Source", inspection.source.to_string()));
+        panel = panel.push(label_value_owned(t::inspect_size(), size_text));
+        let offset_text =
+            t::inspect_offset_value(inspection.offset_bytes / 2048, inspection.offset_bytes);
+        panel = panel.push(label_value_owned(t::inspect_offset(), offset_text));
+        panel = panel.push(label_value_owned(t::inspect_source(), inspection.source.to_string()));
 
         if !inspection.summary.is_empty() {
             panel = panel.push(
@@ -2262,7 +2234,7 @@ impl App {
                     .width(Length::Fixed(0.0))
                     .height(Length::Fixed(6.0)),
             );
-            panel = panel.push(fonts::body("Preview (hex):"));
+            panel = panel.push(fonts::body(t::inspect_hex_preview()));
             panel = panel.push(
                 Scrollable::new(fonts::body_monospace(preview.clone()))
                     .direction(iced::widget::scrollable::Direction::Horizontal(
@@ -2289,7 +2261,7 @@ impl App {
         let left_text = if self.toast.is_some() {
             self.toast.clone().unwrap_or_default()
         } else if selected_count > 0 {
-            format!("Selected: {selected_count}")
+            t::status_selected(selected_count)
         } else {
             format!(
                 "{} v{}",
@@ -2364,44 +2336,44 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
     let toolbar = row![
         w::styled_tooltip(
             toolbar_button(icons::new_archive().size(18).into(), Message::NewArchive),
-            fonts::body("New"),
+            fonts::body(t::toolbar_new()),
             tooltip::Position::Bottom,
         ),
         w::styled_tooltip(
             toolbar_button(icons::open_archive().size(18).into(), Message::OpenArchive),
-            fonts::body("Open"),
+            fonts::body(t::toolbar_open()),
             tooltip::Position::Bottom,
         ),
         w::styled_tooltip(
             toolbar_button(icons::save().size(18).into(), Message::SaveArchive),
-            fonts::body("Save"),
+            fonts::body(t::toolbar_save()),
             tooltip::Position::Bottom,
         ),
         w::styled_tooltip(
             toolbar_button(icons::pack().size(18).into(), Message::PackArchive),
-            fonts::body("Pack archive"),
+            fonts::body(t::toolbar_pack()),
             tooltip::Position::Bottom,
         ),
         w::vhairline(divider),
         w::styled_tooltip(
             toolbar_button(icons::import().size(18).into(), Message::ImportFiles),
-            fonts::body("Import"),
+            fonts::body(t::toolbar_import()),
             tooltip::Position::Bottom,
         ),
         w::styled_tooltip(
             toolbar_button(icons::open_archive().size(18).into(), Message::ImportFolder),
-            fonts::body("Import folder"),
+            fonts::body(t::toolbar_import_folder()),
             tooltip::Position::Bottom,
         ),
         w::styled_tooltip(
             toolbar_button(icons::export().size(18).into(), Message::ExportSelected),
-            fonts::body("Export selected"),
+            fonts::body(t::toolbar_export_selected()),
             tooltip::Position::Bottom,
         ),
         w::vhairline(divider),
         w::styled_tooltip(
             toolbar_button(icons::delete().size(18).into(), Message::DeleteSelected),
-            fonts::body("Delete selected"),
+            fonts::body(t::toolbar_delete_selected()),
             tooltip::Position::Bottom,
         ),
         w::vhairline(divider),
@@ -2410,7 +2382,7 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
                 icons::shield_check().size(18).into(),
                 Message::OpenValidatorPopup
             ),
-            fonts::body("Validate textures"),
+            fonts::body(t::toolbar_validate()),
             tooltip::Position::Bottom,
         ),
         w::vhairline(divider),
@@ -2419,7 +2391,7 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
                 icons::texture().size(18).into(),
                 Message::ImportImageAsTxdRequested
             ),
-            fonts::body("Import image as TXD"),
+            fonts::body(t::toolbar_image_as_txd()),
             tooltip::Position::Bottom,
         ),
         w::styled_tooltip(
@@ -2427,7 +2399,7 @@ fn build_toolbar(accent: Color, bg: Color, divider: Color) -> Element<'static, M
                 icons::verdict_convert().size(18).into(),
                 Message::BulkConvertRequested
             ),
-            fonts::body("Convert selection to target dialect"),
+            fonts::body(t::toolbar_convert_selection()),
             tooltip::Position::Bottom,
         ),
     ]
@@ -2721,9 +2693,9 @@ pub fn build(app: &App) -> Element<'_, Message> {
                 Space::new().height(Length::Fill),
                 hero_icon,
                 Space::new().height(Length::Fixed(8.0)),
-                fonts::display("Open or create an archive to get started."),
+                fonts::display(t::empty_heading()),
                 Space::new().height(Length::Fixed(8.0)),
-                fonts::caption("Or drag and drop an .img or .dir file here to open it."),
+                fonts::caption_wrapped(t::empty_drop_hint()),
                 Space::new().height(Length::Fixed(18.0)),
                 pro_tip,
                 Space::new().height(Length::Fill),
@@ -2740,7 +2712,7 @@ pub fn build(app: &App) -> Element<'_, Message> {
             // is deterministic: SEARCH_DROPDOWN_X anchors the floating
             // dropdown under the input, not under the strip's left edge.
             let label = container(
-                row![icons::search().size(15), fonts::header("Search:"),]
+                row![icons::search().size(15), fonts::header(t::search_label()),]
                     .spacing(8)
                     .align_y(Alignment::Center),
             )
@@ -4751,7 +4723,7 @@ fn search_prediction_dropdown(
     divider: Color,
 ) -> Element<'_, Message> {
     let prediction_button =
-        |name: String, message: Message, active: bool, hint: Option<&'static str>| {
+        |name: String, message: Message, active: bool, hint: Option<String>| {
             let label = if let Some(hint) = hint {
                 row![fonts::caption(hint), fonts::body(name)]
                     .spacing(6)
@@ -4809,7 +4781,7 @@ fn search_prediction_dropdown(
             name.clone(),
             Message::SearchPickDidYouMean,
             app.prediction_index.is_some_and(|i| i >= match_count),
-            Some("Did you mean"),
+            Some(t::search_did_you_mean()),
         ));
     }
 
@@ -4913,7 +4885,7 @@ fn context_icon(message: &Message) -> Element<'static, Message> {
     icon.size(16).into()
 }
 
-fn label_value(label: &str, value: String) -> Element<'_, Message> {
+fn label_value<'a>(label: impl std::fmt::Display, value: String) -> Element<'a, Message> {
     row![
         fonts::header(format!("{label}:")),
         Space::new().width(Length::Fixed(4.0)),
@@ -4922,7 +4894,7 @@ fn label_value(label: &str, value: String) -> Element<'_, Message> {
     .into()
 }
 
-fn label_value_owned(label: &str, value: String) -> Element<'_, Message> {
+fn label_value_owned<'a>(label: impl std::fmt::Display, value: String) -> Element<'a, Message> {
     row![
         fonts::header(format!("{label}:")),
         Space::new().width(Length::Fixed(4.0)),
@@ -4931,7 +4903,7 @@ fn label_value_owned(label: &str, value: String) -> Element<'_, Message> {
     .into()
 }
 
-fn copy_button(label: &str, message: Message) -> Element<'_, Message> {
+fn copy_button<'a>(label: String, message: Message) -> Element<'a, Message> {
     button(w::icon_label(
         icons::copy().size(13),
         fonts::caption(label).align_x(iced::alignment::Horizontal::Center),
@@ -4942,12 +4914,12 @@ fn copy_button(label: &str, message: Message) -> Element<'_, Message> {
     .into()
 }
 
-pub fn version_label(version: ImgVersion) -> &'static str {
+pub fn version_label(version: ImgVersion) -> String {
     match version {
-        ImgVersion::One => "PC v1",
-        ImgVersion::Two => "PC v2",
-        ImgVersion::Xbox360 => "Xbox 360 IMG v1",
-        ImgVersion::Unknown => "Unknown",
+        ImgVersion::One => "PC v1".to_string(),
+        ImgVersion::Two => "PC v2".to_string(),
+        ImgVersion::Xbox360 => "Xbox 360 IMG v1".to_string(),
+        ImgVersion::Unknown => t::version_unknown(),
     }
 }
 
@@ -4973,22 +4945,20 @@ fn sort_tooltip_text(
 ) -> String {
     match column {
         SortColumn::Name => match (active, direction) {
-            (true, SortDirection::Ascending) => "Sorted by file name (A → Z).",
-            (true, SortDirection::Descending) => "Sorted by file name (Z → A).",
-            (false, _) => "Sort by file name (A → Z).",
-        }
-        .to_string(),
+            (true, SortDirection::Ascending) => t::sort_tip_name_asc(),
+            (true, SortDirection::Descending) => t::sort_tip_name_desc(),
+            (false, _) => t::sort_tip_name_inactive(),
+        },
         SortColumn::Type => match (active, primary_type) {
-            (true, Some(primary)) => format!("Sorted by file type, {primary} first."),
-            (true, None) => "Sorted by file type alphabetically.".to_string(),
-            (false, _) => "Sort by file type (alphabetical).".to_string(),
+            (true, Some(primary)) => t::sort_tip_type_primary(primary),
+            (true, None) => t::sort_tip_type_alphabetical(),
+            (false, _) => t::sort_tip_type_inactive(),
         },
         SortColumn::Size => match (active, direction) {
-            (true, SortDirection::Descending) => "Sorted by size (largest first).",
-            (true, SortDirection::Ascending) => "Sorted by size (smallest first).",
-            (false, _) => "Sort by size (largest first).",
-        }
-        .to_string(),
+            (true, SortDirection::Descending) => t::sort_tip_size_desc(),
+            (true, SortDirection::Ascending) => t::sort_tip_size_asc(),
+            (false, _) => t::sort_tip_size_inactive(),
+        },
     }
 }
 
@@ -5198,7 +5168,7 @@ fn empty_state() -> Element<'static, Message> {
     Container::new(
         column![
             Space::new().height(Length::Fixed(8.0)),
-            fonts::body("No entries match the current filter."),
+            fonts::body(t::table_no_matches()),
         ]
         .align_x(Alignment::Center),
     )
