@@ -21,7 +21,7 @@ use fluent_syntax::parser;
 /// Where the `.ftl` files live, relative to the package root.
 const DIRECTORY: &str = "i18n";
 const SOURCE_LANGUAGE: &str = "en";
-const TRANSLATIONS: &[&str] = &["es", "ru"];
+const TRANSLATIONS: &[&str] = &["es", "pt-BR", "ru"];
 
 struct Message {
     /// Variables the message reads, including through message references,

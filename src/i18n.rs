@@ -27,12 +27,14 @@ pub mod t {
 
 const ENGLISH_FTL: &str = include_str!("../i18n/en.ftl");
 const SPANISH_FTL: &str = include_str!("../i18n/es.ftl");
+const PORTUGUESE_BR_FTL: &str = include_str!("../i18n/pt-BR.ftl");
 const RUSSIAN_FTL: &str = include_str!("../i18n/ru.ftl");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Language {
     English,
     Spanish,
+    PortugueseBr,
     Russian,
     /// English with accented, lengthened text, for finding labels that
     /// clip or wrap before real translations arrive. Debug builds only.
@@ -41,13 +43,19 @@ pub enum Language {
 
 impl Language {
     /// The languages offered in the Language menu, in menu order.
-    pub const SELECTABLE: [Language; 3] = [Language::English, Language::Spanish, Language::Russian];
+    pub const SELECTABLE: [Language; 4] = [
+        Language::English,
+        Language::Spanish,
+        Language::PortugueseBr,
+        Language::Russian,
+    ];
 
     /// The code stored in settings.ini.
     pub const fn code(self) -> &'static str {
         match self {
             Language::English => "en",
             Language::Spanish => "es",
+            Language::PortugueseBr => "pt-BR",
             Language::Russian => "ru",
             Language::Pseudo => "pseudo",
         }
@@ -59,6 +67,7 @@ impl Language {
         match self {
             Language::English => "English",
             Language::Spanish => "Español",
+            Language::PortugueseBr => "Português (Brasil)",
             Language::Russian => "Русский",
             Language::Pseudo => "Pseudo",
         }
@@ -77,6 +86,7 @@ impl Language {
         match primary.as_str() {
             "en" => Some(Language::English),
             "es" => Some(Language::Spanish),
+            "pt" => Some(Language::PortugueseBr),
             "ru" => Some(Language::Russian),
             _ => None,
         }
@@ -86,6 +96,7 @@ impl Language {
         match self {
             Language::English | Language::Pseudo => ENGLISH_FTL,
             Language::Spanish => SPANISH_FTL,
+            Language::PortugueseBr => PORTUGUESE_BR_FTL,
             Language::Russian => RUSSIAN_FTL,
         }
     }
@@ -95,6 +106,7 @@ impl Language {
         let tag = match self {
             Language::English | Language::Pseudo => "en",
             Language::Spanish => "es",
+            Language::PortugueseBr => "pt-BR",
             Language::Russian => "ru",
         };
         tag.parse().expect("built-in locale tags are valid")
@@ -302,6 +314,7 @@ mod tests {
         for language in [
             Language::English,
             Language::Spanish,
+            Language::PortugueseBr,
             Language::Russian,
             Language::Pseudo,
         ] {
@@ -320,6 +333,9 @@ mod tests {
         set_language(Language::Spanish);
         assert_eq!(t::menu_file(), "Archivo");
         assert_eq!(t::menu_file_new("Ctrl + N"), "Nuevo (Ctrl + N)");
+        set_language(Language::PortugueseBr);
+        assert_eq!(t::menu_file(), "Arquivo");
+        assert_eq!(t::menu_file_new("Ctrl + N"), "Novo (Ctrl + N)");
         set_language(Language::Russian);
         assert_eq!(t::menu_file(), "Файл");
         set_language(Language::English);
@@ -400,12 +416,17 @@ mod tests {
             LanguageSetting::System,
             LanguageSetting::Fixed(Language::English),
             LanguageSetting::Fixed(Language::Spanish),
+            LanguageSetting::Fixed(Language::PortugueseBr),
             LanguageSetting::Fixed(Language::Russian),
         ] {
             assert_eq!(setting.to_string().parse(), Ok(setting));
         }
         assert_eq!("fr".parse::<LanguageSetting>(), Err(()));
         assert_eq!(Language::from_locale_tag("es-MX"), Some(Language::Spanish));
+        assert_eq!(
+            Language::from_locale_tag("pt_BR.UTF-8"),
+            Some(Language::PortugueseBr)
+        );
         assert_eq!(
             Language::from_locale_tag("ru_RU.UTF-8"),
             Some(Language::Russian)
