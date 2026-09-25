@@ -50,7 +50,7 @@ menu-selection-delete = Удалить выбранное ({ $shortcut })
 
 ## View menu
 
-menu-view-navigation-gizmo = Навигационный гизмо
+menu-view-navigation-gizmo = Гизмо навигации
 menu-view-search-bar = Строка поиска
 menu-view-search-selection-context = Контекст выделения в поиске
 menu-view-literal-file-types = Буквальные типы файлов
@@ -276,12 +276,12 @@ update-open-releases = Открыть страницу релизов
 ## Validate textures dialog
 
 dialog-validator-title = Проверка текстур
-validator-intro = Выберите игру, для которой предназначен этот архив. Проверка отмечает каждую текстуру вне форматов, которые принимает розничная версия движка, и перечисляет неизвестные форматы, которые могут загрузиться, но не являются родными для игры.
+validator-intro = Выберите игру, для которой предназначен этот архив. Проверка отмечает каждую текстуру в формате, который не принимает оригинальная версия игры, и перечисляет неизвестные форматы: они могут загрузиться, но не являются родными для игры.
 validator-last-run = Последняя проверка: { $counts }
 validator-no-textures = нет текстур
 validator-current-target = текущая цель
 validator-validate-for = Проверить для { $game }
-validator-native-heading = Родные (проверено на розничной версии):
+validator-native-heading = Родные (проверено на оригинальной версии):
 validator-unknown-heading = Неизвестные / не родные для игры:
 validator-hint-likely = Содержимое похоже на { $game }
 validator-hint-possible = Содержимое, возможно, для { $game }
@@ -304,12 +304,12 @@ legend-incompatible-description = Выбранный движок не може�
 
 dialog-sort-title = Сортировка — { $archive }
 dialog-sort-title-no-archive = Сортировка — (архив не открыт)
-sort-empty = Ключей пока нет. Добавьте ключ ниже, чтобы начать сортировку.
+sort-empty = Критериев пока нет. Добавьте критерий ниже, чтобы начать сортировку.
 sort-intro = Задайте правила приоритета и примените их к текущему архиву.
-sort-select-key = Выберите ключ…
-sort-add-key = + Добавить ключ
-sort-add-key-max = + Добавить ключ (достигнут максимум)
-sort-keys-active = Активно ключей: { $active } из { $total }
+sort-select-key = Выберите критерий…
+sort-add-key = + Добавить критерий
+sort-add-key-max = + Добавить критерий (достигнут максимум)
+sort-keys-active = Активно критериев: { $active } из { $total }
 sort-preview-heading = Предпросмотр (первые 10 записей)
 sort-preview-empty = (в текущем архиве нет записей)
 sort-apply-preset = Применить шаблон…
@@ -807,11 +807,11 @@ texture-export-no-nft = Не найден NFT для «{ $name }»
 
 ## Manifest comparison errors
 
-compare-manifest-inspect = Не удалось проверить манифест «{ $path }»: { $error }
-compare-manifest-too-large = Манифест «{ $path }» слишком большой ({ $size }; предел — { $limit }).
-compare-manifest-read = Не удалось прочитать манифест «{ $path }»: { $error }
-compare-manifest-grew = Манифест «{ $path }» превысил предел { $limit } во время чтения.
-compare-manifest-utf8 = Манифест «{ $path }» не является корректным UTF-8: { $error }
+compare-manifest-inspect = Не удалось проверить список «{ $path }»: { $error }
+compare-manifest-too-large = Список «{ $path }» слишком большой ({ $size }; предел — { $limit }).
+compare-manifest-read = Не удалось прочитать список «{ $path }»: { $error }
+compare-manifest-grew = Список «{ $path }» превысил предел { $limit } во время чтения.
+compare-manifest-utf8 = Список «{ $path }» не является корректным UTF-8: { $error }
 
 ## Compatibility verdicts
 
@@ -821,6 +821,7 @@ verdict-convertible-lossless = преобразуется без потерь
 verdict-convertible-lossy = преобразуется с потерями
 verdict-unsupported = несовместимо
 verdict-untested = не проверено
+verdict-count = { $verdict }: { $count }
 
 ## Compatibility evidence notes
 
@@ -933,9 +934,9 @@ compat-error-unknown-target = неизвестная целевая игра «{
 
 ## Save check: container conventions
 
-compat-container-v2-expects-v1 = Контейнер IMG v2, но { $game } ожидает IMG v1 — игра не увидит эти файлы.
-compat-container-v1-sa = Контейнер IMG v1; оригинальная San Andreas использует IMG v2 (v1 загружается, только если указан в gta.dat).
-compat-container-xbox = Упаковка Xbox 360; { $game } ожидает контейнер для ПК.
+compat-container-v2-expects-v1 = контейнер IMG v2, но { $game } ожидает IMG v1 — игра не увидит эти файлы.
+compat-container-v1-sa = контейнер IMG v1; оригинальная San Andreas использует IMG v2 (v1 загружается, только если указан в gta.dat).
+compat-container-xbox = упаковка Xbox 360; { $game } ожидает контейнер для ПК.
 
 ## Import check notes
 

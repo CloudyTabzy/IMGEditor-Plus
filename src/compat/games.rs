@@ -93,7 +93,7 @@ impl Verdict {
         counts
             .iter()
             .map(|(label, count)| match Self::from_label(label) {
-                Some(verdict) => format!("{} {count}", verdict.display_label()),
+                Some(verdict) => t::verdict_count(verdict.display_label(), *count),
                 None => format!("{label} {count}"),
             })
             .collect::<Vec<_>>()
@@ -699,7 +699,7 @@ mod tests {
         crate::i18n::set_language(crate::i18n::Language::Russian);
         let translated = Verdict::counts_summary(&counts);
         crate::i18n::set_language(crate::i18n::Language::English);
-        assert_eq!(translated, "родной 12, не проверено 1");
+        assert_eq!(translated, "родной: 12, не проверено: 1");
     }
 
     fn raster(platform: u32, logical: LogicalFormat) -> RasterProfile {

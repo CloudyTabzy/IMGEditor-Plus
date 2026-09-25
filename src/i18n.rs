@@ -402,7 +402,7 @@ mod tests {
         set_language(Language::Spanish);
         assert_eq!(
             t::bulk_entry("a.txd", 1, "DXT1"),
-            "a.txd - 1 textura -> DXT1"
+            "a.txd — 1 textura -> DXT1"
         );
         set_language(Language::English);
     }

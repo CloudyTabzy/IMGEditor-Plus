@@ -159,7 +159,7 @@ preview-after = Sesudah (terkode)
 dialog-target = Target: { $target }
 dialog-target-archive = Target: { $target } · { $archive }
 dialog-replace-title = Ganti tekstur
-replace-summary = Mengganti “{ $texture }” - sumber: { $source } ({ $width }x{ $height })
+replace-summary = Mengganti “{ $texture }” — sumber: { $source } ({ $width }x{ $height })
 replace-override-note = Disimpan di memori sebagai pengganti; berkas arsip berubah saat Anda menyimpan.
 replace-confirm = Ganti tekstur
 dialog-new-txd-title = Impor gambar sebagai TXD
@@ -167,7 +167,7 @@ new-txd-summary = TXD baru dari { $source } ({ $width }x{ $height })
 new-txd-name-placeholder = nama tekstur
 new-txd-confirm = Tambahkan ke arsip
 dialog-bulk-title = Konversi ke dialek target
-bulk-entry = { $entry } - { $count } tekstur -> { $formats }
+bulk-entry = { $entry } — { $count } tekstur -> { $formats }
 bulk-more-entries = … dan { $count } entri lainnya
 bulk-summary = { $textures } tekstur dalam { $entries } entri dari { $source } akan dikodekan ulang untuk target.
 bulk-skipped = { $skipped } sudah asli (dilewati), { $failed } tidak terbaca (dilewati).
@@ -197,7 +197,7 @@ compare-running-body = Membaca { $manifest } dan membandingkannya dengan { $arch
 ## Save check dialog
 
 dialog-save-check-title = Pemeriksaan penyimpanan
-save-check-summary = { $textures } tekstur, { $entries } entri - diperiksa terhadap { $target }.
+save-check-summary = { $textures } tekstur, { $entries } entri — diperiksa terhadap { $target }.
 save-check-counts = { $fine } asli/didukung · { $convertible } dapat dikonversi (tanpa kehilangan) · { $incompatible } tidak kompatibel · { $unknown } tidak diketahui
 # $note is a technical detail and stays in English.
 save-check-container = Wadah: { $note }
@@ -223,11 +223,11 @@ unsaved-discard-and-quit = Buang perubahan dan keluar
 
 dialog-import-check-title = Pemeriksaan impor
 import-check-offender = { $name }: { $verdict }
-import-check-offender-note = { $name }: { $verdict } - { $note }
+import-check-offender-note = { $name }: { $verdict } — { $note }
 import-check-file = { $count } tekstur: { $detail }
 import-check-more = …dan { $count } berkas lain yang ditandai.
 import-check-summary = Keputusan diperlukan untuk { $target }: { $flagged } dari { $total } berkas — { $incompatible } tekstur tidak kompatibel, { $unknown } tidak diketahui.
-import-check-note = Impor tetap apa adanya - format hanya penting jika game harus memuat tekstur ini.
+import-check-note = Impor tetap apa adanya — format hanya penting jika game harus memuat tekstur ini.
 import-check-import-anyway = Tetap impor
 import-check-cancel = Batalkan impor
 
@@ -271,13 +271,13 @@ validator-use-as-target = Gunakan { $game } sebagai target
 validator-already-target = (sudah menjadi target)
 validator-highlight-rows = Sorot baris
 legend-native = asli
-legend-native-description = Dibuat oleh mesin ini - tidak perlu tindakan.
+legend-native-description = Dibuat oleh mesin ini — tidak perlu tindakan.
 legend-supported = didukung / dapat dikonversi
 legend-supported-description = Dapat dimuat, tetapi bukan dialek data game; penulisan ulang tanpa kehilangan mungkin ditawarkan.
 legend-lossy = konversi dengan kehilangan
 legend-lossy-description = Hanya dapat digunakan setelah konversi yang mengubah piksel (kompresi atau kuantisasi).
 legend-unknown = tidak diketahui
-legend-unknown-description = Tidak ada bukti ke arah mana pun - belum diketahui adanya ketidakcocokan. Gunakan dengan hati-hati.
+legend-unknown-description = Tidak ada bukti ke arah mana pun — belum diketahui adanya ketidakcocokan. Gunakan dengan hati-hati.
 legend-incompatible = tidak kompatibel
 legend-incompatible-description = Mesin yang dipilih tidak dapat memakai format ini.
 
@@ -397,15 +397,15 @@ toast-import-busy = Impor sedang disiapkan.
 toast-preparing-import = Menyiapkan impor…
 toast-txd-name-required = Beri nama untuk TXD baru.
 toast-entry-exists = Entri bernama “{ $name }” sudah ada.
-toast-entry-added = “{ $name }” ditambahkan - simpan arsip untuk menulisnya.
+toast-entry-added = “{ $name }” ditambahkan — simpan arsip untuk menulisnya.
 toast-set-target-first = Tetapkan target game terlebih dahulu (Validasi tekstur).
 toast-select-entries-to-convert = Pilih entri yang akan dikonversi terlebih dahulu.
 toast-archive-changed-planning = Arsip berubah saat konversi direncanakan; coba lagi.
-toast-convert-only-txd = Hanya entri TXD yang dapat dikonversi - tidak ada entri yang dipilih yang merupakan wadah tekstur TXD.
+toast-convert-only-txd = Hanya entri TXD yang dapat dikonversi — tidak ada entri yang dipilih yang merupakan wadah tekstur TXD.
 toast-convert-all-native = Semua tekstur yang dipilih sudah asli untuk target.
 toast-archive-changed-after-plan = Arsip berubah setelah konversi ini direncanakan; coba lagi.
 toast-archive-changed-during = Arsip berubah selama konversi; hasil usang dibuang.
-toast-converted = { $count } entri dikonversi - simpan arsip untuk menulisnya.
+toast-converted = { $count } entri dikonversi — simpan arsip untuk menulisnya.
 toast-conversion-failed = Konversi gagal: { $error }
 toast-no-decoded-textures = Tidak ada tekstur terdekode untuk diekspor.
 toast-decoded = { $count } tekstur didekode
@@ -418,7 +418,7 @@ toast-read-failed = Gagal membaca { $name }: { $error }
 
 toast-import-cancelled = Impor dibatalkan.
 toast-imported = { $count } berkas diimpor.
-toast-imported-unchecked = { $count } berkas diimpor - target validator belum ditetapkan, format tidak diperiksa.
+toast-imported-unchecked = { $count } berkas diimpor — target validator belum ditetapkan, format tidak diperiksa.
 toast-import-failed = Impor gagal: { $error }
 toast-no-files-in-folder = Tidak ada berkas biasa ditemukan di { $folder }.
 toast-folder-scan-failed = Pemindaian folder gagal: { $error }
@@ -447,7 +447,7 @@ toast-association-removed = Asosiasi .img/.dir dihapus.
 toast-association-failed = Asosiasi berkas gagal: { $error }
 toast-validation-cancelled = Validasi dibatalkan.
 toast-validation-failed = Validasi gagal: { $error }
-toast-no-compat-issues = Tidak ada masalah kompatibilitas - { $summary }
+toast-no-compat-issues = Tidak ada masalah kompatibilitas — { $summary }
 # $verdicts is the per-verdict count list, e.g. "native 12, untested 1".
 validation-summary = Validasi untuk { $game }: { $txds } TXD ({ $textures } tekstur): { $verdicts }; { $errors } kesalahan, { $warnings } peringatan
 
@@ -490,7 +490,7 @@ pro-tip-bulk-convert = Konversi pilihan ke dialek target mengodekan ulang TXD ya
 pro-tip-entry-lists = Ctrl+L mengekspor daftar entri dan Ctrl+P membandingkannya dengan arsip untuk menemukan nama yang hilang.
 toast-no-dff-to-animate = Tidak ada model DFF di arsip ini untuk dianimasikan.
 toast-replace-needs-txd = Penggantian berlaku untuk entri TXD; entri itu bukan TXD.
-toast-texture-replaced = Tekstur diganti - simpan arsip untuk menulisnya.
+toast-texture-replaced = Tekstur diganti — simpan arsip untuk menulisnya.
 toast-bully-texture-writing = Penulisan tekstur Bully (Gamebryo) belum didukung.
 toast-archive-file-missing = Berkas arsip tidak ada lagi. Gunakan Simpan sebagai… terlebih dahulu.
 toast-folder-scan-target-changed = Arsip target berubah saat folder dipindai.
@@ -755,8 +755,8 @@ inspect-rw-uv-animation = Animasi UV
 inspect-rw-stream = Aliran RenderWare
 inspect-bytes = { $count } byte
 inspect-col-unknown = Kolisi tidak diketahui
-inspect-endian-big = Big
-inspect-endian-little = Little
+inspect-endian-big = Big-endian
+inspect-endian-little = Little-endian
 inspect-nif-truncated = NIF (terpotong)
 inspect-lines-value = { $lines } ({ $nonempty } tidak kosong)
 inspect-format-scm = Skrip GTA (main.scm)
@@ -787,6 +787,7 @@ verdict-convertible-lossless = dapat dikonversi (tanpa kehilangan)
 verdict-convertible-lossy = dapat dikonversi (dengan kehilangan)
 verdict-unsupported = tidak didukung
 verdict-untested = belum diuji
+verdict-count = { $verdict }: { $count }
 
 ## Compatibility evidence notes
 ## These cite measurements of the retail games. Keep format names
@@ -847,7 +848,7 @@ compat-note-sa-16bit = driver memetakan 1555/565/4444; SA retail tidak menyertak
 compat-note-c555 = driver memetakan C555 ke X1R5G5B5; retail tidak menyertakan satu pun
 compat-note-lum8 = driver memetakan LUM8 ke D3DFMT_L8; retail tidak menyertakan satu pun
 compat-note-sa-a8l8 = D3D9 membawa A8L8 dan dekoder independen mendukungnya; pemetaan nibble RW biasa belum diverifikasi
-compat-note-iii-pal = III retail: 96,5% PAL8; VC retail: 27 raster - diterima tetapi jarang
+compat-note-iii-pal = III retail: 96,5% PAL8; VC retail: 27 raster — diterima tetapi jarang
 compat-note-vc-dxt1 = dialek dunia VC retail: DXT1 dengan D3D8 pp=1; nibble raster usang
 compat-note-iii-dxt1 = III retail tidak menyertakan raster terkompresi (0/15.372); perangkat keras D3D8 mendukung DXT1
 compat-note-vc-dxt3 = dialek alfa VC retail: DXT3 dengan D3D8 pp=3 (1.149 raster)
@@ -886,7 +887,7 @@ compat-choice-sa-pal8 = mengkuantisasi warna; SA retail tidak menyertakan raster
 
 ## Conversion warnings and errors
 
-compat-warn-alpha-discarded = { $source } memiliki alfa, tetapi { $format } tidak dapat menyimpannya - kanal alfa akan dibuang.
+compat-warn-alpha-discarded = { $source } memiliki alfa, tetapi { $format } tidak dapat menyimpannya — kanal alfa akan dibuang.
 compat-warn-dxt-lossy = Kompresi { $format } menyebabkan kehilangan; pratinjau menampilkan hasil terkode.
 compat-warn-palette-exact = { $format } menyimpan gambar dengan tepat ({ $colors } warna).
 compat-warn-palette-quantize = Warna akan dikuantisasi menjadi paling banyak { $cap } entri.
@@ -904,7 +905,7 @@ compat-error-unknown-target = target game tidak dikenal “{ $id }”
 
 ## Save check: container conventions
 
-compat-container-v2-expects-v1 = wadah IMG v2, tetapi { $game } mengharapkan IMG v1 - game tidak akan melihat berkas ini.
+compat-container-v2-expects-v1 = wadah IMG v2, tetapi { $game } mengharapkan IMG v1 — game tidak akan melihat berkas ini.
 compat-container-v1-sa = wadah IMG v1; San Andreas retail memakai IMG v2 (v1 hanya dimuat jika tercantum di gta.dat).
 compat-container-xbox = pengemasan Xbox 360; { $game } mengharapkan wadah PC.
 

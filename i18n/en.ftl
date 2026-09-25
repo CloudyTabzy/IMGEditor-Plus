@@ -1009,6 +1009,8 @@ verdict-convertible-lossless = convertible (lossless)
 verdict-convertible-lossy = convertible (lossy)
 verdict-unsupported = unsupported
 verdict-untested = untested
+# One entry of a verdict tally, joined with commas: "native 12, untested 1".
+verdict-count = { $verdict } { $count }
 
 ## Compatibility evidence notes
 ## These cite measurements of the retail games. Keep format names

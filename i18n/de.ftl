@@ -172,7 +172,7 @@ new-txd-name-placeholder = Texturname
 new-txd-confirm = Zum Archiv hinzufügen
 dialog-bulk-title = In den Zieldialekt konvertieren
 bulk-entry =
-    { $entry } - { $count ->
+    { $entry } – { $count ->
         [one] { $count } Textur
        *[other] { $count } Texturen
     } -> { $formats }
@@ -391,8 +391,8 @@ sort-keys-active =
 sort-preview-heading = Live-Vorschau (erste 10 Einträge)
 sort-preview-empty = (keine Einträge im aktuellen Archiv)
 sort-apply-preset = Voreinstellung anwenden…
-sort-ascending-short = Auf ▲
-sort-descending-short = Ab ▼
+sort-ascending-short = Aufst. ▲
+sort-descending-short = Abst. ▼
 sort-key-name = Name
 sort-key-extension = Erweiterung
 sort-key-type = Typ
@@ -964,8 +964,8 @@ inspect-bytes =
        *[other] { $count } Bytes
     }
 inspect-col-unknown = Unbekannte Kollision
-inspect-endian-big = Big
-inspect-endian-little = Little
+inspect-endian-big = Big-Endian
+inspect-endian-little = Little-Endian
 inspect-nif-truncated = NIF (abgeschnitten)
 inspect-lines-value = { $lines } ({ $nonempty } nicht leer)
 inspect-format-scm = GTA-Skript (main.scm)
@@ -1004,6 +1004,7 @@ verdict-convertible-lossless = konvertierbar (verlustfrei)
 verdict-convertible-lossy = konvertierbar (verlustbehaftet)
 verdict-unsupported = nicht unterstützt
 verdict-untested = ungeprüft
+verdict-count = { $verdict }: { $count }
 
 ## Compatibility evidence notes
 ## These cite measurements of the retail games. Keep format names
@@ -1113,7 +1114,7 @@ compat-warn-palette-exact =
 compat-warn-palette-quantize = Die Farben werden auf höchstens { $cap } Einträge quantisiert.
 compat-warn-stream-budget = { $width }x{ $height } überschreitet das 1024-px-Streaming-Budget von SA; das Spiel streamt es möglicherweise nicht.
 # $verdict is one of the verdict-* labels above.
-compat-warn-verdict = { $format } ist { $verdict } für { $game }: { $note }
+compat-warn-verdict = { $format } für { $game }: { $verdict } – { $note }
 compat-error-image-format = unbekanntes Bildformat: { $error }
 compat-error-image-kind = { $kind }-Bilder werden nicht unterstützt; verwende PNG, DDS, BMP oder TGA
 compat-error-decode = { $label }-Dekodierung fehlgeschlagen: { $error }

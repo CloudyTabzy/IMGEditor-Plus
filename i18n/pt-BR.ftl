@@ -85,6 +85,7 @@ menu-language-pseudo = Pseudolocalização (teste de layout)
 # Shown under the entry name when the right-click extends a selection.
 context-more-selected =
     { $count ->
+        [0] +{ $count } selecionados
         [one] +{ $count } selecionado
        *[other] +{ $count } selecionados
     }
@@ -163,7 +164,7 @@ preview-after = Depois (codificado)
 dialog-target = Destino: { $target }
 dialog-target-archive = Destino: { $target } · { $archive }
 dialog-replace-title = Substituir textura
-replace-summary = Substituindo “{ $texture }” - origem: { $source } ({ $width }x{ $height })
+replace-summary = Substituindo “{ $texture }” — origem: { $source } ({ $width }x{ $height })
 replace-override-note = Armazenada na memória como substituição; o arquivo só muda quando você salvar.
 replace-confirm = Substituir textura
 dialog-new-txd-title = Importar imagem como TXD
@@ -172,26 +173,31 @@ new-txd-name-placeholder = nome da textura
 new-txd-confirm = Adicionar ao arquivo
 dialog-bulk-title = Converter para o dialeto do destino
 bulk-entry =
-    { $entry } - { $count ->
+    { $entry } — { $count ->
+        [0] { $count } texturas
         [one] { $count } textura
        *[other] { $count } texturas
     } -> { $formats }
 bulk-more-entries =
     { $count ->
+        [0] … e mais { $count } entradas
         [one] … e mais { $count } entrada
        *[other] … e mais { $count } entradas
     }
 bulk-summary =
     { $textures ->
+        [0] { $textures } texturas
         [one] { $textures } textura
        *[other] { $textures } texturas
     } em { $entries ->
+        [0] { $entries } entradas
         [one] { $entries } entrada
        *[other] { $entries } entradas
     } de { $source } serão recodificadas para o destino.
 bulk-skipped = { $skipped } já nativas (ignoradas), { $failed } ilegíveis (ignoradas).
 bulk-ignored =
     { $count ->
+        [0] { $count } das entradas selecionadas não são contêineres TXD e permanecerão intactas.
         [one] { $count } das entradas selecionadas não é um contêiner TXD e permanecerá intacta.
        *[other] { $count } das entradas selecionadas não são contêineres TXD e permanecerão intactas.
     }
@@ -203,11 +209,13 @@ dialog-compare-title = Comparar com lista
 compare-manifest = Manifesto: { $path }
 compare-archive =
     Arquivo: { $archive } · { $count ->
+        [0] { $count } entradas no arquivo
         [one] { $count } entrada no arquivo
        *[other] { $count } entradas no arquivo
     }
 compare-stats =
     { $names ->
+        [0] { $names } nomes no manifesto
         [one] { $names } nome no manifesto
        *[other] { $names } nomes no manifesto
     } ({ $unique } únicos) · { $matched } correspondentes · { $missing } ausentes ({ $missing-unique } únicos)
@@ -215,11 +223,13 @@ compare-case-sensitive = Diferenciar maiúsculas e minúsculas
 compare-show-archive-only = Mostrar entradas exclusivas do arquivo
 compare-duplicate-lines =
     { $count ->
+        [0] { $count } linhas duplicadas no manifesto
         [one] { $count } linha duplicada no manifesto
        *[other] { $count } linhas duplicadas no manifesto
     }
 compare-blank-lines =
     { $count ->
+        [0] { $count } linhas em branco ignoradas
         [one] { $count } linha em branco ignorada
        *[other] { $count } linhas em branco ignoradas
     }
@@ -227,6 +237,7 @@ compare-missing-heading = Ausentes no arquivo ({ $count })
 compare-no-missing = Nenhuma entrada ausente encontrada.
 compare-more-missing =
     { $count ->
+        [0] … e mais { $count } nomes ausentes
         [one] … e mais { $count } nome ausente
        *[other] … e mais { $count } nomes ausentes
     }
@@ -234,6 +245,7 @@ compare-archive-only-heading = Entradas exclusivas do arquivo ({ $count })
 compare-no-archive-only = Nenhuma entrada exclusiva do arquivo encontrada.
 compare-more-archive-only =
     { $count ->
+        [0] … e mais { $count } nomes exclusivos do arquivo
         [one] … e mais { $count } nome exclusivo do arquivo
        *[other] … e mais { $count } nomes exclusivos do arquivo
     }
@@ -253,7 +265,7 @@ save-check-summary =
         [0] { $entries } entradas
         [one] { $entries } entrada
        *[other] { $entries } entradas
-    } - verificado em relação a { $target }.
+    } — verificado em relação a { $target }.
 save-check-counts = { $fine } nativas/compatíveis · { $convertible } conversíveis (sem perdas) · { $incompatible } incompatíveis · { $unknown } desconhecidas
 # $note is a technical detail and stays in English.
 save-check-container = Contêiner: { $note }
@@ -261,11 +273,13 @@ save-check-anomaly = { $code }: { $count } (ex.: { $example })
 save-check-broken-headers = Cabeçalhos corrompidos (corrigíveis sem recodificar):
 save-check-warnings =
     { $count ->
+        [0] { $count } anomalias de nível de aviso (reportadas, não bloqueantes).
         [one] { $count } anomalia de nível de aviso (reportada, não bloqueante).
        *[other] { $count } anomalias de nível de aviso (reportadas, não bloqueantes).
     }
 save-check-repair =
     Corrigir cabeçalhos DXT inconsistentes antes de salvar ({ $count ->
+        [0] { $count } relatórios
         [one] { $count } relatório
        *[other] { $count } relatórios
     }, sem perdas)
@@ -281,6 +295,7 @@ unsaved-archive = “{ $archive }” tem alterações não salvas.
 unsaved-archive-note = Fechar sem salvar descarta essas alterações; o arquivo no disco permanece intacto.
 unsaved-window =
     { $count ->
+        [0] { $count } arquivos têm alterações não salvas: { $archives }
         [one] { $count } arquivo tem alterações não salvas: { $archives }
        *[other] { $count } arquivos têm alterações não salvas: { $archives }
     }
@@ -291,19 +306,22 @@ unsaved-discard-and-quit = Descartar alterações e sair
 
 dialog-import-check-title = Verificação de importação
 import-check-offender = { $name }: { $verdict }
-import-check-offender-note = { $name }: { $verdict } - { $note }
+import-check-offender-note = { $name }: { $verdict } — { $note }
 import-check-file =
     { $count ->
+        [0] { $count } texturas
         [one] { $count } textura
        *[other] { $count } texturas
     }: { $detail }
 import-check-more =
     { $count ->
+        [0] …e mais { $count } arquivos sinalizados.
         [one] …e mais { $count } arquivo sinalizado.
        *[other] …e mais { $count } arquivos sinalizados.
     }
 import-check-summary =
     Há decisões pendentes para { $target }: { $flagged } de { $total ->
+        [0] { $total } arquivos
         [one] { $total } arquivo
        *[other] { $total } arquivos
     } — { $incompatible ->
@@ -311,7 +329,7 @@ import-check-summary =
         [one] { $incompatible } textura incompatível
        *[other] { $incompatible } texturas incompatíveis
     } e { $unknown } desconhecidas.
-import-check-note = As importações são gravadas como estão de qualquer forma - o formato só importa se o jogo precisar carregar essas texturas.
+import-check-note = As importações são gravadas como estão de qualquer forma — o formato só importa se o jogo precisar carregar essas texturas.
 import-check-import-anyway = Importar mesmo assim
 import-check-cancel = Cancelar importação
 
@@ -329,11 +347,13 @@ folder-import-top-level = Apenas os arquivos diretamente dentro desta pasta são
 folder-import-no-duplicates = Nenhum nome duplicado detectado.
 folder-import-duplicates =
     { $count ->
+        [0] { $count } nomes duplicados detectados. Escolha como lidar com eles.
         [one] { $count } nome duplicado detectado. Escolha como lidar com ele.
        *[other] { $count } nomes duplicados detectados. Escolha como lidar com eles.
     }
 folder-import-skipped =
     { $count ->
+        [0] { $count } itens não puderam ser inspecionados e serão ignorados.
         [one] { $count } item não pôde ser inspecionado e será ignorado.
        *[other] { $count } itens não puderam ser inspecionados e serão ignorados.
     }
@@ -368,13 +388,13 @@ validator-use-as-target = Usar { $game } como destino
 validator-already-target = (já é o destino)
 validator-highlight-rows = Destacar linhas
 legend-native = nativo
-legend-native-description = Criado por este motor - nenhuma ação necessária.
+legend-native-description = Criado por este motor — nenhuma ação necessária.
 legend-supported = compatível / conversível
 legend-supported-description = Carrega, mas não é o dialeto de dados do jogo; uma conversão sem perdas pode ser oferecida.
 legend-lossy = conversão com perdas
 legend-lossy-description = Só pode ser usado após uma conversão que altera pixels (compressão ou quantização).
 legend-unknown = desconhecido
-legend-unknown-description = Sem evidências em nenhum sentido - não há registro de incompatibilidade. Use com cuidado.
+legend-unknown-description = Sem evidências em nenhum sentido — não há registro de incompatibilidade. Use com cuidado.
 legend-incompatible = incompatível
 legend-incompatible-description = O motor selecionado não consegue usar este formato.
 
@@ -389,14 +409,15 @@ sort-add-key = + Adicionar critério
 sort-add-key-max = + Adicionar critério (limite atingido)
 sort-keys-active =
     { $active } de { $total ->
+        [0] { $total } critérios ativos
         [one] { $total } critério ativo
        *[other] { $total } critérios ativos
     }
 sort-preview-heading = Pré-visualização ao vivo (10 primeiras entradas)
 sort-preview-empty = (nenhuma entrada no arquivo atual)
 sort-apply-preset = Aplicar predefinição…
-sort-ascending-short = Asc ▲
-sort-descending-short = Desc ▼
+sort-ascending-short = Cresc. ▲
+sort-descending-short = Decresc. ▼
 sort-key-name = Nome
 sort-key-extension = Extensão
 sort-key-type = Tipo
@@ -460,6 +481,7 @@ toast-packed-nothing = Arquivo compactado — nenhum espaço recuperado ({ $size
 toast-pack-failed = Falha ao compactar: { $error }
 toast-headers-repaired =
     { $count ->
+        [0] { $count } cabeçalhos de textura corrigidos; salvando.
         [one] { $count } cabeçalho de textura corrigido; salvando.
        *[other] { $count } cabeçalhos de textura corrigidos; salvando.
     }
@@ -488,16 +510,19 @@ toast-animation-failed = Falha ao carregar a animação: { $error }
 toast-3d-load-failed = Falha ao carregar em 3D: { $error }
 anim-summary-ifp =
     { $animation } em { $model } ({ $clips ->
+        [0] { $clips } clipes
         [one] { $clips } clipe
        *[other] { $clips } clipes
     }, GTA IFP)
 anim-summary-agr =
     { $animation } em { $model } ({ $clips ->
+        [0] { $clips } clipes
         [one] { $clips } clipe
        *[other] { $clips } clipes
     })
 anim-summary-agr-named =
     { $animation } em { $model } ({ $clips ->
+        [0] { $clips } clipes
         [one] { $clips } clipe
        *[other] { $clips } clipes
     }, nomes do HXD)
@@ -514,28 +539,31 @@ toast-import-busy = Uma importação já está sendo preparada.
 toast-preparing-import = Preparando importação…
 toast-txd-name-required = Dê um nome ao novo TXD.
 toast-entry-exists = Já existe uma entrada chamada “{ $name }”.
-toast-entry-added = “{ $name }” adicionada - salve o arquivo para gravar.
+toast-entry-added = “{ $name }” adicionada — salve o arquivo para gravar.
 toast-set-target-first = Defina primeiro um jogo de destino (Validar texturas).
 toast-select-entries-to-convert = Selecione primeiro as entradas a converter.
 toast-archive-changed-planning = O arquivo mudou durante o planejamento da conversão; tente novamente.
-toast-convert-only-txd = Apenas entradas TXD podem ser convertidas - nenhuma das entradas selecionadas é um contêiner de texturas TXD.
+toast-convert-only-txd = Apenas entradas TXD podem ser convertidas — nenhuma das entradas selecionadas é um contêiner de texturas TXD.
 toast-convert-all-native = Todas as texturas selecionadas já são nativas para o destino.
 toast-archive-changed-after-plan = O arquivo mudou depois que esta conversão foi planejada; tente novamente.
 toast-archive-changed-during = O arquivo mudou durante a conversão; resultados obsoletos foram descartados.
 toast-converted =
     { $count ->
-        [one] { $count } entrada convertida - salve o arquivo para gravá-la.
-       *[other] { $count } entradas convertidas - salve o arquivo para gravá-las.
+        [0] { $count } entradas convertidas — salve o arquivo para gravá-las.
+        [one] { $count } entrada convertida — salve o arquivo para gravá-la.
+       *[other] { $count } entradas convertidas — salve o arquivo para gravá-las.
     }
 toast-conversion-failed = Falha na conversão: { $error }
 toast-no-decoded-textures = Nenhuma textura decodificada para exportar.
 toast-decoded =
     { $count ->
+        [0] { $count } texturas decodificadas
         [one] { $count } textura decodificada
        *[other] { $count } texturas decodificadas
     }
 toast-decoded-not-retained =
     { $count ->
+        [0] { $count } texturas decodificadas, mas a pré-visualização não pôde ser mantida
         [one] { $count } textura decodificada, mas a pré-visualização não pôde ser mantida
        *[other] { $count } texturas decodificadas, mas a pré-visualização não pôde ser mantida
     }
@@ -548,13 +576,15 @@ toast-read-failed = Falha ao ler { $name }: { $error }
 toast-import-cancelled = Importação cancelada.
 toast-imported =
     { $count ->
+        [0] { $count } arquivos importados.
         [one] { $count } arquivo importado.
        *[other] { $count } arquivos importados.
     }
 toast-imported-unchecked =
     { $count ->
-        [one] { $count } arquivo importado - nenhum destino de validação definido, os formatos não foram verificados.
-       *[other] { $count } arquivos importados - nenhum destino de validação definido, os formatos não foram verificados.
+        [0] { $count } arquivos importados — nenhum destino de validação definido, os formatos não foram verificados.
+        [one] { $count } arquivo importado — nenhum destino de validação definido, os formatos não foram verificados.
+       *[other] { $count } arquivos importados — nenhum destino de validação definido, os formatos não foram verificados.
     }
 toast-import-failed = Falha ao importar: { $error }
 toast-no-files-in-folder = Nenhum arquivo comum encontrado em { $folder }.
@@ -565,12 +595,14 @@ toast-folder-import-cancelled = Importação da pasta cancelada: { $imported } i
 toast-see-log = Consulte o log do arquivo para mais detalhes.
 toast-exported =
     { $count ->
+        [0] { $count } entradas exportadas.
         [one] { $count } entrada exportada.
        *[other] { $count } entradas exportadas.
     }
 toast-export-failed = Falha ao exportar: { $error }
 toast-entry-list-exported =
     { $count ->
+        [0] { $count } nomes de entrada exportados para { $path }.
         [one] { $count } nome de entrada exportado para { $path }.
        *[other] { $count } nomes de entrada exportados para { $path }.
     }
@@ -579,6 +611,7 @@ toast-compare-failed = Falha na comparação da lista de entradas: { $error }
 toast-no-missing-to-copy = Não há entradas ausentes para copiar.
 toast-copied-missing =
     { $count ->
+        [0] { $count } nomes de entradas ausentes copiados.
         [one] { $count } nome de entrada ausente copiado.
        *[other] { $count } nomes de entradas ausentes copiados.
     }
@@ -591,6 +624,7 @@ toast-copied-name = Nome copiado: { $name }
 toast-drag-cancelled = Arrasto cancelado.
 toast-moved-entries =
     { $count ->
+        [0] { $count } entradas movidas para o arquivo #{ $archive }.
         [one] { $count } entrada movida para o arquivo #{ $archive }.
        *[other] { $count } entradas movidas para o arquivo #{ $archive }.
     }
@@ -600,7 +634,7 @@ toast-association-removed = A associação de .img/.dir foi removida.
 toast-association-failed = Falha na associação de arquivos: { $error }
 toast-validation-cancelled = Validação cancelada.
 toast-validation-failed = Falha na validação: { $error }
-toast-no-compat-issues = Nenhum problema de compatibilidade encontrado - { $summary }
+toast-no-compat-issues = Nenhum problema de compatibilidade encontrado — { $summary }
 # $verdicts is the per-verdict count list, e.g. "native 12, untested 1".
 validation-summary =
     Validação para { $game }: { $txds ->
@@ -631,18 +665,21 @@ log-viewer-closed = Visualizador 3D fechado
 log-external-viewer = Abrindo visualizador 3D externo para { $name }
 log-exported =
     { $count ->
+        [0] { $count } entradas exportadas
         [one] { $count } entrada exportada
        *[other] { $count } entradas exportadas
     }
 log-export-failed = Falha ao exportar: { $error }
 log-entry-list-exported =
     { $count ->
+        [0] Lista de entradas exportada ({ $count } nomes) para { $path }
         [one] Lista de entradas exportada ({ $count } nome) para { $path }
        *[other] Lista de entradas exportada ({ $count } nomes) para { $path }
     }
 log-compat-check = Verificação de compatibilidade: { $summary }
 log-decoded =
     { $count ->
+        [0] { $count } pré-visualizações de textura decodificadas
         [one] { $count } pré-visualização de textura decodificada
        *[other] { $count } pré-visualizações de textura decodificadas
     }
@@ -651,6 +688,7 @@ log-texture-export-failed = Falha ao exportar { $model }: { $error }
 recent-exported = Exportação: { $what }
 recent-exported-files =
     { $count ->
+        [0] { $count } arquivos
         [one] { $count } arquivo
        *[other] { $count } arquivos
     }
@@ -676,7 +714,7 @@ pro-tip-bulk-convert = Converter seleção para o dialeto do destino recodifica 
 pro-tip-entry-lists = Ctrl+L exporta uma lista de entradas e Ctrl+P compara uma com o arquivo para encontrar nomes ausentes.
 toast-no-dff-to-animate = Nenhum modelo DFF encontrado neste arquivo para animar.
 toast-replace-needs-txd = A substituição funciona em entradas TXD; essa entrada não é uma.
-toast-texture-replaced = Textura substituída - salve o arquivo para gravá-la.
+toast-texture-replaced = Textura substituída — salve o arquivo para gravá-la.
 toast-bully-texture-writing = A gravação de texturas do Bully (Gamebryo) ainda não é compatível.
 toast-archive-file-missing = O arquivo não existe mais. Use Salvar como… primeiro.
 toast-folder-scan-target-changed = O arquivo de destino mudou enquanto a pasta era verificada.
@@ -686,6 +724,7 @@ toast-drop-needs-archive = Abra um arquivo primeiro para soltar arquivos que nã
 toast-no-game-root = Não foi possível determinar a pasta do jogo a partir do caminho do arquivo.
 toast-textures-exported =
     { $count ->
+        [0] { $count } texturas exportadas.
         [one] { $count } textura exportada.
        *[other] { $count } texturas exportadas.
     }
@@ -880,6 +919,7 @@ texture-none-decodable = Nenhuma textura decodificável neste contêiner.
 texture-animation-model = Modelo de animação { $entry } — troque de modelo no painel 3D
 texture-export =
     { $count ->
+        [0] Exportar texturas ({ $count })
         [one] Exportar textura ({ $count })
        *[other] Exportar texturas ({ $count })
     }
@@ -934,11 +974,13 @@ log-archive-created = Arquivo criado
 log-archive-saved = Arquivo salvo
 log-archive-packed =
     { $entries ->
+        [0] Arquivo compactado: { $entries } entradas, { $reclaimed } recuperados
         [one] Arquivo compactado: { $entries } entrada, { $reclaimed } recuperados
        *[other] Arquivo compactado: { $entries } entradas, { $reclaimed } recuperados
     }
 log-imported-entries =
     { $count ->
+        [0] { $count } entradas importadas
         [one] { $count } entrada importada
        *[other] { $count } entradas importadas
     }
@@ -975,12 +1017,13 @@ inspect-rw-uv-animation = Animação de UV
 inspect-rw-stream = Fluxo RenderWare
 inspect-bytes =
     { $count ->
+        [0] { $count } bytes
         [one] { $count } byte
        *[other] { $count } bytes
     }
 inspect-col-unknown = Colisão desconhecida
-inspect-endian-big = Big
-inspect-endian-little = Little
+inspect-endian-big = Big-endian
+inspect-endian-little = Little-endian
 inspect-nif-truncated = NIF (truncado)
 inspect-lines-value = { $lines } ({ $nonempty } não vazias)
 inspect-format-scm = Script do GTA (main.scm)
@@ -998,6 +1041,7 @@ inspect-texture-count =
 texture-export-none = Nenhuma textura incorporada encontrada
 texture-export-done =
     { $count ->
+        [0] { $count } texturas incorporadas exportadas
         [one] { $count } textura incorporada exportada
        *[other] { $count } texturas incorporadas exportadas
     }
@@ -1020,6 +1064,7 @@ verdict-convertible-lossless = conversível (sem perdas)
 verdict-convertible-lossy = conversível (com perdas)
 verdict-unsupported = incompatível
 verdict-untested = não verificado
+verdict-count = { $verdict }: { $count }
 
 ## Compatibility evidence notes
 ## These cite measurements of the retail games. Keep format names
@@ -1080,7 +1125,7 @@ compat-note-sa-16bit = o driver mapeia 1555/565/4444; o SA original não inclui 
 compat-note-c555 = o driver mapeia C555 para X1R5G5B5; o original não inclui nenhum
 compat-note-lum8 = o driver mapeia LUM8 para D3DFMT_L8; o original não inclui nenhum
 compat-note-sa-a8l8 = o D3D9 carrega A8L8 e decodificadores independentes são compatíveis; o mapeamento nibble comum do RW não foi verificado
-compat-note-iii-pal = III original: 96,5% PAL8; VC original: 27 rasters - aceito, mas raro
+compat-note-iii-pal = III original: 96,5% PAL8; VC original: 27 rasters — aceito, mas raro
 compat-note-vc-dxt1 = dialeto do mundo do VC original: DXT1 com D3D8 pp=1; o nibble do raster está obsoleto
 compat-note-iii-dxt1 = o III original não inclui rasters comprimidos (0/15.372); o hardware D3D8 é compatível com DXT1
 compat-note-vc-dxt3 = dialeto alfa do VC original: DXT3 com D3D8 pp=3 (1.149 rasters)
@@ -1119,10 +1164,11 @@ compat-choice-sa-pal8 = quantiza as cores; o SA original não inclui nenhum rast
 
 ## Conversion warnings and errors
 
-compat-warn-alpha-discarded = { $source } tem alfa, mas { $format } não consegue armazená-lo - o canal alfa será descartado.
+compat-warn-alpha-discarded = { $source } tem alfa, mas { $format } não consegue armazená-lo — o canal alfa será descartado.
 compat-warn-dxt-lossy = A compressão { $format } tem perdas; a pré-visualização mostra o resultado codificado.
 compat-warn-palette-exact =
     { $colors ->
+        [0] { $format } armazena a imagem exatamente ({ $colors } cores).
         [one] { $format } armazena a imagem exatamente ({ $colors } cor).
        *[other] { $format } armazena a imagem exatamente ({ $colors } cores).
     }
@@ -1141,7 +1187,7 @@ compat-error-unknown-target = destino de jogo desconhecido “{ $id }”
 
 ## Save check: container conventions
 
-compat-container-v2-expects-v1 = contêiner IMG v2, mas { $game } espera IMG v1 - o jogo não verá esses arquivos.
+compat-container-v2-expects-v1 = contêiner IMG v2, mas { $game } espera IMG v1 — o jogo não verá esses arquivos.
 compat-container-v1-sa = contêiner IMG v1; o San Andreas original usa IMG v2 (o v1 só carrega quando listado no gta.dat).
 compat-container-xbox = empacotamento Xbox 360; { $game } espera um contêiner de PC.
 

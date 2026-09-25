@@ -81,11 +81,7 @@ menu-language-pseudo = Pseudolocalización (prueba de diseño)
 
 ## Entry context menu
 
-context-more-selected =
-    { $count ->
-        [one] +{ $count } seleccionado más
-       *[other] +{ $count } seleccionados más
-    }
+context-more-selected = +{ $count } más en la selección
 context-play-animation = Reproducir animación
 context-open-3d = Abrir en el visor 3D
 context-open-external = Abrir en un visor externo
@@ -134,7 +130,7 @@ about-visit-repository = Visitar el repositorio
 ## Welcome dialog
 
 dialog-welcome-title = Bienvenida
-welcome-heading = Bienvenido a { $app } v{ $version }
+welcome-heading = Te damos la bienvenida a { $app } v{ $version }
 welcome-tagline = Un editor de archivos IMG de GTA para III, VC, San Andreas y Bully SE.
 welcome-dont-show = No volver a mostrar este mensaje
 welcome-disable-updates = Desactivar la búsqueda de actualizaciones
@@ -160,7 +156,7 @@ preview-after = Después (codificada)
 dialog-target = Destino: { $target }
 dialog-target-archive = Destino: { $target } · { $archive }
 dialog-replace-title = Reemplazar textura
-replace-summary = Reemplazando '{ $texture }' - origen: { $source } ({ $width }x{ $height })
+replace-summary = Reemplazando «{ $texture }» (origen: { $source }, { $width }x{ $height })
 replace-override-note = Se guarda en memoria como sustitución; el archivo cambia al guardar.
 replace-confirm = Reemplazar textura
 dialog-new-txd-title = Importar imagen como TXD
@@ -169,7 +165,7 @@ new-txd-name-placeholder = nombre de la textura
 new-txd-confirm = Añadir al archivo
 dialog-bulk-title = Convertir al dialecto del destino
 bulk-entry =
-    { $entry } - { $count ->
+    { $entry } — { $count ->
         [one] { $count } textura
        *[other] { $count } texturas
     } -> { $formats }
@@ -245,10 +241,10 @@ save-check-summary =
     { $textures ->
         [one] { $textures } textura
        *[other] { $textures } texturas
-    }, { $entries ->
+    } y { $entries ->
         [one] { $entries } entrada
        *[other] { $entries } entradas
-    } - comprobado para { $target }.
+    } comprobadas para { $target }.
 save-check-counts = { $fine } nativas/compatibles · { $convertible } convertibles (sin pérdida) · { $incompatible } incompatibles · { $unknown } desconocidas
 save-check-container = Contenedor: { $note }
 save-check-anomaly = { $code }: { $count } (p. ej. { $example })
@@ -271,7 +267,7 @@ save-check-save-anyway = Guardar de todos modos
 ## Unsaved changes dialog
 
 dialog-unsaved-title = Cambios sin guardar
-unsaved-archive = '{ $archive }' tiene cambios sin guardar.
+unsaved-archive = «{ $archive }» tiene cambios sin guardar.
 unsaved-archive-note = Si cierras sin guardar, se descartarán; el archivo en disco no se modifica.
 unsaved-window =
     { $count ->
@@ -285,7 +281,7 @@ unsaved-discard-and-quit = Descartar cambios y salir
 
 dialog-import-check-title = Comprobación de importación
 import-check-offender = { $name }: { $verdict }
-import-check-offender-note = { $name }: { $verdict } - { $note }
+import-check-offender-note = { $name }: { $verdict } — { $note }
 import-check-file =
     { $count ->
         [one] { $count } textura
@@ -304,7 +300,7 @@ import-check-summary =
         [one] { $incompatible } textura incompatible
        *[other] { $incompatible } texturas incompatibles
     }, { $unknown } desconocidas.
-import-check-note = La importación es literal en ambos casos; el formato solo importa si el juego debe cargar estas texturas.
+import-check-note = La importación se hace tal cual en ambos casos; el formato solo importa si el juego debe cargar estas texturas.
 import-check-import-anyway = Importar de todos modos
 import-check-cancel = Cancelar importación
 
@@ -373,15 +369,15 @@ legend-incompatible-description = El motor seleccionado no puede usar este forma
 
 dialog-sort-title = Ordenar por — { $archive }
 dialog-sort-title-no-archive = Ordenar por — (ningún archivo abierto)
-sort-empty = Aún no hay claves. Añade una abajo para empezar a ordenar.
+sort-empty = Aún no hay criterios. Añade uno abajo para empezar a ordenar.
 sort-intro = Define reglas de prioridad y aplícalas al archivo actual.
-sort-select-key = Elegir clave…
-sort-add-key = + Añadir clave
-sort-add-key-max = + Añadir clave (máximo alcanzado)
+sort-select-key = Elegir criterio…
+sort-add-key = + Añadir criterio
+sort-add-key-max = + Añadir criterio (máximo alcanzado)
 sort-keys-active =
     { $active } de { $total ->
-        [one] { $total } clave activa
-       *[other] { $total } claves activas
+        [one] { $total } criterio activo
+       *[other] { $total } criterios activos
     }
 sort-preview-heading = Vista previa en vivo (primeras 10 entradas)
 sort-preview-empty = (no hay entradas en el archivo actual)
@@ -503,8 +499,8 @@ toast-replace-failed = No se pudo reemplazar: { $error }
 toast-import-busy = Ya se está preparando una importación.
 toast-preparing-import = Preparando la importación…
 toast-txd-name-required = Ponle un nombre al nuevo TXD.
-toast-entry-exists = Ya existe una entrada llamada '{ $name }'.
-toast-entry-added = Se añadió '{ $name }'; guarda el archivo para escribirla.
+toast-entry-exists = Ya existe una entrada llamada «{ $name }».
+toast-entry-added = Se añadió «{ $name }»; guarda el archivo para escribirla.
 toast-set-target-first = Elige primero un juego de destino (Validar texturas).
 toast-select-entries-to-convert = Selecciona primero las entradas que quieres convertir.
 toast-archive-changed-planning = El archivo cambió mientras se preparaba la conversión; vuelve a intentarlo.
@@ -649,7 +645,7 @@ pro-tip-autoscroll = Haz clic central en la lista de entradas para desplazarte c
 pro-tip-tab-keys = Pulsa 1, 2 o 3 para cambiar a Exportar, Vista 3D o Textura.
 pro-tip-close-tab = Haz clic central en la pestaña de un archivo para cerrarla rápidamente.
 pro-tip-uv-overlay = La superposición UV de las texturas está disponible cuando el modelo seleccionado aporta la geometría correspondiente.
-pro-tip-wire-grid = En la vista 3D, la malla muestra las aristas de los triángulos y la cuadrícula del suelo ayuda a juzgar la escala.
+pro-tip-wire-grid = En la vista 3D, el modo alámbrico muestra las aristas de los triángulos y la cuadrícula del suelo ayuda a juzgar la escala.
 pro-tip-save-keys = Usa Ctrl+S para guardar rápido y Ctrl+Shift+S para guardar el archivo con otro nombre.
 pro-tip-unique-exports = Las texturas exportadas reciben nombres únicos automáticamente, así que las exportaciones por lotes nunca se sobrescriben.
 pro-tip-agr = Editar → Cargar animación .agr reproduce una animación en la vista 3D; Espacio pausa o reanuda y ←/→ avanzan fotograma a fotograma.
@@ -661,7 +657,7 @@ toast-no-dff-to-animate = No se encontró ningún modelo DFF en este archivo que
 toast-replace-needs-txd = El reemplazo funciona con entradas TXD, y esa entrada no lo es.
 toast-texture-replaced = Textura reemplazada; guarda el archivo para escribirla.
 toast-bully-texture-writing = Aún no se admite escribir texturas de Bully (Gamebryo).
-toast-archive-file-missing = El archivo ya no existe en el disco. Usa primero Guardar como…
+toast-archive-file-missing = El archivo ya no existe en el disco. Usa primero «Guardar como…».
 toast-folder-scan-target-changed = El archivo de destino cambió mientras se analizaba la carpeta.
 toast-folder-import-discarded = Se descartó la importación de la carpeta porque el archivo de destino cambió.
 toast-compare-discarded = Se descartó la comparación porque el archivo cambió; vuelve a intentarlo.
@@ -676,7 +672,7 @@ toast-textures-export-failed = No se pudieron exportar las texturas: { $error }
 error-write-file = No se pudo escribir { $path }: { $error }
 error-read-entry = No se pudo leer la entrada: { $error }
 error-texture-decode = No se pudo decodificar la textura: { $error }
-error-texture-preview-unsupported = La vista previa de texturas admite entradas TXD y NFT; '{ $entry }' no es un contenedor de texturas compatible.
+error-texture-preview-unsupported = La vista previa de texturas admite entradas TXD y NFT; «{ $entry }» no es un contenedor de texturas compatible.
 
 ## Entry table and search
 
@@ -777,7 +773,7 @@ viewer-reset = Restablecer vista
 viewer-reset-tip = Reencuadra la cámara en el modelo. Atajo: R
 viewer-clear = Borrar
 viewer-clear-tip = Descarta la escena cargada
-viewer-wireframe = Malla
+viewer-wireframe = Alámbrico
 viewer-wireframe-tip = Muestra las aristas de los triángulos sobre el modelo sombreado.
 viewer-cull = Ocultar caras traseras
 viewer-cull-tip = Oculta los triángulos orientados hacia atrás para revisar el orden de las caras.
@@ -976,15 +972,15 @@ texture-export-done =
        *[other] Se exportaron { $count } texturas incrustadas
     }
 texture-export-partial = Texturas exportadas: { $written }; errores: { $failures }
-texture-export-no-nft = No se encontró ningún NFT para '{ $name }'
+texture-export-no-nft = No se encontró ningún NFT para «{ $name }»
 
 ## Manifest comparison errors
 
-compare-manifest-inspect = No se pudo inspeccionar el manifiesto '{ $path }': { $error }
-compare-manifest-too-large = El manifiesto '{ $path }' es demasiado grande ({ $size }; el límite es { $limit }).
-compare-manifest-read = No se pudo leer el manifiesto '{ $path }': { $error }
-compare-manifest-grew = El manifiesto '{ $path }' superó el límite de { $limit } mientras se leía.
-compare-manifest-utf8 = El manifiesto '{ $path }' no es UTF-8 válido: { $error }
+compare-manifest-inspect = No se pudo inspeccionar la lista «{ $path }»: { $error }
+compare-manifest-too-large = La lista «{ $path }» es demasiado grande ({ $size }; el límite es { $limit }).
+compare-manifest-read = No se pudo leer la lista «{ $path }»: { $error }
+compare-manifest-grew = La lista «{ $path }» superó el límite de { $limit } mientras se leía.
+compare-manifest-utf8 = La lista «{ $path }» no es UTF-8 válido: { $error }
 
 ## Compatibility verdicts
 
@@ -994,6 +990,7 @@ verdict-convertible-lossless = convertible (sin pérdida)
 verdict-convertible-lossy = convertible (con pérdida)
 verdict-unsupported = incompatible
 verdict-untested = sin verificar
+verdict-count = { $verdict }: { $count }
 
 ## Compatibility evidence notes
 
@@ -1103,16 +1100,16 @@ compat-error-image-format = formato de imagen no reconocido: { $error }
 compat-error-image-kind = las imágenes { $kind } no son compatibles; usa PNG, DDS, BMP o TGA
 compat-error-decode = no se pudo decodificar { $label }: { $error }
 compat-error-image-size = tamaño de imagen no compatible: { $width }x{ $height }
-compat-error-unreadable-texture = '{ $name }' no se puede decodificar ({ $error }); la conversión necesita píxeles legibles
+compat-error-unreadable-texture = «{ $name }» no se puede decodificar ({ $error }); la conversión necesita píxeles legibles
 compat-error-no-dimensions = la textura no tiene dimensiones
 compat-error-texture-index = el índice de textura { $index } está fuera de rango
-compat-error-unknown-target = juego de destino desconocido: '{ $id }'
+compat-error-unknown-target = juego de destino desconocido: «{ $id }»
 
 ## Save check: container conventions
 
-compat-container-v2-expects-v1 = Contenedor IMG v2, pero { $game } espera IMG v1: el juego no verá estos archivos.
-compat-container-v1-sa = Contenedor IMG v1; San Andreas original usa IMG v2 (v1 solo se carga si aparece en gta.dat).
-compat-container-xbox = Empaquetado de Xbox 360; { $game } espera un contenedor de PC.
+compat-container-v2-expects-v1 = contenedor IMG v2, pero { $game } espera IMG v1: el juego no verá estos archivos.
+compat-container-v1-sa = contenedor IMG v1; San Andreas original usa IMG v2 (v1 solo se carga si aparece en gta.dat).
+compat-container-xbox = empaquetado de Xbox 360; { $game } espera un contenedor de PC.
 
 ## Import check notes
 
