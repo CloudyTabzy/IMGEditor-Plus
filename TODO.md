@@ -30,7 +30,8 @@ scheme (+1 minor). Bump `Cargo.toml` and the README heading before tagging.
   per-user ProgID + OpenWithProgids + RegisteredApplications entry (never the
   `.img` default) and opens Settings ▸ Default apps; an archive path on the
   command line opens on startup (`src/file_association.rs`).
-- **Translations (English / Español / Русский)** — Project Fluent via its
+- **Translations (English, Deutsch, Español, Bahasa Indonesia, Português
+  (Brasil), Русский)** — Project Fluent via its
   Rust crates; `build/i18n.rs` generates a typed `i18n::t` API from
   `i18n/en.ftl` and validates the translations; root Language menu with a
   "System language" default and instant switching (`i18n/README.md`).
@@ -40,10 +41,14 @@ scheme (+1 minor). Bump `Cargo.toml` and the README heading before tagging.
     import checks, folder import, converters, compare, update check,
     validator, sort manager) and the Windows file-dialog titles; dialog
     text wraps instead of clipping, plurals replace "(s)".
-  - [ ] Phase 3: toasts (≈120), inspector/export panels, status bar,
-    empty states and pro tips, tooltips, plus text the `compat` module
-    generates (verdict labels, format notes, warnings, hint reasons).
-  - [ ] Phase 4: native review of `es.ftl` and `ru.ftl` (drafts today).
+  - [x] Phase 3: toasts, archive log lines, inspector/export/3D/texture
+    panels, entry table, toolbar and status bar, empty states and pro tips,
+    plus text the `compat` module generates (verdict labels, format notes,
+    warnings, hint reasons).
+  - [x] German, Brazilian Portuguese and Indonesian added (all 726
+    messages).
+  - [ ] Phase 4: native review of `de`, `es`, `id`, `pt-BR` and `ru`
+    (drafts today).
 - **Fixes** — Save As no longer deletes the source archive; saves rename the
   new file into place before removing anything; imported files that change
   size mid-save fail the save instead of corrupting the layout; inspector

@@ -58,14 +58,16 @@ User-facing text never goes into Rust source as a literal.
    `{ $shortcut }` becomes `t::menu_file_new(shortcut)`. A misspelled
    message or a missing, extra or misnamed argument is a compile error.
 3. Add the translations to `de.ftl`, `es.ftl`, `id.ftl`, `pt-BR.ftl` and
-   `ru.ftl`, or leave them for a translator (they fall back to English).
+   `ru.ftl` in the same change. A missing translation falls back to English
+   at runtime, but the build warns about it and the change is incomplete
+   until `cargo check` prints no `untranslated` warning.
 
 Pass counts as numbers, not formatted strings, so plural rules can apply.
 
 ## Checking layouts
 
-German, Spanish, Indonesian, Portuguese and Russian run roughly a third longer than English. Debug builds
-add a "Pseudo-locale" entry to the Language menu: English with every letter
+German, Spanish, Portuguese and Russian run roughly a third longer than
+English, and Indonesian is often longer too. Debug builds add a "Pseudo-locale" entry to the Language menu: English with every letter
 accented and the vowels doubled ("Fíílée"), so clipped or badly wrapped
 labels show up before real translations exist.
 
