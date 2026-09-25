@@ -900,6 +900,7 @@ texture-grid-tip = Show a reference grid over the texture preview.
 texture-grid-size-tip = Use a { $size }×{ $size } reference grid for the texture.
 texture-grid-size = Size:
 texture-fullscreen-tip = View fullscreen (full quality)
+texture-model-companion = Model companion texture
 
 ## Entry table: the Type column and curated file-type names
 ## (the English names double as sort and grouping keys; only the

@@ -730,6 +730,7 @@ texture-grid-tip = Показывать опорную сетку поверх �
 texture-grid-size-tip = Использовать опорную сетку { $size }×{ $size } для текстуры.
 texture-grid-size = Размер:
 texture-fullscreen-tip = На весь экран (полное качество)
+texture-model-companion = Текстура модели
 
 ## Entry table: the Type column and curated file-type names
 

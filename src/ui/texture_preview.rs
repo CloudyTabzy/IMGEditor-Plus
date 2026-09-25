@@ -8,6 +8,7 @@ use iced::{Color, Point, Rectangle, Size, Theme, Vector, mouse};
 
 use crate::inspector::scene3d::mesh::SceneMesh;
 use crate::inspector::scene3d::scene::Scene;
+use crate::i18n::t;
 use crate::parser::DecodedTexture;
 
 pub type UvTriangle = [[f32; 2]; 3];
@@ -609,7 +610,7 @@ pub fn decoded_textures_from_scene(scene: &Scene) -> Vec<DecodedTexture> {
             height: texture.height,
             rgba: texture.rgba.clone(),
             has_alpha,
-            format_name: "Model companion texture".to_string(),
+            format_name: t::texture_model_companion(),
             mipmap_count: 1,
             palette_colors,
             raster: None,

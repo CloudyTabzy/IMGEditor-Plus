@@ -888,6 +888,7 @@ texture-grid-tip = Muestra una cuadrícula de referencia sobre la vista previa d
 texture-grid-size-tip = Usa una cuadrícula de referencia de { $size }×{ $size } para la textura.
 texture-grid-size = Tamaño:
 texture-fullscreen-tip = Ver a pantalla completa (calidad completa)
+texture-model-companion = Textura del modelo
 
 ## Entry table: the Type column and curated file-type names
 
