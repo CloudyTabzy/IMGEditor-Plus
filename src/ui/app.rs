@@ -8793,7 +8793,7 @@ impl App {
                 Message::SetLanguage(setting),
             ));
         }
-        if cfg!(debug_assertions) {
+        if crate::i18n::pseudo_locale_enabled() {
             let setting = LanguageSetting::Fixed(Language::Pseudo);
             language_items.push((
                 format!("{}{}", language_marker(setting), t::menu_language_pseudo()),
@@ -11387,7 +11387,7 @@ mod tests {
 
     #[test]
     fn dialogs_build_in_every_language() {
-        for language in [Language::English, Language::Spanish, Language::Russian, Language::Pseudo] {
+        for language in Language::SELECTABLE.into_iter().chain([Language::Pseudo]) {
             let mut app = test_app_with_entries();
             let _ = app.update(Message::SetLanguage(LanguageSetting::Fixed(language)));
             app.show_about = true;

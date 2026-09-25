@@ -137,12 +137,26 @@ pub enum LanguageSetting {
     Fixed(Language),
 }
 
+/// Whether the Pseudo-locale layout check is offered: debug builds started
+/// with `IMGEDITOR_PSEUDO_LOCALE` set (any value), and tests. Hidden
+/// otherwise so testers of a debug build never meet it by accident.
+pub fn pseudo_locale_enabled() -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        cfg!(debug_assertions) && std::env::var_os("IMGEDITOR_PSEUDO_LOCALE").is_some()
+    })
+}
+
 impl LanguageSetting {
     pub fn resolve(self) -> Language {
         match self {
             LanguageSetting::System => system_language(),
-            // A pseudo setting copied into a release build shows English.
-            LanguageSetting::Fixed(Language::Pseudo) if !cfg!(debug_assertions) => {
+            // A saved pseudo setting shows English once the Pseudo-locale
+            // is no longer offered, so the menu can always switch back.
+            LanguageSetting::Fixed(Language::Pseudo) if !pseudo_locale_enabled() => {
                 Language::English
             }
             LanguageSetting::Fixed(language) => language,

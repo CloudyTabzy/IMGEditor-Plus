@@ -36,7 +36,8 @@ scheme (+1 minor). Bump `Cargo.toml` and the README heading before tagging.
   `i18n/en.ftl` and validates the translations; root Language menu with a
   "System language" default and instant switching (`i18n/README.md`).
   - [x] Phase 1: infrastructure, all menus, entry context menu, title bar,
-    Russian heading font fallback, debug-only pseudo-locale.
+    Russian heading font fallback, pseudo-locale for layout checks (debug
+    builds started with `IMGEDITOR_PSEUDO_LOCALE=1`).
   - [x] Phase 2: every dialog (about, welcome, unsaved changes, save and
     import checks, folder import, converters, compare, update check,
     validator, sort manager) and the Windows file-dialog titles; dialog
