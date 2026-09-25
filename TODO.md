@@ -432,9 +432,21 @@ This is fine for **another IMG version** (`PcV3Parser` etc.). For a brand-new co
 ## 6. Code-quality follow-ups
 
 - **§4.1 and §4.2 completed** — the reusable modules now live in `src/lib.rs`, the executable uses `src/main.rs`, and the crate-root `dead_code` suppression/duplicate-target issue described by the old notes no longer applies.
-- **§4.3 `BlockPayload` large enum variant** (`inspector/nif.rs`). `BlockPayload::NiTriShapeDataPayload` (~150 B inline) inflates every other variant. Boxing the heavy variant would shrink the enum to ~32 B. Touches ~35 match sites across `nif.rs`, `viewer3d.rs`, `texture.rs`. A `Cow`-based or `Arc`-based variant may be cleaner than `Box<>` if multiple consumers read the same payload.
-- **§4.4 `Message` large enum variant** (`ui/app.rs`). `Viewer3dLoadCompleted` carries a full `Scene` (potentially MB-sized) and `ExportCompleted` carries a `Vec<String>`. Box only `Viewer3dLoadCompleted` (the largest by far) to keep `Message` small enough to inline in the iced task queue. Profile first to confirm it's a hotspot.
-
+- **§4.3 `BlockPayload` large enum variant** — done (unreleased). Clippy's
+  size report showed the outlier was `NiTexturingProperty` (784 bytes of
+  inline `TexDesc` slots), not `NiTriShapeData`; boxing that one variant
+  shrank every parsed block threefold.
+- **§4.4 `Message` large enum variant** — resolved; the lint no longer fires
+  because the decoded scene already travels as `Arc<Scene>`. The stale
+  `allow` is gone.
+- **Baseline (unreleased):** `cargo clippy --all-targets` reports nothing on
+  Rust 1.96, the crate is `rustfmt`-formatted (the formatting commit is in
+  `.git-blame-ignore-revs`), and the long argument lists behind
+  `too_many_arguments` allows became `NifWalk`, `ReplaceJob` and the 3D
+  viewer's `FrameView`/`SceneUploadKey`. The remaining allows are deliberate
+  (DXT5 alpha table, `ColorScale::new`, ordered binary reads). Fresh clones
+  build again: `Cargo.toml` no longer declares the gitignored benchmark
+  examples.
 ---
 
 ## 7. Release infra
