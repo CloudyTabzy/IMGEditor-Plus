@@ -428,13 +428,9 @@ pub(crate) struct CompareState {
     pub(crate) show_archive_only: bool,
 }
 
-/// Application event type. Heterogeneous by design — some variants carry
-/// large payloads (`Viewer3dLoadCompleted::Scene`, `ExportCompleted::Vec<String>`)
-/// while most are unit or single-value. Boxing the large variants would
-/// shrink the inline footprint but force a heap allocation on every
-/// `iced::Task::done(Message::…)`, which is the event-loop hot path.
-/// Tracked in TODO §6.
-#[allow(clippy::large_enum_variant)]
+/// Application event type. Large payloads travel behind pointers (the
+/// decoded 3D scene is an `Arc<Scene>`), so the enum stays small enough to
+/// move through the event loop by value.
 #[derive(Debug, Clone)]
 pub enum Message {
     Noop,

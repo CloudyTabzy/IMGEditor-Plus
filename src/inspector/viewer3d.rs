@@ -1289,7 +1289,7 @@ mod tests {
             vec![
                 Some(BlockPayload::NiSourceTexture(source)),
                 Some(BlockPayload::NiSourceTexture(normal_source)),
-                Some(BlockPayload::NiTexturingProperty(texturing)),
+                Some(BlockPayload::NiTexturingProperty(Box::new(texturing))),
             ],
             Vec::new(),
         );
@@ -1305,7 +1305,7 @@ mod tests {
             ..Default::default()
         };
         let mut nif = nif;
-        nif.payloads[2] = Some(BlockPayload::NiTexturingProperty(normal_property));
+        nif.payloads[2] = Some(BlockPayload::NiTexturingProperty(Box::new(normal_property)));
         assert_eq!(diffuse_texture_for_properties(&nif, &[2]), None);
     }
 }

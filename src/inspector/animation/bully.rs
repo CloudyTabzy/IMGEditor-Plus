@@ -2990,13 +2990,13 @@ mod tests {
                 ..Default::default()
             })),
             shape(vec![2]),
-            Some(BlockPayload::NiTexturingProperty(NiTexturingPropertyData {
+            Some(BlockPayload::NiTexturingProperty(Box::new(NiTexturingPropertyData {
                 base: Some(TexDesc {
                     source_ref: 4,
                     ..Default::default()
                 }),
                 ..Default::default()
-            })),
+            }))),
             Some(BlockPayload::NiTriShapeData(NiTriShapeDataPayload {
                 vertices: vec![
                     Vector3 {

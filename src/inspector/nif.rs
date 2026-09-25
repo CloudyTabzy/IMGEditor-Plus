@@ -157,13 +157,10 @@ pub struct Footer {
 /// Discriminated union of the block payloads we know how to parse.
 /// Add new variants as more block types are implemented.
 ///
-/// `NiTriShapeDataPayload` carries several `Vec<Vector3>` fields and is
-/// the largest variant by a wide margin. Boxing it would shrink the
-/// enum's inline footprint but force every match site to deref through
-/// `Box`, and most NIFs only carry a handful of these blocks held
-/// briefly. The current layout keeps the parser hot path flat; see
-/// TODO §5 for the follow-up if real-world profiles ever justify it.
-#[allow(clippy::large_enum_variant)]
+/// `NiTexturingProperty` is boxed: its twelve inline `Option<TexDesc>`
+/// slots made it 784 bytes, three times the next-largest variant, and every
+/// block of every parsed NIF paid that size. Boxed, the enum drops to the
+/// size of `NiTriStripsData`.
 #[derive(Debug, Clone)]
 pub enum BlockPayload {
     NiNode(NiNodeData),
@@ -177,7 +174,7 @@ pub enum BlockPayload {
     NiStringExtraData(NiStringExtraDataData),
     NiSourceTexture(NiSourceTextureData),
     NiMaterialProperty(NiMaterialPropertyData),
-    NiTexturingProperty(NiTexturingPropertyData),
+    NiTexturingProperty(Box<NiTexturingPropertyData>),
     NiAlphaProperty(NiAlphaPropertyData),
     NiZBufferProperty(NiZBufferPropertyData),
     NiSpecularProperty(NiSpecularPropertyData),
@@ -1007,7 +1004,8 @@ fn parse_block(type_name: &str, raw: &[u8], endian: Endian) -> NifResult<BlockPa
                 read_ni_material_property(&mut r).map(BlockPayload::NiMaterialProperty)
             }
             "NiTexturingProperty" => {
-                read_ni_texturing_property(&mut r).map(BlockPayload::NiTexturingProperty)
+                read_ni_texturing_property(&mut r)
+                    .map(|property| BlockPayload::NiTexturingProperty(Box::new(property)))
             }
             "NiAlphaProperty" => read_ni_alpha_property(&mut r).map(BlockPayload::NiAlphaProperty),
             "NiZBufferProperty" => {
