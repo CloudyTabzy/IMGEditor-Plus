@@ -82,7 +82,7 @@ impl PcV1Parser {
         let img_file = std::fs::File::open(path).context("failed to open IMG v1 archive")?;
         archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
 
-        archive.add_log("Opened archive".to_string());
+        archive.add_log(crate::i18n::t::log_archive_opened());
         Ok(())
     }
 
@@ -215,7 +215,6 @@ impl PcV1Parser {
         let img_file =
             std::fs::File::open(&output_path).context("failed to reopen packed IMG v1 archive")?;
         archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
-        archive.add_log("Archive saved".to_string());
         Ok(())
     }
 

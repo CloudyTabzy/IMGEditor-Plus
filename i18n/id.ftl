@@ -718,6 +718,7 @@ archive-untitled = Tanpa judul
 
 ## Archive log (Export tab)
 
+log-archive-opened = Arsip dibuka
 log-archive-created = Arsip dibuat
 log-archive-saved = Arsip disimpan
 log-archive-packed = Arsip dikemas: { $entries } entri, { $reclaimed } diklaim kembali

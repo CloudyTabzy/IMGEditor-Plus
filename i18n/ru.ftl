@@ -747,6 +747,7 @@ archive-untitled = Без имени
 
 ## Archive log (Export tab)
 
+log-archive-opened = Архив открыт
 log-archive-created = Архив создан
 log-archive-saved = Архив сохранён
 log-archive-packed = Архив упакован: записей — { $entries }, освобождено { $reclaimed }

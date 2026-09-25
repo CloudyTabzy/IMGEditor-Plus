@@ -920,6 +920,7 @@ archive-untitled = Untitled
 
 ## Archive log (Export tab)
 
+log-archive-opened = Opened archive
 log-archive-created = Created archive
 log-archive-saved = Archive saved
 log-archive-packed =

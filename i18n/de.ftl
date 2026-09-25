@@ -915,6 +915,7 @@ archive-untitled = Unbenannt
 
 ## Archive log (Export tab)
 
+log-archive-opened = Archiv geöffnet
 log-archive-created = Archiv erstellt
 log-archive-saved = Archiv gespeichert
 log-archive-packed =

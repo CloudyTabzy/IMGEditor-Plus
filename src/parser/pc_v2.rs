@@ -121,7 +121,7 @@ impl ImgParser for PcV2Parser {
         archive.entries = entries;
         archive.source_mmap = Some(source_mmap);
 
-        archive.add_log("Opened archive".to_string());
+        archive.add_log(crate::i18n::t::log_archive_opened());
         Ok(())
     }
 
@@ -181,7 +181,6 @@ impl ImgParser for PcV2Parser {
         let img_file =
             std::fs::File::open(output_path).context("failed to reopen packed IMG v2 archive")?;
         archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
-        archive.add_log("Archive saved".to_string());
         Ok(())
     }
 

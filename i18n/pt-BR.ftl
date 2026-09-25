@@ -970,6 +970,7 @@ archive-untitled = Sem título
 
 ## Archive log (Export tab)
 
+log-archive-opened = Arquivo aberto
 log-archive-created = Arquivo criado
 log-archive-saved = Arquivo salvo
 log-archive-packed =
