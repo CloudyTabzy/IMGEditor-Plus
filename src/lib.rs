@@ -1,3 +1,6 @@
+#[global_allocator]
+static ALLOC: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
+
 pub mod archive;
 pub mod compare;
 pub mod compat;

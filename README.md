@@ -373,6 +373,7 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 | `ureq` | Update checker (HTTP) |
 | `fluent-bundle` / `fluent-syntax` | Interface translations (Project Fluent) |
 | `sys-locale` | Detects the Windows display language |
+| `rusty_alloc-api 2.2` | Process-wide global allocator: pure-Rust mimalloc remake, ~10–15 % faster on archive open / table rebuild / filter / sort at equal peak memory — see [docs/allocator-rusty-alloc.md](docs/allocator-rusty-alloc.md) |
 
 ---
 

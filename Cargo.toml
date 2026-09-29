@@ -46,6 +46,10 @@ wgpu = { version = "27", default-features = false, features = ["wgsl", "vulkan"]
 quick_cache = { version = "0.7.0", features = ["stats"] }
 texpresso = { version = "2.0.2", features = ["rayon"] }
 quantette = { version = "0.6.0", default-features = false, features = ["kmeans", "threads"] }
+# Global allocator (src/lib.rs): pure-Rust mimalloc remake. The api crate is
+# the safe GlobalAlloc veneer over the rusty_alloc core. See
+# docs/allocator-rusty-alloc.md for the A/B record and the rejected surfaces.
+rusty_alloc-api = "2.2.1"
 # UI translations (src/i18n.rs): Project Fluent's own Rust crates.
 fluent-bundle = "0.16"
 unic-langid = "0.9"
