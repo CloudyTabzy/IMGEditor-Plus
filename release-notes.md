@@ -1,3 +1,9 @@
+## IMG Editor Plus v4.16.2
+
+### Highlights
+
+- **Memory-return fix:** freed decode memory is now handed back to the OS instead of parked in the allocator after archives close or caches clear. A scripted decode session (468 textures + 2000 scenes) measured the post-teardown resident tail drop from 236 MiB to 16 MiB — parity with the plain Windows heap — at zero measurable speed cost (interleaved open/filter/sort and export A/B). The startup policy call also remains overridable via `RUSTY_ALLOC_PURGE_DELAY`. Profiling method, raw per-phase data, the codebase memory map for future structural work, and the guide for eventually removing the allocator: `docs/allocator-rusty-alloc.md`.
+
 ## IMG Editor Plus v4.16.1
 
 ### Highlights

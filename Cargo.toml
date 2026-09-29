@@ -1,6 +1,6 @@
 [package]
 name = "imgeditor"
-version = "4.16.1"
+version = "4.16.2"
 edition = "2024"
 rust-version = "1.96"
 
