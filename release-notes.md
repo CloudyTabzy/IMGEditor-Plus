@@ -1,3 +1,10 @@
+## IMG Editor Plus v4.16.1
+
+### Highlights
+
+- **New global allocator (`rusty_alloc` 2.2.1):** the whole process now allocates through the pure-Rust mimalloc remake — no C mimalloc anywhere in the dependency graph, +50 KB per executable. An interleaved A/B against the Windows CRT heap on a 940 MB / 16,316-entry archive measured archive open −15 %, entry-table rebuilds −10…−15 %, search filtering −9 % and sorting −14 % at equal peak working set; the disk-bound export path is unchanged. The wins land exactly on the interactive paths (open, table, search, sort).
+- **Honest memory story:** freed pages stay parked in the allocator by the crate's shipped default (its OS-purge path carries a known Windows access-violation defect), bounded in this app by the byte-budgeted scene/texture caches; users who want OS trimming can opt in per run with `RUSTY_ALLOC_PURGE_DELAY=<ms>`. Full record — method, per-round spreads, retention characteristic, studied-and-rejected allocator surfaces: `docs/allocator-rusty-alloc.md`.
+
 ## IMG Editor Plus v4.5.0
 
 ### Highlights

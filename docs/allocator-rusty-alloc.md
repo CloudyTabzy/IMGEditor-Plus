@@ -116,6 +116,4 @@ The harnesses are local-only (gitignored) `examples/`. To reproduce an arm
 pair: build the examples, stash the exes, comment out the two
 `#[global_allocator]` lines in `src/lib.rs`, rebuild, and interleave the two
 binaries over the same archive (5+ rounds; medians; quote per-round spread for
-any headline number). The baseline exes behind this record were stashed under
-`target/alloc-ab/baseline/` on the measuring machine — uncommitted scratch,
-regenerate rather than trust.
+any headline number).
