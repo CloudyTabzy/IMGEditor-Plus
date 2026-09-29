@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "bench"), windows_subsystem = "windows")]
 
 fn main() -> anyhow::Result<()> {
+    imgeditor::init_allocator();
     imgeditor::dev_logger::init_dev_log();
     install_panic_hook();
 

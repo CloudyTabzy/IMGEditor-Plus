@@ -2229,6 +2229,7 @@ dependencies = [
  "quick_cache",
  "rayon",
  "rfd",
+ "rusty_alloc",
  "rusty_alloc-api",
  "serde",
  "serde_json",

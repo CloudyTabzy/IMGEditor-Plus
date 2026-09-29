@@ -50,6 +50,8 @@ quantette = { version = "0.6.0", default-features = false, features = ["kmeans",
 # the safe GlobalAlloc veneer over the rusty_alloc core. See
 # docs/allocator-rusty-alloc.md for the A/B record and the rejected surfaces.
 rusty_alloc-api = "2.2.1"
+# Direct on the core for `options::set` (init_allocator) and stats.
+rusty_alloc = "2.2.1"
 # UI translations (src/i18n.rs): Project Fluent's own Rust crates.
 fluent-bundle = "0.16"
 unic-langid = "0.9"
