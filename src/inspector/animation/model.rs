@@ -423,7 +423,7 @@ impl ModelAsset {
                         joints: skin.joints.len(),
                     });
                 }
-                let mut joint_nodes = std::collections::HashSet::with_capacity(skin.joints.len());
+                let mut joint_nodes = crate::collections::HashSet::with_capacity(skin.joints.len());
                 for (joint, &node) in skin.joints.iter().enumerate() {
                     if node.0 as usize >= node_count {
                         return Err(ModelError::SkinJointNodeMissing {
@@ -458,7 +458,7 @@ impl ModelAsset {
                 }
                 for (vertex, influences) in skin.weights.iter_mut().enumerate() {
                     let mut joint_slots =
-                        std::collections::HashSet::with_capacity(influences.len());
+                        crate::collections::HashSet::with_capacity(influences.len());
                     for &(slot, weight) in influences.iter() {
                         if slot as usize >= skin.joints.len() {
                             return Err(ModelError::SkinJointOutOfRange {

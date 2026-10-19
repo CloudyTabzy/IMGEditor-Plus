@@ -1,6 +1,6 @@
 //! Shared helpers for texture-tab previews and optional NIF UV overlays.
 
-use std::collections::HashSet;
+use crate::collections::HashSet;
 use std::path::Path;
 
 use iced::widget::{canvas, image};

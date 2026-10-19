@@ -6,7 +6,7 @@
 //! untouched. Times are canonical seconds (`f32`); the transport works in
 //! `f64` and converts at the sampling boundary.
 
-use std::collections::HashMap;
+use crate::collections::HashMap;
 
 use glam::{Quat, Vec3};
 

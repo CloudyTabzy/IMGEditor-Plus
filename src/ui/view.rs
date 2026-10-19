@@ -215,24 +215,22 @@ impl App {
         let total_height = total as f32 * ROW_HEIGHT;
         let scroll_y = self.scroll_y.max(0.0);
 
-        // Compatibility verdicts by entry index, built once per frame so
-        // the row styling below is a map lookup, not a scan per row.
-        // Skipped entirely when the user turned highlighting off.
-        let compat_verdicts: std::collections::HashMap<usize, crate::compat::games::Verdict> =
+        // Compatibility verdicts by entry index, rebuilt each frame as a
+        // dense table so the row styling below is an indexed read, not a
+        // hash probe. Skipped entirely when highlighting is off.
+        let compat_verdicts: Vec<Option<crate::compat::games::Verdict>> =
             if self.compat_highlight_enabled {
-                archive
-                    .compat_report
-                    .as_ref()
-                    .map(|report| {
-                        report
-                            .entry_verdicts
-                            .iter()
-                            .map(|verdict| (verdict.entry_index, verdict.worst))
-                            .collect()
-                    })
-                    .unwrap_or_default()
+                let mut worst = vec![None; archive.entries.len()];
+                if let Some(report) = archive.compat_report.as_ref() {
+                    for verdict in &report.entry_verdicts {
+                        if verdict.entry_index < worst.len() {
+                            worst[verdict.entry_index] = Some(verdict.worst);
+                        }
+                    }
+                }
+                worst
             } else {
-                std::collections::HashMap::new()
+                Vec::new()
             };
 
         // Window of visible rows, with an overscan to cover any tall viewport.
@@ -273,7 +271,7 @@ impl App {
                     entry_index,
                     display_row,
                     entry,
-                    compat_verdicts.get(&entry_index).copied(),
+                    compat_verdicts.get(entry_index).copied().flatten(),
                     name_width,
                 ));
             }
@@ -1176,7 +1174,7 @@ impl App {
         }
 
         let clip_names: Vec<String> = data.clips.iter().map(|(_, name)| name.clone()).collect();
-        let clip_map: std::collections::HashMap<String, ClipId> = data
+        let clip_map: crate::collections::HashMap<String, ClipId> = data
             .clips
             .iter()
             .map(|(id, name)| (name.clone(), *id))
@@ -1212,7 +1210,7 @@ impl App {
                         .find(|(entry, _)| *entry == idx)
                         .map(|(_, name)| name.clone())
                 });
-                let ifp_map: std::collections::HashMap<String, usize> = playback
+                let ifp_map: crate::collections::HashMap<String, usize> = playback
                     .available_ifps
                     .iter()
                     .map(|(entry, name)| (name.clone(), *entry))
@@ -1281,7 +1279,7 @@ impl App {
                     models
                         .iter()
                         .map(|(entry, name)| (name.clone(), *entry))
-                        .collect::<std::collections::HashMap<String, usize>>(),
+                        .collect::<crate::collections::HashMap<String, usize>>(),
                 );
                 let menu_height = if models.len() <= 13 {
                     Length::Shrink
@@ -3966,11 +3964,11 @@ fn build_update_status(app: &App) -> Option<Element<'_, Message>> {
 /// in-memory preview data, so IDE/COL labels fall back to their normal name
 /// comparison when no catalog is loaded here.
 static EMPTY_IDE_MAP: std::sync::LazyLock<
-    std::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
-> = std::sync::LazyLock::new(std::collections::HashMap::new);
+    crate::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
+> = std::sync::LazyLock::new(crate::collections::HashMap::new);
 static EMPTY_COL_MAP: std::sync::LazyLock<
-    std::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
-> = std::sync::LazyLock::new(std::collections::HashMap::new);
+    crate::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
+> = std::sync::LazyLock::new(crate::collections::HashMap::new);
 
 fn build_sort_manager(app: &App) -> Option<Element<'_, Message>> {
     if !app.show_sort_manager {

@@ -15,14 +15,14 @@ use crate::inspector::animation::{ClipId, NodeId};
 fn gta_ifp_name_calibration(
     model: &ModelAsset,
     targets: &[(String, Vec<crate::inspector::animation::clip::TrackChannel>)],
-) -> std::collections::HashMap<String, NodeId> {
-    let mut lookup: std::collections::HashMap<String, Vec<NodeId>> =
-        std::collections::HashMap::new();
+) -> crate::collections::HashMap<String, NodeId> {
+    let mut lookup: crate::collections::HashMap<String, Vec<NodeId>> =
+        crate::collections::HashMap::new();
     for node in &model.nodes {
         let key = node.name.trim().to_ascii_lowercase();
         lookup.entry(key).or_default().push(node.id);
     }
-    let mut assignments = std::collections::HashMap::new();
+    let mut assignments = crate::collections::HashMap::new();
     for (target, _) in targets {
         let key = target.trim().to_ascii_lowercase();
         if let Some(ids) = lookup.get(&key)
@@ -53,8 +53,8 @@ fn bully_numeric_track_offset(
     library: &crate::inspector::animation::clip::AnimationLibrary,
     targets: &[(String, Vec<crate::inspector::animation::clip::TrackChannel>)],
     candidates: &[(String, NodeId)],
-) -> Option<std::collections::HashMap<String, NodeId>> {
-    use std::collections::HashSet;
+) -> Option<crate::collections::HashMap<String, NodeId>> {
+    use crate::collections::HashSet;
 
     const MIN_CHARACTER_TRACKS: usize = 8;
 
@@ -235,7 +235,7 @@ pub fn bind_clip(model: &ModelAsset, clip: &AnimationClip) -> ClipBinding {
 /// session and reused for every clip selection.
 #[derive(Clone, Debug, Default)]
 pub struct BindingCalibration {
-    assignments: std::collections::HashMap<String, crate::inspector::animation::NodeId>,
+    assignments: crate::collections::HashMap<String, crate::inspector::animation::NodeId>,
     pub diagnostics: Vec<String>,
 }
 
@@ -289,8 +289,9 @@ fn calibration_inputs(
     model: &ModelAsset,
     library: &crate::inspector::animation::clip::AnimationLibrary,
 ) -> (CalibrationTargets, CalibrationCandidates) {
+    use crate::collections::HashSet;
     use crate::inspector::animation::clip::TrackChannel;
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::BTreeMap;
 
     // A representative rotation channel per target, aggregated over valid
     // clips. BTreeMap keeps both target order and the resulting calibration
@@ -437,7 +438,7 @@ pub fn calibrate_bindings(
     model: &ModelAsset,
     library: &crate::inspector::animation::clip::AnimationLibrary,
 ) -> BindingCalibration {
-    use std::collections::HashMap;
+    use crate::collections::HashMap;
 
     const MAX_BIND_ANGLE_DEG: f32 = 20.0;
     const CANDIDATE_SKIP_COST: f32 = 0.25;

@@ -669,7 +669,7 @@ pub fn candidate_models(
             }
         }
     }
-    let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut seen: crate::collections::HashSet<usize> = crate::collections::HashSet::new();
     let mut candidates: Vec<(usize, String)> = Vec::new();
     for name in &names {
         if name.is_empty() {

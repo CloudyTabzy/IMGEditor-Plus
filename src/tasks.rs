@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -670,9 +670,7 @@ fn precompute_output_paths(
             if !dir_empty {
                 return Ok(unique_output_path(&base));
             }
-            let count = name_counts
-                .entry(entry.file_name_lower.clone())
-                .or_insert(0);
+            let count = name_counts.entry_ref(&entry.file_name_lower).or_insert(0);
             *count += 1;
             if *count == 1 {
                 return Ok(base);

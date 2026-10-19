@@ -93,9 +93,9 @@ pub struct SortPreview<'a> {
     pub primary_type: Option<&'a str>,
     pub literal_types: bool,
     pub ide_labels:
-        &'a std::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
+        &'a crate::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
     pub col_labels:
-        &'a std::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
+        &'a crate::collections::HashMap<compact_str::CompactString, compact_str::CompactString>,
 }
 
 /// Build the Sort Manager modal. Returns the inner content
@@ -237,11 +237,11 @@ fn preview_section<'a>(
     chain: &'a SortChain,
     primary_type: Option<&'a str>,
     literal_types: bool,
-    ide_labels: &'a std::collections::HashMap<
+    ide_labels: &'a crate::collections::HashMap<
         compact_str::CompactString,
         compact_str::CompactString,
     >,
-    col_labels: &'a std::collections::HashMap<
+    col_labels: &'a crate::collections::HashMap<
         compact_str::CompactString,
         compact_str::CompactString,
     >,
@@ -449,11 +449,11 @@ fn preview_pane<'a>(
     chain: &'a SortChain,
     primary_type: Option<&'a str>,
     literal_types: bool,
-    ide_labels: &'a std::collections::HashMap<
+    ide_labels: &'a crate::collections::HashMap<
         compact_str::CompactString,
         compact_str::CompactString,
     >,
-    col_labels: &'a std::collections::HashMap<
+    col_labels: &'a crate::collections::HashMap<
         compact_str::CompactString,
         compact_str::CompactString,
     >,

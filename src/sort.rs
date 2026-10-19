@@ -312,9 +312,9 @@ pub struct SortContext<'a> {
     /// Maps an entry filename (case-insensitive lookup) to its IDE
     /// file label, if known. Empty map means IDE sort degrades to
     /// name ordering.
-    pub ide_files: &'a std::collections::HashMap<CompactString, CompactString>,
+    pub ide_files: &'a crate::collections::HashMap<CompactString, CompactString>,
     /// Maps an entry filename to its COL file label.
-    pub col_files: &'a std::collections::HashMap<CompactString, CompactString>,
+    pub col_files: &'a crate::collections::HashMap<CompactString, CompactString>,
     /// "Primary" file-type string used to break ties in `SortKey::Type`.
     /// Without this, the type sort reduces to a name sort.
     pub primary_type: Option<&'a str>,
@@ -331,13 +331,13 @@ impl<'a> Default for SortContext<'a> {
         // pattern that derive generates. Hand-written default keeps
         // the empty-map behaviour explicit.
         static EMPTY_IDE: std::sync::OnceLock<
-            std::collections::HashMap<CompactString, CompactString>,
+            crate::collections::HashMap<CompactString, CompactString>,
         > = std::sync::OnceLock::new();
         static EMPTY_COL: std::sync::OnceLock<
-            std::collections::HashMap<CompactString, CompactString>,
+            crate::collections::HashMap<CompactString, CompactString>,
         > = std::sync::OnceLock::new();
-        let ide = EMPTY_IDE.get_or_init(std::collections::HashMap::new);
-        let col = EMPTY_COL.get_or_init(std::collections::HashMap::new);
+        let ide = EMPTY_IDE.get_or_init(crate::collections::HashMap::new);
+        let col = EMPTY_COL.get_or_init(crate::collections::HashMap::new);
         Self {
             ide_files: ide,
             col_files: col,
@@ -356,8 +356,8 @@ impl<'a> SortContext<'a> {
     /// keyed by entry filename (case-insensitive) and contain the
     /// IDE/COL file label for that entry.
     pub fn from_maps(
-        ide_files: &'a std::collections::HashMap<CompactString, CompactString>,
-        col_files: &'a std::collections::HashMap<CompactString, CompactString>,
+        ide_files: &'a crate::collections::HashMap<CompactString, CompactString>,
+        col_files: &'a crate::collections::HashMap<CompactString, CompactString>,
     ) -> Self {
         Self {
             ide_files,
@@ -654,7 +654,7 @@ mod tests {
         // Entry filenames -> IDE file label. The map is keyed by
         // the entry filename (case-insensitive) and stores the
         // label of the IDE the entry belongs to.
-        let mut ide = std::collections::HashMap::new();
+        let mut ide = crate::collections::HashMap::new();
         ide.insert(
             CompactString::from("nif_one.txt"),
             CompactString::from("models.ide"),
@@ -663,7 +663,7 @@ mod tests {
             CompactString::from("nif_two.txt"),
             CompactString::from("actors.ide"),
         );
-        let col = std::collections::HashMap::new();
+        let col = crate::collections::HashMap::new();
         let ctx = SortContext::from_maps(&ide, &col);
         sort_entries(&mut entries, &chain, &ctx);
         // "actors.ide" should bubble in front of "models.ide".

@@ -1,5 +1,5 @@
 use quick_cache::sync::GuardResult;
-use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,6 +14,7 @@ use iced_aw::menu::{Item, Menu, MenuBar};
 use iced_fonts::LUCIDE_FONT_BYTES;
 
 use crate::archive::{ArchiveInfo, EntryInfo, ExportStatus, SortColumn};
+use crate::collections::HashMap;
 use crate::dev_logger;
 use crate::sort::{SortChain, SortDirection, SortKey, SortPriority};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -7149,16 +7150,16 @@ impl App {
                                     ide_map.clone(),
                                     model_stem.as_str(),
                                 );
-                                let mut resolved: std::collections::HashMap<
+                                let mut resolved: crate::collections::HashMap<
                                     String,
                                     Option<SceneTexture>,
-                                > = std::collections::HashMap::new();
+                                > = crate::collections::HashMap::new();
                                 for mesh in &mut model.meshes {
                                     let Some(name) = mesh.texture_name.clone() else {
                                         continue;
                                     };
                                     let texture = resolved
-                                        .entry(name.clone())
+                                        .entry_ref(&name)
                                         .or_insert_with(|| resolver(&name))
                                         .clone();
                                     mesh.diffuse = texture;

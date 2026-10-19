@@ -1680,7 +1680,7 @@ fn build_pending_skin(
         diagnostics.push("skin skipped: skeleton root is missing or is not a NiNode".to_string());
         return None;
     }
-    let mut unique_bones = std::collections::HashSet::with_capacity(joint_count);
+    let mut unique_bones = crate::collections::HashSet::with_capacity(joint_count);
     for &bone in &instance.bones {
         if bone < 0
             || !matches!(
@@ -1949,9 +1949,9 @@ struct NifWalk<'n> {
     nodes: Vec<SceneNode>,
     meshes: Vec<MeshAsset>,
     diagnostics: Vec<String>,
-    visited: std::collections::HashSet<i32>,
+    visited: crate::collections::HashSet<i32>,
     track_counter: u32,
-    node_ids: std::collections::HashMap<i32, NodeId>,
+    node_ids: crate::collections::HashMap<i32, NodeId>,
     pending_skins: Vec<PendingSkin>,
     source_names: Vec<Option<String>>,
 }
@@ -1965,9 +1965,9 @@ impl<'n> NifWalk<'n> {
             nodes: Vec::new(),
             meshes: Vec::new(),
             diagnostics: Vec::new(),
-            visited: std::collections::HashSet::new(),
+            visited: crate::collections::HashSet::new(),
             track_counter: 0,
-            node_ids: std::collections::HashMap::new(),
+            node_ids: crate::collections::HashMap::new(),
             pending_skins: Vec::new(),
             source_names: Vec::new(),
         }
@@ -2628,8 +2628,8 @@ mod tests {
             .collect();
         let anim = stream.parent().expect("game root").join("Anim");
 
-        let mut models: std::collections::HashMap<usize, ModelAsset> =
-            std::collections::HashMap::new();
+        let mut models: crate::collections::HashMap<usize, ModelAsset> =
+            crate::collections::HashMap::new();
         let mut rows: Vec<String> = Vec::new();
         let mut character_offsets: std::collections::BTreeMap<u32, Vec<String>> =
             std::collections::BTreeMap::new();
@@ -2688,7 +2688,7 @@ mod tests {
                 rows.push(format!("{agr_name} | {model_name}: no clips"));
                 continue;
             };
-            if let std::collections::hash_map::Entry::Vacant(slot) = models.entry(model_index) {
+            if let crate::collections::Entry::Vacant(slot) = models.entry(model_index) {
                 let Some(nif_bytes) = world_entry(stream, &model_name) else {
                     failed += 1;
                     rows.push(format!("{agr_name} | {model_name}: NIF read failed"));
@@ -4281,16 +4281,16 @@ mod tests {
             "grounded clip must reach the floor, lowest viewer Y was {lowest}"
         );
 
-        let right_nodes: std::collections::HashSet<_> = (29..=36)
+        let right_nodes: crate::collections::HashSet<_> = (29..=36)
             .filter_map(|index| model.node_by_name(&format!("track_{index:03}")))
             .map(|node| node.id)
             .collect();
         let skin = model.meshes[0].skin.as_ref().expect("Mandy body skin");
-        let right_slots: std::collections::HashSet<usize> = skin
+        let right_slots: crate::collections::HashSet<usize> = skin
             .joints
             .iter()
             .enumerate()
-            .filter(|(_, node)| right_nodes.contains(node))
+            .filter(|(_, node)| right_nodes.contains(*node))
             .map(|(slot, _)| slot)
             .collect();
         assert!(

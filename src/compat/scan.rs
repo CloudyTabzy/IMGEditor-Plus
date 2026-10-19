@@ -820,7 +820,7 @@ fn decode_ni_pixel_tail(raw: &[u8], endian: Endian) -> Option<NftPixelInfo> {
 }
 
 fn unique_color_count(rgba: &[u8]) -> usize {
-    use std::collections::HashSet;
+    use crate::collections::HashSet;
     let mut seen = HashSet::new();
     for px in rgba.chunks_exact(4) {
         seen.insert([px[0], px[1], px[2], px[3]]);

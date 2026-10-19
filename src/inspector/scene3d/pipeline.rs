@@ -25,7 +25,7 @@
 //! owned here and rebuilt only when the scene changes or the viewport
 //! resizes.
 
-use std::collections::HashSet;
+use crate::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bytemuck::{Pod, Zeroable};

@@ -5,8 +5,8 @@
 //! makes the compatibility behavior easy to test and lets large manifests be
 //! processed away from the event loop.
 
+use crate::collections::HashSet;
 use crate::i18n::t;
-use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Path;

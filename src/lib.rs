@@ -16,6 +16,7 @@ pub fn init_allocator() {
 }
 
 pub mod archive;
+pub mod collections;
 pub mod compare;
 pub mod compat;
 pub mod config;

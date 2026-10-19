@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -443,10 +442,12 @@ pub struct ArchiveInfo {
     /// Advisory content probe shown in the validator popup (None until
     /// probed, cleared when entry content changes).
     pub target_hint: Option<crate::compat::hint::TargetHint>,
-    /// Reverse lookup from entry index to its position in `selected_indices`.
-    /// Rebuilt by `update_selected_list` so shift+click and similar operations
-    /// avoid linear scans of the filtered list.
-    pub(crate) selected_lookup: HashMap<usize, usize>,
+    /// Entry index -> display row for the current filter/sort, dense by
+    /// entry index (`NOT_VISIBLE` marks filtered-out entries). Rebuilt by
+    /// `update_selected_list` so shift+click and similar operations avoid
+    /// linear scans of the filtered list; the dense table keeps the
+    /// per-keystroke rebuild free of hashing and reallocation.
+    pub(crate) selected_lookup: Vec<u32>,
     /// Index of the entry currently in rename mode. Tracking this directly
     /// avoids scanning every entry to clear the rename flag on each click.
     pub rename_index: Option<usize>,
@@ -456,6 +457,10 @@ pub struct ArchiveInfo {
     /// add/remove/rename/import misses instead of serving old data.
     generation: u64,
 }
+
+/// Sentinel in [`ArchiveInfo::selected_lookup`] for entries that the
+/// current filter hides.
+pub(crate) const NOT_VISIBLE: u32 = u32::MAX;
 
 impl ArchiveInfo {
     pub fn new(file_name: impl Into<String>, create_new: bool, version: ImgVersion) -> Self {
@@ -493,7 +498,7 @@ impl ArchiveInfo {
             compat_report: None,
             target_game: None,
             target_hint: None,
-            selected_lookup: HashMap::new(),
+            selected_lookup: Vec::new(),
             rename_index: None,
             generation: 0,
         };
@@ -543,7 +548,7 @@ impl ArchiveInfo {
             compat_report: None,
             target_game: None,
             target_hint: None,
-            selected_lookup: HashMap::new(),
+            selected_lookup: Vec::new(),
             rename_index: None,
             generation: 0,
         };
@@ -589,7 +594,10 @@ impl ArchiveInfo {
         self.sync_sort_state_from_chain();
         let filter = filter.trim().to_lowercase();
         self.selected_indices.clear();
+        // Dense entry-index table; `resize` reuses the allocation across
+        // keystrokes instead of rehashing a map.
         self.selected_lookup.clear();
+        self.selected_lookup.resize(self.entries.len(), NOT_VISIBLE);
 
         // Eagerly clone the cached file-type list. `unique_file_types` needs
         // `&mut self` to populate the cache, so it must happen before we hold
@@ -667,7 +675,7 @@ impl ArchiveInfo {
         );
 
         for (display_row, (entry_index, _, _)) in matches.into_iter().enumerate() {
-            self.selected_lookup.insert(entry_index, display_row);
+            self.selected_lookup[entry_index] = display_row as u32;
             self.selected_indices.push(entry_index);
         }
 
@@ -863,7 +871,10 @@ impl ArchiveInfo {
     /// O(1) lookup from entry index to its display row in the current filter/sort.
     /// Returns `None` if the entry is not currently visible.
     pub fn display_row_of(&self, entry_index: usize) -> Option<usize> {
-        self.selected_lookup.get(&entry_index).copied()
+        self.selected_lookup
+            .get(entry_index)
+            .filter(|&&row| row != NOT_VISIBLE)
+            .map(|&row| row as usize)
     }
 
     /// Clears the rename state for the single entry that was in rename mode,

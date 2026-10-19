@@ -9,7 +9,7 @@
 //!   2. On each tick: `animator.update(dt)`
 //!   3. In the view: `let value = animator.get(id)` — returns the interpolated value.
 
-use std::collections::HashMap;
+use crate::collections::HashMap;
 use std::time::Duration;
 
 use crate::ui::easing::Easing;
