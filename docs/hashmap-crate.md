@@ -125,3 +125,61 @@ hand (export path, texture resolution).
   machine; its `world_entry` helper returns `None` at `std::fs::read(World.dir)`
   before any collection code runs, so all four fixture cases are skipped and
   its final coverage assert fires.
+
+## Appendix: raw runs
+
+Commands (from `IMGEditor-rs`):
+
+```
+cargo build -j 2 --release --example benchmark_hashmaps
+target\release\examples\benchmark_hashmaps.exe ^
+    C:\Dev\IMGEditor-master\corpus\Gta_3_img\gta3.img sa --real-verdicts
+```
+
+Raw outputs live outside the repo:
+`C:\Dev\IMGEditor-master\fixtures\hashmap-bench\{baseline,before2-warm,after,after2,after3,after4}.txt`.
+`baseline` is the very first (cold page cache) run; `before2-warm` is the warm
+before arm rebuilt from the same tree with only `src/` reverted.
+
+### List rebuilds — per-run medians (ms)
+
+| arm | baseline | before2-warm | after | after2 | after3 | after4 |
+|---|---|---|---|---|---|---|
+| no filter, name asc | 1.805 | 1.808 | 1.637 | 1.772 | 1.711 | 1.713 |
+| filter "a" | 1.188 | 1.141 | 1.083 | 1.080 | 1.102 | 1.121 |
+| filter "pol" | 0.245 | 0.243 | 0.243 | 0.253 | 0.247 | 0.260 |
+| sort size desc | 1.918 | 1.927 | 1.713 | 1.720 | 1.804 | 1.845 |
+| sort type asc | 2.690 | 2.873 | 2.822 | 2.929 | 2.836 | 2.762 |
+| sort offset desc | 0.396 | 0.367 | 0.190 | 0.217 | 0.189 | 0.188 |
+
+### Other arms — per-run medians
+
+| arm | baseline | before2-warm | after | after2 | after3 | after4 |
+|---|---|---|---|---|---|---|
+| `display_row_of` (ns) | 10.28 | 10.25 | 2.15 | 2.14 | 2.22 | 2.23 |
+| compare, case-sensitive (ms) | 2.665 | 2.564 | 2.060 | 2.364 | 2.250 | 2.389 |
+| compare, case-insensitive (ms) | 3.237 | 3.097 | 2.477 | 2.729 | 2.539 | 2.571 |
+| wire dedup (ms) | 2.681 | 2.651 | 0.845 | 1.155 | 0.889 | 0.858 |
+| open #2 / #3 (ms) | 8.28 / 8.21 | 8.13 / 7.76 | 7.77 / 7.02 | 7.87 / 7.26 | 8.08 / 7.26 | 7.88 / 7.72 |
+| compat scan (ms) | 898.2 * | 277.5 | 277.2 | 279.4 | 289.8 | 296.0 |
+
+\* first read of the 897 MB archive, page-cache cold; the five warm runs
+agree within noise, i.e. the scan is unchanged by the migration.
+
+### Isolated micro arms (identical code in both arms; ranges over six runs)
+
+| arm | range |
+|---|---|
+| verdict table, std `HashMap` collect (2,740 pairs) | 0.022–0.023 ms |
+| verdict table, hashbrown collect | 0.008–0.010 ms |
+| verdict table, dense `Vec` build | 0.001 ms |
+| verdict `get`: std / hashbrown / `Vec` | 11.30–11.86 / 5.87–6.88 / 3.59–3.75 ns |
+| name counts, std `entry(k.clone())` | 0.337–0.355 ms |
+| name counts, hashbrown `entry(k.clone())` | 0.348–0.373 ms |
+| name counts, hashbrown `entry_ref(&key)` | 0.179–0.192 ms |
+
+The lookup-phase checksums (`635668774` for `display_row_of`, `840089` for
+the verdict gets) are identical in every run, confirming the arms do the same
+work.
+
+
