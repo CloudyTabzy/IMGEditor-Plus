@@ -5,6 +5,10 @@ A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **s
 > Forked and evolved from [Grinch_'s IMG Editor](https://github.com/user-grinch/IMGEditor).  
 > Rewritten in Rust to eliminate crashes, memory bugs, and dependency hell.
 
+> **Status:** feature-complete and in maintenance mode. Latest tagged release:
+> v4.16.2; the working tree is v4.16.3 (unreleased). No new features or
+> platform ports are currently planned.
+
 ---
 
 ## 🔥 Why Rust?
@@ -313,8 +317,10 @@ The `dist\` folder then contains the portable `.exe`, `README.md`, and `LICENSE`
 
 ## 🗺️ Roadmap
 
+**The sections below are retained as design notes rather than commitments.**
+
 ### Cross-platform ports
-The codebase is architected so the core parsers and archive logic are platform-agnostic. A future release will add:
+The codebase is architected so the core parsers and archive logic are platform-agnostic. A port would require:
 
 - **macOS** — gate the Windows console-hide and `.ico` resource logic, use `dirs` for config paths, and package as an `.app` bundle.
 - **Linux** — same core work plus `.desktop` entry and AppImage/flatpak packaging.
@@ -322,7 +328,7 @@ The codebase is architected so the core parsers and archive logic are platform-a
 The main UI layer uses Iced, which is cross-platform by design, so the desktop porting effort is mostly packaging and platform-specific window integration.
 
 ### Platform-specific note on GTA support
-Version 4.0 was developed and tested primarily against **Bully Scholarship Edition** archives, with the embedded viewer now covering common PC RenderWare DFF/TXD assets used by GTA III, Vice City, and San Andreas. Genuine per-game fixtures are still needed for compatibility claims; console-native geometry and advanced RenderWare material effects remain future work. Bully AGR animation, HXD association, and NIF CPU skinning are now documented in the AGR research record above. Broader GTA workflow polish — importing, exporting, and format edge cases — will be addressed as representative archives become available.
+Version 4.0 was developed and tested primarily against **Bully Scholarship Edition** archives, with the embedded viewer now covering common PC RenderWare DFF/TXD assets used by GTA III, Vice City, and San Andreas. Genuine per-game fixtures would still be needed for broader compatibility claims; console-native geometry and advanced RenderWare material effects remain unimplemented. Bully AGR animation, HXD association, and NIF CPU skinning are documented in the AGR research record above. Broader GTA workflow polish — importing, exporting, and format edge cases — would be addressed only if representative archives become available.
 
 ---
 
@@ -362,9 +368,10 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 | `tokio 1.40` | Async runtime (multi-thread, fs, sync) |
 | `memmap2` | Zero-copy archive reads |
 | `quick_cache` | Byte-budgeted LRU caches (3D scenes, texture previews, inspector summaries) — its placeholder guards also power single-flight decode dedup |
-| `rayon` | Parallel entry export |
+| `rayon` | Parallel entry export and TXD preview catalog builds |
 | `glam` | Vector/matrix math for the 3D viewer |
 | `compact_str` | Compact inline strings for 10,000+ entry names |
+| `hashbrown` | SwissTable maps/sets with foldhash for internal collections — see [docs/hashmap-crate.md](docs/hashmap-crate.md) |
 | `image` | PNG encode/export plus PNG/DDS/BMP/TGA decoding for the texture converter |
 | `texpresso` | Pure-Rust BC1/BC2/BC3 (DXT1/3/5) compression for the texture converter |
 | `quantette` | Wu + k-means palette quantization (Oklab) for PAL8/PAL4 output |
@@ -373,7 +380,7 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 | `ureq` | Update checker (HTTP) |
 | `fluent-bundle` / `fluent-syntax` | Interface translations (Project Fluent) |
 | `sys-locale` | Detects the Windows display language |
-| `rusty_alloc-api 2.2` | Process-wide global allocator: pure-Rust mimalloc remake, ~10–15 % faster on archive open / table rebuild / filter / sort at equal peak memory — see [docs/allocator-rusty-alloc.md](docs/allocator-rusty-alloc.md) |
+| `rusty_alloc-api 2.2.1` | Process-wide global allocator: pure-Rust mimalloc remake, ~10–15 % faster on archive open / table rebuild / filter / sort at equal peak memory — see [docs/allocator-rusty-alloc.md](docs/allocator-rusty-alloc.md) |
 
 ---
 

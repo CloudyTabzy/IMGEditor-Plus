@@ -1,15 +1,13 @@
-# IMGEditor-rs — Next Objectives
+# IMGEditor-rs — Backlog and release record
 
-Last tagged release: **v4.16.0** (shipped 2026-09-25: the interface in six
-languages, AI-translated pending native review, plus the merged title bar,
-Recent menu, per-archive game folder, Explorer integration, save-safety and
-entry-name fixes, and a clippy/rustfmt code-quality pass).
+Last tagged release: **v4.16.2** (2026-09-30). The working tree is
+**v4.16.3** (unreleased: hashbrown/foldhash internal maps and parallel TXD
+preview catalogs).
 
-Next phase: **Bully AGR completion and CAT/LIP/LUR inspection**, followed by
-separate GTA animation adapters. The remaining
-**DFF/NIF model profiles (Phase D)** and compatibility/asset-hardening items
-are tracked below. The shipped compatibility-engine details are recorded in
-the release notes and the dedicated documents under `docs/`.
+Project status: **feature-complete and in maintenance mode.** The open items
+below are an optional backlog, not an active roadmap. The shipped
+compatibility-engine details are recorded in the release notes and the
+dedicated documents under `docs/`.
 
 ## v4.16.0 (released 2026-09-25)
 
@@ -452,3 +450,35 @@ This is fine for **another IMG version** (`PcV3Parser` etc.). For a brand-new co
 - **§5.1 `package-release.ps1` excludes `docs/`** (done in v3.5.0 post-release). Zip contains only `imgeditor.exe`, `README.md`, `LICENSE`.
 - **§5.2 `Cargo.toml` `[profile.release].codegen-units = 16`** (done in v3.4.0). Hardens against the `harfrust`/`regex-automata` stack-overrun on Rust 1.96.
 - **§5.3 `rust-toolchain.toml`** — completed. The project pins `channel = "1.96.0"` so the §5.2 workaround is correct-by-default after any toolchain bump.
+
+---
+
+## 8. Rayon CPU and memory follow-ups (source audit; unmeasured)
+
+- [ ] **Bound buffered export batches.** `export_entries_batched` divides the
+  entry count by `workers` with floor rounding. For 15 entries and 8 workers,
+  this creates 15 chunks; on a pool with at least 15 threads, each may hold a
+  4 MiB reader while its active output entry holds a 1 MiB writer. Use ceiling
+  division so the batch count stays within the intended worker limit.
+- [ ] **Set an app-wide Rayon thread budget.** The default zero-copy export,
+  quantette palette generation, and texpresso DXT compression all use Rayon's
+  global pool. Pick a thread cap after measuring CPU use, UI responsiveness,
+  throughput, and peak memory; configure it before the pool's first use.
+- [ ] **Parallelize PAL4/PAL8 pixel-to-index mapping for large mip levels.**
+  `map_with_lut` currently maps pixels serially even though each output index
+  is independent. Fill preallocated output ranges in parallel, preserve the
+  original image coordinates for dithering, and keep small inputs serial if
+  measurements show the scheduling cost outweighs the gain.
+- [ ] **Reuse the palette LUT during conversion.** Palette alpha averaging
+  builds a LUT through `map_level`, then final mip mapping builds it again
+  through `map_levels`. Alpha averaging changes palette alpha only, so the
+  RGB lookup table can be shared across both stages.
+- [ ] **Measure palette conversion's peak working set.** Quantization retains
+  the visible RGB list and, below quantette's automatic dedup threshold,
+  creates a full-image Oklab buffer; parallel Wu quantization also creates
+  per-chunk histograms. Evaluate streaming or reduced working sets against
+  palette quality before changing the quantization input.
+- [ ] **Add focused performance measurements** for buffered and zero-copy
+  export, small and large PAL4/PAL8 conversions, and DXT compression. Record
+  throughput, peak memory, and CPU use before and after resource-policy or
+  parallel-mapping changes.

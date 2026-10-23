@@ -1,3 +1,14 @@
+## IMG Editor Plus v4.16.3 (unreleased)
+
+### Highlights
+
+- **Faster internal hash collections:** `hashbrown` with foldhash now backs
+  the internal maps and sets used by archive tables, search/sort, and caches.
+  Raw A/B runs are recorded in `docs/hashmap-crate.md`.
+- **Parallel TXD preview catalogs:** large texture dictionaries build their
+  preview catalog with Rayon, keeping texture-heavy archives responsive. See
+  `docs/rayon-parallelism.md`.
+
 ## IMG Editor Plus v4.16.2
 
 ### Highlights
