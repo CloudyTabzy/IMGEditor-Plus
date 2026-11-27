@@ -127,22 +127,16 @@ and the `get_value_or_guard` single-flight pattern at `app.rs:8084` transfers
 directly. A cheaper first step that needs no new type: keep the eager decode
 but stop at a per-entry byte budget and log what was skipped.
 
-### 4. The base mip level is cloned unconditionally in every conversion
+### 4. The base mip level is cloned unconditionally in every conversion *(fixed 2026-11-27)*
 
-`compat/encode.rs:311-315`:
-`vec![(w, h, rgba[..w*h*4].to_vec())]`. `mip_chain` runs unconditionally at
-`encode.rs:269` for **every** format, so the caller's `SourceImage.rgba` and
-this duplicate coexist for the whole encode — 4 MiB at 1024×1024, plus 1.33 MiB
-of genuine mip tail. Neither the DXT branch (`encode.rs:416-435`, which only
-iterates `levels`) nor the uncompressed branch (`encode.rs:282-286`) needs the
-base level as owned memory.
+`compat/encode.rs` previously cloned level 0 (`rgba[..w*h*4].to_vec()`) in
+`mip_chain` for every format, keeping a 4 MiB duplicate alive at 1024×1024.
+`encode_texture` now uses `mip_chain_borrowed` (`Cow::Borrowed` for level 0,
+`Cow::Owned` for the downsampled tail) and `palette::map_levels_borrowed`,
+removing 4 MiB from the peak of every conversion while keeping `pub fn mip_chain`
+unchanged.
 
-Fix: `Cow::Borrowed` for level 0, owned for the downsampled tail. This removes
-4 MiB from the peak of *every* conversion. The `Vec<(u32,u32,Vec<u8>)>` signature
-ripples into `encode_dxt_levels`, `encode_paletted` and `palette::map_levels`,
-all of which only read it.
-
-### 5. PAL8 conversion holds three full-pixel vectors, and feeds k-means 4× more samples than it can use
+### 5. PAL8 conversion holds three full-pixel vectors, and feeds k-means 4× more samples than it can use *(partially fixed 2026-11-27: `visible` is now pre-sized with `Vec::with_capacity`; stride-sampling / `.max_samples(n)` remains open)*
 
 `compat/palette.rs:66-70` collects every opaque pixel into
 `Vec<Srgb<u8>>` — 3 MiB at 1024². Because it is a `filter().map().collect()`,
@@ -248,31 +242,16 @@ have `parse_dff` / `parse_txd` / `parse_nif` / `parse_col` consume slices.
 Keep the `Vec` path for `imported` and `override_bytes` entries, which have no
 mmap range. A 2 MB DFF stops being a 2 MB copy.
 
-### 10. Full-archive validation allocates ~500 K Strings and retains none of them
+### 10. Full-archive validation allocates ~500 K Strings and retains none of them *(fixed 2026-11-27)*
 
-`compat/scan.rs:226` does `profile.logical.label().to_string()` per texture and
-feeds it to `BTreeMap::entry`, which takes the key by value — one allocation per
-texture for a key drawn from 16 `LogicalFormat` variants. `scan.rs:242-250` then
-calls `classify(game, &profile)` for **all four games** and keeps only
-`verdict.label()`; `classify` (`compat/games.rs:508`) returns `note: String` and
-every branch builds it through Fluent. `scan.rs:252-253` calls it a fifth time
-when a target is set.
-
-The code's own corpus figures (`games.rs:617` "32,157 textures measured" for SA,
-`games.rs:670` "15,372" for III) put a full SA validation at 32,157 × 5
-≈ 160,785 discarded `note` Strings plus 32,157 `class_label` Strings — on the
-order of 500 K heap allocations and ~20 MB of allocator traffic, with **zero
-retention**.
-
-This is not a peak-memory problem; it is allocator throughput on a
-`spawn_blocking` task the UI awaits (note: `rusty_alloc` 2.6.0 later restored
-the 10 ms `purge_delay` default, reducing churn overhead relative to 2.2.1's
-`purge_delay = 0`, though avoiding 500 K transient strings remains worthwhile).
-Fix: split `classify` into a `String`-free
-`classify_verdict(game, profile) -> (Verdict, Evidence)` and keep the
-`note`-bearing `classify` as a thin wrapper for the UI paths that display it.
-Key `class_counts` by `LogicalFormat` plus a `bool` for the 32-bpp-storage case
-rather than by `String`.
+`compat/games.rs` now exposes allocation-free `classify_verdict` and
+`classify_nft_verdict` sharing the exact same decision tables as `classify` /
+`classify_nft_format` without calling Fluent or allocating `note: String`.
+`compat/scan.rs` uses those verdicts, updates `class_counts` / `nft_formats`
+without allocating a `String` on map hits, borrows entries zero-copy from
+`source_mmap`, and uses `parse_txd_headers` when `decode_pixels` is false
+(skipping 350+ MB of transient mipmap copies). Combined with Rayon `try_fold` +
+`try_reduce`, full validation of `gta3.img` dropped from 263.8 ms to 25.7 ms.
 
 ### 11. An uncapped per-pixel `HashSet` where a capped one already exists *(fixed 2026-11-27)*
 

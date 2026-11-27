@@ -15,7 +15,7 @@ use crate::i18n::t;
 use crate::parser::texture_decoder::{
     PLATFORM_D3D8, PLATFORM_D3D9, RasterDescriptor, decode_native_raster,
 };
-use crate::parser::txd::{NativeTexture, parse_txd};
+use crate::parser::txd::{NativeTexture, parse_txd, parse_txd_headers};
 use crate::parser::txd_writer;
 
 /// A decoded source image (PNG/DDS/BMP/TGA).
@@ -468,7 +468,7 @@ pub fn apply_replaces(
     txd_bytes: &[u8],
     plans: &[(usize, &ConversionPlan)],
 ) -> Result<Vec<u8>, String> {
-    let parsed = parse_txd(txd_bytes)?;
+    let parsed = parse_txd_headers(txd_bytes)?;
     let mut replacements = Vec::with_capacity(plans.len());
     for (index, plan) in plans {
         let old = parsed
@@ -561,6 +561,35 @@ fn synthetic_profile(encoded: &EncodedTexture, platform_id: u32) -> RasterProfil
 /// Convenience: profile of a parsed texture.
 pub fn texture_profile(texture: &NativeTexture) -> RasterProfile {
     RasterProfile::from_native(texture)
+}
+
+/// Maximum concurrent workers during bulk texture conversion.
+///
+/// Caps concurrent in-flight textures so peak transient memory stays bounded
+/// (~15 MiB per 1024² conversion with borrowed base mips, so <= ~60 MiB across
+/// 4 workers even on 16+ core machines) while still scaling bulk conversions.
+/// Nested `texpresso` / `quantette` / `palette` rayon calls run inside this
+/// same pool via `ThreadPool::install`, avoiding oversubscription.
+pub const BULK_CONVERT_MAX_WORKERS: usize = 4;
+
+/// Run a bulk-conversion closure inside an on-demand bounded rayon thread pool.
+/// The pool is torn down on return so no idle worker threads linger afterwards.
+pub fn run_in_bounded_convert_pool<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, BULK_CONVERT_MAX_WORKERS);
+    if workers <= 1 {
+        return f();
+    }
+    match rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .thread_name(|index| format!("imgeditor-convert-{index}"))
+        .build()
+    {
+        Ok(pool) => pool.install(f),
+        Err(_) => f(),
+    }
 }
 
 /// Resolve a target id, erroring when unknown or Bully.

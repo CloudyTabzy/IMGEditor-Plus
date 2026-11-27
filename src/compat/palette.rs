@@ -17,9 +17,13 @@
 //! way the quantizer intended and gradients band less than with RGB
 //! distance.
 
+use std::borrow::Cow;
+use std::sync::LazyLock;
+
 use quantette::color_space::srgb8_to_oklab;
 use quantette::deps::palette::{Oklab, Srgb};
 use quantette::{PaletteSize, Pipeline, QuantizeMethod};
+use rayon::prelude::*;
 
 /// Pixels with alpha below this are routed to the transparent slot and
 /// excluded from color quantization. Eight matches the dark cutoff
@@ -63,11 +67,12 @@ pub fn quantize(rgba: &[u8], max_colors: usize) -> QuantizedPalette {
         max_colors
     };
 
-    let visible: Vec<Srgb<u8>> = rgba
-        .chunks_exact(4)
-        .filter(|pixel| pixel[3] >= TRANSPARENT_CUTOFF)
-        .map(|pixel| Srgb::new(pixel[0], pixel[1], pixel[2]))
-        .collect();
+    let mut visible: Vec<Srgb<u8>> = Vec::with_capacity(rgba.len() / 4);
+    for pixel in rgba.chunks_exact(4) {
+        if pixel[3] >= TRANSPARENT_CUTOFF {
+            visible.push(Srgb::new(pixel[0], pixel[1], pixel[2]));
+        }
+    }
 
     if visible.is_empty() {
         return QuantizedPalette {
@@ -129,8 +134,10 @@ pub fn quantize(rgba: &[u8], max_colors: usize) -> QuantizedPalette {
 /// took seconds and hundreds of megabytes on those).
 type ColorLut = Box<[u8; 32768]>;
 
-fn build_lut(palette: &QuantizedPalette) -> ColorLut {
-    let palette_labs = palette_oklab(&palette.entries);
+/// Precomputed Oklab coordinates for every cell of the 5-5-5 RGB LUT.
+/// Independent of the palette, so computing it once avoids 32,768 sRGB->Oklab
+/// conversions on every quantized texture.
+static LUT_OKLAB_CELLS: LazyLock<Vec<Oklab>> = LazyLock::new(|| {
     let centers: Vec<Srgb<u8>> = (0..32768usize)
         .map(|key| {
             let r5 = (key >> 10) & 0x1F;
@@ -143,15 +150,22 @@ fn build_lut(palette: &QuantizedPalette) -> ColorLut {
             )
         })
         .collect();
-    let labs = srgb8_to_oklab(&centers);
-    // 32k cells x palette entries: parallel so dev builds stay snappy.
-    use rayon::prelude::*;
-    let table: Vec<u8> = labs
-        .par_iter()
-        .map(|lab| nearest_oklab(lab, &palette_labs))
-        .collect();
+    srgb8_to_oklab(&centers)
+});
+
+/// Minimum pixel count before [`map_with_lut`] fans out row-wise over rayon
+/// (256x256 = 65,536 pixels; smaller mips pay less serially than fork/join).
+const PARALLEL_MAP_MIN_PIXELS: usize = 65_536;
+
+fn build_lut(palette: &QuantizedPalette) -> ColorLut {
+    let palette_labs = palette_oklab(&palette.entries);
+    let labs = &*LUT_OKLAB_CELLS;
+    // 32k cells x palette entries: fill the boxed LUT directly in parallel
+    // without allocating a second staging Vec.
     let mut lut: ColorLut = Box::new([0u8; 32768]);
-    lut.copy_from_slice(&table);
+    lut.par_iter_mut()
+        .zip(labs.par_iter())
+        .for_each(|(slot, lab)| *slot = nearest_oklab(lab, &palette_labs));
     lut
 }
 
@@ -182,6 +196,18 @@ pub fn map_levels(
         .collect()
 }
 
+pub(crate) fn map_levels_borrowed(
+    levels: &[(u32, u32, Cow<'_, [u8]>)],
+    palette: &QuantizedPalette,
+    dither: bool,
+) -> Vec<Vec<u8>> {
+    let lut = build_lut(palette);
+    levels
+        .iter()
+        .map(|(width, _, pixels)| map_with_lut(pixels, *width, palette, dither, &lut))
+        .collect()
+}
+
 fn map_with_lut(
     rgba: &[u8],
     width: u32,
@@ -189,10 +215,54 @@ fn map_with_lut(
     dither: bool,
     lut: &ColorLut,
 ) -> Vec<u8> {
+    const BAYER: [[i16; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+
     let transparent_index = palette.transparent_index().unwrap_or(0);
-    let mut out = Vec::with_capacity(rgba.len() / 4);
+    let pixel_count = rgba.len() / 4;
+    let row_len = width as usize;
+
+    if pixel_count >= PARALLEL_MAP_MIN_PIXELS && row_len > 0 && pixel_count.is_multiple_of(row_len)
+    {
+        let mut out = vec![0u8; pixel_count];
+        let rgba_aligned = &rgba[..pixel_count * 4];
+        if dither {
+            out.par_chunks_exact_mut(row_len)
+                .zip(rgba_aligned.par_chunks_exact(row_len * 4))
+                .enumerate()
+                .for_each(|(y, (out_row, rgba_row))| {
+                    let bayer_row = BAYER[y & 3];
+                    for (x, (slot, pixel)) in
+                        out_row.iter_mut().zip(rgba_row.chunks_exact(4)).enumerate()
+                    {
+                        if pixel[3] < TRANSPARENT_CUTOFF {
+                            *slot = transparent_index;
+                            continue;
+                        }
+                        let threshold = (bayer_row[x & 3] - 8) * 2;
+                        let r = (i16::from(pixel[0]) + threshold).clamp(0, 255) as u8;
+                        let g = (i16::from(pixel[1]) + threshold).clamp(0, 255) as u8;
+                        let b = (i16::from(pixel[2]) + threshold).clamp(0, 255) as u8;
+                        *slot = lut[cell_key(r, g, b)];
+                    }
+                });
+        } else {
+            out.par_chunks_exact_mut(row_len)
+                .zip(rgba_aligned.par_chunks_exact(row_len * 4))
+                .for_each(|(out_row, rgba_row)| {
+                    for (slot, pixel) in out_row.iter_mut().zip(rgba_row.chunks_exact(4)) {
+                        *slot = if pixel[3] < TRANSPARENT_CUTOFF {
+                            transparent_index
+                        } else {
+                            lut[cell_key(pixel[0], pixel[1], pixel[2])]
+                        };
+                    }
+                });
+        }
+        return out;
+    }
+
+    let mut out = Vec::with_capacity(pixel_count);
     if dither {
-        const BAYER: [[i16; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
         for (index, pixel) in rgba.chunks_exact(4).enumerate() {
             if pixel[3] < TRANSPARENT_CUTOFF {
                 out.push(transparent_index);
@@ -604,5 +674,53 @@ mod tests {
             image::RgbaImage::from_raw(sheet_width, sheet_height, sheet).expect("sheet dimensions");
         image.save(&path).expect("write sheet");
         eprintln!("wrote {}", path.display());
+    }
+
+    #[test]
+    fn parallel_lut_mapping_matches_serial_with_and_without_dither() {
+        // 256x256 = 65,536 pixels, crossing PARALLEL_MAP_MIN_PIXELS.
+        let width = 256u32;
+        let height = 256u32;
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let alpha = if (x + y) % 17 == 0 { 0 } else { 255 };
+                rgba.extend_from_slice(&[
+                    (x.wrapping_mul(3)) as u8,
+                    (y.wrapping_mul(5)) as u8,
+                    ((x ^ y).wrapping_mul(7)) as u8,
+                    alpha,
+                ]);
+            }
+        }
+        let palette = quantize(&rgba, 64);
+        let lut = build_lut(&palette);
+
+        // Compare row-parallel map_with_lut against reference single-threaded row mapping.
+        const BAYER: [[i16; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+        let transparent = palette.transparent_index().unwrap_or(0);
+
+        for dither in [false, true] {
+            let par = map_with_lut(&rgba, width, &palette, dither, &lut);
+            let mut seq = Vec::with_capacity(par.len());
+            for (idx, px) in rgba.chunks_exact(4).enumerate() {
+                if px[3] < TRANSPARENT_CUTOFF {
+                    seq.push(transparent);
+                    continue;
+                }
+                if dither {
+                    let x = (idx as u32 % width) as usize % 4;
+                    let y = (idx as u32 / width) as usize % 4;
+                    let t = (BAYER[y][x] - 8) * 2;
+                    let r = (i16::from(px[0]) + t).clamp(0, 255) as u8;
+                    let g = (i16::from(px[1]) + t).clamp(0, 255) as u8;
+                    let b = (i16::from(px[2]) + t).clamp(0, 255) as u8;
+                    seq.push(lut[cell_key(r, g, b)]);
+                } else {
+                    seq.push(lut[cell_key(px[0], px[1], px[2])]);
+                }
+            }
+            assert_eq!(par, seq, "parallel LUT mapping diverged (dither={dither})");
+        }
     }
 }

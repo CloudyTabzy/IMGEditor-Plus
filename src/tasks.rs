@@ -474,13 +474,13 @@ fn export_entries_batched(
     completed: &AtomicUsize,
 ) -> Vec<(CompactString, anyhow::Result<()>)> {
     let workers = rayon::current_num_threads().clamp(1, 8);
-    let chunk_size = (entries.len() / workers).max(1);
+    let chunk_size = entries.len().div_ceil(workers).max(1);
 
     let source_path = archive.path.clone();
 
     entries
         .par_chunks(chunk_size)
-        .flat_map(|chunk| {
+        .flat_map_iter(|chunk| {
             let chunk_len = chunk.len();
             // A worker whose shared reader fails to open falls back to
             // per-entry opens inside `export_entry_buffered` instead of
@@ -491,36 +491,36 @@ fn export_entries_batched(
                 .map(|file| BufReader::with_capacity(4 * 1024 * 1024, file));
 
             let mut local_completed: usize = 0;
-            chunk
-                .iter()
-                .enumerate()
-                .map(|(idx, entry)| {
-                    if progress.is_cancelled() {
-                        return (
-                            entry.file_name.clone(),
-                            Err(anyhow::anyhow!("Export cancelled")),
-                        );
-                    }
+            let mut out = Vec::with_capacity(chunk_len);
+            for (idx, entry) in chunk.iter().enumerate() {
+                if progress.is_cancelled() {
+                    break;
+                }
 
-                    let result = export_entry_buffered(
-                        archive.version,
-                        entry,
-                        source_path.as_deref(),
-                        reader.as_mut(),
-                        folder,
-                    );
+                let result = export_entry_buffered(
+                    archive.version,
+                    entry,
+                    source_path.as_deref(),
+                    reader.as_mut(),
+                    folder,
+                );
 
-                    local_completed += 1;
-                    if local_completed.is_multiple_of(64) || idx + 1 == chunk_len {
-                        let done = completed.fetch_add(local_completed, Ordering::Relaxed)
-                            + local_completed;
-                        local_completed = 0;
-                        progress.set_percentage(done as f32 / total as f32);
-                    }
+                local_completed += 1;
+                if local_completed.is_multiple_of(64) || idx + 1 == chunk_len {
+                    let done =
+                        completed.fetch_add(local_completed, Ordering::Relaxed) + local_completed;
+                    local_completed = 0;
+                    progress.set_percentage(done as f32 / total as f32);
+                }
 
-                    (entry.file_name.clone(), result)
-                })
-                .collect::<Vec<_>>()
+                out.push((entry.file_name.clone(), result));
+            }
+            if local_completed > 0 {
+                let done =
+                    completed.fetch_add(local_completed, Ordering::Relaxed) + local_completed;
+                progress.set_percentage(done as f32 / total as f32);
+            }
+            out
         })
         .collect()
 }
@@ -600,30 +600,34 @@ fn export_entries_zero_copy(
     };
 
     let paths = precompute_output_paths(entries, folder);
-    let progress_step = (total / 256).max(64);
+    const CHUNK_SIZE: usize = 64;
 
     entries
-        .par_iter()
-        .zip(paths.par_iter())
-        .map(|(entry, output_path)| {
+        .par_chunks(CHUNK_SIZE)
+        .zip(paths.par_chunks(CHUNK_SIZE))
+        .flat_map_iter(|(entry_chunk, path_chunk)| {
             if progress.is_cancelled() {
-                return (
-                    entry.file_name.clone(),
-                    Err(anyhow::anyhow!("Export cancelled")),
-                );
+                return Vec::new();
             }
-
-            let result = match output_path {
-                Ok(output_path) => export_entry_zero_copy(entry, output_path, &mmap),
-                Err(reason) => Err(anyhow::anyhow!(reason.clone())),
-            };
-
-            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-            if done.is_multiple_of(progress_step) || done == total {
+            let mut out = Vec::with_capacity(entry_chunk.len());
+            let mut local_completed = 0usize;
+            for (entry, output_path) in entry_chunk.iter().zip(path_chunk.iter()) {
+                if progress.is_cancelled() {
+                    break;
+                }
+                let result = match output_path {
+                    Ok(output_path) => export_entry_zero_copy(entry, output_path, &mmap),
+                    Err(reason) => Err(anyhow::anyhow!(reason.clone())),
+                };
+                local_completed += 1;
+                out.push((entry.file_name.clone(), result));
+            }
+            if local_completed > 0 {
+                let done =
+                    completed.fetch_add(local_completed, Ordering::Relaxed) + local_completed;
                 progress.set_percentage(done as f32 / total as f32);
             }
-
-            (entry.file_name.clone(), result)
+            out
         })
         .collect()
 }

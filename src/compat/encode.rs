@@ -12,6 +12,8 @@
 //! DXT compression uses texpresso (MIT); the INU Tools encoder was
 //! consulted for facts only (GPL-3.0, no code reuse).
 
+use std::borrow::Cow;
+
 use crate::parser::texture_decoder::format;
 
 /// Output formats the converter can write.
@@ -266,7 +268,7 @@ pub fn encode_texture(
     }
     let source_alpha = rgba[..expected].chunks_exact(4).any(|pixel| pixel[3] < 255);
 
-    let levels = mip_chain(rgba, width, height);
+    let levels = mip_chain_borrowed(rgba, width, height);
     let mut palette = Vec::new();
     let mipmaps = match format {
         EncodeFormat::Pal8 => {
@@ -309,10 +311,19 @@ pub fn encode_texture(
 /// Downsample to the full mip chain with a box filter, halving until
 /// 1x1. Odd dimensions round up (RenderWare levels never go below 1).
 pub fn mip_chain(rgba: &[u8], width: u32, height: u32) -> Vec<(u32, u32, Vec<u8>)> {
+    mip_chain_borrowed(rgba, width, height)
+        .into_iter()
+        .map(|(w, h, px)| (w, h, px.into_owned()))
+        .collect()
+}
+
+/// Borrows level 0 directly from `rgba` so encoding a 1024² texture never
+/// duplicates its 4 MiB base buffer alongside the source image.
+fn mip_chain_borrowed(rgba: &[u8], width: u32, height: u32) -> Vec<(u32, u32, Cow<'_, [u8]>)> {
     let mut levels = vec![(
         width,
         height,
-        rgba[..width as usize * height as usize * 4].to_vec(),
+        Cow::Borrowed(&rgba[..width as usize * height as usize * 4]),
     )];
     loop {
         let (w, h, ref px) = *levels.last().expect("level exists");
@@ -321,7 +332,7 @@ pub fn mip_chain(rgba: &[u8], width: u32, height: u32) -> Vec<(u32, u32, Vec<u8>
         }
         let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
         let down = downsample(px, w, h, nw, nh);
-        levels.push((nw, nh, down));
+        levels.push((nw, nh, Cow::Owned(down)));
     }
     levels
 }
@@ -408,7 +419,7 @@ fn encode_4444(px: &[u8]) -> Vec<u8> {
 // ---- DXT --------------------------------------------------------------
 
 fn encode_dxt_levels(
-    levels: &[(u32, u32, Vec<u8>)],
+    levels: &[(u32, u32, Cow<'_, [u8]>)],
     format: texpresso::Format,
     options: EncodeOptions,
     source_alpha: bool,
@@ -443,13 +454,13 @@ fn encode_dxt_levels(
 /// get a reserved entry instead of consuming color slots, and entry
 /// alpha is the usage-weighted average of its members.
 fn encode_paletted(
-    levels: &[(u32, u32, Vec<u8>)],
+    levels: &[(u32, u32, Cow<'_, [u8]>)],
     max_colors: usize,
     dither: bool,
 ) -> (Vec<u8>, Vec<Vec<u8>>) {
     let (_, _, base) = &levels[0];
     let quantized = crate::compat::palette::quantize(base, max_colors);
-    let indices = crate::compat::palette::map_levels(levels, &quantized, dither);
+    let indices = crate::compat::palette::map_levels_borrowed(levels, &quantized, dither);
 
     let mut palette_bytes = vec![0u8; 1024];
     for (i, c) in quantized.entries.iter().enumerate() {

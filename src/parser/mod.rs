@@ -340,6 +340,53 @@ pub fn read_entry_header_standalone(
     Ok(data)
 }
 
+/// Borrow one entry's bytes from `override_bytes` or `source_mmap` when
+/// possible, falling back to an owned read for imported files or unmapped
+/// archives. Keeps parallel scans and parsers zero-copy on mapped archives.
+pub(crate) fn read_entry_bytes_with_source<'a>(
+    entry: &'a EntryInfo,
+    archive_source: Option<&Path>,
+    source_mmap: Option<&'a Mmap>,
+) -> anyhow::Result<std::borrow::Cow<'a, [u8]>> {
+    if let Some(bytes) = &entry.override_bytes {
+        return Ok(std::borrow::Cow::Borrowed(bytes.as_slice()));
+    }
+    if entry.imported {
+        let source = entry
+            .source_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
+        return Ok(std::borrow::Cow::Owned(read_imported_file(source)?));
+    }
+
+    if let Some(mmap) = source_mmap {
+        let range = checked_source_entry_range(entry, mmap.len())?;
+        return Ok(std::borrow::Cow::Borrowed(&mmap[range]));
+    }
+
+    let source = archive_source.ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
+    let size = u64::from(entry.sector) * SECTOR_SIZE;
+    let offset = u64::from(entry.offset) * SECTOR_SIZE;
+    let mut file = std::fs::File::open(source)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut data = vec![0u8; size as usize];
+    file.read_exact(&mut data)?;
+    Ok(std::borrow::Cow::Owned(data))
+}
+
+/// Zero-copy wrapper over [`read_entry_bytes_with_source`] for callers that
+/// hold an [`ArchiveInfo`].
+pub(crate) fn read_entry_bytes<'a>(
+    archive: &'a ArchiveInfo,
+    entry: &'a EntryInfo,
+) -> anyhow::Result<std::borrow::Cow<'a, [u8]>> {
+    read_entry_bytes_with_source(
+        entry,
+        archive.path.as_deref(),
+        archive.source_mmap.as_deref(),
+    )
+}
+
 /// Read one entry's bytes from the archive source, preferring the mmap and
 /// honoring imported/override entries. Shared by the save, export, and
 /// conversion tasks that hold only a path + mmap snapshot.
@@ -348,31 +395,8 @@ pub(crate) fn read_entry_data_with_source(
     archive_source: Option<&Path>,
     source_mmap: Option<&Mmap>,
 ) -> anyhow::Result<Vec<u8>> {
-    if let Some(bytes) = &entry.override_bytes {
-        return Ok(bytes.as_ref().clone());
-    }
-    if entry.imported {
-        let source = entry
-            .source_path
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
-        return read_imported_file(source);
-    }
-
-    let source = archive_source.ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
-    let size = u64::from(entry.sector) * SECTOR_SIZE;
-    let offset = u64::from(entry.offset) * SECTOR_SIZE;
-
-    if let Some(mmap) = source_mmap {
-        let range = checked_source_entry_range(entry, mmap.len())?;
-        return Ok(mmap[range].to_vec());
-    }
-
-    let mut file = std::fs::File::open(source)?;
-    file.seek(SeekFrom::Start(offset))?;
-    let mut data = vec![0u8; size as usize];
-    file.read_exact(&mut data)?;
-    Ok(data)
+    read_entry_bytes_with_source(entry, archive_source, source_mmap)
+        .map(std::borrow::Cow::into_owned)
 }
 
 const ZERO_SECTOR: [u8; SECTOR_SIZE as usize] = [0; SECTOR_SIZE as usize];
@@ -616,10 +640,15 @@ pub fn prepare_import_entry(
     Ok(PreparedImportEntry::Ready(entry))
 }
 
+const PARALLEL_PREPARE_IMPORT_MIN: usize = 32;
+
 pub fn prepare_import_batch(paths: &[PathBuf], version: ImgVersion) -> PreparedImportBatch {
-    let mut batch = PreparedImportBatch::default();
-    for path in paths {
-        match prepare_import_entry(path, version) {
+    let mut batch = PreparedImportBatch {
+        entries: Vec::with_capacity(paths.len()),
+        ..PreparedImportBatch::default()
+    };
+    let record = |batch: &mut PreparedImportBatch, outcome: anyhow::Result<PreparedImportEntry>| {
+        match outcome {
             Ok(PreparedImportEntry::Ready(entry)) => batch.entries.push(entry),
             Ok(PreparedImportEntry::Skipped { log, .. }) => {
                 batch.skipped += 1;
@@ -630,6 +659,23 @@ pub fn prepare_import_batch(paths: &[PathBuf], version: ImgVersion) -> PreparedI
             Err(_) => {
                 batch.skipped += 1;
             }
+        }
+    };
+
+    if paths.len() >= PARALLEL_PREPARE_IMPORT_MIN {
+        use rayon::prelude::*;
+        // Large drag-and-drop batches overlap per-file metadata syscalls across
+        // workers while preserving exact input order.
+        let outcomes: Vec<anyhow::Result<PreparedImportEntry>> = paths
+            .par_iter()
+            .map(|path| prepare_import_entry(path, version))
+            .collect();
+        for outcome in outcomes {
+            record(&mut batch, outcome);
+        }
+    } else {
+        for path in paths {
+            record(&mut batch, prepare_import_entry(path, version));
         }
     }
     batch

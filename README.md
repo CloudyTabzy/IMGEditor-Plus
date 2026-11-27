@@ -367,7 +367,7 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 | `tokio 1.40` | Async runtime (multi-thread, fs, sync) |
 | `memmap2` | Zero-copy archive reads |
 | `quick_cache` | Byte-budgeted LRU caches (3D scenes, texture previews, inspector summaries) — its placeholder guards also power single-flight decode dedup |
-| `rayon` | Parallel entry export and TXD preview catalog builds |
+| `rayon 1.12` | Work-stealing parallelism for archive export, compatibility scan, header normalize, TXD/NFT preview decode, bounded-pool bulk conversion, palette mapping, and batch import prep — see [docs/rayon-parallelism.md](docs/rayon-parallelism.md) |
 | `glam` | Vector/matrix math for the 3D viewer |
 | `compact_str` | Compact inline strings for 10,000+ entry names |
 | `hashbrown` | SwissTable maps/sets with foldhash for internal collections — see [docs/hashmap-crate.md](docs/hashmap-crate.md) |

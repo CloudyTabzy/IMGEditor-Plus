@@ -27,7 +27,7 @@ iced_aw = { version = "0.14.1", features = ["menu", "tabs", "context_menu", "car
 iced_fonts = { version = "0.3.0", features = ["lucide"] }
 image = { version = "0.25", default-features = false, features = ["png", "dds", "bmp", "tga"] }
 memmap2 = "0.9"
-rayon = "1.10"
+rayon = "1.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 smallvec = "1"

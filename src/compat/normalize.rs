@@ -12,7 +12,11 @@
 
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use crate::archive::ArchiveInfo;
+
+const PARALLEL_NORMALIZE_MIN_ENTRIES: usize = 32;
 
 /// One entry that can be repaired, with a human-readable description.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,29 +36,41 @@ struct NativeHeader {
     depth: u8,
 }
 
-/// Plan every mechanically fixable entry in the archive. Reads entry
-/// bytes; nothing is modified.
+/// Plan every mechanically fixable entry in the archive. Borrows entry
+/// bytes from the archive mmap when mapped; nothing is modified.
 pub fn plan_fixes(archive: &ArchiveInfo) -> Vec<HeaderFix> {
-    let mut fixes = Vec::new();
-    for (index, entry) in archive.entries.iter().enumerate() {
+    let inspect = |(index, entry): (usize, &crate::archive::EntryInfo)| -> Option<HeaderFix> {
         if !entry.file_name_lower.ends_with(".txd") {
-            continue;
+            return None;
         }
-        let Ok(bytes) = crate::parser::read_entry_data(archive, entry) else {
-            continue;
-        };
+        let bytes = crate::parser::read_entry_bytes(archive, entry).ok()?;
         for header in walk_native_headers(&bytes) {
             if let Some(detail) = fix_detail(&header) {
-                fixes.push(HeaderFix {
+                return Some(HeaderFix {
                     entry_index: index,
                     file_name: entry.file_name.to_string(),
                     detail,
                 });
-                break; // one report line per entry is enough
             }
         }
+        None
+    };
+
+    if archive.entries.len() >= PARALLEL_NORMALIZE_MIN_ENTRIES {
+        archive
+            .entries
+            .par_iter()
+            .enumerate()
+            .filter_map(inspect)
+            .collect()
+    } else {
+        archive
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(inspect)
+            .collect()
     }
-    fixes
 }
 
 /// Apply the fixes: every entry with a fixable header gets patched bytes
@@ -76,40 +92,59 @@ pub fn apply_fixes(archive: &mut ArchiveInfo) -> usize {
 /// large archives never block the UI; the result is applied when it
 /// returns.
 pub fn collect_fixes(archive: &ArchiveInfo) -> Vec<(usize, Arc<Vec<u8>>)> {
-    let mut patches = Vec::new();
-    for (index, entry) in archive.entries.iter().enumerate() {
+    let patch_one = |(index, entry): (usize, &crate::archive::EntryInfo)| {
         if !entry.file_name_lower.ends_with(".txd") {
-            continue;
+            return None;
         }
-        if let Some(bytes) = fixed_entry(archive, entry) {
-            patches.push((index, bytes));
-        }
+        fixed_entry(archive, entry).map(|bytes| (index, bytes))
+    };
+
+    if archive.entries.len() >= PARALLEL_NORMALIZE_MIN_ENTRIES {
+        archive
+            .entries
+            .par_iter()
+            .enumerate()
+            .filter_map(patch_one)
+            .collect()
+    } else {
+        archive
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(patch_one)
+            .collect()
     }
-    patches
 }
 
-/// Read one entry, patch every fixable native header in it, and return
-/// the patched bytes when anything changed.
+/// Inspect one entry zero-copy, only cloning and patching its bytes when at
+/// least one native header actually needs repair.
 fn fixed_entry(archive: &ArchiveInfo, entry: &crate::archive::EntryInfo) -> Option<Arc<Vec<u8>>> {
-    let Ok(mut bytes) = crate::parser::read_entry_data(archive, entry) else {
+    let bytes = crate::parser::read_entry_bytes(archive, entry).ok()?;
+    let headers = walk_native_headers(&bytes);
+    let needs_patch = headers.iter().any(|header| {
+        let Some(nibble) = fixed_nibble(header.d3d_format) else {
+            return false;
+        };
+        let want = (header.raster_format & !0x0F00) | nibble;
+        header.raster_format != want || header.depth != 16
+    });
+    if !needs_patch {
         return None;
-    };
-    let mut changed = false;
-    for header in walk_native_headers(&bytes) {
+    }
+    let mut owned = bytes.into_owned();
+    for header in headers {
         if let Some(nibble) = fixed_nibble(header.d3d_format) {
             let want = (header.raster_format & !0x0F00) | nibble;
             if header.raster_format != want {
-                bytes[header.raster_pos..header.raster_pos + 4]
+                owned[header.raster_pos..header.raster_pos + 4]
                     .copy_from_slice(&want.to_le_bytes());
-                changed = true;
             }
             if header.depth != 16 {
-                bytes[header.depth_pos] = 16;
-                changed = true;
+                owned[header.depth_pos] = 16;
             }
         }
     }
-    if changed { Some(Arc::new(bytes)) } else { None }
+    Some(Arc::new(owned))
 }
 
 /// Describe what would change, or `None` when the header is fine.

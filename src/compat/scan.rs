@@ -3,19 +3,22 @@
 //! anomalies, and per-game verdicts. This is the verification tool for
 //! the profile tables and the seed of the user-facing auditor.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Context;
+use rayon::prelude::*;
 
 use crate::archive::ArchiveInfo;
 use crate::inspector::nif::{self, Endian};
-use crate::parser::txd::parse_txd;
-use crate::parser::{ImgVersion, canonical_img_path, read_entry_data_from_source};
+use crate::parser::txd::{parse_txd, parse_txd_headers};
+use crate::parser::{ImgVersion, canonical_img_path, read_entry_bytes as read_archive_entry_bytes};
 #[cfg(test)]
 use crate::parser::{iparser::ImgParser, pc_v2::PcV2Parser};
 
-use super::games::{ALL_GAMES, classify};
+use super::games::{ALL_GAMES, classify, classify_nft_verdict, classify_verdict};
 use super::raster::{LogicalFormat, RasterProfile, Severity};
 use crate::i18n::t;
 
@@ -156,17 +159,122 @@ impl ScanReport {
             .map(|(_, count)| *count)
             .sum()
     }
+
+    /// Merge a later slice's partial report into `self`, preserving archive
+    /// order for `entry_verdicts` and the 5-example cap in `anomaly_examples`.
+    fn merge(&mut self, other: Self) {
+        self.txd_entries += other.txd_entries;
+        self.nif_entries += other.nif_entries;
+        self.nft_entries += other.nft_entries;
+        self.parse_failures += other.parse_failures;
+        self.textures += other.textures;
+        self.nft_textures += other.nft_textures;
+        self.nft_paletted += other.nft_paletted;
+        self.palette_reconstructible =
+            match (self.palette_reconstructible, other.palette_reconstructible) {
+                (Some(a), Some(b)) => Some(a + b),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            };
+
+        for (format, count) in other.nft_formats {
+            *self.nft_formats.entry(format).or_default() += count;
+        }
+        for (game, counts) in other.nft_verdicts {
+            let dest = self.nft_verdicts.entry(game).or_default();
+            for (label, count) in counts {
+                *dest.entry(label).or_default() += count;
+            }
+        }
+        for (class, count) in other.class_counts {
+            *self.class_counts.entry(class).or_default() += count;
+        }
+        for (code, count) in other.anomaly_counts {
+            *self.anomaly_counts.entry(code).or_default() += count;
+        }
+        for (code, severity) in other.anomaly_severity {
+            let merged = self
+                .anomaly_severity
+                .get(code)
+                .copied()
+                .map(|existing| existing.max_by_rank(severity))
+                .unwrap_or(severity);
+            self.anomaly_severity.insert(code, merged);
+        }
+        for (code, examples) in other.anomaly_examples {
+            let dest = self.anomaly_examples.entry(code).or_default();
+            let remaining = 5usize.saturating_sub(dest.len());
+            if remaining > 0 {
+                dest.extend(examples.into_iter().take(remaining));
+            }
+        }
+        for (game, counts) in other.verdicts {
+            let dest = self.verdicts.entry(game).or_default();
+            for (label, count) in counts {
+                *dest.entry(label).or_default() += count;
+            }
+        }
+        self.entry_verdicts.extend(other.entry_verdicts);
+    }
 }
 
-/// Shared profiling loop: reads each TXD entry (mmap slice when the
-/// archive is mapped), parses it, and accumulates the report.
+/// Minimum archive entry count before `profile_entries` fans out over rayon.
+const PARALLEL_SCAN_MIN_ENTRIES: usize = 32;
+
+/// Shared profiling loop: borrows each TXD/NFT entry directly from the archive
+/// mmap when mapped, parses it, and accumulates the report. Large archives fan
+/// out with `try_fold` + `try_reduce`, which preserves archive order for
+/// `entry_verdicts` and `anomaly_examples` while short-circuiting on cancel.
 fn profile_entries(
     archive: &ArchiveInfo,
     report: &mut ScanReport,
     options: &ScanOptions,
     progress: Option<&crate::archive::ProgressInfo>,
 ) -> anyhow::Result<()> {
+    if archive.entries.len() < PARALLEL_SCAN_MIN_ENTRIES {
+        return profile_entries_serial(archive, report, options, progress);
+    }
+
     let total = archive.entries.len();
+    let completed = AtomicUsize::new(0);
+    let progress_step = (total / 128).max(16);
+    let target = options.target.and_then(crate::compat::games::profile_by_id);
+
+    let merged = archive
+        .entries
+        .par_iter()
+        .enumerate()
+        .try_fold(ScanReport::default, |mut acc, (index, entry)| {
+            if let Some(progress) = progress
+                && progress.is_cancelled()
+            {
+                anyhow::bail!("Validation cancelled");
+            }
+            profile_one_entry(archive, index, entry, &mut acc, options, target)?;
+            if let Some(progress) = progress {
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                if done.is_multiple_of(progress_step) || done == total {
+                    progress.set_percentage(done as f32 / total.max(1) as f32);
+                }
+            }
+            Ok(acc)
+        })
+        .try_reduce(ScanReport::default, |mut left, right| {
+            left.merge(right);
+            Ok(left)
+        })?;
+    report.merge(merged);
+    Ok(())
+}
+
+fn profile_entries_serial(
+    archive: &ArchiveInfo,
+    report: &mut ScanReport,
+    options: &ScanOptions,
+    progress: Option<&crate::archive::ProgressInfo>,
+) -> anyhow::Result<()> {
+    let total = archive.entries.len();
+    let target = options.target.and_then(crate::compat::games::profile_by_id);
     for (index, entry) in archive.entries.iter().enumerate() {
         if let Some(progress) = progress {
             if progress.is_cancelled() {
@@ -176,15 +284,35 @@ fn profile_entries(
                 progress.set_percentage((index + 1) as f32 / total.max(1) as f32);
             }
         }
-        if entry.file_name_lower.ends_with(".txd") {
-            profile_txd_entry(archive, index, entry, report, options)?;
-        } else if entry.file_name_lower.ends_with(".nft") {
-            profile_nft_entry(archive, index, entry, report, options)?;
-        } else if entry.file_name_lower.ends_with(".nif") {
-            report.nif_entries += 1;
-        }
+        profile_one_entry(archive, index, entry, report, options, target)?;
     }
     Ok(())
+}
+
+fn profile_one_entry(
+    archive: &ArchiveInfo,
+    index: usize,
+    entry: &crate::archive::EntryInfo,
+    report: &mut ScanReport,
+    options: &ScanOptions,
+    target: Option<&crate::compat::games::GameProfile>,
+) -> anyhow::Result<()> {
+    if entry.file_name_lower.ends_with(".txd") {
+        profile_txd_entry(archive, index, entry, report, options, target)?;
+    } else if entry.file_name_lower.ends_with(".nft") {
+        profile_nft_entry(archive, index, entry, report, target)?;
+    } else if entry.file_name_lower.ends_with(".nif") {
+        report.nif_entries += 1;
+    }
+    Ok(())
+}
+
+fn bump_owned_count(map: &mut BTreeMap<String, usize>, key: &str) {
+    if let Some(count) = map.get_mut(key) {
+        *count += 1;
+    } else {
+        map.insert(key.to_owned(), 1);
+    }
 }
 
 fn profile_txd_entry(
@@ -193,12 +321,18 @@ fn profile_txd_entry(
     entry: &crate::archive::EntryInfo,
     report: &mut ScanReport,
     options: &ScanOptions,
+    target: Option<&crate::compat::games::GameProfile>,
 ) -> anyhow::Result<()> {
     report.txd_entries += 1;
     let Some(bytes) = read_entry_bytes(archive, entry, report, "TXD_READ_FAIL")? else {
         return Ok(());
     };
-    let parsed = match parse_txd(&bytes) {
+    let parsed = if options.decode_pixels {
+        parse_txd(&bytes)
+    } else {
+        parse_txd_headers(&bytes)
+    };
+    let parsed = match parsed {
         Ok(parsed) => parsed,
         Err(err) => {
             report.parse_failures += 1;
@@ -215,7 +349,6 @@ fn profile_txd_entry(
 
     // Per-entry verdicts for the chosen target power the row
     // highlights in the UI. Computed alongside the aggregate pass.
-    let target = options.target.and_then(crate::compat::games::profile_by_id);
     let mut entry_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut entry_worst: Option<crate::compat::games::Verdict> = None;
 
@@ -223,11 +356,13 @@ fn profile_txd_entry(
         report.textures += 1;
         let profile = RasterProfile::from_native(texture);
 
-        let mut class_label = profile.logical.label().to_string();
-        if profile.logical == LogicalFormat::R888 && profile.storage_bpp == 4 {
-            class_label.push_str(" (32bpp storage)");
-        }
-        *report.class_counts.entry(class_label).or_default() += 1;
+        let class_label: &str =
+            if profile.logical == LogicalFormat::R888 && profile.storage_bpp == 4 {
+                "888 (32bpp storage)"
+            } else {
+                profile.logical.label()
+            };
+        bump_owned_count(&mut report.class_counts, class_label);
 
         for anomaly in profile.anomalies() {
             record_anomaly(
@@ -240,17 +375,17 @@ fn profile_txd_entry(
         }
 
         for game in ALL_GAMES {
-            let verdict = classify(game, &profile);
+            let verdict = classify_verdict(game, &profile);
             *report
                 .verdicts
                 .entry(game.id)
                 .or_default()
-                .entry(verdict.verdict.label())
+                .entry(verdict.label())
                 .or_default() += 1;
         }
 
         if let Some(target) = target {
-            let verdict = classify(target, &profile).verdict;
+            let verdict = classify_verdict(target, &profile);
             *entry_counts.entry(verdict.label()).or_default() += 1;
             entry_worst = Some(match entry_worst {
                 Some(previous) => previous.max(verdict),
@@ -414,7 +549,7 @@ pub fn check_import_file(
         return check;
     }
 
-    let parsed = match parse_txd(&bytes) {
+    let parsed = match parse_txd_headers(&bytes) {
         Ok(parsed) => parsed,
         Err(_) => {
             check.skipped = true;
@@ -439,48 +574,55 @@ pub fn check_import_file(
     check
 }
 
-/// Read one entry's bytes through the mmap when available. Returns
-/// `Ok(None)` after recording a read-failure anomaly for the entry.
-fn read_entry_bytes(
-    archive: &ArchiveInfo,
-    entry: &crate::archive::EntryInfo,
+const PARALLEL_IMPORT_CHECK_MIN: usize = 8;
+
+/// Pre-flight check a batch of candidate import files, fanning out across
+/// rayon workers once the batch is large enough to amortize fork/join overhead.
+pub fn check_import_files(
+    paths: &[PathBuf],
+    target: &crate::compat::games::GameProfile,
+) -> Vec<ImportFileCheck> {
+    if paths.len() >= PARALLEL_IMPORT_CHECK_MIN {
+        paths
+            .par_iter()
+            .map(|path| check_import_file(path, target))
+            .collect()
+    } else {
+        paths
+            .iter()
+            .map(|path| check_import_file(path, target))
+            .collect()
+    }
+}
+
+/// Borrow one entry's bytes through the mmap or override buffer when available.
+/// Returns `Ok(None)` after recording a read-failure anomaly for the entry.
+fn read_entry_bytes<'a>(
+    archive: &'a ArchiveInfo,
+    entry: &'a crate::archive::EntryInfo,
     report: &mut ScanReport,
     code: &'static str,
-) -> anyhow::Result<Option<Vec<u8>>> {
-    match (&archive.source_mmap, &archive.path) {
-        (Some(mmap), _) => {
-            let start = entry.offset as usize * crate::parser::SECTOR_SIZE as usize;
-            let end = start + entry.sector as usize * crate::parser::SECTOR_SIZE as usize;
-            match mmap.get(start..end) {
-                Some(slice) => Ok(Some(slice.to_vec())),
-                None => {
-                    report.parse_failures += 1;
-                    record_anomaly(
-                        report,
-                        code,
-                        Severity::Error,
-                        &entry.file_name,
-                        "entry range lies outside the archive".to_string(),
-                    );
-                    Ok(None)
-                }
-            }
+) -> anyhow::Result<Option<Cow<'a, [u8]>>> {
+    if entry.override_bytes.is_none()
+        && !entry.imported
+        && archive.source_mmap.is_none()
+        && archive.path.is_none()
+    {
+        anyhow::bail!("archive has no source to read from");
+    }
+    match read_archive_entry_bytes(archive, entry) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) => {
+            report.parse_failures += 1;
+            record_anomaly(
+                report,
+                code,
+                Severity::Error,
+                &entry.file_name,
+                format!("{err}"),
+            );
+            Ok(None)
         }
-        (None, Some(source)) => match read_entry_data_from_source(entry, Some(source)) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(err) => {
-                report.parse_failures += 1;
-                record_anomaly(
-                    report,
-                    code,
-                    Severity::Error,
-                    &entry.file_name,
-                    format!("{err}"),
-                );
-                Ok(None)
-            }
-        },
-        (None, None) => anyhow::bail!("archive has no source to read from"),
     }
 }
 
@@ -533,12 +675,11 @@ fn profile_nft_entry(
     entry_index: usize,
     entry: &crate::archive::EntryInfo,
     report: &mut ScanReport,
-    options: &ScanOptions,
+    target: Option<&crate::compat::games::GameProfile>,
 ) -> anyhow::Result<()> {
     report.nft_entries += 1;
     // Resolve the target first so even entries that cannot be parsed
     // still surface a row verdict instead of being silently unmarked.
-    let target = options.target.and_then(crate::compat::games::profile_by_id);
     let Some(bytes) = read_entry_bytes(archive, entry, report, "NFT_READ_FAIL")? else {
         return Ok(());
     };
@@ -592,16 +733,16 @@ fn profile_nft_entry(
         entry_textures += 1;
         let format = info_format_label(raw, header.endian);
         for game in ALL_GAMES {
-            let verdict = crate::compat::games::classify_nft_format(game, format);
+            let verdict = classify_nft_verdict(game, format);
             *report
                 .nft_verdicts
                 .entry(game.id)
                 .or_default()
-                .entry(verdict.verdict.label())
+                .entry(verdict.label())
                 .or_default() += 1;
         }
         if let Some(target) = target {
-            let verdict = crate::compat::games::classify_nft_format(target, format).verdict;
+            let verdict = classify_nft_verdict(target, format);
             *entry_counts.entry(verdict.label()).or_default() += 1;
             entry_worst = Some(match entry_worst {
                 Some(previous) => previous.max(verdict),
@@ -610,10 +751,7 @@ fn profile_nft_entry(
         }
         match decode_ni_pixel_tail(raw, header.endian) {
             Some(info) => {
-                *report
-                    .nft_formats
-                    .entry(info.format_name().to_string())
-                    .or_default() += 1;
+                bump_owned_count(&mut report.nft_formats, info.format_name());
                 if info.paletted() {
                     report.nft_paletted += 1;
                 }
@@ -659,10 +797,7 @@ fn profile_nft_entry(
                         nif_format_name(fmt)
                     ),
                 );
-                *report
-                    .nft_formats
-                    .entry(nif_format_name(fmt).to_string())
-                    .or_default() += 1;
+                bump_owned_count(&mut report.nft_formats, nif_format_name(fmt));
             }
         }
     }
@@ -1566,5 +1701,119 @@ mod tests {
         assert!(skipped.skipped);
         assert_eq!(skipped.textures, 0);
         assert!(!skipped.has_incompatible());
+    }
+
+    #[test]
+    fn parallel_profile_entries_matches_serial_field_for_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad_txd = dir.path().join("bad.txd");
+        std::fs::write(&bad_txd, b"not a valid txd").unwrap();
+        let nft_path = dir.path().join("ok.nft");
+        std::fs::write(
+            &nft_path,
+            nif_nft_bytes(&nif_pixel_data_block(4, &[(8, 8)], -1)),
+        )
+        .unwrap();
+
+        let mut archive = ArchiveInfo::new("synthetic", true, ImgVersion::Two);
+        // Exceed PARALLEL_SCAN_MIN_ENTRIES (32) with a mix of bad TXDs, NFTs,
+        // and NIFs so anomaly caps, counters, and entry_verdicts ordering are
+        // all exercised across rayon chunks.
+        for i in 0..48usize {
+            let mut entry = match i % 3 {
+                0 => {
+                    let mut e = crate::archive::EntryInfo::new(format!("bad_{i:02}.txd"));
+                    e.imported = true;
+                    e.source_path = Some(bad_txd.clone());
+                    e
+                }
+                1 => {
+                    let mut e = crate::archive::EntryInfo::new(format!("tex_{i:02}.nft"));
+                    e.imported = true;
+                    e.source_path = Some(nft_path.clone());
+                    e
+                }
+                _ => crate::archive::EntryInfo::new(format!("mesh_{i:02}.nif")),
+            };
+            entry.sector = 1;
+            archive.entries.push(entry);
+        }
+
+        let options = ScanOptions {
+            decode_pixels: false,
+            target: Some("bully"),
+        };
+        let mut serial = ScanReport::default();
+        profile_entries_serial(&archive, &mut serial, &options, None).unwrap();
+        let mut parallel = ScanReport::default();
+        profile_entries(&archive, &mut parallel, &options, None).unwrap();
+
+        assert_eq!(parallel.txd_entries, serial.txd_entries);
+        assert_eq!(parallel.nif_entries, serial.nif_entries);
+        assert_eq!(parallel.nft_entries, serial.nft_entries);
+        assert_eq!(parallel.parse_failures, serial.parse_failures);
+        assert_eq!(parallel.textures, serial.textures);
+        assert_eq!(parallel.nft_textures, serial.nft_textures);
+        assert_eq!(parallel.nft_paletted, serial.nft_paletted);
+        assert_eq!(parallel.nft_formats, serial.nft_formats);
+        assert_eq!(parallel.nft_verdicts, serial.nft_verdicts);
+        assert_eq!(parallel.class_counts, serial.class_counts);
+        assert_eq!(parallel.anomaly_counts, serial.anomaly_counts);
+        assert_eq!(parallel.anomaly_severity, serial.anomaly_severity);
+        assert_eq!(parallel.anomaly_examples, serial.anomaly_examples);
+        assert_eq!(parallel.verdicts, serial.verdicts);
+        assert_eq!(parallel.entry_verdicts.len(), serial.entry_verdicts.len());
+        for (p, s) in parallel
+            .entry_verdicts
+            .iter()
+            .zip(serial.entry_verdicts.iter())
+        {
+            assert_eq!(p.entry_index, s.entry_index);
+            assert_eq!(p.file_name, s.file_name);
+            assert_eq!(p.textures, s.textures);
+            assert_eq!(p.worst, s.worst);
+            assert_eq!(p.counts, s.counts);
+        }
+    }
+
+    #[test]
+    fn parallel_profile_entries_matches_serial_on_retail_gta3_when_present() {
+        let Some(root) = crate::test_paths::corpus_root() else {
+            return;
+        };
+        let path = root.join("Gta_3_img").join("gta3.img");
+        if !path.is_file() {
+            return;
+        }
+        let archive = ArchiveInfo::open(&path).expect("open gta3.img");
+        let options = ScanOptions {
+            decode_pixels: false,
+            target: Some("sa"),
+        };
+        let mut serial = ScanReport::default();
+        profile_entries_serial(&archive, &mut serial, &options, None).unwrap();
+        let mut parallel = ScanReport::default();
+        profile_entries(&archive, &mut parallel, &options, None).unwrap();
+
+        assert_eq!(parallel.txd_entries, serial.txd_entries);
+        assert_eq!(parallel.textures, serial.textures);
+        assert_eq!(parallel.parse_failures, serial.parse_failures);
+        assert_eq!(parallel.class_counts, serial.class_counts);
+        assert_eq!(parallel.anomaly_counts, serial.anomaly_counts);
+        assert_eq!(parallel.anomaly_severity, serial.anomaly_severity);
+        assert_eq!(parallel.anomaly_examples, serial.anomaly_examples);
+        assert_eq!(parallel.verdicts, serial.verdicts);
+        assert_eq!(parallel.entry_verdicts.len(), serial.entry_verdicts.len());
+        for (p, s) in parallel
+            .entry_verdicts
+            .iter()
+            .zip(serial.entry_verdicts.iter())
+        {
+            assert_eq!(p.entry_index, s.entry_index);
+            assert_eq!(p.file_name, s.file_name);
+            assert_eq!(p.textures, s.textures);
+            assert_eq!(p.worst, s.worst);
+            assert_eq!(p.counts, s.counts);
+        }
     }
 }

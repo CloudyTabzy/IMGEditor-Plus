@@ -194,8 +194,20 @@ impl NativeTexture {
     }
 }
 
-/// Parse a complete TXD file from raw bytes.
+/// Parse a complete TXD file from raw bytes, including palette and mipmap
+/// pixel payloads.
 pub fn parse_txd(bytes: &[u8]) -> Result<TxdFile, String> {
+    parse_txd_inner(bytes, true)
+}
+
+/// Parse a TXD file's headers and validate every palette/mipmap byte range
+/// without copying pixel payloads. Used by archive scans, import pre-flight
+/// checks, and TXD splicers that only inspect metadata.
+pub fn parse_txd_headers(bytes: &[u8]) -> Result<TxdFile, String> {
+    parse_txd_inner(bytes, false)
+}
+
+fn parse_txd_inner(bytes: &[u8], copy_pixels: bool) -> Result<TxdFile, String> {
     let top = read_section(bytes, 0, bytes.len())?;
     if top.kind == rw::PI_TEXTURE_DICTIONARY {
         return parse_platform_independent_txd(bytes, top);
@@ -229,12 +241,13 @@ pub fn parse_txd(bytes: &[u8]) -> Result<TxdFile, String> {
                             texture_count, MAX_TEXTURES
                         ));
                     }
+                    textures.reserve(usize::from(texture_count));
                 }
             }
             rw::TEXTURE_NATIVE => {
                 let body = &bytes[child.start..child.end];
                 if textures.len() < MAX_TEXTURES as usize
-                    && let Ok(texture) = parse_native_texture(body)
+                    && let Ok(texture) = parse_native_texture(body, copy_pixels)
                 {
                     textures.push(texture);
                 }
@@ -293,7 +306,7 @@ pub(crate) fn native_splices(bytes: &[u8]) -> Vec<NativeSplice> {
         };
         if child.kind == rw::TEXTURE_NATIVE {
             let body = &bytes[child.start..child.end];
-            if out.len() < MAX_TEXTURES as usize && parse_native_texture(body).is_ok() {
+            if out.len() < MAX_TEXTURES as usize && parse_native_texture(body, false).is_ok() {
                 out.push(splice_for_native(bytes, &child, position));
             }
         }
@@ -635,7 +648,7 @@ fn platform_independent_has_alpha(
     }
 }
 
-fn parse_native_texture(bytes: &[u8]) -> Result<NativeTexture, String> {
+fn parse_native_texture(bytes: &[u8], copy_pixels: bool) -> Result<NativeTexture, String> {
     // GTA PC Texture Native chunks contain a nested STRUCT. A raw fallback is
     // retained for old tools that omitted that wrapper.
     let mut position = 0usize;
@@ -647,14 +660,14 @@ fn parse_native_texture(bytes: &[u8]) -> Result<NativeTexture, String> {
             break;
         };
         if child.kind == rw::STRUCT {
-            return parse_native_struct(&bytes[child.start..child.end]);
+            return parse_native_struct(&bytes[child.start..child.end], copy_pixels);
         }
         position = child.end;
     }
-    parse_native_struct(bytes)
+    parse_native_struct(bytes, copy_pixels)
 }
 
-fn parse_native_struct(bytes: &[u8]) -> Result<NativeTexture, String> {
+fn parse_native_struct(bytes: &[u8], copy_pixels: bool) -> Result<NativeTexture, String> {
     let mut cursor = Cursor::new(bytes);
     let platform_id = cursor.u32("platform id")?;
     let filter_mode = cursor.u8("filter mode")?;
@@ -695,19 +708,32 @@ fn parse_native_struct(bytes: &[u8]) -> Result<NativeTexture, String> {
         _ => None,
     };
     let palette = match palette_size {
-        Some(size) => cursor.take(size, "palette")?.to_vec(),
+        Some(size) => {
+            let slice = cursor.take(size, "palette")?;
+            if copy_pixels {
+                slice.to_vec()
+            } else {
+                Vec::new()
+            }
+        }
         None => Vec::new(),
     };
 
-    let mut mipmaps = Vec::with_capacity(num_mipmaps as usize);
+    let mut mipmaps = if copy_pixels {
+        Vec::with_capacity(num_mipmaps as usize)
+    } else {
+        Vec::new()
+    };
     for level in 0..num_mipmaps as usize {
         let byte_len = cursor.u32("mipmap byte length")? as usize;
-        let data = cursor.take(byte_len, "mipmap pixels")?.to_vec();
-        mipmaps.push(MipmapLevel {
-            width: width.checked_shr(level as u32).unwrap_or(0).max(1),
-            height: height.checked_shr(level as u32).unwrap_or(0).max(1),
-            data,
-        });
+        let slice = cursor.take(byte_len, "mipmap pixels")?;
+        if copy_pixels {
+            mipmaps.push(MipmapLevel {
+                width: width.checked_shr(level as u32).unwrap_or(0).max(1),
+                height: height.checked_shr(level as u32).unwrap_or(0).max(1),
+                data: slice.to_vec(),
+            });
+        }
     }
 
     let has_alpha = texture_decoder::native_has_alpha(

@@ -1916,22 +1916,24 @@ impl App {
                 ))
             })
             .collect();
-        let verdicts: Vec<crate::compat::scan::EntryVerdict> = imported
-            .into_iter()
-            .filter_map(|(entry_index, file_name, path)| {
-                let check = crate::compat::scan::check_import_file(&path, target);
-                if check.textures == 0 {
-                    return None;
-                }
-                Some(crate::compat::scan::EntryVerdict {
-                    entry_index,
-                    file_name,
-                    textures: check.textures,
-                    worst: check.worst,
-                    counts: check.counts,
-                })
+        let check_one = |(entry_index, file_name, path): (usize, String, PathBuf)| {
+            let check = crate::compat::scan::check_import_file(&path, target);
+            if check.textures == 0 {
+                return None;
+            }
+            Some(crate::compat::scan::EntryVerdict {
+                entry_index,
+                file_name,
+                textures: check.textures,
+                worst: check.worst,
+                counts: check.counts,
             })
-            .collect();
+        };
+        let verdicts: Vec<crate::compat::scan::EntryVerdict> = if imported.len() >= 8 {
+            imported.into_par_iter().filter_map(check_one).collect()
+        } else {
+            imported.into_iter().filter_map(check_one).collect()
+        };
         if verdicts.is_empty() {
             return;
         }
@@ -2009,10 +2011,7 @@ impl App {
         Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || {
-                    check_paths
-                        .iter()
-                        .map(|path| crate::compat::scan::check_import_file(path, target))
-                        .collect::<Vec<_>>()
+                    crate::compat::scan::check_import_files(&check_paths, target)
                 })
                 .await
                 .map_err(|error| error.to_string())
@@ -9405,6 +9404,86 @@ fn plan_txd_import(
 /// Receives only the selected entries (with their indices) plus the source
 /// accessors, so the task never needs a full archive clone. Each entry's
 /// TXD is parsed once — classification, planning, and apply all reuse it.
+fn plan_bulk_entry(
+    index: usize,
+    entry: &EntryInfo,
+    archive_path: Option<&std::path::Path>,
+    source_mmap: Option<&memmap2::Mmap>,
+    source_label: &str,
+    target: &'static crate::compat::games::GameProfile,
+    parallel_textures: bool,
+) -> Option<BulkEntryPlan> {
+    use crate::compat::games::{Verdict, classify_verdict};
+    use crate::compat::raster::RasterProfile;
+
+    let bytes =
+        crate::parser::read_entry_bytes_with_source(entry, archive_path, source_mmap).ok()?;
+    let txd = crate::parser::txd::parse_txd(&bytes).ok()?;
+
+    let mut skipped_native = 0usize;
+    let mut to_convert = Vec::new();
+    for (texture_index, texture) in txd.textures.iter().enumerate() {
+        let profile = RasterProfile::from_native(texture);
+        if classify_verdict(target, &profile) == Verdict::Native {
+            skipped_native += 1;
+        } else {
+            to_convert.push((texture_index, texture));
+        }
+    }
+    if to_convert.is_empty() {
+        return None;
+    }
+
+    let options = crate::compat::encode::EncodeOptions {
+        // The bulk dialog lists counts, not pixels; skipping the
+        // preview decode keeps big selections cheap.
+        preview: false,
+        ..Default::default()
+    };
+    let convert_one = |(texture_index, texture): &(usize, &crate::parser::txd::NativeTexture)| {
+        crate::compat::convert::plan_conversion_for_texture(
+            texture,
+            target,
+            source_label,
+            None,
+            options,
+        )
+        .map(|plan| {
+            (
+                *texture_index,
+                texture.diffuse_name.clone(),
+                CompactPlan(Arc::new(plan)),
+            )
+        })
+    };
+
+    let outcomes: Vec<_> = if parallel_textures && to_convert.len() >= 2 {
+        to_convert.par_iter().map(convert_one).collect()
+    } else {
+        to_convert.iter().map(convert_one).collect()
+    };
+
+    let mut textures = Vec::with_capacity(outcomes.len());
+    let mut failed = 0usize;
+    for outcome in outcomes {
+        match outcome {
+            Ok(planned) => textures.push(planned),
+            Err(_) => failed += 1,
+        }
+    }
+    if textures.is_empty() {
+        return None;
+    }
+    Some(BulkEntryPlan {
+        entry_index: index,
+        file_name: entry.file_name.to_string(),
+        entry: entry.clone(),
+        textures,
+        skipped_native,
+        failed,
+    })
+}
+
 fn plan_bulk_convert(
     archive_index: usize,
     archive_generation: u64,
@@ -9414,64 +9493,57 @@ fn plan_bulk_convert(
     selected: &[(usize, EntryInfo)],
     target: &'static crate::compat::games::GameProfile,
 ) -> Result<BulkPlanReady, String> {
-    use crate::compat::games::{Verdict, classify};
-    use crate::compat::raster::RasterProfile;
-
-    let mut entries = Vec::new();
+    let mut txd_selected: Vec<(usize, &EntryInfo)> = Vec::with_capacity(selected.len());
     let mut ignored_non_txd = 0usize;
     for (index, entry) in selected {
-        if !entry.file_name_lower.ends_with(".txd") {
+        if entry.file_name_lower.ends_with(".txd") {
+            txd_selected.push((*index, entry));
+        } else {
             ignored_non_txd += 1;
-            continue;
-        }
-        let Ok(bytes) =
-            crate::parser::read_entry_data_with_source(entry, archive_path.as_deref(), source_mmap)
-        else {
-            continue;
-        };
-        let Ok(txd) = crate::parser::txd::parse_txd(&bytes) else {
-            continue;
-        };
-        let mut textures = Vec::new();
-        let mut skipped_native = 0usize;
-        let mut failed = 0usize;
-        for (texture_index, texture) in txd.textures.iter().enumerate() {
-            let profile = RasterProfile::from_native(texture);
-            if classify(target, &profile).verdict == Verdict::Native {
-                skipped_native += 1;
-                continue;
-            }
-            match crate::compat::convert::plan_conversion_for_texture(
-                texture,
-                target,
-                &source_label,
-                None,
-                crate::compat::encode::EncodeOptions {
-                    // The bulk dialog lists counts, not pixels; skipping the
-                    // preview decode keeps big selections cheap.
-                    preview: false,
-                    ..Default::default()
-                },
-            ) {
-                Ok(plan) => textures.push((
-                    texture_index,
-                    texture.diffuse_name.clone(),
-                    CompactPlan(Arc::new(plan)),
-                )),
-                Err(_) => failed += 1,
-            }
-        }
-        if !textures.is_empty() {
-            entries.push(BulkEntryPlan {
-                entry_index: *index,
-                file_name: entry.file_name.to_string(),
-                entry: entry.clone(),
-                textures,
-                skipped_native,
-                failed,
-            });
         }
     }
+
+    let archive_path_ref = archive_path.as_deref();
+    let entries: Vec<BulkEntryPlan> = if txd_selected.is_empty() {
+        Vec::new()
+    } else {
+        // Fan out inside a bounded pool so peak transient memory stays capped
+        // while still saturating multiple cores across entries and textures.
+        crate::compat::convert::run_in_bounded_convert_pool(|| {
+            if txd_selected.len() >= 2 {
+                txd_selected
+                    .par_iter()
+                    .filter_map(|&(index, entry)| {
+                        plan_bulk_entry(
+                            index,
+                            entry,
+                            archive_path_ref,
+                            source_mmap,
+                            &source_label,
+                            target,
+                            true,
+                        )
+                    })
+                    .collect()
+            } else {
+                txd_selected
+                    .iter()
+                    .filter_map(|&(index, entry)| {
+                        plan_bulk_entry(
+                            index,
+                            entry,
+                            archive_path_ref,
+                            source_mmap,
+                            &source_label,
+                            target,
+                            true,
+                        )
+                    })
+                    .collect()
+            }
+        })
+    };
+
     Ok(BulkPlanReady {
         archive_index,
         archive_generation,
@@ -9494,9 +9566,8 @@ fn convert_bulk_entries(
     archive_path: Option<&std::path::Path>,
     source_mmap: Option<&memmap2::Mmap>,
 ) -> Result<BulkPatches, String> {
-    let mut patches = Vec::new();
-    for entry_plan in entries {
-        let mut bytes = crate::parser::read_entry_data_with_source(
+    let splice_one = |entry_plan: &BulkEntryPlan| -> Result<(usize, Arc<Vec<u8>>), String> {
+        let bytes = crate::parser::read_entry_bytes_with_source(
             &entry_plan.entry,
             archive_path,
             source_mmap,
@@ -9507,26 +9578,38 @@ fn convert_bulk_entries(
             .iter()
             .map(|(texture_index, _, plan)| (*texture_index, plan.0.as_ref()))
             .collect();
-        bytes = crate::compat::convert::apply_replaces(&bytes, &plans)?;
-        patches.push((entry_plan.entry_index, Arc::new(bytes)));
+        let patched = crate::compat::convert::apply_replaces(&bytes, &plans)?;
+        Ok((entry_plan.entry_index, Arc::new(patched)))
+    };
+
+    if entries.len() >= 4 {
+        entries.par_iter().map(splice_one).collect()
+    } else {
+        entries.iter().map(splice_one).collect()
     }
-    Ok(patches)
 }
 
 /// Minimum raster count before a TXD preview catalog fans out over rayon.
-/// Below this the fork/join overhead (~20-35 us) exceeds the serial decode.
+/// Below this the fork/join overhead (~20-35 us) exceeds the serial decode,
+/// unless the catalog has multiple large textures (>= 256k total pixels).
 /// Retail catalogs with 18-44 rasters measured 3.3-3.8x faster in
 /// `examples/benchmark_rayon_decode.rs`.
 const TXD_PARALLEL_DECODE_MIN: usize = 8;
+const TXD_PARALLEL_DECODE_MIN_PIXELS: u64 = 262_144;
 
 /// Decode a TXD's rasters for the texture-preview catalog.
 fn decode_txd_catalog(
     textures: &[crate::parser::txd::NativeTexture],
 ) -> Result<Vec<DecodedTexture>, String> {
-    if textures.len() >= TXD_PARALLEL_DECODE_MIN {
-        let decoded: Vec<Result<DecodedTexture, String>> =
-            textures.par_iter().map(decode_txd_texture).collect();
-        decoded.into_iter().collect()
+    let fan_out = textures.len() >= TXD_PARALLEL_DECODE_MIN
+        || (textures.len() >= 2
+            && textures
+                .iter()
+                .map(|tex| u64::from(tex.width) * u64::from(tex.height))
+                .sum::<u64>()
+                >= TXD_PARALLEL_DECODE_MIN_PIXELS);
+    if fan_out {
+        textures.par_iter().map(decode_txd_texture).collect()
     } else {
         textures.iter().map(decode_txd_texture).collect()
     }

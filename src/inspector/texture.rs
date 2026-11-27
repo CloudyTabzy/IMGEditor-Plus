@@ -377,39 +377,37 @@ pub fn decode_nft_textures_with_resolver<F>(
 where
     F: FnMut(&str) -> Option<Vec<u8>>,
 {
-    let catalog = parse_nft_catalog_bytes(bytes).ok_or_else(|| {
-        "NFT parse failed: unsupported or malformed Gamebryo texture catalog".to_string()
-    })?;
-    let catalog_count = catalog.entries.len();
-    let mut decoded = Vec::new();
+    use rayon::prelude::*;
 
-    for (key, entry) in catalog.entries {
-        let source_path = entry.source_path.clone();
-        let nif_format = entry.nif_format;
-        let scene_texture = entry
-            .pixel_data
-            .and_then(|payload| decode_texture_payload(&payload))
-            .or_else(|| {
-                resolve_external(&source_path)
-                    .or_else(|| resolve_external(&key))
-                    .and_then(|payload| decode_texture_payload(&payload))
-            });
-        let Some((scene_texture, format_name)) = scene_texture else {
-            continue;
-        };
-        let name = Path::new(&source_path)
+    const NFT_PARALLEL_DECODE_MIN: usize = 4;
+    const NFT_PARALLEL_DECODE_MIN_BYTES: usize = 128 * 1024;
+
+    struct NftDecodeMeta {
+        key: String,
+        source_path: String,
+        nif_format: Option<u32>,
+    }
+
+    struct PendingNftDecode {
+        meta: NftDecodeMeta,
+        payload: Vec<u8>,
+    }
+
+    let build_decoded = |meta: NftDecodeMeta,
+                         scene_texture: SceneTexture,
+                         format_name: &'static str| {
+        let name = Path::new(&meta.source_path)
             .file_name()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
-            .unwrap_or(&key)
+            .unwrap_or(&meta.key)
             .to_string();
         let has_alpha = scene_texture
             .rgba
             .chunks_exact(4)
             .any(|pixel| pixel[3] < 255);
         let palette_colors = crate::parser::texture_decoder::palette_colors(&scene_texture.rgba);
-
-        decoded.push(DecodedTexture {
+        DecodedTexture {
             name,
             width: scene_texture.width,
             height: scene_texture.height,
@@ -419,9 +417,73 @@ where
             mipmap_count: 1,
             palette_colors,
             raster: None,
-            nif_format,
+            nif_format: meta.nif_format,
             handle: std::sync::OnceLock::new(),
-        });
+        }
+    };
+
+    let decode_batch = |batch: Vec<PendingNftDecode>| -> (Vec<DecodedTexture>, Vec<NftDecodeMeta>) {
+        let total_bytes: usize = batch.iter().map(|item| item.payload.len()).sum();
+        let fan_out = batch.len() >= NFT_PARALLEL_DECODE_MIN
+            || (batch.len() >= 2 && total_bytes >= NFT_PARALLEL_DECODE_MIN_BYTES);
+
+        let decode_one = |item: PendingNftDecode| match decode_texture_payload(&item.payload) {
+            Some((scene_texture, format_name)) => {
+                Ok(build_decoded(item.meta, scene_texture, format_name))
+            }
+            None => Err(item.meta),
+        };
+        let outcomes: Vec<Result<DecodedTexture, NftDecodeMeta>> = if fan_out {
+            batch.into_par_iter().map(decode_one).collect()
+        } else {
+            batch.into_iter().map(decode_one).collect()
+        };
+
+        let mut ok = Vec::with_capacity(outcomes.len());
+        let mut failed = Vec::new();
+        for outcome in outcomes {
+            match outcome {
+                Ok(tex) => ok.push(tex),
+                Err(meta) => failed.push(meta),
+            }
+        }
+        (ok, failed)
+    };
+
+    let catalog = parse_nft_catalog_bytes(bytes).ok_or_else(|| {
+        "NFT parse failed: unsupported or malformed Gamebryo texture catalog".to_string()
+    })?;
+    let catalog_count = catalog.entries.len();
+
+    let mut embedded = Vec::with_capacity(catalog_count);
+    let mut needs_external = Vec::new();
+    for (key, entry) in catalog.entries {
+        let meta = NftDecodeMeta {
+            key,
+            source_path: entry.source_path,
+            nif_format: entry.nif_format,
+        };
+        if let Some(payload) = entry.pixel_data {
+            embedded.push(PendingNftDecode { meta, payload });
+        } else {
+            needs_external.push(meta);
+        }
+    }
+
+    let (mut decoded, embedded_failed) = decode_batch(embedded);
+    needs_external.extend(embedded_failed);
+
+    if !needs_external.is_empty() {
+        let mut external_batch = Vec::with_capacity(needs_external.len());
+        for meta in needs_external {
+            if let Some(payload) =
+                resolve_external(&meta.source_path).or_else(|| resolve_external(&meta.key))
+            {
+                external_batch.push(PendingNftDecode { meta, payload });
+            }
+        }
+        let (external_decoded, _) = decode_batch(external_batch);
+        decoded.extend(external_decoded);
     }
 
     decoded.sort_by_key(|texture| texture.name.to_ascii_lowercase());

@@ -504,6 +504,21 @@ pub fn format_catalog(game: &GameProfile) -> &'static [FormatInfo] {
     }
 }
 
+/// Classify a texture raster against a target game without allocating or
+/// formatting any Fluent note string. Used by archive-wide scans and bulk
+/// planners that only need the verdict severity.
+pub fn classify_verdict(game: &GameProfile, profile: &RasterProfile) -> Verdict {
+    if game.id == BULLY.id {
+        return Verdict::Unsupported;
+    }
+    let (verdict, _, _) = format_verdict_parts(game, profile);
+    if !game.platforms.contains(&profile.platform_id) {
+        verdict.combine(Verdict::ConvertibleLossless)
+    } else {
+        verdict
+    }
+}
+
 /// Classify a texture raster against a target game.
 pub fn classify(game: &GameProfile, profile: &RasterProfile) -> VerdictReport {
     // Bully has no RenderWare texture path at all: its assets are
@@ -517,7 +532,8 @@ pub fn classify(game: &GameProfile, profile: &RasterProfile) -> VerdictReport {
         };
     }
 
-    let (verdict, evidence, mut note) = format_verdict(game, profile);
+    let (verdict, evidence, note_fn) = format_verdict_parts(game, profile);
+    let mut note = note_fn.map(|f| f()).unwrap_or_default();
 
     // A platform the target dialect doesn't accept needs a container
     // rewrite first. That rewrite is lossless (pixels unchanged), but it
@@ -547,16 +563,26 @@ pub fn classify(game: &GameProfile, profile: &RasterProfile) -> VerdictReport {
     }
 }
 
-fn format_verdict(game: &GameProfile, profile: &RasterProfile) -> (Verdict, Evidence, String) {
+type NoteFn = Option<fn() -> String>;
+
+fn format_verdict_parts(
+    game: &GameProfile,
+    profile: &RasterProfile,
+) -> (Verdict, Evidence, NoteFn) {
     match game.id {
         "sa" => sa_verdict(profile),
         "gta3" | "vc" => iii_vc_verdict(game.id, profile),
         _ => (
             Verdict::Untested,
             Evidence::Untested,
-            t::compat_note_no_profile(),
+            Some(t::compat_note_no_profile),
         ),
     }
+}
+
+/// Allocation-free verdict for a Gamebryo `NiPixelData` raster format.
+pub fn classify_nft_verdict(game: &GameProfile, format: u32) -> Verdict {
+    nft_verdict_parts(game, format).0
 }
 
 /// Classify a Gamebryo `NiPixelData` raster format (nif.xml
@@ -567,105 +593,124 @@ fn format_verdict(game: &GameProfile, profile: &RasterProfile) -> (Verdict, Evid
 /// raster is simply not their native form. Evidence: the retail
 /// World.img scan (35,655 rasters, 2026-09-11).
 pub fn classify_nft_format(game: &GameProfile, format: u32) -> VerdictReport {
-    if game.id != BULLY.id {
-        return VerdictReport {
-            game_id: game.id,
-            verdict: Verdict::Unsupported,
-            evidence: Evidence::Docs,
-            note: t::compat_note_nft_not_rw(),
-        };
+    let (verdict, evidence, note_fn) = nft_verdict_parts(game, format);
+    VerdictReport {
+        game_id: game.id,
+        verdict,
+        evidence,
+        note: note_fn.map(|f| f()).unwrap_or_default(),
     }
-    let (verdict, evidence, note) = match format {
+}
+
+fn nft_verdict_parts(game: &GameProfile, format: u32) -> (Verdict, Evidence, NoteFn) {
+    if game.id != BULLY.id {
+        return (
+            Verdict::Unsupported,
+            Evidence::Docs,
+            Some(t::compat_note_nft_not_rw),
+        );
+    }
+    match format {
         4 => (
             Verdict::Native,
             Evidence::Retail,
-            t::compat_note_bully_dxt1(),
+            Some(t::compat_note_bully_dxt1),
         ),
         6 => (
             Verdict::Native,
             Evidence::Retail,
-            t::compat_note_bully_dxt5(),
+            Some(t::compat_note_bully_dxt5),
         ),
         0 | 1 => (
             Verdict::Native,
             Evidence::Retail,
-            t::compat_note_bully_rgb(),
+            Some(t::compat_note_bully_rgb),
         ),
         2 | 3 => (
             Verdict::Native,
             Evidence::Retail,
-            t::compat_note_bully_pal(),
+            Some(t::compat_note_bully_pal),
         ),
         // The Gamebryo format enum and our decoder both handle DXT3,
         // but retail Bully ships none - keep it non-native.
         5 => (
             Verdict::Supported,
             Evidence::Docs,
-            t::compat_note_bully_dxt3(),
+            Some(t::compat_note_bully_dxt3),
         ),
-        _ => (Verdict::Untested, Evidence::Untested, String::new()),
-    };
-    VerdictReport {
-        game_id: game.id,
-        verdict,
-        evidence,
-        note,
+        _ => (Verdict::Untested, Evidence::Untested, None),
     }
 }
 
-fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, String) {
+fn sa_verdict(profile: &RasterProfile) -> (Verdict, Evidence, NoteFn) {
     // Retail evidence base: GTA SA PC 1.0 (gta3.img, gta_int.img,
     // player.img, cutscene.img — 32,157 textures measured 2026-09-11,
     // zero parse failures, zero header anomalies). SA is a
     // palette-free dialect: no PAL, no 1555, no DXT5 in retail.
     match profile.logical {
-        LogicalFormat::Dxt1 | LogicalFormat::Dxt3 => {
-            (Verdict::Native, Evidence::Retail, t::compat_note_sa_dxt())
-        }
+        LogicalFormat::Dxt1 | LogicalFormat::Dxt3 => (
+            Verdict::Native,
+            Evidence::Retail,
+            Some(t::compat_note_sa_dxt),
+        ),
         // DXT2/DXT4 are DXT3/DXT5 with premultiplied alpha; the D3D9
         // native format word carries them directly. Retail SA ships
         // neither, so runtime acceptance stays unverified.
         LogicalFormat::Dxt2 | LogicalFormat::Dxt4 => (
             Verdict::Supported,
             Evidence::Docs,
-            t::compat_note_sa_dxt24(),
+            Some(t::compat_note_sa_dxt24),
         ),
         LogicalFormat::Dxt5 => (
             Verdict::Supported,
             Evidence::Retail,
-            t::compat_note_sa_dxt5(),
+            Some(t::compat_note_sa_dxt5),
         ),
         // Sources conflict on SA palettes: the raster spec and librw's
         // native reader contain palette logic, while Magic.TXD's matrix
         // omits SA. Parse and preserve, do not claim runtime support.
-        LogicalFormat::Pal8 | LogicalFormat::Pal4 => {
-            (Verdict::Untested, Evidence::Docs, t::compat_note_sa_pal())
-        }
+        LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
+            Verdict::Untested,
+            Evidence::Docs,
+            Some(t::compat_note_sa_pal),
+        ),
         // Retail SA ships uncompressed 888 as X8R8G8B8 32bpp storage
         // (1,015 rasters, mostly player.img ped skins) and 8888 (237).
         LogicalFormat::R888 if profile.storage_bpp == 4 => {
-            (Verdict::Native, Evidence::Retail, String::new())
+            (Verdict::Native, Evidence::Retail, None)
         }
         LogicalFormat::R888 => (
             Verdict::Untested,
             Evidence::Docs,
-            t::compat_note_sa_depth24(),
+            Some(t::compat_note_sa_depth24),
         ),
-        LogicalFormat::R8888 => (Verdict::Native, Evidence::Retail, String::new()),
+        LogicalFormat::R8888 => (Verdict::Native, Evidence::Retail, None),
         // Driver-mapped formats that retail SA happens not to ship.
         LogicalFormat::R1555 | LogicalFormat::R565 | LogicalFormat::R4444 => (
             Verdict::Supported,
             Evidence::Docs,
-            t::compat_note_sa_16bit(),
+            Some(t::compat_note_sa_16bit),
         ),
-        LogicalFormat::R555 => (Verdict::Supported, Evidence::Docs, t::compat_note_c555()),
-        LogicalFormat::Lum8 => (Verdict::Supported, Evidence::Docs, t::compat_note_lum8()),
-        LogicalFormat::A8l8 => (Verdict::Untested, Evidence::Docs, t::compat_note_sa_a8l8()),
-        LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, String::new()),
+        LogicalFormat::R555 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            Some(t::compat_note_c555),
+        ),
+        LogicalFormat::Lum8 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            Some(t::compat_note_lum8),
+        ),
+        LogicalFormat::A8l8 => (
+            Verdict::Untested,
+            Evidence::Docs,
+            Some(t::compat_note_sa_a8l8),
+        ),
+        LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, None),
     }
 }
 
-fn iii_vc_verdict(game_id: &str, profile: &RasterProfile) -> (Verdict, Evidence, String) {
+fn iii_vc_verdict(game_id: &str, profile: &RasterProfile) -> (Verdict, Evidence, NoteFn) {
     // Retail evidence base: GTA III PC 1.0 (gta3.img + txd.img,
     // 15,372 textures) and GTA VC PC 1.0 (gta3.img, 12,023 textures)
     // measured 2026-09-11. The VC pass was re-resolved 2026-09-11e:
@@ -676,30 +721,42 @@ fn iii_vc_verdict(game_id: &str, profile: &RasterProfile) -> (Verdict, Evidence,
     match profile.logical {
         // PAL is the III world-texture form (96.5% PAL8); VC barely
         // uses it (27 rasters) in favor of compressed data.
-        LogicalFormat::Pal8 | LogicalFormat::Pal4 => {
-            (Verdict::Native, Evidence::Retail, t::compat_note_iii_pal())
-        }
-        LogicalFormat::Dxt1 if vc => (Verdict::Native, Evidence::Retail, t::compat_note_vc_dxt1()),
+        LogicalFormat::Pal8 | LogicalFormat::Pal4 => (
+            Verdict::Native,
+            Evidence::Retail,
+            Some(t::compat_note_iii_pal),
+        ),
+        LogicalFormat::Dxt1 if vc => (
+            Verdict::Native,
+            Evidence::Retail,
+            Some(t::compat_note_vc_dxt1),
+        ),
         // III genuinely ships zero compressed rasters; DXT1 rides on
         // D3D8 hardware support but is not the game's data dialect.
         LogicalFormat::Dxt1 => (
             Verdict::Supported,
             Evidence::Retail,
-            t::compat_note_iii_dxt1(),
+            Some(t::compat_note_iii_dxt1),
         ),
-        LogicalFormat::Dxt3 if vc => (Verdict::Native, Evidence::Retail, t::compat_note_vc_dxt3()),
+        LogicalFormat::Dxt3 if vc => (
+            Verdict::Native,
+            Evidence::Retail,
+            Some(t::compat_note_vc_dxt3),
+        ),
         // librw's D3D driver reads native compression values 1..5 into
         // DXT1..DXT5 textures; DXT2/DXT4 are the premultiplied-alpha
         // twins of DXT3/DXT5 and our decoder already handles them.
-        LogicalFormat::Dxt2 | LogicalFormat::Dxt3 | LogicalFormat::Dxt4 | LogicalFormat::Dxt5 => {
-            (Verdict::Supported, Evidence::Docs, t::compat_note_iii_dxt())
-        }
+        LogicalFormat::Dxt2 | LogicalFormat::Dxt3 | LogicalFormat::Dxt4 | LogicalFormat::Dxt5 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            Some(t::compat_note_iii_dxt),
+        ),
         // Question 5 answered: retail III stores 888 exclusively as
         // 32-bit X8R8G8B8 (6,806 rasters; the txd.img player/vehicle
         // set is 87% of this class). True 24-bit never ships. VC
         // agrees (1 raster, 32bpp).
         LogicalFormat::R888 if profile.storage_bpp == 4 => {
-            (Verdict::Native, Evidence::Retail, String::new())
+            (Verdict::Native, Evidence::Retail, None)
         }
         // librw maps RW C888 to D3DFMT_X8R8G8B8 and has no 24-bit RW
         // raster code; D3DFMT_R8G8B8 carries no RW format.
@@ -709,39 +766,59 @@ fn iii_vc_verdict(game_id: &str, profile: &RasterProfile) -> (Verdict, Evidence,
         LogicalFormat::R888 => (
             Verdict::Untested,
             Evidence::Docs,
-            t::compat_note_iii_depth24(),
+            Some(t::compat_note_iii_depth24),
         ),
-        LogicalFormat::R8888 => (Verdict::Native, Evidence::Retail, t::compat_note_iii_8888()),
+        LogicalFormat::R8888 => (
+            Verdict::Native,
+            Evidence::Retail,
+            Some(t::compat_note_iii_8888),
+        ),
         // The raw 16-bit forms are not what retail VC stores: its
         // 565/1555/4444 headers label DXT1/DXT3 data. They still load,
         // but they are not the dialect.
         LogicalFormat::R565 if vc => (
             Verdict::Supported,
             Evidence::Retail,
-            t::compat_note_vc_565(),
+            Some(t::compat_note_vc_565),
         ),
-        LogicalFormat::R565 => (Verdict::Supported, Evidence::Docs, t::compat_note_iii_565()),
+        LogicalFormat::R565 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            Some(t::compat_note_iii_565),
+        ),
         LogicalFormat::R1555 if vc => (
             Verdict::Supported,
             Evidence::Retail,
-            t::compat_note_vc_1555(),
+            Some(t::compat_note_vc_1555),
         ),
-        LogicalFormat::R1555 => (Verdict::Native, Evidence::Retail, String::new()),
+        LogicalFormat::R1555 => (Verdict::Native, Evidence::Retail, None),
         LogicalFormat::R4444 if vc => (
             Verdict::Supported,
             Evidence::Retail,
-            t::compat_note_vc_4444(),
+            Some(t::compat_note_vc_4444),
         ),
         LogicalFormat::R4444 => (
             Verdict::Supported,
             Evidence::Docs,
-            t::compat_note_iii_4444(),
+            Some(t::compat_note_iii_4444),
         ),
         // Mapped driver formats that retail happens not to use.
-        LogicalFormat::R555 => (Verdict::Supported, Evidence::Docs, t::compat_note_c555()),
-        LogicalFormat::Lum8 => (Verdict::Supported, Evidence::Docs, t::compat_note_lum8()),
-        LogicalFormat::A8l8 => (Verdict::Untested, Evidence::Docs, t::compat_note_iii_a8l8()),
-        LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, String::new()),
+        LogicalFormat::R555 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            Some(t::compat_note_c555),
+        ),
+        LogicalFormat::Lum8 => (
+            Verdict::Supported,
+            Evidence::Docs,
+            Some(t::compat_note_lum8),
+        ),
+        LogicalFormat::A8l8 => (
+            Verdict::Untested,
+            Evidence::Docs,
+            Some(t::compat_note_iii_a8l8),
+        ),
+        LogicalFormat::Unknown => (Verdict::Untested, Evidence::Untested, None),
     }
 }
 
@@ -773,6 +850,65 @@ mod tests {
         for game in [&GTA3, &VC, &SA] {
             let report = classify_nft_format(game, 4);
             assert_eq!(report.verdict, Verdict::Unsupported, "{}", game.id);
+        }
+    }
+
+    #[test]
+    fn classify_verdict_matches_full_classify_across_all_games_and_formats() {
+        let formats = [
+            LogicalFormat::Dxt1,
+            LogicalFormat::Dxt2,
+            LogicalFormat::Dxt3,
+            LogicalFormat::Dxt4,
+            LogicalFormat::Dxt5,
+            LogicalFormat::Pal8,
+            LogicalFormat::Pal4,
+            LogicalFormat::R888,
+            LogicalFormat::R8888,
+            LogicalFormat::R565,
+            LogicalFormat::R1555,
+            LogicalFormat::R4444,
+            LogicalFormat::R555,
+            LogicalFormat::Lum8,
+            LogicalFormat::A8l8,
+            LogicalFormat::Unknown,
+        ];
+        for game in ALL_GAMES {
+            for logical in formats {
+                for platform_id in [8u32, 9, 99] {
+                    for storage_bpp in [1u32, 2, 3, 4] {
+                        let profile = RasterProfile {
+                            platform_id,
+                            raster_format: 0,
+                            d3d_format: 0,
+                            fourcc: None,
+                            logical,
+                            storage_bpp,
+                            width: 64,
+                            height: 64,
+                            depth: (storage_bpp * 8) as u8,
+                            mip_levels: 1,
+                            palette: PaletteKind::None,
+                            has_alpha_header: false,
+                            automipmap: false,
+                        };
+                        assert_eq!(
+                            classify_verdict(game, &profile),
+                            classify(game, &profile).verdict,
+                            "mismatch for game={} logical={logical:?} plat={platform_id} bpp={storage_bpp}",
+                            game.id
+                        );
+                    }
+                }
+            }
+            for nft_fmt in 0..=16u32 {
+                assert_eq!(
+                    classify_nft_verdict(game, nft_fmt),
+                    classify_nft_format(game, nft_fmt).verdict,
+                    "nft mismatch for game={} fmt={nft_fmt}",
+                    game.id
+                );
+            }
         }
     }
 

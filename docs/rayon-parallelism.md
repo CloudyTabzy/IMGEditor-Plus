@@ -1,18 +1,26 @@
-# Rayon use, and the dependency optional-feature audit
+# Rayon use (`rayon` 1.12.0), and the dependency optional-feature audit
 
 Record for the threading/feature pass that followed the hash-collection
-migration (performance patch, 2026-10-19). The question it answers: which
-optional dependency features (Rayon above all) are worth enabling, and which
-of the app's own loops are worth fanning out.
+migration (2026-10-19) and the `rayon 1.12.0` (`rayon-core 1.13.0`)
+architecture pass (2026-11-27). The question it answers: which optional
+dependency features (Rayon above all) are worth enabling, and which of the
+app's own workloads benefit from work-stealing parallelism without exploding
+peak memory or breaking deterministic output.
 
-## Existing parallel surfaces (unchanged)
+## Active parallel surfaces
 
-| surface | mechanism |
+| surface | mechanism & policy |
 |---|---|
-| Archive export (`tasks.rs`) | `par_iter` over entries, chunked, workers clamped to 8 |
-| Palette LUT build (`compat/palette.rs`) | `par_iter` |
-| DXT encode (`texpresso`, `rayon` feature) | internal `par_chunks_mut` over block rows — on |
-| Palette quantization (`quantette`, `threads` feature) | internal parallelism — on |
+| Archive export (`tasks.rs`) | `par_chunks(64)` + `flat_map_iter` zero-copy mmap export (batched atomic progress + early break on cancel); chunked `par_chunks` + `flat_map_iter` buffered fallback (`workers` clamped to 8) |
+| Compat archive scan (`compat/scan.rs`) | `par_iter().enumerate().try_fold().try_reduce()` at `>= 32` entries; zero-copy mmap slices (`read_entry_bytes`), header-only TXD parsing (`parse_txd_headers`), lock-free `classify_verdict`; left-to-right `try_reduce` keeps `entry_verdicts` and `anomaly_examples` bit-for-bit identical to serial while short-circuiting on cancel |
+| Pre-save header normalize (`compat/normalize.rs`) | `par_iter().enumerate().filter_map()` at `>= 32` entries; zero-copy mmap inspection, cloning bytes only for entries that need patching |
+| Bulk texture conversion (`compat/convert.rs`, `ui/app.rs`) | On-demand bounded `ThreadPool` (`BULK_CONVERT_MAX_WORKERS = 4`, torn down on return) via `run_in_bounded_convert_pool`, fanning out across selected TXDs and textures; nested `texpresso` / `quantette` / `palette` calls inherit this same pool via `ThreadPool::install`, capping peak scratch memory while keeping multi-core throughput; `convert_bulk_entries` splices in parallel at `>= 4` entries |
+| Palette LUT & pixel mapping (`compat/palette.rs`) | Cached constant 32,768-cell Oklab table (`LUT_OKLAB_CELLS`), direct `par_iter_mut` fill into boxed LUT, row-wise `par_chunks_exact_mut` mapping at `>= 65,536` pixels (256×256+) |
+| TXD preview catalog decode (`ui/app.rs`) | Short-circuiting `par_iter().map().collect::<Result<_, _>>()` at `>= 8` rasters or `>= 2` rasters with `>= 262,144` total pixels |
+| NFT preview catalog decode (`inspector/texture.rs`) | Sequential `FnMut` external resolution followed by `into_par_iter` payload decode at `>= 4` payloads or `>= 2` payloads totalling `>= 128 KiB` |
+| Batch import prep & pre-flight checks (`parser/mod.rs`, `compat/scan.rs`, `ui/app.rs`) | `prepare_import_batch` fans out `fs::metadata` at `>= 32` files; `check_import_files` and `refresh_imported_verdicts` fan out at `>= 8` files, preserving exact input order |
+| DXT encode (`texpresso`, `rayon` feature) | Internal `par_chunks_mut` over block rows — inherits calling rayon pool |
+| Palette quantization (`quantette`, `threads` feature) | Internal parallelism — inherits calling rayon pool |
 
 ## New: TXD preview catalog decode fans out
 
@@ -54,31 +62,75 @@ Effect: a large TXD's preview catalog decodes in ~1 ms instead of ~4 ms.
 | `wgpu` | `counters` | **No.** GPU-side profiling aid, not a user-facing speed feature; could be a local dev aid later. |
 | `ureq` | `charset`, `cookies`, `native-tls`, … | **No.** The updater uses plain TLS + gzip only. |
 
-## App-side rayon candidates measured and deferred
+## 1.12.0 architecture pass (2026-11-27)
 
-- **Compat scan per-entry profiling** (`compat/scan.rs`, 277 ms warm for
-  16,316 entries): parallelizable, but the report is accumulated into
-  `BTreeMap`s and counters, so it needs a per-thread report + merge
-  refactor. The scan runs off the UI thread; deferred until it shows up in
-  a profile.
-- **NFT catalog decode** (`decode_nft_textures_with_resolver`): takes an
-  `FnMut` resolver, so fanning out needs an `Fn + Sync` signature change;
-  payload counts per catalog are small. Deferred.
+Manifest floor bumped from `rayon = "1.10"` → `"1.12"` (locking `rayon 1.12.0`
+and `rayon-core 1.13.0`). All three previously deferred high-value surfaces
+(`compat/scan.rs`, `decode_nft_textures_with_resolver`, and the bulk converter
+driver) plus `compat/normalize.rs`, `compat/palette.rs` row mapping, batch
+import prep/preflight, and `tasks.rs` export chunking were redesigned around
+three architectural rules:
+
+1. **Eliminate copy/lock contention before fanning out.** `read_entry_bytes`
+   borrows slices straight from `source_mmap` (`Cow::Borrowed`), `parse_txd_headers`
+   validates every palette/mipmap slice without copying 350+ MB of pixels, and
+   `classify_verdict` / `classify_nft_verdict` avoid 160k+ Fluent `RwLock` +
+   `String` allocations per archive scan.
+2. **Preserve exact archive order deterministically.** Rayon's
+   `IndexedParallelIterator::try_fold` + `try_reduce` combines `left` before
+   `right`, keeping `entry_verdicts` order and the 5-example cap in
+   `anomaly_examples` bit-for-bit identical to the serial loop (verified by
+   unit tests on synthetic archives and retail `gta3.img`).
+3. **Bound memory-heavy nested parallelism with an on-demand `ThreadPool`.**
+   `texpresso 2.0.2`, `quantette 0.6.0`, and `palette.rs` all schedule onto
+   Rayon's current pool. Running `plan_bulk_convert` inside a 4-worker
+   `ThreadPool::install` caps concurrent in-flight textures (and therefore peak
+   scratch memory) while letting nested DXT/palette work share those same 4
+   workers with zero deadlocks, zero oversubscription, and zero lingering idle
+   threads once conversion finishes.
+
+### Measured impact (`examples/benchmark_rayon_pass.rs`, release, 16 threads)
+
+Archive: `corpus\Gta_3_img\gta3.img` (16,316 entries, 2,740 TXDs, 26,004
+textures) and `corpus\Gta_3_img\Export\`. Windows, Rust 1.99.1, `rusty_alloc`
+2.6.0. "After" is the median across 3 warm runs (each run's own median over
+its rounds).
+
+| workload | before (med) | after (med of 3 runs) | speedup |
+|---|---|---|---|
+| `scan_archive (gta3.img, sa)` (incl. open) | 263.750 ms | **25.715 ms** | **10.3× (−90 %)** |
+| `normalize::plan_fixes` (229 fixes) | 32.339 ms | **0.250 ms** | **129× (−99 %)** |
+| `normalize::collect_fixes` (229 patches) | 40.348 ms | **3.550 ms** | **11.4× (−91 %)** |
+| `prepare_import_batch` (500 files) | 5.607 ms | **1.277 ms** | **4.4× (−77 %)** |
+| `check_import_files` (64 TXDs) | 2.843 ms | **0.767 ms** | **3.7× (−73 %)** |
+| `bulk convert` (337 tex → Rgb888, 4 workers) | 18.244 ms | **5.440 ms** | **3.4× (−70 %)** |
+| `palette::map_level` (1024² dither, LUT + map) | 4.092 ms | **1.307 ms** | **3.1× (−68 %)** |
+| `bulk convert` (337 tex → DXT1, 4 workers) | 89.879 ms | **37.505 ms** | **2.4× (−58 %)** |
+
+Raw medians across the 3 warm after runs (ms):
+
+| arm | run 1 | run 2 | run 3 | median |
+|---|---|---|---|---|
+| `scan_archive (gta3.img, sa)` | 25.867 | 25.640 | 25.715 | 25.715 |
+| `normalize::plan_fixes` | 0.167 | 0.267 | 0.250 | 0.250 |
+| `normalize::collect_fixes` | 3.648 | 3.527 | 3.550 | 3.550 |
+| `palette::map_level` (1024² dither) | 1.411 | 1.264 | 1.307 | 1.307 |
+| `bulk convert` bounded pool (DXT1) | 38.976 | 36.495 | 37.505 | 37.505 |
+| `bulk convert` bounded pool (Rgb888) | 5.264 | 5.440 | 5.746 | 5.440 |
+| `prepare_import_batch` (500 files) | 1.277 | 1.237 | 1.296 | 1.277 |
+| `check_import_files` (64 TXDs) | 0.769 | 0.680 | 0.767 | 0.767 |
+
+## Rejected app-side candidates
+
 - **Search scoring** (16 k fuzzy scores per keystroke, inside the measured
   1.1–1.8 ms rebuild): the rebuild is sort-dominated; fork/join overhead
-  would eat most of the gain at this size. Rejected.
-- **Converter driver** (serial by design — see `docs/memory-pre-profiling-audit.md`):
-  the biggest untapped CPU fan-out, but the audit flagged per-texture peak
-  memory (~19 MB at 1024²: rgba + visible + Oklab), so parallel workers
-  multiply peak. Needs a worker-budget design first; deferred.
+  would eat most of the gain at this size. Kept serial.
 
 ## Notes
 
 - Machine: 16 logical CPUs, shared/unpinned; treat <5 % as noise, as in the
   other performance records.
-- Nested-rayon interaction is not a factor for the new fan-out: the preview
-  path uses the app's serial DXT decoder, not texpresso; texpresso's rayon
-  path is only used by encode/convert.
-- Verification: 750 lib tests pass in release (one stale-fixture test
-  filtered — see `docs/hashmap-crate.md`), `cargo fmt --check` clean,
-  `cargo clippy --release --all-targets` clean.
+- Verification: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
+  and `cargo test -j 2` all pass with zero warnings (the Bully Stream fixture
+  test noted in earlier records was fixed in `af0a3ee` to skip cleanly via
+  `test_paths::bully_stream()`).
