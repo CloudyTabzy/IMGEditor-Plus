@@ -4076,10 +4076,10 @@ mod tests {
     /// standalone props, so this uses the exact runtime binding path first.
     #[test]
     fn object_1004_curve_roots_bind_across_matching_rigs_when_available() {
-        let Ok(stream) = std::env::var("IMGEDITOR_BULLY_STREAM") else {
+        let Some(stream) = crate::test_paths::bully_stream() else {
             return;
         };
-        let stream = std::path::Path::new(&stream);
+        let stream = stream.as_path();
         let cases = [
             ("AsyGate.agr", "AsyGate.nif"),
             ("Armor.agr", "Armor.nif"),
