@@ -829,6 +829,7 @@ pub enum Message {
     ToggleSearchSelectionContext(bool),
     ToggleLiteralFileTypes(bool),
     ToggleContextAccumulate(bool),
+    ToggleAlwaysOnTop(bool),
 
     ExportEmbeddedTexturesRequest {
         entry_index: usize,
@@ -2076,8 +2077,8 @@ impl App {
             }
         }
 
-        let mut tasks =
-            Vec::with_capacity(archive_paths.len() + usize::from(!import_paths.is_empty()));
+        let archive_count = archive_paths.len();
+        let mut tasks = Vec::with_capacity(archive_count + usize::from(!import_paths.is_empty()));
         for archive_path in archive_paths {
             tasks.push(self.open_archive_path(archive_path));
         }
@@ -2085,6 +2086,12 @@ impl App {
         if !import_paths.is_empty() {
             if let Some(index) = self.editor.selected_archive() {
                 tasks.push(self.begin_import(index, import_paths, None));
+            } else if archive_count > 0 {
+                self.toast_extended_duration = true;
+                self.toast = Some(t::toast_drop_mixed_no_archive(
+                    archive_count,
+                    import_paths.len(),
+                ));
             } else {
                 self.toast = Some(t::toast_drop_needs_archive());
             }
@@ -4927,6 +4934,7 @@ impl App {
                             self.toast = Some(t::toast_target_archive_closed());
                             return Task::none();
                         };
+                        let skipped = batch.skipped;
                         let count = {
                             let archive = &mut self.editor.archives_mut()[index];
                             let count = Editor::apply_prepared_import(archive, batch, false);
@@ -4942,10 +4950,17 @@ impl App {
                         if count > 0 {
                             self.refresh_imported_verdicts(index);
                         }
-                        self.toast = Some(if checked {
-                            t::toast_imported(count)
-                        } else {
-                            t::toast_imported_unchecked(count)
+                        if skipped > 0 {
+                            self.toast_extended_duration = true;
+                        }
+                        self.toast = Some(match (count, skipped, checked) {
+                            (0, s, _) if s > 0 => t::toast_import_none_skipped(s),
+                            (c, s, true) if s > 0 => t::toast_imported_with_skipped(c, s),
+                            (c, s, false) if s > 0 => {
+                                t::toast_imported_unchecked_with_skipped(c, s)
+                            }
+                            (c, _, true) => t::toast_imported(c),
+                            (c, _, false) => t::toast_imported_unchecked(c),
                         });
                     }
                     Err(error) => {
@@ -6997,6 +7012,17 @@ impl App {
                 Task::none()
             }
 
+            Message::ToggleAlwaysOnTop(enabled) => {
+                self.config.always_on_top = enabled;
+                self.save_config();
+                let level = if enabled {
+                    iced::window::Level::AlwaysOnTop
+                } else {
+                    iced::window::Level::Normal
+                };
+                iced::window::latest().and_then(move |id| iced::window::set_level(id, level))
+            }
+
             Message::ExportEmbeddedTexturesRequest {
                 entry_index,
                 nif_basename,
@@ -8726,6 +8752,14 @@ impl App {
             (
                 format!(
                     "{}{}",
+                    view_toggle(self.config.always_on_top),
+                    t::menu_view_always_on_top()
+                ),
+                Message::ToggleAlwaysOnTop(!self.config.always_on_top),
+            ),
+            (
+                format!(
+                    "{}{}",
                     view_toggle(self.config.show_navigation_gizmo),
                     t::menu_view_navigation_gizmo()
                 ),
@@ -9155,6 +9189,11 @@ fn menu_icon(message: &Message) -> Element<'static, Message> {
 /// Explorer's "Open") is opened once the window is up.
 pub fn run_app(config: Config, startup_file: Option<PathBuf>) -> iced::Result {
     let size: iced::Size = config.window.size.unwrap_or([1100.0, 720.0]).into();
+    let level = if config.always_on_top {
+        iced::window::Level::AlwaysOnTop
+    } else {
+        iced::window::Level::Normal
+    };
 
     let boot_config = Arc::new(config);
     let boot_config_for_boot = Arc::clone(&boot_config);
@@ -9183,6 +9222,7 @@ pub fn run_app(config: Config, startup_file: Option<PathBuf>) -> iced::Result {
     })
     .window(iced::window::Settings {
         icon: window_icon(),
+        level,
         // The close button must not quit on its own: dirty archives get
         // an "unsaved changes" confirmation, and only then do we close
         // the window ourselves.
@@ -12849,11 +12889,97 @@ mod tests {
         assert_eq!(app.editor.archives()[0].entries.len(), before);
         assert!(!app.editor.archives()[0].dirty);
         assert!(
+            app.toast.as_deref().is_some_and(
+                |toast| toast.contains("No files imported") && toast.contains("1 skipped")
+            ),
+            "expected skipped-only toast, got {:?}",
+            app.toast
+        );
+    }
+
+    #[test]
+    fn dropping_mixed_archives_and_non_img_with_no_archive_open_explains_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("first.img");
+        let dir_path = dir.path().join("first.dir");
+        let mut dir_bytes = [0u8; 32];
+        dir_bytes[0..4].copy_from_slice(&0u32.to_le_bytes());
+        dir_bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+        dir_bytes[8..17].copy_from_slice(b"base.dff\0");
+        std::fs::write(&dir_path, dir_bytes).unwrap();
+        std::fs::write(&img_path, vec![0u8; 2048]).unwrap();
+
+        let extra_a = dir.path().join("hud.txd");
+        let extra_b = dir.path().join("effects.fxp");
+        std::fs::write(&extra_a, b"a").unwrap();
+        std::fs::write(&extra_b, b"b").unwrap();
+
+        let mut app = test_app();
+        run_message_waves(
+            &mut app,
+            vec![
+                Message::FilesDropped(img_path),
+                Message::FilesDropped(extra_a),
+                Message::FilesDropped(extra_b),
+            ],
+        );
+
+        assert_eq!(app.editor.archives().len(), 1);
+        assert!(app.toast_extended_duration);
+        assert!(
             app.toast
                 .as_deref()
-                .is_some_and(|toast| toast.contains("Imported 0 files")),
-            "expected 0 imported count toast, got {:?}",
+                .is_some_and(|toast| toast.contains("Opening 1 archive")
+                    && toast.contains("2 non-IMG items skipped")),
+            "expected mixed-drop summary toast, got {:?}",
             app.toast
+        );
+    }
+
+    #[test]
+    fn dropping_valid_and_skipped_files_reports_both_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let valid = dir.path().join("car.dff");
+        let skipped = dir.path().join("no_extension");
+        std::fs::write(&valid, b"car").unwrap();
+        std::fs::write(&skipped, b"skip").unwrap();
+
+        let mut app = test_app_with_entries();
+        let before = app.editor.archives()[0].entries.len();
+
+        run_message_waves(
+            &mut app,
+            vec![Message::FilesDropped(valid), Message::FilesDropped(skipped)],
+        );
+
+        assert_eq!(app.editor.archives()[0].entries.len(), before + 1);
+        assert!(app.toast_extended_duration);
+        assert!(
+            app.toast.as_deref().is_some_and(
+                |toast| toast.contains("Imported 1 file") && toast.contains("1 skipped")
+            ),
+            "expected imported+skipped toast, got {:?}",
+            app.toast
+        );
+    }
+
+    #[test]
+    fn toggle_always_on_top_updates_config_and_schedules_window_level() {
+        let mut app = test_app();
+        assert!(!app.config.always_on_top);
+
+        let on_task = app.update(Message::ToggleAlwaysOnTop(true));
+        assert!(app.config.always_on_top);
+        assert!(
+            iced_runtime::task::into_stream(on_task).is_some(),
+            "enabling always-on-top must schedule a window level task"
+        );
+
+        let off_task = app.update(Message::ToggleAlwaysOnTop(false));
+        assert!(!app.config.always_on_top);
+        assert!(
+            iced_runtime::task::into_stream(off_task).is_some(),
+            "disabling always-on-top must schedule a window level task"
         );
     }
 

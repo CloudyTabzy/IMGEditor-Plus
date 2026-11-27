@@ -51,6 +51,7 @@ menu-selection-delete = Delete selected ({ $shortcut })
 
 ## View menu (toggles; the on/off marker is added by the code)
 
+menu-view-always-on-top = Always on top
 menu-view-navigation-gizmo = Navigation gizmo
 menu-view-search-bar = Search bar
 menu-view-search-selection-context = Search selection context
@@ -554,6 +555,17 @@ toast-imported-unchecked =
         [one] Imported { $count } file - no validator target set, formats were not checked.
        *[other] Imported { $count } files - no validator target set, formats were not checked.
     }
+toast-imported-with-skipped =
+    { $count ->
+        [one] Imported { $count } file ({ $skipped } skipped - see archive log).
+       *[other] Imported { $count } files ({ $skipped } skipped - see archive log).
+    }
+toast-imported-unchecked-with-skipped =
+    { $count ->
+        [one] Imported { $count } file ({ $skipped } skipped - see log); formats not checked.
+       *[other] Imported { $count } files ({ $skipped } skipped - see log); formats not checked.
+    }
+toast-import-none-skipped = No files imported ({ $skipped } skipped - see archive log).
 toast-import-failed = Import failed: { $error }
 toast-no-files-in-folder = No regular files found in { $folder }.
 toast-folder-scan-failed = Folder scan failed: { $error }
@@ -677,6 +689,14 @@ toast-folder-scan-target-changed = The target archive changed while the folder w
 toast-folder-import-discarded = Folder import discarded because the target archive changed.
 toast-compare-discarded = Comparison discarded because the archive changed; please retry.
 toast-drop-needs-archive = Open an archive first to drop non-IMG files into it.
+toast-drop-mixed-no-archive =
+    { $archives ->
+        [one] Opening { $archives } archive
+       *[other] Opening { $archives } archives
+    } - { $skipped ->
+        [one] { $skipped } non-IMG item skipped
+       *[other] { $skipped } non-IMG items skipped
+    } (drop onto an open archive to import).
 toast-no-game-root = Could not determine the game folder from the archive path.
 toast-textures-exported =
     { $count ->

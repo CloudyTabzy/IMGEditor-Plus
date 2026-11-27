@@ -49,6 +49,7 @@ menu-selection-delete = Auswahl löschen ({ $shortcut })
 
 ## View menu (toggles; the on/off marker is added by the code)
 
+menu-view-always-on-top = Immer im Vordergrund
 menu-view-navigation-gizmo = Navigations-Gizmo
 menu-view-search-bar = Suchleiste
 menu-view-search-selection-context = Auswahlkontext in der Suche
@@ -552,6 +553,17 @@ toast-imported-unchecked =
         [one] { $count } Datei importiert – kein Validator-Ziel festgelegt, Formate wurden nicht geprüft.
        *[other] { $count } Dateien importiert – kein Validator-Ziel festgelegt, Formate wurden nicht geprüft.
     }
+toast-imported-with-skipped =
+    { $count ->
+        [one] { $count } Datei importiert ({ $skipped } übersprungen – siehe Archivprotokoll).
+       *[other] { $count } Dateien importiert ({ $skipped } übersprungen – siehe Archivprotokoll).
+    }
+toast-imported-unchecked-with-skipped =
+    { $count ->
+        [one] { $count } Datei importiert ({ $skipped } übersprungen – siehe Protokoll); Formate wurden nicht geprüft.
+       *[other] { $count } Dateien importiert ({ $skipped } übersprungen – siehe Protokoll); Formate wurden nicht geprüft.
+    }
+toast-import-none-skipped = Keine Dateien importiert ({ $skipped } übersprungen – siehe Archivprotokoll).
 toast-import-failed = Import fehlgeschlagen: { $error }
 toast-no-files-in-folder = Keine regulären Dateien in { $folder } gefunden.
 toast-folder-scan-failed = Ordnerprüfung fehlgeschlagen: { $error }
@@ -672,6 +684,14 @@ toast-folder-scan-target-changed = Das Zielarchiv hat sich geändert, während d
 toast-folder-import-discarded = Ordnerimport verworfen, weil sich das Zielarchiv geändert hat.
 toast-compare-discarded = Vergleich verworfen, weil sich das Archiv geändert hat; bitte erneut versuchen.
 toast-drop-needs-archive = Öffne zuerst ein Archiv, um Nicht-IMG-Dateien hineinzuziehen.
+toast-drop-mixed-no-archive =
+    { $archives ->
+        [one] { $archives } Archiv wird geöffnet
+       *[other] { $archives } Archive werden geöffnet
+    } – { $skipped ->
+        [one] { $skipped } Nicht-IMG-Element übersprungen
+       *[other] { $skipped } Nicht-IMG-Elemente übersprungen
+    } (zum Importieren auf ein offenes Archiv ziehen).
 toast-no-game-root = Der Spielordner konnte nicht aus dem Archivpfad ermittelt werden.
 toast-textures-exported =
     { $count ->

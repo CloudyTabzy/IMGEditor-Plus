@@ -275,6 +275,8 @@ pub struct Config {
     /// Right-clicking an entry adds it to the current selection instead
     /// of replacing it.
     pub context_selection_accumulates: bool,
+    /// Keep the main window floating above other windows.
+    pub always_on_top: bool,
     /// Per-archive validator target (game id), most recently used first.
     /// Keyed by the canonical archive path so the choice survives
     /// restarts without sidecar files next to the game.
@@ -412,6 +414,7 @@ impl Default for Config {
             search_selection_context: true,
             literal_file_types: false,
             context_selection_accumulates: true,
+            always_on_top: false,
             archive_targets: Vec::new(),
             archive_game_roots: Vec::new(),
             archive_tab_width: ARCHIVE_TAB_WIDTH_DEFAULT,
@@ -645,6 +648,9 @@ impl Config {
                 "context_selection_accumulates" => {
                     config.context_selection_accumulates = value.eq_ignore_ascii_case("true");
                 }
+                "always_on_top" => {
+                    config.always_on_top = value.eq_ignore_ascii_case("true");
+                }
                 _ => {}
             }
         }
@@ -854,6 +860,11 @@ impl Config {
                 "false"
             }
         )?;
+        writeln!(
+            file,
+            "always_on_top={}",
+            if self.always_on_top { "true" } else { "false" }
+        )?;
         Ok(())
     }
 
@@ -966,6 +977,7 @@ mod tests {
             search_selection_context: false,
             literal_file_types: true,
             context_selection_accumulates: false,
+            always_on_top: true,
             archive_targets: Vec::new(),
             archive_game_roots: Vec::new(),
             archive_tab_width: 220.0,
@@ -980,6 +992,7 @@ mod tests {
 
         let loaded = Config::load_from_path(&path);
         assert!(loaded.first_run_complete);
+        assert!(loaded.always_on_top);
         assert_eq!(loaded.theme, ThemeMode::DarkTokyoNight);
         assert_eq!(
             loaded.language,
@@ -1366,5 +1379,19 @@ mod tests {
             loaded.set_archive_game_root(&dir.path().join(format!("a{i}.img")), &chosen);
         }
         assert_eq!(loaded.archive_game_roots.len(), ARCHIVE_GAME_ROOTS_MAX);
+    }
+
+    #[test]
+    fn always_on_top_defaults_off_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.ini");
+
+        let mut config = Config::default();
+        assert!(!config.always_on_top);
+        config.always_on_top = true;
+        config.save_to_path(&settings).unwrap();
+
+        let loaded = Config::load_from_path(&settings);
+        assert!(loaded.always_on_top);
     }
 }

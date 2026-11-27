@@ -5,8 +5,11 @@
 - **Multi-file drag-and-drop import:** dragging and dropping multiple files
   from Explorer now imports the full selection in one batch (matching
   `Ctrl+I`), including drops of over 100 files, unified pre-flight format
-  checks, deduplicated `.dir`/`.img` pairs, and non-clobbering live-archive
-  merges (fixes #1).
+  checks, deduplicated `.dir`/`.img` pairs, non-clobbering live-archive
+  merges, and clear summaries when drops mix archives and non-IMG or skipped
+  items (fixes #1).
+- **Always on top:** new `View → Always on top` toggle keeps the editor
+  floating above Explorer and other windows (persisted in `settings.ini`).
 - **Faster internal hash collections:** `hashbrown` with foldhash now backs
   the internal maps and sets used by archive tables, search/sort, and caches.
   Raw A/B runs are recorded in `docs/hashmap-crate.md`.

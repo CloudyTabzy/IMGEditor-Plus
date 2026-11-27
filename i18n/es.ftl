@@ -49,6 +49,7 @@ menu-selection-delete = Eliminar seleccionados ({ $shortcut })
 
 ## View menu
 
+menu-view-always-on-top = Siempre visible
 menu-view-navigation-gizmo = Gizmo de navegación
 menu-view-search-bar = Barra de búsqueda
 menu-view-search-selection-context = Contexto de selección en la búsqueda
@@ -542,6 +543,17 @@ toast-imported-unchecked =
         [one] Se importó { $count } archivo; no hay destino en el validador, así que no se comprobaron los formatos.
        *[other] Se importaron { $count } archivos; no hay destino en el validador, así que no se comprobaron los formatos.
     }
+toast-imported-with-skipped =
+    { $count ->
+        [one] Se importó { $count } archivo ({ $skipped } omitidos — consulta el registro del archivo).
+       *[other] Se importaron { $count } archivos ({ $skipped } omitidos — consulta el registro del archivo).
+    }
+toast-imported-unchecked-with-skipped =
+    { $count ->
+        [one] Se importó { $count } archivo ({ $skipped } omitidos — consulta el registro); no se comprobaron los formatos.
+       *[other] Se importaron { $count } archivos ({ $skipped } omitidos — consulta el registro); no se comprobaron los formatos.
+    }
+toast-import-none-skipped = No se importó ningún archivo ({ $skipped } omitidos — consulta el registro del archivo).
 toast-import-failed = No se pudo importar: { $error }
 toast-no-files-in-folder = No se encontraron archivos normales en { $folder }.
 toast-folder-scan-failed = No se pudo analizar la carpeta: { $error }
@@ -662,6 +674,14 @@ toast-folder-scan-target-changed = El archivo de destino cambió mientras se ana
 toast-folder-import-discarded = Se descartó la importación de la carpeta porque el archivo de destino cambió.
 toast-compare-discarded = Se descartó la comparación porque el archivo cambió; vuelve a intentarlo.
 toast-drop-needs-archive = Abre primero un archivo para soltar en él archivos que no sean IMG.
+toast-drop-mixed-no-archive =
+    { $archives ->
+        [one] Abriendo { $archives } archivo IMG
+       *[other] Abriendo { $archives } archivos IMG
+    } — { $skipped ->
+        [one] { $skipped } elemento que no es IMG omitido
+       *[other] { $skipped } elementos que no son IMG omitidos
+    } (suéltalos en un archivo abierto para importarlos).
 toast-no-game-root = No se pudo determinar la carpeta del juego a partir de la ruta del archivo.
 toast-textures-exported =
     { $count ->

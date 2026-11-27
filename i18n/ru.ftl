@@ -50,6 +50,7 @@ menu-selection-delete = Удалить выбранное ({ $shortcut })
 
 ## View menu
 
+menu-view-always-on-top = Поверх всех окон
 menu-view-navigation-gizmo = Гизмо навигации
 menu-view-search-bar = Строка поиска
 menu-view-search-selection-context = Контекст выделения в поиске
@@ -449,6 +450,9 @@ toast-read-failed = Не удалось прочитать { $name }: { $error }
 toast-import-cancelled = Импорт отменён.
 toast-imported = Импортировано файлов: { $count }.
 toast-imported-unchecked = Импортировано файлов: { $count }. Целевая игра не выбрана, поэтому форматы не проверялись.
+toast-imported-with-skipped = Импортировано файлов: { $count } (пропущено: { $skipped } — см. журнал архива).
+toast-imported-unchecked-with-skipped = Импортировано файлов: { $count } (пропущено: { $skipped } — см. журнал); форматы не проверялись.
+toast-import-none-skipped = Файлы не импортированы (пропущено: { $skipped } — см. журнал архива).
 toast-import-failed = Не удалось импортировать: { $error }
 toast-no-files-in-folder = В { $folder } нет обычных файлов.
 toast-folder-scan-failed = Не удалось просканировать папку: { $error }
@@ -530,6 +534,7 @@ toast-folder-scan-target-changed = Целевой архив изменился 
 toast-folder-import-discarded = Импорт папки отменён: целевой архив изменился.
 toast-compare-discarded = Сравнение отменено: архив изменился; повторите попытку.
 toast-drop-needs-archive = Сначала откройте архив, чтобы перетаскивать в него файлы, отличные от IMG.
+toast-drop-mixed-no-archive = Открытие архивов: { $archives } — пропущено элементов не IMG: { $skipped } (перетащите их в открытый архив для импорта).
 toast-no-game-root = Не удалось определить папку игры по пути к архиву.
 toast-textures-exported = Экспортировано текстур: { $count }.
 toast-textures-export-failed = Не удалось экспортировать текстуры: { $error }

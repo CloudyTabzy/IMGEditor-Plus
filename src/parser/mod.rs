@@ -571,6 +571,7 @@ pub enum PreparedImportEntry {
 pub struct PreparedImportBatch {
     pub entries: Vec<EntryInfo>,
     pub logs: Vec<String>,
+    pub skipped: usize,
 }
 
 pub fn prepare_import_entry(
@@ -621,11 +622,14 @@ pub fn prepare_import_batch(paths: &[PathBuf], version: ImgVersion) -> PreparedI
         match prepare_import_entry(path, version) {
             Ok(PreparedImportEntry::Ready(entry)) => batch.entries.push(entry),
             Ok(PreparedImportEntry::Skipped { log, .. }) => {
+                batch.skipped += 1;
                 if let Some(line) = log {
                     batch.logs.push(line);
                 }
             }
-            Err(_) => {}
+            Err(_) => {
+                batch.skipped += 1;
+            }
         }
     }
     batch

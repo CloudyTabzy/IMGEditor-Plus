@@ -49,6 +49,7 @@ menu-selection-delete = Excluir selecionados ({ $shortcut })
 
 ## View menu (toggles; the on/off marker is added by the code)
 
+menu-view-always-on-top = Sempre no topo
 menu-view-navigation-gizmo = Gizmo de navegação
 menu-view-search-bar = Barra de pesquisa
 menu-view-search-selection-context = Contexto da seleção na pesquisa
@@ -586,6 +587,19 @@ toast-imported-unchecked =
         [one] { $count } arquivo importado — nenhum destino de validação definido, os formatos não foram verificados.
        *[other] { $count } arquivos importados — nenhum destino de validação definido, os formatos não foram verificados.
     }
+toast-imported-with-skipped =
+    { $count ->
+        [0] { $count } arquivos importados ({ $skipped } ignorados — consulte o log do arquivo).
+        [one] { $count } arquivo importado ({ $skipped } ignorados — consulte o log do arquivo).
+       *[other] { $count } arquivos importados ({ $skipped } ignorados — consulte o log do arquivo).
+    }
+toast-imported-unchecked-with-skipped =
+    { $count ->
+        [0] { $count } arquivos importados ({ $skipped } ignorados — consulte o log); os formatos não foram verificados.
+        [one] { $count } arquivo importado ({ $skipped } ignorados — consulte o log); os formatos não foram verificados.
+       *[other] { $count } arquivos importados ({ $skipped } ignorados — consulte o log); os formatos não foram verificados.
+    }
+toast-import-none-skipped = Nenhum arquivo importado ({ $skipped } ignorados — consulte o log do arquivo).
 toast-import-failed = Falha ao importar: { $error }
 toast-no-files-in-folder = Nenhum arquivo comum encontrado em { $folder }.
 toast-folder-scan-failed = Falha ao verificar a pasta: { $error }
@@ -721,6 +735,16 @@ toast-folder-scan-target-changed = O arquivo de destino mudou enquanto a pasta e
 toast-folder-import-discarded = A importação da pasta foi descartada porque o arquivo de destino mudou.
 toast-compare-discarded = A comparação foi descartada porque o arquivo mudou; tente novamente.
 toast-drop-needs-archive = Abra um arquivo primeiro para soltar arquivos que não sejam IMG nele.
+toast-drop-mixed-no-archive =
+    { $archives ->
+        [0] Abrindo { $archives } arquivos IMG
+        [one] Abrindo { $archives } arquivo IMG
+       *[other] Abrindo { $archives } arquivos IMG
+    } — { $skipped ->
+        [0] { $skipped } itens não IMG ignorados
+        [one] { $skipped } item não IMG ignorado
+       *[other] { $skipped } itens não IMG ignorados
+    } (solte em um arquivo aberto para importar).
 toast-no-game-root = Não foi possível determinar a pasta do jogo a partir do caminho do arquivo.
 toast-textures-exported =
     { $count ->

@@ -49,6 +49,7 @@ menu-selection-delete = Hapus yang dipilih ({ $shortcut })
 
 ## View menu (toggles; the on/off marker is added by the code)
 
+menu-view-always-on-top = Selalu di atas
 menu-view-navigation-gizmo = Gizmo navigasi
 menu-view-search-bar = Bilah pencarian
 menu-view-search-selection-context = Konteks pilihan dalam pencarian
@@ -419,6 +420,9 @@ toast-read-failed = Gagal membaca { $name }: { $error }
 toast-import-cancelled = Impor dibatalkan.
 toast-imported = { $count } berkas diimpor.
 toast-imported-unchecked = { $count } berkas diimpor — target validator belum ditetapkan, format tidak diperiksa.
+toast-imported-with-skipped = { $count } berkas diimpor ({ $skipped } dilewati — lihat log arsip).
+toast-imported-unchecked-with-skipped = { $count } berkas diimpor ({ $skipped } dilewati — lihat log); format tidak diperiksa.
+toast-import-none-skipped = Tidak ada berkas yang diimpor ({ $skipped } dilewati — lihat log arsip).
 toast-import-failed = Impor gagal: { $error }
 toast-no-files-in-folder = Tidak ada berkas biasa ditemukan di { $folder }.
 toast-folder-scan-failed = Pemindaian folder gagal: { $error }
@@ -497,6 +501,7 @@ toast-folder-scan-target-changed = Arsip target berubah saat folder dipindai.
 toast-folder-import-discarded = Impor folder dibuang karena arsip target berubah.
 toast-compare-discarded = Perbandingan dibuang karena arsip berubah; coba lagi.
 toast-drop-needs-archive = Buka arsip terlebih dahulu untuk menjatuhkan berkas non-IMG ke dalamnya.
+toast-drop-mixed-no-archive = Membuka { $archives } arsip — { $skipped } item non-IMG dilewati (jatuhkan ke arsip yang terbuka untuk mengimpor).
 toast-no-game-root = Tidak dapat menentukan folder game dari jalur arsip.
 toast-textures-exported = { $count } tekstur diekspor.
 toast-textures-export-failed = Ekspor tekstur gagal: { $error }
