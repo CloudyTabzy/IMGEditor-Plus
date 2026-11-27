@@ -777,6 +777,8 @@ pub enum Message {
     },
     /// Show a toast produced by a background task.
     ShowToast(String),
+    /// Background external 3D viewer export/launch finished.
+    ExternalViewerFinished(ViewerEvent),
     /// Window close button pressed; may open the unsaved-changes guard.
     WindowCloseRequested(iced::window::Id),
     /// Custom title bar: move, resize, and caption buttons.
@@ -1511,7 +1513,6 @@ pub struct App {
     /// Native-autoscroll control notice shown once per session.
     autoscroll_notice_shown: bool,
     pub modifiers: Modifiers,
-    viewer_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>>,
     /// Retained AGR playback request for the dock's model picker.
     pub(crate) agr_playback: Option<AgrPlayback>,
     /// Monotonic AGR load id; completions carrying an older id are dropped.
@@ -1781,7 +1782,6 @@ impl App {
             entry_table_hovered: false,
             autoscroll_notice_shown: false,
             modifiers: Modifiers::default(),
-            viewer_rxs: Vec::new(),
             agr_playback: None,
             agr_serial: 0,
             animator: Animator::new(),
@@ -5794,7 +5794,8 @@ impl App {
                     }
                     EntryAction::Export => {
                         self.last_export_selected_only = true;
-                        dialogs::save_folder().map(Message::ExportFolderResult)
+                        dialogs::save_folder(self.last_export_directory())
+                            .map(Message::ExportFolderResult)
                     }
                     EntryAction::ViewTextures => self.load_selected_texture(),
                     EntryAction::ExportEmbeddedTextures => {
@@ -5849,7 +5850,7 @@ impl App {
                         let Some(entry_index) = self.editor.selected_entry() else {
                             return Task::none();
                         };
-                        let (archive_path, name, read_result) = {
+                        let (entry, archive_path, source_mmap, name) = {
                             let Some(archive) = self.editor.archives().get(archive_index) else {
                                 return Task::none();
                             };
@@ -5857,40 +5858,79 @@ impl App {
                                 return Task::none();
                             };
                             (
+                                entry.clone(),
                                 archive.path.clone(),
+                                archive.source_mmap.clone(),
                                 entry.file_name.to_string(),
-                                crate::parser::read_entry_data(archive, entry),
                             )
                         };
-                        let data = match read_result {
-                            Ok(d) => d,
-                            Err(e) => {
-                                self.toast =
-                                    Some(t::toast_read_failed(name.as_str(), e.to_string()));
-                                return Task::none();
-                            }
-                        };
-
-                        if name.to_lowercase().ends_with(".dff") {
-                            let rx = viewer3d::spawn_dff_render_window(data, name.clone());
-                            self.viewer_rxs.push(rx);
-                        } else if name.to_lowercase().ends_with(".col") {
-                            let rx = viewer3d::spawn_col_render_window(data, name.clone());
-                            self.viewer_rxs.push(rx);
-                        } else {
-                            let game_root = archive_path
-                                .as_deref()
-                                .and_then(|p| self.config.game_root_for(p));
-                            let rx = viewer3d::spawn_render_window(data, name.clone(), game_root);
-                            self.viewer_rxs.push(rx);
-                        }
+                        let game_root = archive_path
+                            .as_deref()
+                            .and_then(|p| self.config.game_root_for(p));
 
                         if let Some(archive) = self.editor.selected_archive_mut() {
                             archive.add_log(t::log_external_viewer(name.as_str()));
                         }
-                        Task::none()
+
+                        Task::perform(
+                            async move {
+                                tokio::task::spawn_blocking(move || {
+                                    let bytes = match crate::parser::read_entry_bytes_with_source(
+                                        &entry,
+                                        archive_path.as_deref(),
+                                        source_mmap.as_deref(),
+                                    ) {
+                                        Ok(bytes) => bytes,
+                                        Err(error) => {
+                                            return ViewerEvent::Failed {
+                                                reason: t::toast_read_failed(
+                                                    name.as_str(),
+                                                    error.to_string(),
+                                                ),
+                                            };
+                                        }
+                                    };
+                                    let lower = name.to_ascii_lowercase();
+                                    if lower.ends_with(".dff") {
+                                        viewer3d::open_dff_external_viewer(&bytes, &name)
+                                    } else if lower.ends_with(".col") {
+                                        viewer3d::open_col_external_viewer(&bytes, &name)
+                                    } else {
+                                        viewer3d::open_nif_external_viewer(
+                                            &bytes,
+                                            &name,
+                                            game_root.as_deref(),
+                                        )
+                                    }
+                                })
+                                .await
+                                .unwrap_or_else(|err| {
+                                    ViewerEvent::Failed {
+                                        reason: format!("viewer panicked: {err}"),
+                                    }
+                                })
+                            },
+                            Message::ExternalViewerFinished,
+                        )
                     }
                 }
+            }
+
+            Message::ExternalViewerFinished(event) => {
+                match event {
+                    ViewerEvent::Opened { name } => {
+                        if let Some(archive) = self.editor.selected_archive_mut() {
+                            archive.add_log(t::log_viewer_opened(name.as_str()));
+                        }
+                    }
+                    ViewerEvent::Failed { reason } => {
+                        self.toast = Some(reason.clone());
+                        if let Some(archive) = self.editor.selected_archive_mut() {
+                            archive.add_log(t::log_viewer_failed(reason.as_str()));
+                        }
+                    }
+                }
+                Task::none()
             }
 
             Message::ShowAbout => {
@@ -6003,7 +6043,6 @@ impl App {
                 Task::none()
             }
             Message::TickProgress => {
-                self.poll_viewer_rxs();
                 // Animate the progress bar smoothly towards the current value.
                 // The baseline must fall back to the current value when no
                 // animation is registered (get() reads 0.0 and finished
@@ -6214,7 +6253,9 @@ impl App {
             }
             Message::AnimationFrame(now) => self.on_animation_frame(now),
             Message::AnimationDemoStart => self.start_animation_demo(),
-            Message::PickAgrFile => dialogs::open_agr_file().map(Message::AgrFileChosen),
+            Message::PickAgrFile => {
+                dialogs::open_agr_file(self.default_agr_directory()).map(Message::AgrFileChosen)
+            }
             Message::AgrFileChosen(Some(path)) => self.load_loose_agr(path),
             Message::AgrFileChosen(None) => Task::none(),
             Message::AnimationDemoExit => {
@@ -6820,9 +6861,8 @@ impl App {
                 Task::none()
             }
 
-            Message::TextureExport => {
-                dialogs::save_folder().map(Message::TextureExportFolderResult)
-            }
+            Message::TextureExport => dialogs::save_folder(self.last_export_directory())
+                .map(Message::TextureExportFolderResult),
 
             Message::TextureExportFolderResult(Some(folder)) => {
                 let Some(archive_index) = self.editor.selected_archive() else {
@@ -7052,7 +7092,7 @@ impl App {
                 let _ = entry_index;
                 self.toast = Some(t::toast_pick_embedded_folder(nif_basename.as_str()));
                 let nb = nif_basename.clone();
-                dialogs::save_folder().map(move |folder| {
+                dialogs::save_folder(self.last_export_directory()).map(move |folder| {
                     Message::ExportEmbeddedTexturesFolderResult {
                         entry_index,
                         nif_basename: nb.clone(),
@@ -8342,7 +8382,7 @@ impl App {
     fn start_export(&mut self, mode: ExportMode) -> Task<Message> {
         self.last_export_selected_only = matches!(mode, ExportMode::Selected);
         self.toast = None;
-        dialogs::save_folder().map(Message::ExportFolderResult)
+        dialogs::save_folder(self.last_export_directory()).map(Message::ExportFolderResult)
     }
 
     fn start_manifest_export(&mut self) -> Task<Message> {
@@ -8428,35 +8468,44 @@ impl App {
         ));
     }
 
-    fn poll_viewer_rxs(&mut self) {
-        let mut logs: Vec<String> = Vec::new();
-        let mut toast: Option<String> = None;
-        self.viewer_rxs.retain_mut(|rx| {
-            loop {
-                match rx.try_recv() {
-                    Ok(ViewerEvent::Opened { name }) => {
-                        logs.push(t::log_viewer_opened(name.as_str()));
-                    }
-                    Ok(ViewerEvent::Failed { reason }) => {
-                        toast = Some(reason.clone());
-                        logs.push(t::log_viewer_failed(reason.as_str()));
-                    }
-                    Ok(ViewerEvent::Closed) => {
-                        logs.push(t::log_viewer_closed());
-                    }
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break true,
-                }
-            }
-        });
-        if let Some(msg) = toast {
-            self.toast = Some(msg);
+    fn last_export_directory(&self) -> Option<PathBuf> {
+        self.editor
+            .selected_archive()
+            .and_then(|index| self.editor.archives().get(index))
+            .and_then(|archive| archive.last_export_folder.clone())
+            .filter(|path| path.is_dir())
+            .or_else(|| {
+                self.config
+                    .last_export_folder
+                    .clone()
+                    .filter(|path| path.is_dir())
+            })
+    }
+
+    fn default_agr_directory(&self) -> Option<PathBuf> {
+        let root = self
+            .editor
+            .selected_archive()
+            .and_then(|index| self.editor.archives().get(index))
+            .and_then(|archive| archive.path.as_deref())
+            .and_then(|path| self.config.game_root_for(path))?;
+        let anim_dir = root.join("Anim");
+        if anim_dir.is_dir() {
+            Some(anim_dir)
+        } else {
+            Some(root)
         }
-        if let Some(archive) = self.editor.selected_archive_mut() {
-            for log in logs {
-                archive.add_log(log);
-            }
-        }
+    }
+
+    pub(crate) fn progress_tick_active(&self) -> bool {
+        self.has_active_progress()
+            || self.toast.is_some()
+            || self.toast_pulses_remaining > 0
+            || self.animator.running_count() > 0
+    }
+
+    pub(crate) fn debounce_tick_active(&self) -> bool {
+        self.filter_pending
     }
 
     /// Hide the native window before asking Iced to release its compositor.
@@ -8528,7 +8577,13 @@ impl App {
             _ => None,
         });
 
-        let tick = iced::time::every(Duration::from_millis(250)).map(|_| Message::TickProgress);
+        // Only run background Tokio interval timers when state actually needs
+        // them, so an idle archive consumes zero periodic timer wakeups.
+        let tick = if self.progress_tick_active() {
+            iced::time::every(Duration::from_millis(250)).map(|_| Message::TickProgress)
+        } else {
+            Subscription::none()
+        };
 
         // Only run the animation ticker when something needs it. A constant
         // 60 Hz update forces a full view rebuild every frame, which makes
@@ -8556,7 +8611,11 @@ impl App {
             Subscription::none()
         };
 
-        let debounce = iced::time::every(Duration::from_millis(150)).map(|_| Message::DebounceTick);
+        let debounce = if self.debounce_tick_active() {
+            iced::time::every(Duration::from_millis(150)).map(|_| Message::DebounceTick)
+        } else {
+            Subscription::none()
+        };
 
         // `FileDropped` is observed directly by the root `file_drop_catcher`
         // widget so large multi-file drops bypass the bounded subscription
@@ -13162,5 +13221,45 @@ mod tests {
             .expect("preflight dialog should stay open");
         assert_eq!(pending.paths.len(), 2);
         assert_eq!(pending.flagged().len(), 2);
+    }
+
+    #[test]
+    fn idle_tokio_timers_stay_dormant_until_state_needs_them() {
+        let mut app = test_app_with_entries();
+        assert!(!app.progress_tick_active());
+        assert!(!app.debounce_tick_active());
+
+        let _ = app.update(Message::SearchChanged("player".to_string()));
+        assert!(app.debounce_tick_active());
+        let _ = app.update(Message::DebounceTick);
+        assert!(!app.debounce_tick_active());
+
+        app.editor.archives_mut()[0].progress.start();
+        assert!(app.progress_tick_active());
+        app.editor.archives_mut()[0].progress.finish();
+        assert!(!app.progress_tick_active());
+
+        app.toast = Some("Saved".to_string());
+        assert!(app.progress_tick_active());
+        app.toast = None;
+        assert!(!app.progress_tick_active());
+    }
+
+    #[test]
+    fn external_viewer_finished_logs_and_toasts_without_polling() {
+        let mut app = test_app_with_entries();
+        let initial_logs = app.editor.archives()[0].logs.len();
+
+        let _ = app.update(Message::ExternalViewerFinished(ViewerEvent::Opened {
+            name: "box.dff".to_string(),
+        }));
+        assert_eq!(app.editor.archives()[0].logs.len(), initial_logs + 1);
+        assert!(app.toast.is_none());
+
+        let _ = app.update(Message::ExternalViewerFinished(ViewerEvent::Failed {
+            reason: "parse failed".to_string(),
+        }));
+        assert_eq!(app.toast.as_deref(), Some("parse failed"));
+        assert_eq!(app.editor.archives()[0].logs.len(), initial_logs + 2);
     }
 }

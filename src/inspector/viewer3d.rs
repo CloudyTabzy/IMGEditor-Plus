@@ -1,10 +1,6 @@
 use std::fs;
 use std::io::Write;
-use std::panic;
 use std::path::{Path, PathBuf};
-use std::thread;
-
-use tokio::sync::mpsc;
 
 use crate::inspector::nif::{
     self, BlockPayload, NiTriShapeDataPayload, NiTriStripsDataPayload, NifFile,
@@ -14,69 +10,33 @@ use crate::inspector::texture::{IdeMap, resolve_textures_for_nif};
 use crate::parser::col::ColFile;
 use crate::parser::dff::DffMesh;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewerEvent {
     Opened { name: String },
     Failed { reason: String },
-    Closed,
 }
 
-/// Export the NIF geometry to a temporary .obj/.mtl pair (with texture when
-/// available) and open it with the system's default viewer.
-///
-/// `texture_files` maps a bare filename (e.g. `"P_ipoor_1950fridge_d.tga"`)
-/// to its raw bytes, extracted from the IMG archive ahead of time.
-pub fn spawn_render_window(
-    nif_data: Vec<u8>,
-    name: String,
-    game_root: Option<PathBuf>,
-) -> mpsc::UnboundedReceiver<ViewerEvent> {
-    let (tx, rx) = mpsc::unbounded_channel();
-    thread::Builder::new()
-        .name(format!("nif-viewer-{name}"))
-        .spawn(move || {
-            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                export_viewer(nif_data, name, game_root, tx.clone());
-            }));
-            if let Err(err) = result {
-                let msg = match err.downcast_ref::<&str>() {
-                    Some(s) => s.to_string(),
-                    None => match err.downcast_ref::<String>() {
-                        Some(s) => s.clone(),
-                        None => "unknown panic".to_string(),
-                    },
-                };
-                eprintln!("[IMGEditor] NIF viewer panicked: {msg}");
-                let _ = tx.send(ViewerEvent::Failed {
-                    reason: format!("viewer panicked: {msg}"),
-                });
-            }
-        })
-        .expect("failed to spawn NIF viewer thread");
-    rx
-}
-
-fn export_viewer(
-    nif_data: Vec<u8>,
-    name: String,
-    game_root: Option<PathBuf>,
-    tx: mpsc::UnboundedSender<ViewerEvent>,
-) {
+/// Export the NIF geometry to a temporary `.obj`/`.mtl` pair (with texture when
+/// available, falling back to `.ply`) and open it with the system's default
+/// viewer. Intended to be invoked inside `tokio::task::spawn_blocking`.
+pub fn open_nif_external_viewer(
+    nif_data: &[u8],
+    name: &str,
+    game_root: Option<&Path>,
+) -> ViewerEvent {
     let data_len = nif_data.len();
     if data_len < 12 || !nif_data.starts_with(b"Gamebryo File Format") {
         let msg = format!("Not a valid NIF file ({data_len} bytes)");
         eprintln!("[IMGEditor] viewer: {msg}");
-        let _ = tx.send(ViewerEvent::Failed { reason: msg });
-        return;
+        return ViewerEvent::Failed { reason: msg };
     }
 
-    let mut nif = match NifFile::parse(&nif_data) {
+    let mut nif = match NifFile::parse(nif_data) {
         Ok(n) => n,
         Err(e) => {
             let msg = format!("NIF parse failed: {e}");
             eprintln!("[IMGEditor] viewer: {msg}");
-            let _ = tx.send(ViewerEvent::Failed { reason: msg });
-            return;
+            return ViewerEvent::Failed { reason: msg };
         }
     };
     nif.resolve_string_indices();
@@ -87,8 +47,7 @@ fn export_viewer(
         None => {
             let msg = "No renderable geometry found in NIF file.".to_string();
             eprintln!("[IMGEditor] viewer: {msg}");
-            let _ = tx.send(ViewerEvent::Failed { reason: msg });
-            return;
+            return ViewerEvent::Failed { reason: msg };
         }
     };
 
@@ -99,18 +58,18 @@ fn export_viewer(
         eprintln!("[IMGEditor] viewer: no diffuse texture found in NIF");
     }
 
-    let stem = Path::new(&name)
+    let stem = Path::new(name)
         .file_stem()
         .and_then(|value| value.to_str())
         .filter(|value| !value.is_empty())
-        .unwrap_or(&name);
+        .unwrap_or(name);
     let temp_dir = std::env::temp_dir().join("IMGEditor").join("preview");
     let _ = fs::create_dir_all(&temp_dir);
 
     // Resolve texture via IDE → NFT pipeline.
     let nif_basename = stem;
     eprintln!("[IMGEditor] viewer: nif basename = {nif_basename}, game_root = {game_root:?}");
-    let ide_map = game_root.as_ref().map(|root| IdeMap::build(root));
+    let ide_map = game_root.map(IdeMap::build);
     let nft_catalog = ide_map
         .as_ref()
         .and_then(|map| resolve_textures_for_nif(nif_basename, map));
@@ -166,13 +125,10 @@ fn export_viewer(
             Err(e) => {
                 let msg = format!("Failed to write PLY: {e}");
                 eprintln!("[IMGEditor] viewer: {msg}");
-                let _ = tx.send(ViewerEvent::Failed { reason: msg });
-                return;
+                return ViewerEvent::Failed { reason: msg };
             }
         }
     }
-
-    let _ = tx.send(ViewerEvent::Opened { name: name.clone() });
 
     // Open the file with the system default handler (detached).
     let out_path = if used_obj {
@@ -181,6 +137,9 @@ fn export_viewer(
         temp_dir.join(format!("{stem}.ply"))
     };
     open_file_detached(&out_path);
+    ViewerEvent::Opened {
+        name: name.to_string(),
+    }
 }
 
 // ---- OBJ + MTL export ------------------------------------------------
@@ -313,46 +272,16 @@ fn write_ply(path: &Path, mesh: &MeshData) -> std::io::Result<()> {
 
 // ---- DFF render window ------------------------------------------------
 
-/// Spawn a render window for a DFF (RenderWare Clump) mesh.
-/// Parses the DFF, extracts geometry, writes a PLY file, and opens it
-/// with the system default 3D viewer.
-pub fn spawn_dff_render_window(
-    dff_data: Vec<u8>,
-    name: String,
-) -> mpsc::UnboundedReceiver<ViewerEvent> {
-    let (tx, rx) = mpsc::unbounded_channel();
-    thread::Builder::new()
-        .name(format!("dff-viewer-{name}"))
-        .spawn(move || {
-            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                export_dff_viewer(dff_data, name, tx.clone());
-            }));
-            if let Err(err) = result {
-                let msg = match err.downcast_ref::<&str>() {
-                    Some(s) => s.to_string(),
-                    None => match err.downcast_ref::<String>() {
-                        Some(s) => s.clone(),
-                        None => "unknown panic".to_string(),
-                    },
-                };
-                eprintln!("[IMGEditor] DFF viewer panicked: {msg}");
-                let _ = tx.send(ViewerEvent::Failed {
-                    reason: format!("viewer panicked: {msg}"),
-                });
-            }
-        })
-        .expect("failed to spawn DFF viewer thread");
-    rx
-}
-
-fn export_dff_viewer(dff_data: Vec<u8>, name: String, tx: mpsc::UnboundedSender<ViewerEvent>) {
-    let meshes = match crate::parser::dff::parse_dff(&dff_data) {
+/// Parse a DFF (RenderWare Clump) mesh, write a temporary `.ply` file, and
+/// open it with the system default 3D viewer. Intended to be invoked inside
+/// `tokio::task::spawn_blocking`.
+pub fn open_dff_external_viewer(dff_data: &[u8], name: &str) -> ViewerEvent {
+    let meshes = match crate::parser::dff::parse_dff(dff_data) {
         Ok(m) => m,
         Err(e) => {
             let msg = format!("DFF parse failed: {e}");
             eprintln!("[IMGEditor] viewer: {msg}");
-            let _ = tx.send(ViewerEvent::Failed { reason: msg });
-            return;
+            return ViewerEvent::Failed { reason: msg };
         }
     };
 
@@ -365,11 +294,11 @@ fn export_dff_viewer(dff_data: Vec<u8>, name: String, tx: mpsc::UnboundedSender<
     let temp_dir = std::env::temp_dir().join("IMGEditor").join("preview");
     let _ = fs::create_dir_all(&temp_dir);
 
-    let stem = Path::new(&name)
+    let stem = Path::new(name)
         .file_stem()
         .and_then(|value| value.to_str())
         .filter(|value| !value.is_empty())
-        .unwrap_or(&name);
+        .unwrap_or(name);
     let ply_path = temp_dir.join(format!("{stem}.ply"));
 
     // Flatten all meshes into one PLY with vertex-offset indexing.
@@ -383,13 +312,15 @@ fn export_dff_viewer(dff_data: Vec<u8>, name: String, tx: mpsc::UnboundedSender<
                 total_verts,
                 total_indices / 3
             );
-            let _ = tx.send(ViewerEvent::Opened { name });
             open_file_detached(&ply_path);
+            ViewerEvent::Opened {
+                name: name.to_string(),
+            }
         }
         Err(e) => {
             let msg = format!("Failed to write PLY: {e}");
             eprintln!("[IMGEditor] viewer: {msg}");
-            let _ = tx.send(ViewerEvent::Failed { reason: msg });
+            ViewerEvent::Failed { reason: msg }
         }
     }
 }
@@ -438,50 +369,27 @@ fn write_ply_from_meshes(
 
 // ---- COL render window ------------------------------------------------
 
-pub fn spawn_col_render_window(
-    col_data: Vec<u8>,
-    name: String,
-) -> mpsc::UnboundedReceiver<ViewerEvent> {
-    let (tx, rx) = mpsc::unbounded_channel();
-    thread::Builder::new()
-        .name(format!("col-viewer-{name}"))
-        .spawn(move || {
-            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                export_col_viewer(col_data, name, tx.clone());
-            }));
-            if let Err(err) = result {
-                let msg = match err.downcast_ref::<&str>() {
-                    Some(s) => s.to_string(),
-                    None => match err.downcast_ref::<String>() {
-                        Some(s) => s.clone(),
-                        None => "unknown panic".to_string(),
-                    },
-                };
-                eprintln!("[IMGEditor] COL viewer panicked: {msg}");
-                let _ = tx.send(ViewerEvent::Failed {
-                    reason: format!("viewer panicked: {msg}"),
-                });
-            }
-        })
-        .expect("failed to spawn COL viewer thread");
-    rx
-}
-
-fn export_col_viewer(col_data: Vec<u8>, name: String, tx: mpsc::UnboundedSender<ViewerEvent>) {
-    let col = match crate::parser::col::parse_col(&col_data) {
+/// Parse a COL collision file, write a temporary `.ply` file, and open it
+/// with the system default 3D viewer. Intended to be invoked inside
+/// `tokio::task::spawn_blocking`.
+pub fn open_col_external_viewer(col_data: &[u8], name: &str) -> ViewerEvent {
+    let col = match crate::parser::col::parse_col(col_data) {
         Ok(c) => c,
         Err(e) => {
             let msg = format!("COL parse failed: {e}");
             eprintln!("[IMGEditor] viewer: {msg}");
-            let _ = tx.send(ViewerEvent::Failed { reason: msg });
-            return;
+            return ViewerEvent::Failed { reason: msg };
         }
     };
 
     let temp_dir = std::env::temp_dir().join("IMGEditor").join("preview");
     let _ = fs::create_dir_all(&temp_dir);
 
-    let stem = name.rsplit('.').next().unwrap_or(&name);
+    let stem = Path::new(name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(name);
     let ply_path = temp_dir.join(format!("{stem}.ply"));
 
     match write_ply_from_col(&ply_path, &col) {
@@ -490,13 +398,15 @@ fn export_col_viewer(col_data: Vec<u8>, name: String, tx: mpsc::UnboundedSender<
                 "[IMGEditor] viewer: wrote COL PLY to {ply_path:?} ({} entries)",
                 col.entries.len()
             );
-            let _ = tx.send(ViewerEvent::Opened { name });
             open_file_detached(&ply_path);
+            ViewerEvent::Opened {
+                name: name.to_string(),
+            }
         }
         Err(e) => {
             let msg = format!("Failed to write COL PLY: {e}");
             eprintln!("[IMGEditor] viewer: {msg}");
-            let _ = tx.send(ViewerEvent::Failed { reason: msg });
+            ViewerEvent::Failed { reason: msg }
         }
     }
 }
