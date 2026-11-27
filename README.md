@@ -1,12 +1,12 @@
-# 🎮 IMG Editor Plus v4.17.0
+# 🎮 IMG Editor Plus v4.18.0
 
 A **pure Rust** desktop editor for GTA and Bully IMG archives — built for **speed**, **safety**, and a modern workflow.
 
 > Forked and evolved from [Grinch_'s IMG Editor](https://github.com/user-grinch/IMGEditor).  
 > Rewritten in Rust to eliminate crashes, memory bugs, and C++ dependency hell.
 
-> **Status:** feature-complete and in maintenance mode. Latest tagged release:
-> v4.17.0.
+> **Status:** feature-complete and in maintenance mode. Latest release:
+> v4.18.0.
 
 ---
 

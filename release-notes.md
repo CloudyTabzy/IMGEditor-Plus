@@ -1,3 +1,20 @@
+## IMG Editor Plus v4.18.0
+
+*First public GitHub release since `v4.16.1` — includes all `v4.17.0` features (multi-file drag-and-drop import, `View → Always on top`, `hashbrown` collections, parallel TXD previews) plus a full core runtime, I/O, parallelism, and memory modernization pass.*
+
+### Highlights
+
+- **Global allocator (`rusty_alloc` 2.6.0):** upgraded to 2.6.0 with demand-committed arenas/segments, 10 ms OS purge, crash-report commit telemetry, and active teardown reclaim (`collect(true)`) when closing archive tabs ([`docs/allocator-rusty-alloc.md`](docs/allocator-rusty-alloc.md)).
+- **Window-parented native dialogs & unified Tokio runtime (`rfd` 0.18.0 + `tokio` 1.54.1):** all native file/folder pickers now parent to the active Iced window (staying modal and above the editor even under **Always on top**), serialized against duplicate launches and safe against mid-dialog window closes; removed the duplicate Tokio runtime, moved external 3D viewer launches to `spawn_blocking`, and gated idle periodic timers so open archives consume zero idle wakeups ([`docs/rfd-tokio-runtime.md`](docs/rfd-tokio-runtime.md)).
+- **Unified zero-copy memory-mapped reads (`memmap2` 0.9.12):** routed archive open, compatibility scan, normalize, export, 3D/animation loads, and texture resolution through shared archive memory maps (`no_probe_handle` on Windows), while cleanly releasing UI-held maps before in-place saves and cleaning up `.temp` files on rename errors ([`docs/memmap2-io.md`](docs/memmap2-io.md)).
+- **Expanded Rayon parallelism (`rayon` 1.12.0):** parallelized compatibility scans, pre-save header normalization, TXD/NFT preview decoding, bounded-pool bulk texture conversion (capped at 4 workers to bound peak memory), palette pixel mapping, and batch import prep while preserving deterministic archive order ([`docs/rayon-parallelism.md`](docs/rayon-parallelism.md)).
+- **Zero-allocation lookups & inline storage (`hashbrown` 0.17.2, `smallvec` 1.16.6, `compact_str` 0.10.0):**
+  - Borrowed-key `LowerStr` / `Equivalent` / `entry_ref` lookups across archive comparison, folder import, and texture indexes ([`docs/hashmap-crate.md`](docs/hashmap-crate.md)).
+  - Union-backed inline storage for `SortChain`, `VertexSkin`, NIF skinning/ref tables (−122,897 heap allocations across 418 retail Bully NIFs, `ArchiveInfo` −32 B), and mip-chain construction ([`docs/smallvec-inline-storage.md`](docs/smallvec-inline-storage.md)).
+  - Inline 24-byte strings across `EntryInfo` (−32,632 temporary heap `String`s and −21–25% open time on `gta3.img`), TXD texture names (99.7% inline, −27,661 allocs/scan at 0 B struct growth), and `IdeMap` ([`docs/compact-str-inline-strings.md`](docs/compact-str-inline-strings.md)).
+- **Reliability & hardening:** atomic UI-thread progress claiming so progress bars and Cancel buttons respond immediately, capped upfront TXD `textures.reserve` against crafted tiny files, and ASCII-first `compact_to_lowercase` with full Unicode parity against `std::str::to_lowercase`.
+- **Verification:** passes `cargo fmt --check`, `cargo check --no-default-features`, `cargo clippy --all-targets -- -D warnings`, and the full 790-test Rust suite.
+
 ## IMG Editor Plus v4.17.0
 
 ### Highlights
