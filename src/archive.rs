@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use anyhow::Context;
-use compact_str::CompactString;
+use compact_str::{CompactString, format_compact};
 use memmap2::Mmap;
 
 use crate::parser::{
@@ -337,20 +337,22 @@ impl EntryInfo {
 
     fn new_with_name_capacity(file_name: impl Into<CompactString>, name_capacity: usize) -> Self {
         let file_name: CompactString = file_name.into();
-        let file_name_lower = CompactString::new(file_name.to_lowercase());
+        let file_name_lower = crate::collections::compact_to_lowercase(&file_name);
         let file_name_raw = if name_capacity == crate::parser::MAX_ENTRY_NAME_LEN {
             encode_entry_name(&file_name)
         } else {
             encode_entry_name_with_limit(&file_name, name_capacity)
         };
-        let file_type = infer_file_type(&file_name);
-        let file_ext = CompactString::new(
-            std::path::Path::new(&file_name)
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext.to_ascii_uppercase())
-                .unwrap_or_else(|| "FILE".to_string()),
-        );
+        let file_type = infer_file_type_from_lower(&file_name_lower);
+        let file_ext = std::path::Path::new(file_name.as_str())
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| {
+                let mut out = CompactString::new(ext);
+                out.make_ascii_uppercase();
+                out
+            })
+            .unwrap_or_else(|| CompactString::const_new("FILE"));
 
         Self {
             offset: 0,
@@ -591,7 +593,7 @@ impl ArchiveInfo {
 
     pub fn update_selected_list(&mut self, filter: &str, literal_types: bool) {
         self.sync_sort_state_from_chain();
-        let filter = filter.trim().to_lowercase();
+        let filter = crate::collections::compact_to_lowercase(filter.trim());
         self.selected_indices.clear();
         // Dense entry-index table; `resize` reuses the allocation across
         // keystrokes instead of rehashing a map.
@@ -915,40 +917,43 @@ pub fn file_type_display(file_type: &str) -> std::borrow::Cow<'_, str> {
 }
 
 pub fn infer_file_type(file_name: &str) -> CompactString {
-    let lower = file_name.to_ascii_lowercase();
+    let lower = crate::collections::compact_to_lowercase(file_name);
+    infer_file_type_from_lower(&lower)
+}
 
+fn infer_file_type_from_lower(lower: &str) -> CompactString {
     if lower.contains(".dff") {
-        CompactString::new("Model")
+        CompactString::const_new("Model")
     } else if lower.contains(".txd") || lower.contains(".nft") {
-        CompactString::new("Texture")
+        CompactString::const_new("Texture")
     } else if lower.contains(".col") {
-        CompactString::new("Collision")
+        CompactString::const_new("Collision")
     } else if lower.contains(".ifp") {
-        CompactString::new("Animation")
+        CompactString::const_new("Animation")
     } else if lower.contains(".ipl") {
-        CompactString::new("Placement")
+        CompactString::const_new("Placement")
     } else if lower.contains(".ide") {
-        CompactString::new("Definition")
+        CompactString::const_new("Definition")
     } else if lower.contains(".dat") {
-        CompactString::new("Data")
+        CompactString::const_new("Data")
     } else if lower.contains(".nif") {
         // Bully Gamebryo model.
-        CompactString::new("Model")
+        CompactString::const_new("Model")
     } else if lower.contains(".idb") {
         // Bully item/instance definition bank (SJBO objects).
-        CompactString::new("Definition")
+        CompactString::const_new("Definition")
     } else if lower.contains(".ipb") {
         // Bully instance placement bank.
-        CompactString::new("Placement")
+        CompactString::const_new("Placement")
     } else if lower.contains(".db") {
         // Bully stream database tracked by the modding toolchain.
-        CompactString::new("Data")
+        CompactString::const_new("Data")
     } else {
-        std::path::Path::new(file_name)
+        std::path::Path::new(lower)
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| CompactString::new(format!(".{ext} file", ext = ext.to_ascii_lowercase())))
-            .unwrap_or_else(|| CompactString::new("file"))
+            .map(|ext| format_compact!(".{ext} file"))
+            .unwrap_or_else(|| CompactString::const_new("file"))
     }
 }
 
@@ -1327,5 +1332,28 @@ mod tests {
         assert_eq!(stats.entry_count, 1);
         assert_eq!(stats.original_bytes, 8 + crate::parser::ENTRY_SIZE as u64);
         assert_eq!(stats.packed_bytes, 8 + crate::parser::ENTRY_SIZE as u64);
+    }
+
+    #[test]
+    fn entry_info_strings_stay_inline_without_heap_allocations() {
+        let entry = EntryInfo::new("Police_Car_01.DFF");
+        assert!(!entry.file_name.is_heap_allocated());
+        assert!(!entry.file_name_lower.is_heap_allocated());
+        assert!(!entry.file_type.is_heap_allocated());
+        assert!(!entry.file_ext.is_heap_allocated());
+        assert_eq!(entry.file_name_lower, "police_car_01.dff");
+        assert_eq!(entry.file_type, "Model");
+        assert_eq!(entry.file_ext, "DFF");
+
+        let custom = EntryInfo::new("README.CUSTOM");
+        assert!(!custom.file_type.is_heap_allocated());
+        assert_eq!(custom.file_type, ".custom file");
+        assert_eq!(custom.file_ext, "CUSTOM");
+
+        let bare = EntryInfo::new("NOEXT");
+        assert!(!bare.file_type.is_heap_allocated());
+        assert!(!bare.file_ext.is_heap_allocated());
+        assert_eq!(bare.file_type, "file");
+        assert_eq!(bare.file_ext, "FILE");
     }
 }

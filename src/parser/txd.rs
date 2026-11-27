@@ -111,8 +111,8 @@ pub struct NativeTexture {
     pub platform_id: u32,
     pub filter_mode: u8,
     pub uv_addressing: u8,
-    pub diffuse_name: String,
-    pub alpha_name: String,
+    pub diffuse_name: compact_str::CompactString,
+    pub alpha_name: compact_str::CompactString,
     /// Complete RenderWare raster format flags.
     pub raster_format: u32,
     /// D3D9 format/FourCC. D3D8 normally leaves this at zero and stores its
@@ -468,8 +468,8 @@ struct PlatformIndependentImage {
 struct PlatformIndependentTexture {
     filter_mode: u8,
     uv_addressing: u8,
-    name: String,
-    mask: String,
+    name: compact_str::CompactString,
+    mask: compact_str::CompactString,
 }
 
 fn parse_platform_independent_image(bytes: &[u8]) -> Result<PlatformIndependentImage, String> {
@@ -572,7 +572,11 @@ fn parse_platform_independent_texture(bytes: &[u8]) -> Result<PlatformIndependen
     })
 }
 
-fn read_string_section(bytes: &[u8], section: Section, what: &str) -> Result<String, String> {
+fn read_string_section(
+    bytes: &[u8],
+    section: Section,
+    what: &str,
+) -> Result<compact_str::CompactString, String> {
     if section.kind != rw::STRING {
         return Err(format!(
             "expected STRING section for {what}, got 0x{:02X}",
@@ -764,9 +768,15 @@ fn parse_native_struct(bytes: &[u8], copy_pixels: bool) -> Result<NativeTexture,
     })
 }
 
-fn read_fixed_name(bytes: &[u8]) -> String {
+fn read_fixed_name(bytes: &[u8]) -> compact_str::CompactString {
     let bytes = bytes.split(|&byte| byte == 0).next().unwrap_or_default();
-    String::from_utf8_lossy(bytes).trim().to_string()
+    match std::str::from_utf8(bytes) {
+        Ok(text) => compact_str::CompactString::new(text.trim()),
+        Err(_) => {
+            let lossy = compact_str::CompactString::from_utf8_lossy(bytes);
+            compact_str::CompactString::new(lossy.trim())
+        }
+    }
 }
 
 fn read_section(bytes: &[u8], position: usize, limit: usize) -> Result<Section, String> {
@@ -1042,5 +1052,17 @@ mod tests {
             .next()
             .expect("real TXD should expose a decodable PC texture");
         assert!(!decoded.is_empty());
+    }
+
+    #[test]
+    fn native_texture_names_stay_inline_without_size_overhead() {
+        let txd = parse_txd(&platform_independent_txd_fixture()).expect("parse");
+        let texture = &txd.textures[0];
+        assert!(!texture.diffuse_name.is_heap_allocated());
+        assert!(!texture.alpha_name.is_heap_allocated());
+        assert_eq!(
+            std::mem::size_of::<compact_str::CompactString>(),
+            std::mem::size_of::<String>()
+        );
     }
 }

@@ -188,7 +188,7 @@ pub fn scan_import_folder(
             if existing_names.contains(&LowerStr(raw.as_ref())) {
                 return true;
             }
-            !seen_names.insert(CompactString::from_str_to_lowercase(raw.as_ref()))
+            !seen_names.insert(crate::collections::compact_to_lowercase(raw.as_ref()))
         })
         .count();
 
@@ -302,7 +302,7 @@ impl FolderImportTask {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string());
-            let key = CompactString::from_str_to_lowercase(display_name.as_str());
+            let key = crate::collections::compact_to_lowercase(display_name.as_str());
             let duplicate = !seen_names.insert(key);
 
             if duplicate && duplicate_policy == FolderDuplicatePolicy::Skip {

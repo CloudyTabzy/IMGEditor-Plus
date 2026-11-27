@@ -1,5 +1,5 @@
-use crate::collections::{EntryRef, HashMap, HashSet, LowerStr};
-use compact_str::CompactString;
+use crate::collections::{EntryRef, HashMap, HashSet, LowerStr, compact_to_lowercase};
+use compact_str::{CompactString, format_compact};
 use memmap2::Mmap;
 use std::borrow::Cow;
 use std::fs;
@@ -16,7 +16,7 @@ const MAX_TEXTURE_DIMENSION: u32 = 8_192;
 /// Maps model name (lowercase) → txd/NFT name (from .ide `objs` entries).
 #[derive(Debug, Default)]
 pub struct IdeMap {
-    inner: HashMap<String, String>,
+    inner: HashMap<CompactString, CompactString>,
     game_root: Option<PathBuf>,
 }
 
@@ -31,7 +31,10 @@ impl IdeMap {
         }
     }
 
-    fn walk_and_parse(dir: &Path, map: &mut HashMap<String, String>) -> std::io::Result<()> {
+    fn walk_and_parse(
+        dir: &Path,
+        map: &mut HashMap<CompactString, CompactString>,
+    ) -> std::io::Result<()> {
         if !dir.is_dir() {
             return Ok(());
         }
@@ -51,7 +54,7 @@ impl IdeMap {
         Ok(())
     }
 
-    fn parse_ide_file(path: &Path, map: &mut HashMap<String, String>) {
+    fn parse_ide_file(path: &Path, map: &mut HashMap<CompactString, CompactString>) {
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => return,
@@ -82,7 +85,10 @@ impl IdeMap {
                 && !txd_name.is_empty()
                 && let EntryRef::Vacant(slot) = map.entry_ref(&LowerStr(model_name))
             {
-                slot.insert_with_key(model_name.to_lowercase(), txd_name.to_string());
+                slot.insert_with_key(
+                    compact_to_lowercase(model_name),
+                    CompactString::new(txd_name),
+                );
             }
         }
     }
@@ -103,7 +109,7 @@ impl IdeMap {
     /// Locate the `.nft` file on disk for a given txd name.
     pub fn locate_nft(&self, txd_name: &str) -> Option<PathBuf> {
         let root = self.game_root.as_ref()?;
-        let target = format!("{}.nft", txd_name.to_lowercase());
+        let target = format_compact!("{txd_name}.nft");
         Self::find_file_recursive(root, &target)
     }
 
@@ -123,8 +129,7 @@ impl IdeMap {
                 && path
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .map(|n| n.to_lowercase() == *target)
-                    .unwrap_or(false)
+                    .is_some_and(|n| n.eq_ignore_ascii_case(target))
             {
                 return Some(path);
             }
@@ -142,7 +147,7 @@ impl IdeMap {
         }
         // 2. Same-basename fallback: try {nif_basename}.nft
         if let Some(ref root) = self.game_root {
-            let target = format!("{}.nft", nif_basename.to_lowercase());
+            let target = format_compact!("{nif_basename}.nft");
             return Self::find_file_recursive(root, &target);
         }
         None
@@ -157,7 +162,7 @@ impl IdeMap {
             .next()
             .filter(|name| !name.is_empty())?;
         let root = self.game_root.as_ref()?;
-        Self::find_file_recursive(root, &basename.to_lowercase())
+        Self::find_file_recursive(root, basename)
     }
 }
 
@@ -184,8 +189,7 @@ impl ArchiveTextureIndex {
     pub fn from_entries_owned(entries: Vec<EntryInfo>, archive_path: Option<&Path>) -> Self {
         let mut indexed = HashMap::with_capacity(entries.len());
         for entry in entries {
-            let key =
-                CompactString::from_str_to_lowercase(texture_basename(entry.file_name.as_str()));
+            let key = compact_to_lowercase(texture_basename(entry.file_name.as_str()));
             indexed.entry(key).or_insert(entry);
         }
         Self {
@@ -2040,5 +2044,22 @@ mod tests {
             index.read("SAMPLE.TXD").as_deref(),
             Some(payload.as_slice())
         );
+    }
+
+    #[test]
+    fn ide_map_entries_stay_inline_with_compact_string() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("sample.ide"),
+            "objs\n100, Police_Car, police_txd, 100, 0\nend\n",
+        )
+        .unwrap();
+
+        let map = IdeMap::build(dir.path());
+        assert_eq!(map.txd_name_for("POLICE_CAR"), Some("police_txd"));
+        for (key, value) in &map.inner {
+            assert!(!key.is_heap_allocated());
+            assert!(!value.is_heap_allocated());
+        }
     }
 }

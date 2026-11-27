@@ -17,6 +17,25 @@ pub use hashbrown::{HashMap, HashSet};
 use compact_str::CompactString;
 use std::hash::{Hash, Hasher};
 
+/// Lowercases `s` into a [`CompactString`] using a fast in-place ASCII path
+/// before falling back to full Unicode case mapping.
+///
+/// `CompactString::from_str_to_lowercase` processes ASCII in 16-byte chunks
+/// and falls through to char-by-char Unicode folding for the tail — which hits
+/// every `< 16`-byte IMG/IDE/TXD name. Checking `is_ascii()` first copies once
+/// into the 24-byte inline buffer and lowercases in place with identical
+/// semantics to `str::to_lowercase()`.
+#[inline]
+pub fn compact_to_lowercase(s: &str) -> CompactString {
+    if s.is_ascii() {
+        let mut out = CompactString::new(s);
+        out.make_ascii_lowercase();
+        out
+    } else {
+        CompactString::from_str_to_lowercase(s)
+    }
+}
+
 /// Zero-allocation lowercase lookup key for hash collections whose stored
 /// keys are already lowercased (`str::to_lowercase`).
 ///
@@ -183,5 +202,26 @@ mod tests {
             Some(String::from("road_01.txd"))
         );
         assert!(wanted.is_empty());
+    }
+
+    #[test]
+    fn compact_to_lowercase_matches_std_and_inlines_short_strings() {
+        let cases = [
+            "",
+            "cj",
+            "Police_Car_01.DFF",
+            "24_Byte_Exact_Name_12345",
+            "ÜBER_Model.dff",
+            "ὈΔΥΣΣΕΎΣ",
+            "\u{212A}.txd",
+            "\u{0130}stanbul.col",
+        ];
+        for input in cases {
+            let lowered = compact_to_lowercase(input);
+            assert_eq!(lowered.as_str(), input.to_lowercase());
+            if lowered.len() <= 24 {
+                assert!(!lowered.is_heap_allocated(), "{input:?} spilled to heap");
+            }
+        }
     }
 }

@@ -369,7 +369,7 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 | `quick_cache` | Byte-budgeted LRU caches (3D scenes, texture previews, inspector summaries) — its placeholder guards also power single-flight decode dedup |
 | `rayon 1.12` | Work-stealing parallelism for archive export, compatibility scan, header normalize, TXD/NFT preview decode, bounded-pool bulk conversion, palette mapping, and batch import prep — see [docs/rayon-parallelism.md](docs/rayon-parallelism.md) |
 | `glam` | Vector/matrix math for the 3D viewer |
-| `compact_str` | Compact inline strings for 10,000+ entry names |
+| `compact_str 0.10.0` | Inline 24-byte strings for 10,000+ archive entries, TXD texture names (99.7% inline), and `IdeMap` lookups — see [docs/compact-str-inline-strings.md](docs/compact-str-inline-strings.md) |
 | `smallvec 1.16.6` | Union-backed inline storage for `SortChain`, `VertexSkin`, NIF `SkinPartition` weight/index rows & block ref lists, and mip-chain construction — see [docs/smallvec-inline-storage.md](docs/smallvec-inline-storage.md) |
 | `hashbrown` | SwissTable maps/sets with foldhash for internal collections — see [docs/hashmap-crate.md](docs/hashmap-crate.md) |
 | `image` | PNG encode/export plus PNG/DDS/BMP/TGA decoding for the texture converter |

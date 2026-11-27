@@ -4585,7 +4585,7 @@ fn build_context_menu(
 
     let mut items: Vec<Element<'_, Message>> = vec![header.into(), w::hairline(divider)];
 
-    let lower = entry.file_name.to_lowercase();
+    let lower = entry.file_name_lower.as_str();
     if crate::ui::app::is_ifp_animation_name(&entry.file_name) {
         items.push(
             context_button(

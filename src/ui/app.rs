@@ -8197,8 +8197,7 @@ impl App {
                     // Append ".bak" to disambiguate. We could
                     // prompt the user, but the IMGF behaviour
                     // is "just do it", so we follow that lead.
-                    entry.file_name =
-                        compact_str::CompactString::from(format!("{}.bak", entry.file_name));
+                    entry.file_name = compact_str::format_compact!("{}.bak", entry.file_name);
                     entry.file_name_lower = entry.file_name.to_ascii_lowercase();
                 }
                 target_archive.entries.push(entry);
@@ -9453,7 +9452,7 @@ fn plan_replace(
         texture_index: job.texture_index,
         source_path: job.source_path.clone(),
         source_name,
-        texture_name: old.diffuse_name.clone(),
+        texture_name: old.diffuse_name.to_string(),
         before: Some((old.width, old.height, Arc::new(before_rgba))),
         plan: CompactPlan(Arc::new(plan)),
         entry: job.entry.clone(),
@@ -9550,7 +9549,7 @@ fn plan_bulk_entry(
         .map(|plan| {
             (
                 *texture_index,
-                texture.diffuse_name.clone(),
+                texture.diffuse_name.to_string(),
                 CompactPlan(Arc::new(plan)),
             )
         })
@@ -9719,7 +9718,7 @@ fn decode_txd_texture(tex: &crate::parser::txd::NativeTexture) -> Result<Decoded
         .decode_rgba()
         .map_err(|e| t::error_texture_decode(e.to_string()))?;
     Ok(DecodedTexture {
-        name: tex.diffuse_name.clone(),
+        name: tex.diffuse_name.to_string(),
         width: tex.width,
         height: tex.height,
         palette_colors: crate::parser::texture_decoder::palette_colors(&rgba),
