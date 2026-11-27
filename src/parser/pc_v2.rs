@@ -1,9 +1,7 @@
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use memmap2::Mmap;
 
 use crate::archive::{ArchiveInfo, EntryInfo, ImgV2Size};
 use crate::parser::{
@@ -109,14 +107,10 @@ impl ImgParser for PcV2Parser {
         let Some(path) = archive.path.as_ref() else {
             anyhow::bail!("new archives do not have a source path");
         };
-        let mut img = std::fs::File::open(path).context("failed to open IMG v2 archive")?;
-
-        let img_len = img
-            .metadata()
-            .context("failed to inspect IMG v2 archive")?
-            .len();
-        let entries = Self::read_validated_entries(&mut img, img_len)?;
-        let source_mmap = Arc::new(unsafe { Mmap::map(&img)? });
+        let img = std::fs::File::open(path).context("failed to open IMG v2 archive")?;
+        let source_mmap = crate::parser::map_archive_file(&img)?;
+        let entries =
+            Self::read_validated_entries_from_slice(&source_mmap, source_mmap.len() as u64)?;
 
         archive.entries = entries;
         archive.source_mmap = Some(source_mmap);
@@ -180,7 +174,7 @@ impl ImgParser for PcV2Parser {
         archive.version = crate::parser::ImgVersion::Two;
         let img_file =
             std::fs::File::open(output_path).context("failed to reopen packed IMG v2 archive")?;
-        archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
+        archive.source_mmap = Some(crate::parser::map_archive_file(&img_file)?);
         Ok(())
     }
 
@@ -213,12 +207,36 @@ impl PcV2Parser {
 
     fn read_validated_entries(img: &mut std::fs::File, img_len: u64) -> Result<Vec<EntryInfo>> {
         img.seek(SeekFrom::Start(0))?;
-        // One sequential buffered pass over the directory instead of a
-        // syscall per 32-byte record.
-        let mut img = BufReader::with_capacity(1024 * 1024, &mut *img);
         let mut header = [0_u8; V2_HEADER_SIZE as usize];
         img.read_exact(&mut header)
             .context("failed to read IMG v2 header")?;
+        if &header[0..4] != b"VER2" {
+            anyhow::bail!("invalid IMG v2 header");
+        }
+        let entry_count = u32::from_le_bytes(header[4..8].try_into().expect("4 bytes"));
+        let directory_end = directory_end_for_count(u64::from(entry_count))?;
+        if directory_end > img_len {
+            anyhow::bail!(
+                "IMG v2 directory table ends at byte {directory_end}, beyond IMG size {img_len}"
+            );
+        }
+        let dir_len = usize::try_from(directory_end)
+            .map_err(|_| anyhow::anyhow!("IMG v2 directory table is too large"))?;
+        let mut dir_bytes = Vec::new();
+        dir_bytes
+            .try_reserve_exact(dir_len)
+            .map_err(|_| anyhow::anyhow!("IMG v2 directory has too many entries to load safely"))?;
+        dir_bytes.extend_from_slice(&header);
+        dir_bytes.resize(dir_len, 0);
+        img.read_exact(&mut dir_bytes[V2_HEADER_SIZE as usize..])
+            .context("failed to read IMG v2 directory")?;
+        Self::read_validated_entries_from_slice(&dir_bytes, img_len)
+    }
+
+    fn read_validated_entries_from_slice(bytes: &[u8], img_len: u64) -> Result<Vec<EntryInfo>> {
+        let Some(header) = bytes.get(0..V2_HEADER_SIZE as usize) else {
+            anyhow::bail!("failed to read IMG v2 header");
+        };
         if &header[0..4] != b"VER2" {
             anyhow::bail!("invalid IMG v2 header");
         }
@@ -230,6 +248,11 @@ impl PcV2Parser {
                 "IMG v2 directory table ends at byte {directory_end}, beyond IMG size {img_len}"
             );
         }
+        let directory_end_usize = usize::try_from(directory_end)
+            .map_err(|_| anyhow::anyhow!("IMG v2 directory table is too large"))?;
+        let Some(records) = bytes.get(V2_HEADER_SIZE as usize..directory_end_usize) else {
+            anyhow::bail!("IMG v2 directory table truncated");
+        };
         let data_start = data_start_for_count(u64::from(entry_count))?;
         let entry_count = usize::try_from(entry_count)
             .map_err(|_| anyhow::anyhow!("IMG v2 has too many directory entries"))?;
@@ -244,10 +267,7 @@ impl PcV2Parser {
             .try_reserve(entry_count)
             .map_err(|_| anyhow::anyhow!("IMG v2 directory has too many ranges to validate"))?;
 
-        for index in 0..entry_count {
-            let mut entry_record = [0_u8; ENTRY_SIZE];
-            img.read_exact(&mut entry_record)
-                .with_context(|| format!("failed to read IMG v2 entry {index}"))?;
+        for (index, entry_record) in records.chunks_exact(ENTRY_SIZE).enumerate() {
             let offset = u32::from_le_bytes(entry_record[0..4].try_into().expect("4 bytes"));
             let size_words = ImgV2Size {
                 streaming_size: u16::from_le_bytes(entry_record[4..6].try_into().expect("2 bytes")),

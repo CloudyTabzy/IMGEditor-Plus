@@ -2,7 +2,8 @@ use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 
 use compact_str::CompactString;
-use memmap2::Mmap;
+use memmap2::{Mmap, MmapOptions};
+use std::sync::Arc;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::i18n::t;
@@ -278,6 +279,28 @@ pub(crate) fn safe_entry_output_path(folder: &Path, name: &str) -> anyhow::Resul
     Ok(folder.join(name))
 }
 
+/// Create a read-only memory mapping for an opened IMG archive file.
+///
+/// Centralizes the single `unsafe` `memmap2` boundary in the codebase:
+/// - Uses `MmapOptions::no_probe_handle()` (`memmap2 0.9.12+`) so Windows
+///   skips the two extra `CreateFileMappingW` write/exec capability probes and
+///   maps directly with `PAGE_READONLY` / `FILE_MAP_READ`.
+/// - `MmapOptions::map_if_safe()` is unsupported on Windows (it requires
+///   kernel-sealed immutable descriptors such as Linux `memfd`), so callers
+///   rely on our archive ownership protocol: `ArchiveInfo` holds the sole
+///   long-lived `Arc<Mmap>`, drops it (`archive.source_mmap = None`) before
+///   replacing an archive in place on save, and background load tasks only
+///   borrow short-lived `Arc` clones while parsing.
+pub(crate) fn map_archive_file(file: &std::fs::File) -> std::io::Result<Arc<Mmap>> {
+    // SAFETY: IMG archives are opened read-only and never mutated through the
+    // mapping; in-place saves write to a sibling `.temp` file and drop
+    // `archive.source_mmap` before `std::fs::rename`. `no_probe_handle()`
+    // guarantees the mapping cannot be widened to writable later.
+    let mmap = unsafe { MmapOptions::new().no_probe_handle().map(file)? };
+    Ok(Arc::new(mmap))
+}
+
+/// Read one entry's bytes from the archive source (preferring `source_mmap`).
 pub fn read_entry_data(archive: &ArchiveInfo, entry: &EntryInfo) -> anyhow::Result<Vec<u8>> {
     read_entry_data_with_source(
         entry,
@@ -542,25 +565,7 @@ pub fn read_entry_data_from_source(
     entry: &EntryInfo,
     archive_source: Option<&std::path::Path>,
 ) -> anyhow::Result<Vec<u8>> {
-    if let Some(bytes) = &entry.override_bytes {
-        return Ok(bytes.as_ref().clone());
-    }
-    if entry.imported {
-        let source = entry
-            .source_path
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("imported entry has no source path"))?;
-        return read_imported_file(source);
-    }
-
-    let source = archive_source.ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
-    let size = u64::from(entry.sector) * SECTOR_SIZE;
-    let offset = u64::from(entry.offset) * SECTOR_SIZE;
-    let mut file = std::fs::File::open(source)?;
-    file.seek(SeekFrom::Start(offset))?;
-    let mut data = vec![0u8; size as usize];
-    file.read_exact(&mut data)?;
-    Ok(data)
+    read_entry_data_with_source(entry, archive_source, None)
 }
 
 pub fn export_entry_to_file(
@@ -580,8 +585,8 @@ pub fn export_entry_to_file(
         return Ok(());
     }
 
-    let data = read_entry_data(archive, entry)?;
-    std::fs::write(&output_path, data)?;
+    let data = read_entry_bytes(archive, entry)?;
+    std::fs::write(&output_path, data.as_ref())?;
     Ok(())
 }
 

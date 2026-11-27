@@ -2,8 +2,6 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use memmap2::Mmap;
-use std::sync::Arc;
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::parser::{
@@ -65,6 +63,9 @@ impl PcV1Parser {
             .map_err(|reason| anyhow::anyhow!("invalid IMG v1 directory: {reason}"))?;
 
         archive.entries.clear();
+        archive
+            .entries
+            .reserve(dir_bytes.len() / crate::parser::ENTRY_SIZE);
         for chunk in dir_bytes.chunks_exact(crate::parser::ENTRY_SIZE) {
             let offset = byte_order.read_u32(&chunk[0..4]);
             let sector = byte_order.read_u32(&chunk[4..8]);
@@ -80,7 +81,7 @@ impl PcV1Parser {
         }
 
         let img_file = std::fs::File::open(path).context("failed to open IMG v1 archive")?;
-        archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
+        archive.source_mmap = Some(crate::parser::map_archive_file(&img_file)?);
 
         archive.add_log(crate::i18n::t::log_archive_opened());
         Ok(())
@@ -214,7 +215,7 @@ impl PcV1Parser {
         archive.version = version;
         let img_file =
             std::fs::File::open(&output_path).context("failed to reopen packed IMG v1 archive")?;
-        archive.source_mmap = Some(Arc::new(unsafe { Mmap::map(&img_file)? }));
+        archive.source_mmap = Some(crate::parser::map_archive_file(&img_file)?);
         Ok(())
     }
 
@@ -383,6 +384,7 @@ fn validate_v1_directory(
 mod tests {
     use std::collections::BTreeMap;
     use std::io::Write;
+    use std::sync::Arc;
 
     use super::*;
     use crate::archive::{ArchiveInfo, EntryInfo};

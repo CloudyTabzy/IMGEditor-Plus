@@ -365,7 +365,7 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 | `iced 0.14` | Reactive GUI (image, svg, advanced, lazy) |
 | `iced_aw 0.14` | Menu bar, tabs, context menus |
 | `tokio 1.40` | Async runtime (multi-thread, fs, sync) |
-| `memmap2` | Zero-copy archive reads |
+| `memmap2 0.9.12` | Zero-copy read-only archive reads (`no_probe_handle` on Windows) across open, scan, export, 3D/animation loads, and texture resolution — see [docs/memmap2-io.md](docs/memmap2-io.md) |
 | `quick_cache` | Byte-budgeted LRU caches (3D scenes, texture previews, inspector summaries) — its placeholder guards also power single-flight decode dedup |
 | `rayon 1.12` | Work-stealing parallelism for archive export, compatibility scan, header normalize, TXD/NFT preview decode, bounded-pool bulk conversion, palette mapping, and batch import prep — see [docs/rayon-parallelism.md](docs/rayon-parallelism.md) |
 | `glam` | Vector/matrix math for the 3D viewer |

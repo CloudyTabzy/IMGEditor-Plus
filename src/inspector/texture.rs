@@ -1,7 +1,10 @@
 use crate::collections::{EntryRef, HashMap, HashSet, LowerStr};
 use compact_str::CompactString;
+use memmap2::Mmap;
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::archive::EntryInfo;
 use crate::inspector::nif::{BlockPayload, NiPixelDataPayload, NifFile};
@@ -168,6 +171,7 @@ impl IdeMap {
 pub struct ArchiveTextureIndex {
     entries: HashMap<CompactString, EntryInfo>,
     archive_path: Option<PathBuf>,
+    source_mmap: Option<Arc<Mmap>>,
 }
 
 impl ArchiveTextureIndex {
@@ -187,15 +191,34 @@ impl ArchiveTextureIndex {
         Self {
             entries: indexed,
             archive_path: archive_path.map(Path::to_path_buf),
+            source_mmap: None,
         }
+    }
+
+    /// Attach the archive's memory map so companion TXD/NFT lookups borrow
+    /// entry slices directly without per-entry `File::open` syscalls or copies.
+    /// Keep this index scoped to short-lived load tasks so the mapping drops
+    /// before any in-place archive save on Windows.
+    pub fn with_source_mmap(mut self, source_mmap: Option<Arc<Mmap>>) -> Self {
+        self.source_mmap = source_mmap;
+        self
+    }
+
+    fn read_bytes<'a>(&'a self, name: &str) -> Option<Cow<'a, [u8]>> {
+        let entry = self.entries.get(&LowerStr(texture_basename(name)))?;
+        crate::parser::read_entry_bytes_with_source(
+            entry,
+            self.archive_path.as_deref(),
+            self.source_mmap.as_deref(),
+        )
+        .ok()
     }
 
     /// Read an archive entry by basename, preserving IMG sector padding just
     /// as the normal entry reader does. NIF parsers intentionally tolerate
     /// that trailing padding.
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
-        let entry = self.entries.get(&LowerStr(texture_basename(name)))?;
-        crate::parser::read_entry_data_from_source(entry, self.archive_path.as_deref()).ok()
+        self.read_bytes(name).map(Cow::into_owned)
     }
 
     /// Resolve a companion NFT from archive entries. An IDE-derived texture
@@ -219,7 +242,7 @@ impl ArchiveTextureIndex {
         }
 
         for candidate in candidates {
-            let Some(bytes) = self.read(&candidate) else {
+            let Some(bytes) = self.read_bytes(&candidate) else {
                 continue;
             };
             if let Some(catalog) = parse_nft_catalog_bytes(&bytes) {
@@ -296,9 +319,22 @@ impl ArchiveTextureIndex {
         wanted: &mut HashSet<String>,
         resolved: &mut HashMap<String, SceneTexture>,
     ) {
-        let Some(bytes) = self.read(entry_name) else {
+        let Some(bytes) = self.read_bytes(entry_name) else {
             return;
         };
+        // Fast header-only pre-check: fallback scans walk hundreds of TXDs in
+        // large archives; skipping pixel copies on non-matching TXDs avoids
+        // hundreds of megabytes of wasted allocations.
+        let Ok(headers) = crate::parser::txd::parse_txd_headers(&bytes) else {
+            return;
+        };
+        let has_match = headers
+            .textures
+            .iter()
+            .any(|texture| wanted.contains(&LowerStr(texture_basename(&texture.diffuse_name))));
+        if !has_match {
+            return;
+        }
         let Ok(txd) = crate::parser::txd::parse_txd(&bytes) else {
             return;
         };
@@ -1975,5 +2011,34 @@ mod tests {
                 && texture.height > 0
                 && texture.rgba.len() == texture.width as usize * texture.height as usize * 4
         }));
+    }
+
+    #[test]
+    fn archive_texture_index_reads_directly_from_attached_mmap_without_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("mmap_test.img");
+        let payload = vec![0x5Au8; crate::parser::SECTOR_SIZE as usize];
+        let mut file_bytes = Vec::new();
+        file_bytes.extend_from_slice(b"VER2");
+        file_bytes.extend_from_slice(&1u32.to_le_bytes());
+        file_bytes.extend_from_slice(&1u32.to_le_bytes()); // offset = 1 sector
+        file_bytes.extend_from_slice(&1u16.to_le_bytes()); // streaming size = 1
+        file_bytes.extend_from_slice(&0u16.to_le_bytes()); // archive size
+        let mut raw_name = [0u8; 24];
+        raw_name[..10].copy_from_slice(b"sample.txd");
+        file_bytes.extend_from_slice(&raw_name);
+        file_bytes.resize(crate::parser::SECTOR_SIZE as usize, 0);
+        file_bytes.extend_from_slice(&payload);
+        std::fs::write(&img_path, &file_bytes).unwrap();
+
+        let archive = crate::archive::ArchiveInfo::open(&img_path).expect("open");
+        assert!(archive.source_mmap.is_some());
+        // Pass archive_path = None so any accidental File::open fallback fails.
+        let index = ArchiveTextureIndex::from_entries(&archive.entries, None)
+            .with_source_mmap(archive.source_mmap.clone());
+        assert_eq!(
+            index.read("SAMPLE.TXD").as_deref(),
+            Some(payload.as_slice())
+        );
     }
 }

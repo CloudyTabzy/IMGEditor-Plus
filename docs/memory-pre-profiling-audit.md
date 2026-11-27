@@ -204,43 +204,27 @@ across the scene and texture caches.
 be added as a direct dependency. This is the closest thing to a new dependency
 in the whole audit, and it is a transitive promoted to direct.
 
-### 8. The entry list is cloned twice per 3D load
+### 8. The entry list is cloned twice per 3D load *(fixed 2026-11-27)*
 
-`app.rs:7397` clones `archive.entries`, and `app.rs:7476` then calls
-`ArchiveTextureIndex::from_entries`, which does `entries.to_vec()` **again** —
-even though `from_entries_owned` (`inspector/texture.rs:171`) exists precisely
-to consume an owned list.
+Both the 3D scene load path and the Bully AGR playback load path in `app.rs`
+now consume their cloned `Vec<EntryInfo>` via
+`ArchiveTextureIndex::from_entries_owned` (computing `candidate_models` first
+in the AGR path) instead of calling `from_entries` and cloning a second time.
+This eliminates the redundant ~3 MB `Vec<EntryInfo>` allocation per 3D load on
+16,316-entry archives.
 
-`EntryInfo` is ~184 B derived from its field list (four inline
-`CompactString`s, a `[u8; 24]`, an `Option<PathBuf>`, an
-`Option<Arc<Vec<u8>>>`, three bools), and because every name is ≤ 23 chars it
-has no per-entry heap allocation. At 16,316 entries that is ~3.0 MB per clone
-and ~6 MB live at once.
+### 9. Loads bypass the archive's own mmap *(fixed 2026-11-27)*
 
-**Fix is one line** — call `from_entries_owned`. Note this is a *remaining*
-call site, not a new idea: commit `f5b4ab3` ("Cut archive clones from export,
-preview, and convert tasks") introduced `from_entries_owned` and applied it to
-the export, preview and convert paths; the 3D load path was not included. See
-[performance-optimization-pass.md](performance-optimization-pass.md) §2.
-
-The surviving single clone needs the task to satisfy `'static`; an
-`Arc<Vec<EntryInfo>>` on `ArchiveInfo` would remove it, which is a wider change.
-
-### 9. Loads bypass the archive's own mmap
-
-`app.rs:7460` (3D load) and `app.rs:8089` (texture decode) call
-`read_entry_data_from_source`, which opens the file and does
-`vec![0u8; size]` + `read_exact` (`parser/mod.rs:537-538`). The archive already
-holds `source_mmap: Option<Arc<Mmap>>` (`archive.rs:402`), and the load task
-captures only `archive_path`. The mmap-aware reader also copies
-(`mod.rs:368`), so one entry-sized allocation happens either way — but the UI
-path additionally re-reads through a file handle instead of the map, and the
-task could have captured an 8-byte `Arc` instead.
-
-Fix: add a `read_entry_slice(&EntryInfo, Option<&Mmap>) -> Option<&[u8]>` and
-have `parse_dff` / `parse_txd` / `parse_nif` / `parse_col` consume slices.
-Keep the `Vec` path for `imported` and `override_bytes` entries, which have no
-mmap range. A 2 MB DFF stops being a 2 MB copy.
+All remaining UI load paths in `app.rs` (3D scene load for DFF/NIF/COL, texture
+preview tab for TXD/NFT, GTA IFP/DFF playback, Bully AGR/NIF playback,
+`plan_replace`, `ReplaceConfirmed`, and external viewer launch) plus
+`ArchiveTextureIndex` and `export_entry_to_file` now borrow entry slices
+directly from `archive.source_mmap` via `read_entry_bytes_with_source`
+(`Cow::Borrowed`, falling back to owned reads only for `imported` or unmapped
+archives). Combined with a `parse_txd_headers` pre-check in
+`ArchiveTextureIndex::resolve_txd_entry`, archive-only DFF texture resolution
+dropped from 1,249 ms to 65.7 ms (19× faster) across 15 retail DFFs. See
+[memmap2-io.md](memmap2-io.md).
 
 ### 10. Full-archive validation allocates ~500 K Strings and retains none of them *(fixed 2026-11-27)*
 

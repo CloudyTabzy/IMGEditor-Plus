@@ -3096,6 +3096,7 @@ impl App {
         };
 
         let archive_path = archive.path.clone();
+        let source_mmap = archive.source_mmap.clone();
         let ifp_entry = ifp_entry.clone();
         let dff_entry = dff_entry.clone();
         let model_name = dff_entry.file_name.to_string();
@@ -3122,14 +3123,16 @@ impl App {
         Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || -> Result<AgrLoadOutcome, String> {
-                    let ifp_bytes = crate::parser::read_entry_data_from_source(
+                    let ifp_bytes = crate::parser::read_entry_bytes_with_source(
                         &ifp_entry,
                         archive_path.as_deref(),
+                        source_mmap.as_deref(),
                     )
                     .map_err(|error| format!("IFP read: {error}"))?;
-                    let dff_bytes = crate::parser::read_entry_data_from_source(
+                    let dff_bytes = crate::parser::read_entry_bytes_with_source(
                         &dff_entry,
                         archive_path.as_deref(),
+                        source_mmap.as_deref(),
                     )
                     .map_err(|error| format!("DFF read: {error}"))?;
 
@@ -3933,6 +3936,7 @@ impl App {
                 let Ok(target) = crate::compat::convert::writable_target(target_id) else {
                     return Task::none();
                 };
+                let source_mmap = archive.source_mmap.clone();
                 let job = ReplaceJob {
                     archive_index,
                     entry_index,
@@ -3946,6 +3950,7 @@ impl App {
                 self.replace_plan_in_flight = true;
                 self.toast = Some(t::toast_preparing_replacement());
                 job.plan_task(
+                    source_mmap,
                     None,
                     crate::compat::encode::EncodeOptions::default(),
                     move |result| Message::ReplacePlanned { attempt, result },
@@ -4019,7 +4024,14 @@ impl App {
                 self.replace_attempt = self.replace_attempt.wrapping_add(1);
                 let attempt = self.replace_attempt;
                 let high_quality = state.high_quality;
-                ReplaceJob::from_state(state).plan_task(
+                let job = ReplaceJob::from_state(state);
+                let source_mmap = self
+                    .editor
+                    .archives()
+                    .get(job.archive_index)
+                    .and_then(|archive| archive.source_mmap.clone());
+                job.plan_task(
+                    source_mmap,
                     Some(format),
                     replace_encode_options(high_quality),
                     move |result| Message::ReplacePlanRefreshed { attempt, result },
@@ -4036,7 +4048,14 @@ impl App {
                 self.replace_attempt = self.replace_attempt.wrapping_add(1);
                 let attempt = self.replace_attempt;
                 let format = state.chooser;
-                ReplaceJob::from_state(state).plan_task(
+                let job = ReplaceJob::from_state(state);
+                let source_mmap = self
+                    .editor
+                    .archives()
+                    .get(job.archive_index)
+                    .and_then(|archive| archive.source_mmap.clone());
+                job.plan_task(
+                    source_mmap,
                     Some(format),
                     replace_encode_options(high_quality),
                     move |result| Message::ReplacePlanRefreshed { attempt, result },
@@ -4080,13 +4099,19 @@ impl App {
                 let texture_index = state.texture_index;
                 let entry = state.entry.clone();
                 let archive_path = state.archive_path.clone();
+                let source_mmap = self
+                    .editor
+                    .archives()
+                    .get(archive_index)
+                    .and_then(|archive| archive.source_mmap.clone());
                 let plan = state.plan.clone();
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || -> Result<Arc<Vec<u8>>, String> {
-                            let bytes = crate::parser::read_entry_data_from_source(
+                            let bytes = crate::parser::read_entry_bytes_with_source(
                                 &entry,
                                 archive_path.as_deref(),
+                                source_mmap.as_deref(),
                             )
                             .map_err(|error| error.to_string())?;
                             let converted = crate::compat::convert::apply_replace(
@@ -5824,7 +5849,7 @@ impl App {
                         let Some(entry_index) = self.editor.selected_entry() else {
                             return Task::none();
                         };
-                        let (entry_clone, archive_path, name) = {
+                        let (archive_path, name, read_result) = {
                             let Some(archive) = self.editor.archives().get(archive_index) else {
                                 return Task::none();
                             };
@@ -5832,15 +5857,12 @@ impl App {
                                 return Task::none();
                             };
                             (
-                                entry.clone(),
                                 archive.path.clone(),
                                 entry.file_name.to_string(),
+                                crate::parser::read_entry_data(archive, entry),
                             )
                         };
-                        let data = match crate::parser::read_entry_data_from_source(
-                            &entry_clone,
-                            archive_path.as_deref(),
-                        ) {
+                        let data = match read_result {
                             Ok(d) => d,
                             Err(e) => {
                                 self.toast =
@@ -7125,6 +7147,7 @@ impl App {
                     agr_entry_data,
                     model_entry_data,
                     archive_path,
+                    source_mmap,
                     archive_entries,
                     archive_generation,
                     archive_name,
@@ -7143,6 +7166,7 @@ impl App {
                         agr,
                         model.clone(),
                         archive.path.clone(),
+                        archive.source_mmap.clone(),
                         archive.entries.clone(),
                         archive.generation(),
                         archive.file_name.clone(),
@@ -7250,18 +7274,22 @@ impl App {
                     async move {
                         let joined = tokio::task::spawn_blocking(move || {
                             let agr_bytes = match (&agr_path, &agr_entry_data) {
-                                (Some(path), _) => std::fs::read(path)
-                                    .map_err(|e| format!("I/O {}: {e}", path.display()))?,
-                                (None, Some(entry)) => crate::parser::read_entry_data_from_source(
+                                (Some(path), _) => std::borrow::Cow::Owned(
+                                    std::fs::read(path)
+                                        .map_err(|e| format!("I/O {}: {e}", path.display()))?,
+                                ),
+                                (None, Some(entry)) => crate::parser::read_entry_bytes_with_source(
                                     entry,
                                     archive_path.as_deref(),
+                                    source_mmap.as_deref(),
                                 )
                                 .map_err(|e| format!("I/O: {e}"))?,
                                 (None, None) => return Err("no AGR source".to_string()),
                             };
-                            let model_bytes = crate::parser::read_entry_data_from_source(
+                            let model_bytes = crate::parser::read_entry_bytes_with_source(
                                 &model_entry_data,
                                 archive_path.as_deref(),
+                                source_mmap.as_deref(),
                             )
                             .map_err(|e| format!("I/O: {e}"))?;
                             let mut nif = crate::inspector::nif::NifFile::parse(&model_bytes)
@@ -7291,12 +7319,20 @@ impl App {
                                     None => (None, None),
                                 },
                             };
+                            let models = crate::inspector::animation::hxd::candidate_models(
+                                crate::inspector::animation::hxd::anim_dir_for_archive(
+                                    archive_path.as_deref(),
+                                )
+                                .as_deref(),
+                                &archive_entries,
+                            );
                             if model.meshes.iter().any(|mesh| mesh.texture_name.is_some()) {
                                 let resolver = nif_texture_resolver(
-                                    crate::inspector::texture::ArchiveTextureIndex::from_entries(
-                                        &archive_entries,
+                                    crate::inspector::texture::ArchiveTextureIndex::from_entries_owned(
+                                        archive_entries,
                                         archive_path.as_deref(),
-                                    ),
+                                    )
+                                    .with_source_mmap(source_mmap.clone()),
                                     ide_map.clone(),
                                     model_stem.as_str(),
                                 );
@@ -7354,13 +7390,6 @@ impl App {
                                     library.clips.len(),
                                 )
                             };
-                            let models = crate::inspector::animation::hxd::candidate_models(
-                                crate::inspector::animation::hxd::anim_dir_for_archive(
-                                    archive_path.as_deref(),
-                                )
-                                .as_deref(),
-                                &archive_entries,
-                            );
                             Ok(AgrLoadOutcome {
                                 model: Arc::new(model),
                                 library: Arc::new(library),
@@ -7535,7 +7564,7 @@ impl App {
             } => {
                 // A static preview replaces any animation playback session.
                 self.agr_playback = None;
-                let (entry_clone, archive_path, archive_entries, cache_key) = {
+                let (entry_clone, archive_path, source_mmap, archive_entries, cache_key) = {
                     let Some(archive) = self.editor.archives().get(archive_index) else {
                         return Task::none();
                     };
@@ -7545,6 +7574,7 @@ impl App {
                     (
                         entry.clone(),
                         archive.path.clone(),
+                        archive.source_mmap.clone(),
                         archive.entries.clone(),
                         (archive.file_name.clone(), archive.generation(), entry_index),
                     )
@@ -7608,9 +7638,10 @@ impl App {
                                             }
                                         };
                             let result = (|| -> Result<crate::inspector::scene3d::Scene, String> {
-                                let bytes = crate::parser::read_entry_data_from_source(
+                                let bytes = crate::parser::read_entry_bytes_with_source(
                                     &entry_clone,
                                     archive_path.as_deref(),
+                                    source_mmap.as_deref(),
                                 )
                                 .map_err(|e| format!("I/O: {e}"))?;
                                 if model_kind == Some(RenderableModelKind::Col) {
@@ -7624,10 +7655,11 @@ impl App {
                                     .map_err(|e| format!("scene: {e:?}"));
                                 }
                                 let archive_texture_index =
-                                    crate::inspector::texture::ArchiveTextureIndex::from_entries(
-                                        &archive_entries,
+                                    crate::inspector::texture::ArchiveTextureIndex::from_entries_owned(
+                                        archive_entries,
                                         archive_path.as_deref(),
-                                    );
+                                    )
+                                    .with_source_mmap(source_mmap.clone());
                                 if model_kind == Some(RenderableModelKind::Dff) {
                                     let dff_meshes = crate::parser::dff::parse_dff(&bytes)
                                         .map_err(|e| format!("DFF parse: {e}"))?;
@@ -8198,7 +8230,7 @@ impl App {
             return Task::none();
         };
         self.set_active_texture_preview_target(Some((archive_index, entry_index)));
-        let (entry_clone, archive_path, archive_entries, texture_cache) = {
+        let (entry_clone, archive_path, source_mmap, archive_entries, texture_cache) = {
             let Some(archive) = self.editor.archives().get(archive_index) else {
                 return Task::none();
             };
@@ -8221,6 +8253,7 @@ impl App {
             (
                 entry.clone(),
                 archive.path.clone(),
+                archive.source_mmap.clone(),
                 archive_entries,
                 Arc::clone(&archive.texture_cache),
             )
@@ -8237,9 +8270,10 @@ impl App {
                     GuardResult::Guard(guard) => {
                         let result = tokio::task::spawn_blocking(
                             move || -> Result<Vec<DecodedTexture>, String> {
-                                let data = crate::parser::read_entry_data_from_source(
+                                let data = crate::parser::read_entry_bytes_with_source(
                                     &entry_clone,
                                     archive_path.as_deref(),
+                                    source_mmap.as_deref(),
                                 ).map_err(|e| t::error_read_entry(e.to_string()))?;
                                 let extension = std::path::Path::new(entry_clone.file_name.as_str())
                                     .extension()
@@ -8258,7 +8292,8 @@ impl App {
                                             crate::inspector::texture::ArchiveTextureIndex::from_entries_owned(
                                                 archive_entries,
                                                 archive_path.as_deref(),
-                                            );
+                                            )
+                                            .with_source_mmap(source_mmap.clone());
                                         crate::inspector::texture::decode_nft_textures_with_resolver(
                                             &data,
                                             |source_path| archive_texture_index.read(source_path),
@@ -9299,18 +9334,23 @@ impl ReplaceJob {
     }
 
     /// Plans on a blocking thread (decoding and encoding are CPU-bound) and
-    /// reports the result through `done`.
+    /// reports the result through `done`. `source_mmap` is passed only for the
+    /// duration of this short-lived task (never stored in `ReplaceState`) so
+    /// an open dialog can never hold the file mapping across an in-place save.
     fn plan_task(
         self,
+        source_mmap: Option<Arc<memmap2::Mmap>>,
         format: Option<crate::compat::encode::EncodeFormat>,
         options: crate::compat::encode::EncodeOptions,
         done: impl FnOnce(Box<Result<ReplacePlanReady, String>>) -> Message + Send + 'static,
     ) -> Task<Message> {
         Task::perform(
             async move {
-                tokio::task::spawn_blocking(move || plan_replace(&self, format, options))
-                    .await
-                    .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
+                tokio::task::spawn_blocking(move || {
+                    plan_replace(&self, source_mmap.as_deref(), format, options)
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("task panicked: {error}")))
             },
             move |result| done(Box::new(result)),
         )
@@ -9320,6 +9360,7 @@ impl ReplaceJob {
 /// Plan one texture replacement off the UI thread.
 fn plan_replace(
     job: &ReplaceJob,
+    source_mmap: Option<&memmap2::Mmap>,
     format: Option<crate::compat::encode::EncodeFormat>,
     options: crate::compat::encode::EncodeOptions,
 ) -> Result<ReplacePlanReady, String> {
@@ -9332,9 +9373,12 @@ fn plan_replace(
         .unwrap_or("image")
         .to_string();
     let image = crate::compat::convert::decode_source_image_named(&bytes, &source_name)?;
-    let entry_bytes =
-        crate::parser::read_entry_data_from_source(&job.entry, job.archive_path.as_deref())
-            .map_err(|error| error.to_string())?;
+    let entry_bytes = crate::parser::read_entry_bytes_with_source(
+        &job.entry,
+        job.archive_path.as_deref(),
+        source_mmap,
+    )
+    .map_err(|error| error.to_string())?;
     let txd = crate::parser::txd::parse_txd(&entry_bytes)?;
     let old = txd
         .textures
