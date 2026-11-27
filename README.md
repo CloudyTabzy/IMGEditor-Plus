@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v4.16.0
+# 🎮 IMG Editor Plus v4.17.0
 
 A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -6,8 +6,7 @@ A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **s
 > Rewritten in Rust to eliminate crashes, memory bugs, and dependency hell.
 
 > **Status:** feature-complete and in maintenance mode. Latest tagged release:
-> v4.16.2; the working tree is v4.16.3 (unreleased). No new features or
-> platform ports are currently planned.
+> v4.17.0. No major platform ports are currently planned.
 
 ---
 

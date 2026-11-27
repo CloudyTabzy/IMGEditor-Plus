@@ -1,4 +1,4 @@
-## IMG Editor Plus v4.16.3 (unreleased)
+## IMG Editor Plus v4.17.0
 
 ### Highlights
 

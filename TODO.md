@@ -1,7 +1,7 @@
 # IMGEditor-rs — Backlog and release record
 
-Last tagged release: **v4.16.2** (2026-09-30). The working tree is
-**v4.16.3** (unreleased: hashbrown/foldhash internal maps and parallel TXD
+Last tagged release: **v4.17.0** (2026-11-27: multi-file drag-and-drop import,
+`View → Always on top`, hashbrown/foldhash internal maps, and parallel TXD
 preview catalogs).
 
 Project status: **feature-complete and in maintenance mode.** The open items
