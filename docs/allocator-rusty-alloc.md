@@ -219,28 +219,71 @@ a wrong number before it was fixed:
 - `'{0:N1}'` formatting embeds the culture's thousands separator and
   silently corrupts CSV columns. Use `[int]` casts.
 
-**rusty_alloc's own counters are not trustworthy for attribution:**
-`stats::merged()` reported `allocs`/`frees` as 0 through the entire session
-while its `segments` counter moved, and its implied committed bytes (160 MiB
-at exit) disagreed with the OS private-commit reading (1030 MiB). Treat
-`merged()` as indicative only; the OS working-set/commit numbers are the
-ground truth. (Likely cause: the registry iteration misses the main thread's
-heap counters — unverified, and not worth chasing given the OS data.)
+**rusty_alloc's own counters vs. OS readings:**
+On 2.2.1, `stats::merged()` reported `allocs`/`frees` as 0 through the entire
+session while its `segments` counter moved, and its implied committed bytes
+(160 MiB at exit) disagreed with the OS private-commit reading (1,030 MiB).
+In 2.6.0, `stats::merged()` now reports live `allocs`/`frees` counts (e.g.
+`250,926 / 249,244` on the 2,000-scene run below) and `stats::process_info()`
+reads Windows `K32GetProcessMemoryInfo` directly; still treat OS working-set
+and private-commit readings as the authoritative ground truth.
 
-**Arms and raw results** (60 TXDs / 2000 scenes session; medians; WS =
-working set, PRIV = private commit):
+**Arms and raw results — 2.2.1 baseline (2026-09-30)** (60 TXDs / 2,000 scenes
+session; medians; WS = working set, P = private commit):
 
-| phase | CRT | rusty purge off | rusty purge on |
+| phase | CRT | rusty 2.2.1 purge off | rusty 2.2.1 purge on (`0`) |
 |---|---|---|---|
 | textures held (23 MiB RGBA) | 57 WS / 33 P | 59 WS / 1028 P | 59 WS / 1028 P |
 | scenes held (194 MiB est.) | 255 WS / 198 P | 289 WS / 1030 P | 286 WS / 1030 P |
 | after scene drop | 69 WS / 12 P | 289 WS / 1030 P | 73 WS / 902 P |
 | teardown idle (20 s) | **13 WS / 6 P** | **236 WS / 1029 P** | **16 WS / 896 P** |
 
-Speed gates for the purge decision: `benchmark_table` 5 interleaved rounds
-each arm — open median 9.93 ms (purge on) vs 9.87 ms (off), spreads fully
-overlapping; `benchmark_export` ZeroCopy 25.45/25.64 s on vs 26.25/28.02 s
-off. The 751-test suite passes with `RUSTY_ALLOC_PURGE_DELAY=0`.
+Speed gates for the 2.2.1 purge decision: `benchmark_table` 5 interleaved
+rounds each arm — open median 9.93 ms (purge on) vs 9.87 ms (off), spreads
+fully overlapping; `benchmark_export` ZeroCopy 25.45/25.64 s on vs 26.25/28.02 s
+off. The 751-test suite passed with `RUSTY_ALLOC_PURGE_DELAY=0`.
+
+### Measured 2.6.0 memory profile — raw runs (2026-11-27)
+
+Harness: `cargo build --example benchmark_memory -j 2` (dev profile, `rusty_alloc`
+2.6.0, Windows, `rustc 1.99.1`), archive `corpus\Gta_3_img\gta3.img` (16,316
+entries), sampled every 150 ms via fresh `Get-Process -Id` objects with
+`RUSTY_ALLOC_PURGE_DELAY` set explicitly per arm.
+
+Columns in the marker log: `epoch_ms,elapsed_s,phase,segment_mib,allocs,frees,extra`.
+
+**Run A — 60 TXDs (468 textures, 23 MiB RGBA) + 800 DFF scenes (51 MiB est.), 3 s idle:**
+
+- `purge_delay=0`: Peak WS **109 MiB** | End WS **18 MiB** | Peak Priv **81 MiB** | End Priv **16 MiB** (`txd_hold` 0.17 s, `dff_hold` 3.75 s)
+- `purge_delay=10` (2.6.0 default): Peak WS **108 MiB** | End WS **17 MiB** | Peak Priv **81 MiB** | End Priv **16 MiB** (`txd_hold` 0.14 s, `dff_hold` 3.59 s)
+
+**Run B — 60 TXDs (468 textures, 23 MiB RGBA) + 2,000 DFF scenes (194 MiB est.), 3 s idle (matches the 2.2.1 session size):**
+
+`purge_delay=0` — Peak WS **287 MiB** | End WS **17 MiB** | Peak Priv **245 MiB** | End Priv **15 MiB**:
+
+```text
+0.00,start,32,26,17,
+0.08,open,32,34475,32776,entries=16316
+0.21,txd_hold,64,36623,34455,textures=468 rgba_mib=23
+3.22,txd_drop,64,36628,34929,textures=468
+7.67,dff_hold,256,250915,215094,scenes=2000 est_mib=194
+10.69,dff_drop,160,250919,249221,
+13.72,teardown,160,250922,249241,
+16.72,exit,160,250926,249244,txd_fail=0 dff_fail=0
+```
+
+`purge_delay=10` (2.6.0 shipped default) — Peak WS **287 MiB** | End WS **17 MiB** | Peak Priv **245 MiB** | End Priv **15 MiB**:
+
+```text
+0.00,start,32,26,17,
+0.08,open,32,34475,32776,entries=16316
+0.21,txd_hold,64,36623,34455,textures=468 rgba_mib=23
+3.22,txd_drop,64,36628,34929,textures=468
+7.90,dff_hold,256,250915,215094,scenes=2000 est_mib=194
+10.93,dff_drop,160,250919,249221,
+13.95,teardown,160,250922,249241,
+16.95,exit,160,250926,249244,txd_fail=0 dff_fail=0
+```
 
 ## Codebase memory map (for future structural work)
 
@@ -249,7 +292,7 @@ instead of guesses:
 
 - **Scene decode dominates.** `parser/dff.rs` (`parse_dff`) +
   `inspector/scene3d/decode.rs` (`build_scene_from_dff`) produced 256 MiB of
-  allocator commitment for 2000 scenes (~194 MiB estimated live) — 4× the
+  allocator segment slots for 2,000 scenes (~194 MiB estimated live) — 4× the
   texture burst. The UI caps this cache at 256/64 MiB
   (`SCENE_CACHE_WEIGHT_CAPACITY` in `ui/app.rs`, desktop/mobile).
 - **Texture decode is secondary:** `parser/txd.rs` (`parse_txd`,
@@ -262,16 +305,21 @@ instead of guesses:
 
 If structural work is ever wanted, the levers are: lower desktop cache
 caps, stream decode→GPU-upload without holding the CPU copy, and reuse
-decode scratch buffers. These reduce **peak** working set (the ~286 MiB
-above); they do not affect the tail, which purge already fixed.
+decode scratch buffers. These reduce **peak** working set (the ~287 MiB
+above); they do not affect the tail, which 2.6.0's demand-committed arenas,
+10 ms delayed purge, and teardown `collect(true)` already keep at 17 MiB WS
+/ 15 MiB private commit.
 
 ## Removing rusty_alloc someday
 
-Three edits: delete the `#[global_allocator]` block and `init_allocator()`
-from `src/lib.rs`, the `imgeditor::init_allocator()` call from
-`src/main.rs`, and both `rusty_alloc*` lines from `Cargo.toml`. The memory
-consequence is nil-to-positive (the CRT heap's measured tail was 13 MiB /
-6 MiB — better than rusty's 16 / 896 on the commit axis). The cost is the
-−10…−15 % on open/filter/sort. Do not remove without re-running the
-interleaved A/B above; and note the commit-number asymmetry means a
-pagefile-constrained machine is a legitimate reason to prefer the CRT arm.
+Five small edits: delete the `#[global_allocator]` block, `init_allocator()`,
+and `reclaim_allocator_memory()` from `src/lib.rs`; remove the
+`imgeditor::init_allocator()` call from `src/main.rs`; remove the
+`crate::reclaim_allocator_memory()` call from `App::close_archive_at` in
+`src/ui/app.rs`; remove the `rusty_alloc::stats::*` lines from
+`write_crash_report` in `src/dev_logger.rs`; and remove both `rusty_alloc*`
+lines from `Cargo.toml`. With 2.6.0's demand-committed arenas/segments the
+old ~900 MiB private-commit asymmetry against the CRT heap is gone (17 MiB
+WS / 15 MiB commit vs CRT's 13 MiB / 6 MiB), so removing it would mainly
+forfeit the −10…−15 % speed win on archive open, filter, and sort. Do not
+remove without re-running the interleaved A/B above.
