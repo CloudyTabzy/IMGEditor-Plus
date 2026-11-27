@@ -1,3 +1,12 @@
+## IMG Editor Plus v4.18.1
+
+### Fixes & Improvements
+
+- **GitHub release update checker (`ureq` 3.5.2):** switched the updater from `/repos/{repo}/tags` (which surfaced unreleased tag-only pushes in Git ref order) to `/repos/{repo}/releases/latest` (published, non-draft, non-prerelease releases only), enforced HTTPS-only requests with a 10 s global timeout, handled HTTP 404 cleanly, and wired the update dialog's **Open Releases** button directly to the release URL instead of the repository homepage.
+- **3D scene cache CPU weight fix:** added `Scene::estimated_cpu_bytes()` omitting GPU-only wire-index buffers so the 256 MiB CPU scene cache no longer over-counts by 1.86× (~138 MiB effective cap), and mapped size overflow conservatively to the full cache budget instead of 1 byte.
+- **External 3D viewer routing & `IdeMap` reuse:** external viewer completion logs now route back to the originating archive tab even if you switch tabs during export, and external NIF renders reuse and populate the app's memoized `IdeMap` instead of re-walking the game folder on disk.
+- **Dependency cleanup:** upgraded `ureq` (`2.12.1` → `3.5.2`, dropping duplicate `webpki-roots 0.26`), removed unused `dark-light 2.0.0` (pruning `ashpd` and Linux portal crates from `Cargo.lock`), upgraded runtime `winreg` (`0.52.0` → `0.56.0`, unifying onto `windows-sys 0.61`), and unified `thiserror` (`1.0` → `2.0`).
+
 ## IMG Editor Plus v4.18.0
 
 *First public GitHub release since `v4.16.1` — includes all `v4.17.0` features (multi-file drag-and-drop import, `View → Always on top`, `hashbrown` collections, parallel TXD previews) plus a full core runtime, I/O, parallelism, and memory modernization pass.*

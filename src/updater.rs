@@ -1,5 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
+
+const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub enum UpdateState {
@@ -35,17 +38,24 @@ pub fn check_updates_future(
 }
 
 pub fn fetch_latest_release_blocking(url: &str, current_version: &str, repo: &str) -> UpdateResult {
-    let response = match ureq::get(url)
-        .set("User-Agent", "IMGEditor")
-        .set("Accept", "application/vnd.github+json")
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(UPDATE_CHECK_TIMEOUT))
+        .https_only(true)
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+
+    let mut response = match agent
+        .get(url)
+        .header("User-Agent", "IMGEditor")
+        .header("Accept", "application/vnd.github+json")
         .call()
     {
         Ok(response) => response,
-        Err(ureq::Error::Status(404, _)) => return UpdateResult::UpToDate,
+        Err(ureq::Error::StatusCode(404)) => return UpdateResult::UpToDate,
         Err(error) => return UpdateResult::Error(error.to_string()),
     };
 
-    let body = match response.into_string() {
+    let body = match response.body_mut().read_to_string() {
         Ok(body) => body,
         Err(error) => return UpdateResult::Error(error.to_string()),
     };

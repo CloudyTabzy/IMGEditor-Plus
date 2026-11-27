@@ -783,7 +783,12 @@ pub enum Message {
     /// Show a toast produced by a background task.
     ShowToast(String),
     /// Background external 3D viewer export/launch finished.
-    ExternalViewerFinished(ViewerEvent),
+    ExternalViewerFinished {
+        archive_index: usize,
+        archive_name: String,
+        event: ViewerEvent,
+        built_ide_map: Option<BuiltIdeMap>,
+    },
     /// Window close button pressed; may open the unsaved-changes guard.
     WindowCloseRequested(iced::window::Id),
     /// Custom title bar: move, resize, and caption buttons.
@@ -1588,8 +1593,10 @@ type SceneCache = std::sync::Arc<
     quick_cache::sync::Cache<SceneCacheKey, Arc<crate::inspector::scene3d::Scene>, SceneCpuWeight>,
 >;
 
-/// Weighs a cached scene by its estimated CPU memory (mesh buffers + decoded
-/// RGBA textures), reusing the same estimate the GPU admission check uses.
+/// Weighs a cached scene by its estimated CPU-resident memory (mesh vertices,
+/// triangle indices, and decoded RGBA textures), omitting the GPU-only
+/// wire-edge index buffer. Overflow maps to the full cache budget so an
+/// unmeasurable scene is conservatively evicted rather than pinned at 1 byte.
 #[derive(Clone)]
 struct SceneCpuWeight;
 
@@ -1597,7 +1604,9 @@ impl quick_cache::Weighter<SceneCacheKey, Arc<crate::inspector::scene3d::Scene>>
     for SceneCpuWeight
 {
     fn weight(&self, _key: &SceneCacheKey, val: &Arc<crate::inspector::scene3d::Scene>) -> u64 {
-        val.estimated_gpu_bytes().unwrap_or(0).max(1)
+        val.estimated_cpu_bytes()
+            .unwrap_or(SCENE_CACHE_WEIGHT_CAPACITY)
+            .max(1)
     }
 }
 
@@ -6007,7 +6016,7 @@ impl App {
                         let Some(entry_index) = self.editor.selected_entry() else {
                             return Task::none();
                         };
-                        let (entry, archive_path, source_mmap, name) = {
+                        let (entry, archive_name, archive_path, source_mmap, name) = {
                             let Some(archive) = self.editor.archives().get(archive_index) else {
                                 return Task::none();
                             };
@@ -6016,6 +6025,7 @@ impl App {
                             };
                             (
                                 entry.clone(),
+                                archive.file_name.clone(),
                                 archive.path.clone(),
                                 archive.source_mmap.clone(),
                                 entry.file_name.to_string(),
@@ -6024,8 +6034,11 @@ impl App {
                         let game_root = archive_path
                             .as_deref()
                             .and_then(|p| self.config.game_root_for(p));
+                        let cached_ide_map = game_root
+                            .as_ref()
+                            .and_then(|root| self.ide_maps.get(root).cloned());
 
-                        if let Some(archive) = self.editor.selected_archive_mut() {
+                        if let Some(archive) = self.editor.archives_mut().get_mut(archive_index) {
                             archive.add_log(t::log_external_viewer(name.as_str()));
                         }
 
@@ -6039,50 +6052,75 @@ impl App {
                                     ) {
                                         Ok(bytes) => bytes,
                                         Err(error) => {
-                                            return ViewerEvent::Failed {
-                                                reason: t::toast_read_failed(
-                                                    name.as_str(),
-                                                    error.to_string(),
-                                                ),
-                                            };
+                                            return (
+                                                ViewerEvent::Failed {
+                                                    reason: t::toast_read_failed(
+                                                        name.as_str(),
+                                                        error.to_string(),
+                                                    ),
+                                                },
+                                                None,
+                                            );
                                         }
                                     };
                                     let lower = name.to_ascii_lowercase();
                                     if lower.ends_with(".dff") {
-                                        viewer3d::open_dff_external_viewer(&bytes, &name)
+                                        (viewer3d::open_dff_external_viewer(&bytes, &name), None)
                                     } else if lower.ends_with(".col") {
-                                        viewer3d::open_col_external_viewer(&bytes, &name)
+                                        (viewer3d::open_col_external_viewer(&bytes, &name), None)
                                     } else {
-                                        viewer3d::open_nif_external_viewer(
+                                        viewer3d::open_nif_external_viewer_with_ide_map(
                                             &bytes,
                                             &name,
                                             game_root.as_deref(),
+                                            cached_ide_map.as_deref(),
                                         )
                                     }
                                 })
                                 .await
                                 .unwrap_or_else(|err| {
-                                    ViewerEvent::Failed {
-                                        reason: format!("viewer panicked: {err}"),
-                                    }
+                                    (
+                                        ViewerEvent::Failed {
+                                            reason: format!("viewer panicked: {err}"),
+                                        },
+                                        None,
+                                    )
                                 })
                             },
-                            Message::ExternalViewerFinished,
+                            move |(event, built_ide_map)| Message::ExternalViewerFinished {
+                                archive_index,
+                                archive_name: archive_name.clone(),
+                                event,
+                                built_ide_map,
+                            },
                         )
                     }
                 }
             }
 
-            Message::ExternalViewerFinished(event) => {
+            Message::ExternalViewerFinished {
+                archive_index,
+                archive_name,
+                event,
+                built_ide_map,
+            } => {
+                if let Some((root, map)) = built_ide_map {
+                    self.ide_maps.entry(root).or_insert(map);
+                }
+                let target_archive = self
+                    .editor
+                    .archives_mut()
+                    .get_mut(archive_index)
+                    .filter(|archive| archive.file_name == archive_name);
                 match event {
                     ViewerEvent::Opened { name } => {
-                        if let Some(archive) = self.editor.selected_archive_mut() {
+                        if let Some(archive) = target_archive {
                             archive.add_log(t::log_viewer_opened(name.as_str()));
                         }
                     }
                     ViewerEvent::Failed { reason } => {
                         self.toast = Some(reason.clone());
-                        if let Some(archive) = self.editor.selected_archive_mut() {
+                        if let Some(archive) = target_archive {
                             archive.add_log(t::log_viewer_failed(reason.as_str()));
                         }
                     }
@@ -13446,21 +13484,43 @@ mod tests {
     }
 
     #[test]
-    fn external_viewer_finished_logs_and_toasts_without_polling() {
+    fn external_viewer_finished_routes_logs_to_origin_tab_and_memoizes_ide_map() {
         let mut app = test_app_with_entries();
-        let initial_logs = app.editor.archives()[0].logs.len();
+        let origin_name = app.editor.archives()[0].file_name.clone();
+        let initial_logs_0 = app.editor.archives()[0].logs.len();
 
-        let _ = app.update(Message::ExternalViewerFinished(ViewerEvent::Opened {
-            name: "box.dff".to_string(),
-        }));
-        assert_eq!(app.editor.archives()[0].logs.len(), initial_logs + 1);
+        // Open a second tab and switch active selection to tab 1 before the
+        // background external-viewer export finishes for tab 0.
+        let _ = app.update(Message::NewArchive);
+        assert_eq!(app.editor.selected_archive(), Some(1));
+        let initial_logs_1 = app.editor.archives()[1].logs.len();
+
+        let fake_root = PathBuf::from("fake_game_root");
+        let built_map = std::sync::Arc::new(crate::inspector::texture::IdeMap::default());
+        let _ = app.update(Message::ExternalViewerFinished {
+            archive_index: 0,
+            archive_name: origin_name.clone(),
+            event: ViewerEvent::Opened {
+                name: "box.dff".to_string(),
+            },
+            built_ide_map: Some((fake_root.clone(), built_map)),
+        });
+        assert_eq!(app.editor.archives()[0].logs.len(), initial_logs_0 + 1);
+        assert_eq!(app.editor.archives()[1].logs.len(), initial_logs_1);
+        assert!(app.ide_maps.contains_key(&fake_root));
         assert!(app.toast.is_none());
 
-        let _ = app.update(Message::ExternalViewerFinished(ViewerEvent::Failed {
-            reason: "parse failed".to_string(),
-        }));
+        let _ = app.update(Message::ExternalViewerFinished {
+            archive_index: 0,
+            archive_name: origin_name,
+            event: ViewerEvent::Failed {
+                reason: "parse failed".to_string(),
+            },
+            built_ide_map: None,
+        });
         assert_eq!(app.toast.as_deref(), Some("parse failed"));
-        assert_eq!(app.editor.archives()[0].logs.len(), initial_logs + 2);
+        assert_eq!(app.editor.archives()[0].logs.len(), initial_logs_0 + 2);
+        assert_eq!(app.editor.archives()[1].logs.len(), initial_logs_1);
     }
 
     #[test]

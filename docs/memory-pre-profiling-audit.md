@@ -81,18 +81,11 @@ resident — a 1.86× over-count**, meaning the documented 256 MiB scene cache c
 holds roughly 138 MiB of real scene memory and ~118 MiB of the budget is
 unreachable.
 
-**Verified.** Fix is small: give `Scene` a separate `estimated_cpu_bytes()` that
-omits the wire term, and use it for `SceneCpuWeight` while leaving
-`estimated_gpu_bytes()` for the GPU admission check. Do not lower the admission
-cap on the strength of this — the *admission* estimate should stay
-conservative.
-
-This is worth doing first regardless of the memory outcome, because until the
-weight is honest, no decision about whether to raise or lower the cap is
-informed. Secondary defect: `unwrap_or(0).max(1)` at `app.rs:1561` maps an
-overflowing scene to a weight of **1 byte**, i.e. effectively uncached but never
-evicted. Unreachable today because `validate_scene_data` rejects such a scene
-before upload, but the mapping is wrong in principle.
+**Verified & fixed in `v4.18.1`.** Added `Scene::estimated_cpu_bytes()`
+(`scene3d/scene.rs`) omitting the GPU-only wire-index term, wired
+`SceneCpuWeight` (`ui/app.rs`) to use it while keeping `estimated_gpu_bytes()`
+conservative for GPU admission, and mapped overflow to
+`SCENE_CACHE_WEIGHT_CAPACITY` rather than 1 byte.
 
 ### 2. Scene decode holds three live copies of the vertex data
 

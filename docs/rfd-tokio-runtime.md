@@ -18,8 +18,8 @@ clarified three boundaries that were previously blurred in `Cargo.toml` and
      (Linux XDG Desktop Portal). In `rfd 0.18.0`, the Linux portal backend
      replaced `ashpd` with direct `libdbus` + `zenity`, dropping the `tokio`
      feature and pruning `rfd`'s `ashpd` edge along with `mio` and `socket2`
-     from `Cargo.lock` (`ashpd 0.10.3` remains solely through `dark-light` on
-     Linux).
+     from `Cargo.lock` (the remaining `ashpd` edge via unused `dark-light` was
+     subsequently removed in `v4.18.1`).
    - On Windows (`win_cid`), `rfd::AsyncFileDialog` deliberately spawns a
      dedicated short-lived OS thread (`std::thread::spawn`), calls
      `CoInitializeEx(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)`,

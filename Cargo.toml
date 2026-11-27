@@ -1,6 +1,6 @@
 [package]
 name = "imgeditor"
-version = "4.18.0"
+version = "4.18.1"
 edition = "2024"
 rust-version = "1.96"
 
@@ -20,7 +20,6 @@ path = "src/lib.rs"
 anyhow = "1.0"
 chrono = "0.4"
 compact_str = "0.10"
-dark-light = "2"
 glam = { version = "0.29", features = ["bytemuck"] }
 iced = { version = "0.14", features = ["tokio", "lazy", "advanced", "highlighter", "image", "svg"] }
 iced_aw = { version = "0.14.1", features = ["menu", "tabs", "context_menu", "card"] }
@@ -31,9 +30,9 @@ rayon = "1.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 smallvec = { version = "1.16.6", features = ["union", "const_generics", "const_new"] }
-thiserror = "1.0"
+thiserror = "2"
 tokio = { version = "1.54", features = ["rt-multi-thread", "time"] }
-ureq = "2"
+ureq = "3.5"
 webbrowser = "1"
 rfd = { version = "0.18", optional = true }
 bytemuck = { version = "1", features = ["derive"] }
@@ -61,10 +60,10 @@ fluent-bundle = "0.16"
 unic-langid = "0.9"
 sys-locale = "0.3"
 
-# Per-user Explorer file associations (src/file_association.rs); already
-# in the dependency graph through dark-light.
+# Per-user Explorer file associations (src/file_association.rs); shares
+# windows-sys 0.61 with rfd.
 [target.'cfg(windows)'.dependencies]
-winreg = "0.52"
+winreg = "0.56"
 
 [dev-dependencies]
 tempfile = "3"

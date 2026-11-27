@@ -80,6 +80,27 @@ impl Scene {
         self.meshes.iter().any(|m| !m.indices.is_empty())
     }
 
+    /// Estimate the CPU-resident memory held by this [`Scene`] inside the
+    /// scene cache: mesh vertices, triangle indices, and decoded RGBA diffuse
+    /// textures. Deliberately omits the GPU-only wire-edge index buffer built
+    /// on upload in `pipeline.rs`.
+    pub fn estimated_cpu_bytes(&self) -> Option<u64> {
+        self.meshes.iter().try_fold(0_u64, |total, mesh| {
+            let vertices = (mesh.vertices.len() as u64).checked_mul(VERTEX_STRIDE as u64)?;
+            let indices =
+                (mesh.indices.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64)?;
+            let texture = mesh.diffuse.as_ref().map_or(Some(0), |texture| {
+                (texture.width as u64)
+                    .checked_mul(texture.height as u64)?
+                    .checked_mul(4)
+            })?;
+            total
+                .checked_add(vertices)?
+                .checked_add(indices)?
+                .checked_add(texture)
+        })
+    }
+
     /// Estimate the persistent GPU resources required for the scene.
     ///
     /// The estimate intentionally covers only mesh buffers (including the
@@ -213,6 +234,10 @@ mod tests {
         };
 
         assert_eq!(
+            scene.estimated_cpu_bytes(),
+            Some(2 * VERTEX_STRIDE as u64 + 3 * 4 + 24)
+        );
+        assert_eq!(
             scene.estimated_gpu_bytes(),
             Some(2 * VERTEX_STRIDE as u64 + 3 * 4 + 6 * 4 + 24)
         );
@@ -220,6 +245,10 @@ mod tests {
 
     #[test]
     fn empty_scene_has_zero_gpu_estimate() {
+        assert_eq!(
+            Scene::empty(BaseOrientation::Yup).estimated_cpu_bytes(),
+            Some(0)
+        );
         assert_eq!(
             Scene::empty(BaseOrientation::Yup).estimated_gpu_bytes(),
             Some(0)

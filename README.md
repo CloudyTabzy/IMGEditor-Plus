@@ -1,4 +1,4 @@
-# 🎮 IMG Editor Plus v4.18.0
+# 🎮 IMG Editor Plus v4.18.1
 
 A **pure Rust** desktop editor for GTA and Bully IMG archives — built for **speed**, **safety**, and a modern workflow.
 
@@ -6,7 +6,7 @@ A **pure Rust** desktop editor for GTA and Bully IMG archives — built for **sp
 > Rewritten in Rust to eliminate crashes, memory bugs, and C++ dependency hell.
 
 > **Status:** feature-complete and in maintenance mode. Latest release:
-> v4.18.0.
+> v4.18.1.
 
 ---
 
@@ -141,7 +141,7 @@ cargo build --release
 | `image` / `texpresso` / `quantette` | Image I/O, BC1–BC3 (DXT1/3/5) compression, and Oklab palette quantization |
 | `fuzzt` | Jaro-Winkler typo fallback for search |
 | `fluent-bundle` / `fluent-syntax` / `sys-locale` | Compile-time checked Project Fluent translations |
-| `ureq` / `webbrowser` / `winreg` | Update checker, external links, and Windows Explorer registration |
+| `ureq 3.5` / `webbrowser` / `winreg 0.56` | HTTPS-only timed GitHub release update checker, external links, and Windows Explorer registration |
 
 ---
 

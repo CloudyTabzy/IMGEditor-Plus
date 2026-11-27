@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::inspector::nif::{
     self, BlockPayload, NiTriShapeDataPayload, NiTriStripsDataPayload, NifFile,
@@ -24,11 +25,22 @@ pub fn open_nif_external_viewer(
     name: &str,
     game_root: Option<&Path>,
 ) -> ViewerEvent {
+    open_nif_external_viewer_with_ide_map(nif_data, name, game_root, None).0
+}
+
+/// Variant of [`open_nif_external_viewer`] that reuses a memoized [`IdeMap`]
+/// when available and returns any freshly-built map so the caller can cache it.
+pub fn open_nif_external_viewer_with_ide_map(
+    nif_data: &[u8],
+    name: &str,
+    game_root: Option<&Path>,
+    cached_ide_map: Option<&IdeMap>,
+) -> (ViewerEvent, Option<(PathBuf, Arc<IdeMap>)>) {
     let data_len = nif_data.len();
     if data_len < 12 || !nif_data.starts_with(b"Gamebryo File Format") {
         let msg = format!("Not a valid NIF file ({data_len} bytes)");
         eprintln!("[IMGEditor] viewer: {msg}");
-        return ViewerEvent::Failed { reason: msg };
+        return (ViewerEvent::Failed { reason: msg }, None);
     }
 
     let mut nif = match NifFile::parse(nif_data) {
@@ -36,7 +48,7 @@ pub fn open_nif_external_viewer(
         Err(e) => {
             let msg = format!("NIF parse failed: {e}");
             eprintln!("[IMGEditor] viewer: {msg}");
-            return ViewerEvent::Failed { reason: msg };
+            return (ViewerEvent::Failed { reason: msg }, None);
         }
     };
     nif.resolve_string_indices();
@@ -47,7 +59,7 @@ pub fn open_nif_external_viewer(
         None => {
             let msg = "No renderable geometry found in NIF file.".to_string();
             eprintln!("[IMGEditor] viewer: {msg}");
-            return ViewerEvent::Failed { reason: msg };
+            return (ViewerEvent::Failed { reason: msg }, None);
         }
     };
 
@@ -66,13 +78,17 @@ pub fn open_nif_external_viewer(
     let temp_dir = std::env::temp_dir().join("IMGEditor").join("preview");
     let _ = fs::create_dir_all(&temp_dir);
 
-    // Resolve texture via IDE → NFT pipeline.
+    // Resolve texture via IDE → NFT pipeline, reusing the caller's memoized
+    // IdeMap when present instead of rescanning the game directory.
     let nif_basename = stem;
     eprintln!("[IMGEditor] viewer: nif basename = {nif_basename}, game_root = {game_root:?}");
-    let ide_map = game_root.map(IdeMap::build);
-    let nft_catalog = ide_map
-        .as_ref()
-        .and_then(|map| resolve_textures_for_nif(nif_basename, map));
+    let built_ide_map = if cached_ide_map.is_none() {
+        game_root.map(|root| (root.to_path_buf(), Arc::new(IdeMap::build(root))))
+    } else {
+        None
+    };
+    let ide_map_ref = cached_ide_map.or_else(|| built_ide_map.as_ref().map(|(_, m)| m.as_ref()));
+    let nft_catalog = ide_map_ref.and_then(|map| resolve_textures_for_nif(nif_basename, map));
     if let Some(ref cat) = nft_catalog {
         eprintln!(
             "[IMGEditor] viewer: NFT catalog has {} entries",
@@ -125,7 +141,7 @@ pub fn open_nif_external_viewer(
             Err(e) => {
                 let msg = format!("Failed to write PLY: {e}");
                 eprintln!("[IMGEditor] viewer: {msg}");
-                return ViewerEvent::Failed { reason: msg };
+                return (ViewerEvent::Failed { reason: msg }, built_ide_map);
             }
         }
     }
@@ -137,9 +153,12 @@ pub fn open_nif_external_viewer(
         temp_dir.join(format!("{stem}.ply"))
     };
     open_file_detached(&out_path);
-    ViewerEvent::Opened {
-        name: name.to_string(),
-    }
+    (
+        ViewerEvent::Opened {
+            name: name.to_string(),
+        },
+        built_ide_map,
+    )
 }
 
 // ---- OBJ + MTL export ------------------------------------------------
