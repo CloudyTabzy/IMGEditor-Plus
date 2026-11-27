@@ -5,9 +5,10 @@
 //! makes the compatibility behavior easy to test and lets large manifests be
 //! processed away from the event loop.
 
-use crate::collections::HashSet;
+use crate::collections::{HashMap, HashSet};
 use crate::i18n::t;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::Path;
 
@@ -175,61 +176,130 @@ pub fn compare_names(
     manifest: &ParsedManifest,
     options: CompareOptions,
 ) -> CompareReport {
-    let archive_keys: HashSet<String> = archive_entries
-        .iter()
-        .map(|name| comparison_key(name, options))
-        .collect();
-    let manifest_keys: HashSet<String> = manifest
-        .entries
-        .iter()
-        .map(|name| comparison_key(name, options))
-        .collect();
+    if options.case_sensitive {
+        compare_with_key(archive_entries, manifest, |name| name)
+    } else {
+        compare_with_key(archive_entries, manifest, CaseFolded)
+    }
+}
 
-    let mut seen_manifest = HashSet::with_capacity(manifest.entries.len());
+fn compare_with_key<'a, K: Eq + Hash + Copy>(
+    archive_entries: &'a [String],
+    manifest: &'a ParsedManifest,
+    key_of: impl Fn(&'a str) -> K,
+) -> CompareReport {
+    // Map each distinct archive key to whether it has been matched by the
+    // manifest (and later, during the archive-only pass, whether it has
+    // already been emitted). This replaces five `HashSet<String>` tables with
+    // two borrowed-key tables and zero per-key heap allocations.
+    let mut archive_keys: HashMap<K, bool> = HashMap::with_capacity(archive_entries.len());
+    for name in archive_entries {
+        archive_keys.insert(key_of(name.as_str()), false);
+    }
+
+    let mut seen_manifest: HashSet<K> = HashSet::with_capacity(manifest.entries.len());
     let mut missing = Vec::new();
-    let mut seen_missing = HashSet::with_capacity(manifest.entries.len());
     let mut matched_count = 0;
+    let mut unique_matched_archive = 0;
+    let mut unique_missing_count = 0;
     let mut duplicate_manifest_count = 0;
+
     for name in &manifest.entries {
-        let key = comparison_key(name, options);
-        if !seen_manifest.insert(key.clone()) {
+        let key = key_of(name.as_str());
+        let is_first = seen_manifest.insert(key);
+        if !is_first {
             duplicate_manifest_count += 1;
         }
-        if archive_keys.contains(&key) {
+        if let Some(matched) = archive_keys.get_mut(&key) {
+            if !*matched {
+                *matched = true;
+                unique_matched_archive += 1;
+            }
             matched_count += 1;
         } else {
-            seen_missing.insert(key);
+            if is_first {
+                unique_missing_count += 1;
+            }
             missing.push(name.clone());
         }
     }
 
-    let mut seen_archive = HashSet::with_capacity(archive_entries.len());
-    let archive_only = archive_entries
-        .iter()
-        .filter_map(|name| {
-            let key = comparison_key(name, options);
-            (seen_archive.insert(key.clone()) && !manifest_keys.contains(&key))
-                .then_some(name.clone())
-        })
-        .collect();
+    let archive_only_count = archive_keys.len() - unique_matched_archive;
+    let mut archive_only = Vec::with_capacity(archive_only_count);
+    if archive_only_count > 0 {
+        for name in archive_entries {
+            let key = key_of(name.as_str());
+            if let Some(emitted) = archive_keys.get_mut(&key)
+                && !*emitted
+            {
+                *emitted = true;
+                archive_only.push(name.clone());
+                if archive_only.len() == archive_only_count {
+                    break;
+                }
+            }
+        }
+    }
 
     CompareReport {
         archive_entry_count: archive_entries.len(),
         manifest_entry_count: manifest.entries.len(),
-        unique_manifest_count: manifest_keys.len(),
+        unique_manifest_count: seen_manifest.len(),
         matched_count,
         missing,
-        unique_missing_count: seen_missing.len(),
+        unique_missing_count,
         archive_only,
         duplicate_manifest_count,
     }
 }
 
-fn comparison_key(name: &str, options: CompareOptions) -> String {
-    if options.case_sensitive {
-        name.to_owned()
+/// Borrowed case-insensitive key matching `str::to_lowercase()` semantics
+/// without allocating on the common ASCII path.
+#[derive(Clone, Copy)]
+struct CaseFolded<'a>(&'a str);
+
+impl PartialEq for CaseFolded<'_> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        if self.0 == other.0 {
+            return true;
+        }
+        if self.0.is_ascii() && other.0.is_ascii() {
+            self.0.eq_ignore_ascii_case(other.0)
+        } else {
+            self.0.to_lowercase() == other.0.to_lowercase()
+        }
+    }
+}
+
+impl Eq for CaseFolded<'_> {}
+
+impl Hash for CaseFolded<'_> {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let bytes = self.0.as_bytes();
+        // Fast path: already-lowercase ASCII needs neither stack copying nor
+        // heap allocation — just hash the slice directly.
+        if !bytes.iter().any(|&b| b >= 0x80 || b.is_ascii_uppercase()) {
+            state.write(bytes);
+            return;
+        }
+        hash_case_folded_slow(self.0, state);
+    }
+}
+
+fn hash_case_folded_slow<H: Hasher>(s: &str, state: &mut H) {
+    let bytes = s.as_bytes();
+    if bytes.len() <= 64 && s.is_ascii() {
+        let mut buf = [0u8; 64];
+        for (dst, &b) in buf.iter_mut().zip(bytes) {
+            *dst = b.to_ascii_lowercase();
+        }
+        state.write(&buf[..bytes.len()]);
+    } else if s.is_ascii() {
+        state.write(s.to_ascii_lowercase().as_bytes());
     } else {
-        name.to_lowercase()
+        state.write(s.to_lowercase().as_bytes());
     }
 }
 
@@ -335,6 +405,43 @@ mod tests {
             CompareOptions::default(),
         );
         assert_eq!(report.archive_only, ["extra.txd", "later.col"]);
+    }
+
+    #[test]
+    fn case_insensitive_handles_duplicates_unicode_and_long_names() {
+        let long_upper = format!("{}.TXD", "A".repeat(70));
+        let long_lower = format!("{}.txd", "a".repeat(70));
+        let report = compare_names(
+            &[
+                "Present.dff".to_owned(),
+                "PRESENT.DFF".to_owned(),
+                "Extra.TXD".to_owned(),
+                "extra.txd".to_owned(),
+                "ÜBER.col".to_owned(),
+                "\u{212A}.ifp".to_owned(),
+                long_upper,
+            ],
+            &manifest(&[
+                "present.dff",
+                "PRESENT.DFF",
+                "über.col",
+                "k.ifp",
+                &long_lower,
+                "Missing.dff",
+                "missing.dff",
+            ]),
+            CompareOptions {
+                case_sensitive: false,
+            },
+        );
+        assert_eq!(report.archive_entry_count, 7);
+        assert_eq!(report.manifest_entry_count, 7);
+        assert_eq!(report.unique_manifest_count, 5);
+        assert_eq!(report.matched_count, 5);
+        assert_eq!(report.missing, ["Missing.dff", "missing.dff"]);
+        assert_eq!(report.unique_missing_count, 1);
+        assert_eq!(report.duplicate_manifest_count, 2);
+        assert_eq!(report.archive_only, ["Extra.TXD"]);
     }
 
     #[test]

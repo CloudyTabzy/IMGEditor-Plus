@@ -1,4 +1,4 @@
-use crate::collections::{HashMap, HashSet};
+use crate::collections::{HashMap, HashSet, LowerStr};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -172,20 +172,23 @@ pub fn scan_import_folder(
             .unwrap_or_default()
     });
 
-    let existing_names: HashSet<String> = archive
+    let existing_names: HashSet<&str> = archive
         .entries
         .iter()
-        .map(|entry| entry.file_name.to_string().to_ascii_lowercase())
+        .map(|entry| entry.file_name_lower.as_str())
         .collect();
-    let mut seen_names = HashSet::new();
+    let mut seen_names: HashSet<CompactString> = HashSet::with_capacity(files.len());
     let duplicate_count = files
         .iter()
         .filter(|path| {
-            let name = path
+            let raw = path
                 .file_name()
-                .map(|name| name.to_string_lossy().to_ascii_lowercase())
+                .map(|name| name.to_string_lossy())
                 .unwrap_or_default();
-            !seen_names.insert(name.clone()) || existing_names.contains(&name)
+            if existing_names.contains(&LowerStr(raw.as_ref())) {
+                return true;
+            }
+            !seen_names.insert(CompactString::from_str_to_lowercase(raw.as_ref()))
         })
         .count();
 
@@ -278,11 +281,14 @@ impl FolderImportTask {
             cancelled: false,
             details: plan.scan_skipped.clone(),
         };
-        let mut seen_names: HashSet<String> = archive
-            .entries
-            .iter()
-            .map(|entry| entry.file_name.to_string().to_ascii_lowercase())
-            .collect();
+        let mut seen_names: HashSet<CompactString> =
+            HashSet::with_capacity(archive.entries.len() + plan.files.len());
+        seen_names.extend(
+            archive
+                .entries
+                .iter()
+                .map(|entry| entry.file_name_lower.clone()),
+        );
 
         for (index, path) in plan.files.iter().enumerate() {
             if progress.is_cancelled() {
@@ -296,7 +302,7 @@ impl FolderImportTask {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string());
-            let key = display_name.to_ascii_lowercase();
+            let key = CompactString::from_str_to_lowercase(display_name.as_str());
             let duplicate = !seen_names.insert(key);
 
             if duplicate && duplicate_policy == FolderDuplicatePolicy::Skip {

@@ -1,4 +1,5 @@
-use crate::collections::{HashMap, HashSet};
+use crate::collections::{EntryRef, HashMap, HashSet, LowerStr};
+use compact_str::CompactString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -66,13 +67,19 @@ impl IdeMap {
             if !in_objs || trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let parts: Vec<&str> = trimmed.split(',').map(|s| s.trim()).collect();
-            if parts.len() >= 3 {
-                let model_name = parts[1].to_lowercase();
-                let txd_name = parts[2].to_string();
-                if !model_name.is_empty() && !txd_name.is_empty() {
-                    map.entry(model_name).or_insert_with(|| txd_name);
-                }
+            let mut parts = trimmed.split(',').map(str::trim);
+            let _id = parts.next();
+            let Some(model_name) = parts.next() else {
+                continue;
+            };
+            let Some(txd_name) = parts.next() else {
+                continue;
+            };
+            if !model_name.is_empty()
+                && !txd_name.is_empty()
+                && let EntryRef::Vacant(slot) = map.entry_ref(&LowerStr(model_name))
+            {
+                slot.insert_with_key(model_name.to_lowercase(), txd_name.to_string());
             }
         }
     }
@@ -81,7 +88,7 @@ impl IdeMap {
     /// dictionary name from an IDE objs entry.
     pub fn txd_name_for(&self, model_basename: &str) -> Option<&str> {
         self.inner
-            .get(&model_basename.to_lowercase())
+            .get(&LowerStr(model_basename))
             .map(|s| s.as_str())
     }
 
@@ -159,7 +166,7 @@ impl IdeMap {
 /// companion NFT data through the archive entry metadata it already owns.
 #[derive(Debug, Clone)]
 pub struct ArchiveTextureIndex {
-    entries: HashMap<String, EntryInfo>,
+    entries: HashMap<CompactString, EntryInfo>,
     archive_path: Option<PathBuf>,
 }
 
@@ -173,9 +180,9 @@ impl ArchiveTextureIndex {
     pub fn from_entries_owned(entries: Vec<EntryInfo>, archive_path: Option<&Path>) -> Self {
         let mut indexed = HashMap::with_capacity(entries.len());
         for entry in entries {
-            indexed
-                .entry(texture_key(entry.file_name.as_str()))
-                .or_insert(entry);
+            let key =
+                CompactString::from_str_to_lowercase(texture_basename(entry.file_name.as_str()));
+            indexed.entry(key).or_insert(entry);
         }
         Self {
             entries: indexed,
@@ -187,7 +194,7 @@ impl ArchiveTextureIndex {
     /// as the normal entry reader does. NIF parsers intentionally tolerate
     /// that trailing padding.
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
-        let entry = self.entries.get(&texture_key(name))?;
+        let entry = self.entries.get(&LowerStr(texture_basename(name)))?;
         crate::parser::read_entry_data_from_source(entry, self.archive_path.as_deref()).ok()
     }
 
@@ -259,7 +266,7 @@ impl ArchiveTextureIndex {
         let mut txd_names: Vec<String> = self
             .entries
             .values()
-            .filter(|entry| entry.file_name.to_ascii_lowercase().ends_with(".txd"))
+            .filter(|entry| entry.file_name_lower.ends_with(".txd"))
             .map(|entry| entry.file_name.to_string())
             .collect();
         txd_names.sort_unstable_by_key(|name| name.to_ascii_lowercase());
@@ -267,7 +274,7 @@ impl ArchiveTextureIndex {
 
         let mut scanned_bytes = 0u64;
         for txd_name in txd_names {
-            let Some(entry) = self.entries.get(&texture_key(&txd_name)) else {
+            let Some(entry) = self.entries.get(&LowerStr(texture_basename(&txd_name))) else {
                 continue;
             };
             let entry_bytes = u64::from(entry.sector).saturating_mul(crate::parser::SECTOR_SIZE);
@@ -296,22 +303,23 @@ impl ArchiveTextureIndex {
             return;
         };
         for texture in txd.textures {
-            let key = texture_key(&texture.diffuse_name);
-            if !wanted.contains(&key) {
+            let lookup = LowerStr(texture_basename(&texture.diffuse_name));
+            if !wanted.contains(&lookup) {
                 continue;
             }
             let Ok(rgba) = texture.decode_rgba() else {
                 continue;
             };
-            resolved.insert(
-                key.clone(),
-                SceneTexture {
-                    width: texture.width,
-                    height: texture.height,
-                    rgba,
-                },
-            );
-            wanted.remove(&key);
+            if let Some(key) = wanted.take(&lookup) {
+                resolved.insert(
+                    key,
+                    SceneTexture {
+                        width: texture.width,
+                        height: texture.height,
+                        rgba,
+                    },
+                );
+            }
         }
     }
 }
@@ -337,14 +345,14 @@ pub struct TextureEntry {
 }
 
 impl NftCatalog {
-    pub fn get_pixels(&self, texture_basename: &str) -> Option<&[u8]> {
+    pub fn get_pixels(&self, name: &str) -> Option<&[u8]> {
         self.entries
-            .get(&texture_key(texture_basename))
+            .get(&LowerStr(texture_basename(name)))
             .and_then(|e| e.pixel_data.as_deref())
     }
 
-    pub fn has_texture(&self, texture_basename: &str) -> bool {
-        self.entries.contains_key(&texture_key(texture_basename))
+    pub fn has_texture(&self, name: &str) -> bool {
+        self.entries.contains_key(&LowerStr(texture_basename(name)))
     }
 }
 
@@ -472,11 +480,13 @@ fn decode_dds_payload(bytes: &[u8]) -> Option<SceneTexture> {
     SceneTexture::from_tga(&tga)
 }
 
+#[inline]
+fn texture_basename(name: &str) -> &str {
+    name.rsplit(['/', '\\']).next().unwrap_or(name)
+}
+
 pub(crate) fn texture_key(name: &str) -> String {
-    name.rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name)
-        .to_lowercase()
+    texture_basename(name).to_lowercase()
 }
 
 // ---- Embedded pixel data extraction ----------------------------------

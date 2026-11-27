@@ -265,27 +265,26 @@ order of 500 K heap allocations and ~20 MB of allocator traffic, with **zero
 retention**.
 
 This is not a peak-memory problem; it is allocator throughput on a
-`spawn_blocking` task the UI awaits, against an allocator whose churn
-sensitivity is already documented (`purge_delay = 0` was measured on exactly
-this class of work). Fix: split `classify` into a `String`-free
+`spawn_blocking` task the UI awaits (note: `rusty_alloc` 2.6.0 later restored
+the 10 ms `purge_delay` default, reducing churn overhead relative to 2.2.1's
+`purge_delay = 0`, though avoiding 500 K transient strings remains worthwhile).
+Fix: split `classify` into a `String`-free
 `classify_verdict(game, profile) -> (Verdict, Evidence)` and keep the
 `note`-bearing `classify` as a thin wrapper for the UI paths that display it.
 Key `class_counts` by `LogicalFormat` plus a `bool` for the 32-bpp-storage case
 rather than by `String`.
 
-### 11. An uncapped per-pixel `HashSet` where a capped one already exists
+### 11. An uncapped per-pixel `HashSet` where a capped one already exists *(fixed 2026-11-27)*
 
-`compat/scan.rs:822-829` `unique_color_count` inserts every pixel into an
-uncapped `HashSet<[u8;4]>` with no early exit. A photographic 1024² texture
-inserts up to 1,048,576 entries — ~10 MiB final table, ~15 MiB transient during
-the last rehash.
+`compat/scan.rs:822-829` `unique_color_count` previously inserted every pixel
+into an uncapped `HashSet<[u8;4]>` with no early exit. A photographic 1024²
+texture could insert up to 1,048,576 entries — ~10 MiB final table, ~15 MiB
+transient during the last rehash.
 
-`parser/texture_decoder.rs:661` already has the correct implementation:
-`palette_colors(&rgba)` is `unique_color_count_capped(rgba, 256)`, and the
-comparison at `scan.rs:263` is exactly `<= 256`. This function is a straight-line
-regression against code that exists next door. Reachability is CLI-only
-(`options.decode_pixels` is false at both production call sites, `app.rs:3448`
-and `app.rs:6482`), but the CLI runs against the same large archives.
+`compat/scan.rs` now delegates directly to
+`parser/texture_decoder.rs::palette_colors(&rgba)` (`unique_color_count_capped(rgba, 256)`
+with pre-sized `HashSet::with_capacity`), bounding the table at 257 entries and
+exiting immediately once a texture exceeds an 8-bit palette.
 
 ### 12. A full-mesh scratch allocation to compute a bound already in hand
 
@@ -445,9 +444,9 @@ already has.
 ## Re-measuring after any of this
 
 The harness and its traps are documented in
-[allocator-rusty-alloc.md](allocator-rusty-alloc.md) §"Profiling method". Two
-warnings carry over: `rusty_alloc::stats::merged()` reported zeros for
-allocs/frees and is **not** usable for attribution — use OS working set and
-private commit — and a cached `Start-Process -PassThru` object with `Refresh()`
-returns frozen private-bytes values, so a fresh `Get-Process` object per sample
-is mandatory.
+[allocator-rusty-alloc.md](allocator-rusty-alloc.md) §"Profiling method". Note
+two measurement rules: always use OS working set and private commit as the
+ground truth (`rusty_alloc` 2.6.0 fixed `stats::merged()` reporting zeros for
+allocs/frees, but OS counters remain the authoritative process-wide metric),
+and a cached `Start-Process -PassThru` object with `Refresh()` returns frozen
+private-bytes values, so a fresh `Get-Process` object per sample is mandatory.

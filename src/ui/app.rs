@@ -7306,12 +7306,12 @@ impl App {
                                     Option<SceneTexture>,
                                 > = crate::collections::HashMap::new();
                                 for mesh in &mut model.meshes {
-                                    let Some(name) = mesh.texture_name.clone() else {
+                                    let Some(name) = mesh.texture_name.as_deref() else {
                                         continue;
                                     };
                                     let texture = resolved
-                                        .entry_ref(&name)
-                                        .or_insert_with(|| resolver(&name))
+                                        .entry_ref(name)
+                                        .or_insert_with(|| resolver(name))
                                         .clone();
                                     mesh.diffuse = texture;
                                 }

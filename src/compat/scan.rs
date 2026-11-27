@@ -260,7 +260,7 @@ fn profile_txd_entry(
 
         if options.decode_pixels {
             match texture.decode_rgba() {
-                Ok(rgba) if unique_color_count(&rgba) <= 256 => {
+                Ok(rgba) if crate::parser::texture_decoder::palette_colors(&rgba).is_some() => {
                     *report.palette_reconstructible.get_or_insert(0) += 1;
                 }
                 Ok(_) => {}
@@ -817,15 +817,6 @@ fn decode_ni_pixel_tail(raw: &[u8], endian: Endian) -> Option<NftPixelInfo> {
         mipmaps: declared_mips,
         palette_ref,
     })
-}
-
-fn unique_color_count(rgba: &[u8]) -> usize {
-    use crate::collections::HashSet;
-    let mut seen = HashSet::new();
-    for px in rgba.chunks_exact(4) {
-        seen.insert([px[0], px[1], px[2], px[3]]);
-    }
-    seen.len()
 }
 
 fn record_anomaly(

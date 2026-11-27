@@ -16,16 +16,21 @@ fn gta_ifp_name_calibration(
     model: &ModelAsset,
     targets: &[(String, Vec<crate::inspector::animation::clip::TrackChannel>)],
 ) -> crate::collections::HashMap<String, NodeId> {
-    let mut lookup: crate::collections::HashMap<String, Vec<NodeId>> =
-        crate::collections::HashMap::new();
+    use crate::collections::{EntryRef, HashMap, LowerStr};
+
+    let mut lookup: HashMap<String, Vec<NodeId>> = HashMap::with_capacity(model.nodes.len());
     for node in &model.nodes {
-        let key = node.name.trim().to_ascii_lowercase();
-        lookup.entry(key).or_default().push(node.id);
+        let trimmed = node.name.trim();
+        match lookup.entry_ref(&LowerStr(trimmed)) {
+            EntryRef::Occupied(mut slot) => slot.get_mut().push(node.id),
+            EntryRef::Vacant(slot) => {
+                slot.insert_with_key(trimmed.to_lowercase(), vec![node.id]);
+            }
+        }
     }
-    let mut assignments = crate::collections::HashMap::new();
+    let mut assignments = HashMap::with_capacity(targets.len());
     for (target, _) in targets {
-        let key = target.trim().to_ascii_lowercase();
-        if let Some(ids) = lookup.get(&key)
+        if let Some(ids) = lookup.get(&LowerStr(target.trim()))
             && ids.len() == 1
         {
             assignments.insert(target.clone(), ids[0]);

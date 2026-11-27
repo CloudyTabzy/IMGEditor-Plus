@@ -42,7 +42,7 @@ fuzzt = { version = "0.3.1", default-features = false, features = ["jaro"] }
 # SwissTable maps/sets with foldhash for internal collections (foldhash is the
 # crate's default hasher). Already in the tree via quick_cache/indexmap, so
 # this promotion adds no new compile units. See docs/hashmap-crate.md.
-hashbrown = "0.17"
+hashbrown = "0.17.2"
 iced_widget = { version = "0.14", features = ["wgpu", "canvas"] }
 log = "0.4"
 pollster = "0.4"

@@ -646,7 +646,8 @@ pub struct DecodedTexture {
 /// Count distinct RGBA colors, stopping once `cap` is exceeded. Bounded
 /// so photo-like textures exit after a few hundred pixels.
 pub fn unique_color_count_capped(rgba: &[u8], cap: usize) -> usize {
-    let mut seen = crate::collections::HashSet::new();
+    let initial = cap.saturating_add(1).min(rgba.len() / 4).min(1024);
+    let mut seen = crate::collections::HashSet::with_capacity(initial);
     for px in rgba.chunks_exact(4) {
         seen.insert([px[0], px[1], px[2], px[3]]);
         if seen.len() > cap {

@@ -1,7 +1,8 @@
-# HashMap crate: `hashbrown` 0.17.1 with foldhash
+# HashMap crate: `hashbrown` 0.17.2 with foldhash
 
 Decision record for the internal hash-collection migration (performance patch,
-2026-10-19). Companion to the crate-level A/B in the sibling benchmark project
+2026-10-19; upgraded from 0.17.1 to 0.17.2 with deeper API adoption on
+2026-11-27). Companion to the crate-level A/B in the sibling benchmark project
 (`C:\Dev\Hashmap_Bench`, Suites A–M) and to `docs/allocator-rusty-alloc.md`,
 which set the A/B discipline used here.
 
@@ -22,11 +23,12 @@ Why:
   keys are game-asset names, entry indices, and pixels, and foldhash's
   `RandomState` is randomly seeded per process, so the security property buys
   nothing here.
-- `hashbrown` was already in the dependency tree at exactly 0.17.1 via
-  `quick_cache` (scene/texture/inspection caches) and `indexmap` (through
-  iced). Promoting it to a direct dependency added no compile units.
-- It adds the APIs this code actually uses: `entry_ref` (borrowed-key entry)
-  and `HashSet::get`.
+- `hashbrown` was already in the dependency tree via `quick_cache`
+  (scene/texture/inspection caches) and `indexmap` (through iced), now unified
+  on 0.17.2. Promoting it to a direct dependency added no compile units.
+- It adds the APIs this code actually uses: `entry_ref` / `VacantEntryRef::insert_with_key`
+  (borrowed-key entry), `Equivalent` (zero-allocation case-insensitive lookup
+  via `LowerStr`), and `HashSet::get` / `HashSet::take`.
 
 Kept deliberately:
 
@@ -118,13 +120,77 @@ hand (export path, texture resolution).
 - The frame-budget effect of the verdict table is small in absolute terms
   (23 µs → ~1 µs on gta3.img, where 2,740 entries carry verdicts) but it is
   per redraw, and the dense table also removes a per-frame allocation.
-- Verification: 750 lib tests pass in release. One fixture-gated test is
-  skipped locally — `object_1004_curve_roots_bind_across_matching_rigs_when_available`
-  requires `IMGEDITOR_BULLY_STREAM`, whose configured path
-  (`C:\Games\Bully - Scholarship Edition\Stream`) no longer exists on this
-  machine; its `world_entry` helper returns `None` at `std::fs::read(World.dir)`
-  before any collection code runs, so all four fixture cases are skipped and
-  its final coverage assert fires.
+- Verification (initial 0.17.1 pass): 750 lib tests passed in release; the
+  Bully Stream fixture test (`object_1004_curve_roots_bind_across_matching_rigs_when_available`)
+  that failed locally when `C:\Games\Bully - Scholarship Edition\Stream` was
+  absent was later fixed in `af0a3ee` to use `test_paths::bully_stream()` and
+  skip cleanly.
+
+## 0.17.2 upgrade and API adoption (2026-11-27)
+
+Upgraded `hashbrown` from `0.17.1` → `0.17.2` (released 2026-11-22: fixes an
+allocator leak on dropping empty tables #751, switches `ProbeSeq::move_next`
+to wrapping arithmetic #736, relaxes default hasher/allocator bounds #732, and
+uses `std::hash::RandomState` #747). Default features (`default-hasher` via
+`foldhash 0.2.0`, `inline-more`, `allocator-api2`, `equivalent`, `raw-entry`)
+already cover everything needed; `serde`, `rayon`, and `nightly` remain off.
+
+Audited every `HashMap`/`HashSet` site in `src/` and adopted `hashbrown`'s
+borrowed-lookup and entry APIs where they eliminate real allocations or passes:
+
+- `src/collections.rs` — re-exports `EntryRef` and `Equivalent`, and adds
+  `LowerStr<'a>` implementing `Hash` + `Equivalent<String | CompactString | str | &str>`
+  matching `str::to_lowercase()` without heap allocation on ASCII inputs.
+- `src/compare.rs` — collapsed `compare_names` from five `HashSet<String>`
+  tables (~80 k `String` allocations on `gta3.img`) into two borrowed-key
+  tables (`HashMap<K, bool>` + `HashSet<K>`), using `&str` for case-sensitive
+  and `CaseFolded<'_>` for case-insensitive matching, skipping the archive-only
+  pass entirely when `archive_only` is empty.
+- `src/tasks.rs` — `scan_import_folder` borrows `&entry.file_name_lower`
+  (`HashSet<&str>`) and probes with `LowerStr`; `FolderImportTask::run_blocking`
+  pre-sizes `HashSet<CompactString>` from `entry.file_name_lower` instead of
+  re-lowercasing every entry into a heap `String`.
+- `src/inspector/texture.rs` — `IdeMap` (`entry_ref(&LowerStr(_))` +
+  `VacantEntryRef::insert_with_key` + allocation-free `txd_name_for`),
+  `ArchiveTextureIndex` (inline `CompactString` keys, allocation-free `read`,
+  `file_name_lower.ends_with(".txd")` filter, and `wanted.take(&LowerStr(_))`
+  in `resolve_txd_entry` to move matched keys with zero clone), and
+  allocation-free `NftCatalog` lookups.
+- `src/compat/scan.rs` & `src/parser/texture_decoder.rs` — replaced the
+  uncapped `unique_color_count` `HashSet` (Finding #11 in
+  `docs/memory-pre-profiling-audit.md`) with `texture_decoder::palette_colors`,
+  and pre-sized `unique_color_count_capped`'s `HashSet`.
+- `src/inspector/animation/binding.rs`, `src/ui/texture_preview.rs`, and
+  `src/ui/app.rs` — switched `gta_ifp_name_calibration` and
+  `decoded_textures_from_scene` to `LowerStr` / `entry_ref` / `with_capacity`,
+  and removed a leftover `.clone()` before `entry_ref` in NIF texture
+  resolution (`app.rs`).
+
+### Measured impact (release, `gta3.img`, 3 warm runs)
+
+Same harness (`examples/benchmark_hashmaps.rs`) and archive (`gta3.img`,
+16,316 entries), Windows, Rust 1.99.1, `rusty_alloc` 2.6.0:
+
+| arm (16,316 entries) | std baseline | 0.17.1 | 0.17.2 + API pass | vs 0.17.1 |
+|---|---|---|---|---|
+| `compare_names`: case-sensitive | 2.61 ms | 2.31 ms | **0.416 ms** | **−82 % (5.6×)** |
+| `compare_names`: case-insensitive | 3.17 ms | 2.56 ms | **0.853 ms** | **−67 % (3.0×)** |
+| `display_row_of` lookup | 10.3 ns | 2.2 ns | 2.15 ns | parity |
+| `verdict map: hashbrown collect` | 0.023 ms | 0.010 ms | 0.011 ms | parity |
+| `name_counts: entry_ref(&key)` | 0.35 ms | 0.19 ms | 0.219 ms | parity |
+| `build_wire_indices` (60 k tris) | 2.67 ms | 0.87 ms | 0.957 ms | parity |
+
+Raw medians across the 3 warm runs (ms unless noted):
+
+| arm | run 1 | run 2 | run 3 | median |
+|---|---|---|---|---|
+| `compare_names`: case-sensitive | 0.416 | 0.406 | 0.419 | 0.416 |
+| `compare_names`: case-insensitive | 0.853 | 0.843 | 0.888 | 0.853 |
+| `display_row_of` (ns/lookup) | 2.17 | 2.14 | 2.15 | 2.15 |
+| `rebuild`: no filter, name asc | 1.776 | 1.853 | 1.866 | 1.853 |
+| `rebuild`: sort offset desc | 0.227 | 0.187 | 0.218 | 0.218 |
+| `name_counts: entry_ref(&key)` | 0.219 | 0.207 | 0.349 | 0.219 |
+| `build_wire_indices` | 0.940 | 0.957 | 1.623 | 0.957 |
 
 ## Appendix: raw runs
 

@@ -1,6 +1,7 @@
 //! Shared helpers for texture-tab previews and optional NIF UV overlays.
 
-use crate::collections::HashSet;
+use crate::collections::{HashSet, LowerStr};
+use crate::inspector::texture::texture_key;
 use std::path::Path;
 
 use iced::widget::{canvas, image};
@@ -578,7 +579,7 @@ fn append_mesh_uvs(mesh: &SceneMesh, triangles: &mut Vec<UvTriangle>) {
 /// immediately available in the Texture tab without decoding the same pixels
 /// a second time.
 pub fn decoded_textures_from_scene(scene: &Scene) -> Vec<DecodedTexture> {
-    let mut seen = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::with_capacity(scene.meshes.len());
     let mut textures = Vec::new();
     for mesh in &scene.meshes {
         let Some(texture_name) = mesh.texture_name.as_deref() else {
@@ -587,15 +588,19 @@ pub fn decoded_textures_from_scene(scene: &Scene) -> Vec<DecodedTexture> {
         let Some(texture) = mesh.diffuse.as_ref() else {
             continue;
         };
-        let key = texture_key(texture_name);
-        if !seen.insert(key.clone()) {
+        let base = texture_name
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(texture_name);
+        if seen.contains(&LowerStr(base)) {
             continue;
         }
+        seen.insert(base.to_lowercase());
         let name = Path::new(texture_name)
             .file_name()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
-            .unwrap_or(&key)
+            .unwrap_or(base)
             .to_string();
         let has_alpha = texture.rgba.chunks_exact(4).any(|pixel| pixel[3] < 255);
         let palette_colors = crate::parser::texture_decoder::palette_colors(&texture.rgba);
@@ -615,13 +620,6 @@ pub fn decoded_textures_from_scene(scene: &Scene) -> Vec<DecodedTexture> {
     }
     textures.sort_by_key(|texture| texture.name.to_ascii_lowercase());
     textures
-}
-
-fn texture_key(name: &str) -> String {
-    name.rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name)
-        .to_ascii_lowercase()
 }
 
 #[cfg(test)]
