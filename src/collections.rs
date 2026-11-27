@@ -18,13 +18,14 @@ use compact_str::CompactString;
 use std::hash::{Hash, Hasher};
 
 /// Lowercases `s` into a [`CompactString`] using a fast in-place ASCII path
-/// before falling back to full Unicode case mapping.
+/// before falling back to `std::str::to_lowercase`.
 ///
-/// `CompactString::from_str_to_lowercase` processes ASCII in 16-byte chunks
-/// and falls through to char-by-char Unicode folding for the tail — which hits
-/// every `< 16`-byte IMG/IDE/TXD name. Checking `is_ascii()` first copies once
-/// into the 24-byte inline buffer and lowercases in place with identical
-/// semantics to `str::to_lowercase()`.
+/// Checking `is_ascii()` first copies once into the 24-byte inline buffer and
+/// lowercases in place with zero heap allocation. The non-ASCII fallback uses
+/// `std::str::to_lowercase()` (never `CompactString::from_str_to_lowercase`,
+/// whose 16-byte ASCII chunker can misclassify a trailing Greek `'Σ'` at a
+/// 16-byte boundary) so stored keys always match [`LowerStr`]'s `Hash` and
+/// `Equivalent` contract across all Unicode inputs.
 #[inline]
 pub fn compact_to_lowercase(s: &str) -> CompactString {
     if s.is_ascii() {
@@ -32,7 +33,7 @@ pub fn compact_to_lowercase(s: &str) -> CompactString {
         out.make_ascii_lowercase();
         out
     } else {
-        CompactString::from_str_to_lowercase(s)
+        CompactString::from(s.to_lowercase())
     }
 }
 
@@ -188,7 +189,7 @@ mod tests {
             match map.entry_ref(&LowerStr(name)) {
                 EntryRef::Occupied(mut slot) => *slot.get_mut() += 1,
                 EntryRef::Vacant(slot) => {
-                    slot.insert_with_key(CompactString::from_str_to_lowercase(name), 1);
+                    slot.insert_with_key(compact_to_lowercase(name), 1);
                 }
             }
         }
@@ -215,13 +216,22 @@ mod tests {
             "ὈΔΥΣΣΕΎΣ",
             "\u{212A}.txd",
             "\u{0130}stanbul.col",
+            // 16-byte ASCII prefix + word-final Greek capital sigma: catches
+            // compact_str 0.10.0's 16-byte chunk boundary bug against std.
+            "aaaaaaaaaaaaaaaaΣ",
+            "0123456789abcdefΣ_1.txd",
         ];
-        for input in cases {
+        let mut map: HashMap<CompactString, usize> = HashMap::new();
+        for (idx, input) in cases.iter().enumerate() {
             let lowered = compact_to_lowercase(input);
             assert_eq!(lowered.as_str(), input.to_lowercase());
             if lowered.len() <= 24 {
                 assert!(!lowered.is_heap_allocated(), "{input:?} spilled to heap");
             }
+            if let EntryRef::Vacant(slot) = map.entry_ref(&LowerStr(input)) {
+                slot.insert_with_key(lowered, idx);
+            }
+            assert_eq!(map.get(&LowerStr(input)), Some(&idx));
         }
     }
 }

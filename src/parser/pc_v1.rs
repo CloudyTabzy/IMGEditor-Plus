@@ -196,9 +196,17 @@ impl PcV1Parser {
         archive.source_mmap = None;
 
         // `rename` replaces the destination in one step, so the old
-        // archive stays intact until its replacement is in place.
-        std::fs::rename(&temp_img, &output_path).context("failed to write archive file")?;
-        std::fs::rename(&temp_dir, &dir_path).context("failed to write directory file")?;
+        // archive stays intact until its replacement is in place. Remove any
+        // leftover `.temp` files if a rename fails (e.g. non-NTFS lock error).
+        if let Err(err) = std::fs::rename(&temp_img, &output_path) {
+            let _ = std::fs::remove_file(&temp_img);
+            let _ = std::fs::remove_file(&temp_dir);
+            return Err(err).context("failed to write archive file");
+        }
+        if let Err(err) = std::fs::rename(&temp_dir, &dir_path) {
+            let _ = std::fs::remove_file(&temp_dir);
+            return Err(err).context("failed to write directory file");
+        }
 
         if remove_existing
             && let Some(ref src) = source_path

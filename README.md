@@ -1,333 +1,107 @@
 # 🎮 IMG Editor Plus v4.17.0
 
-A **pure Rust** desktop editor for GTA IMG archives — built for **speed**, **safety**, and a modern workflow.
+A **pure Rust** desktop editor for GTA and Bully IMG archives — built for **speed**, **safety**, and a modern workflow.
 
 > Forked and evolved from [Grinch_'s IMG Editor](https://github.com/user-grinch/IMGEditor).  
-> Rewritten in Rust to eliminate crashes, memory bugs, and dependency hell.
+> Rewritten in Rust to eliminate crashes, memory bugs, and C++ dependency hell.
 
 > **Status:** feature-complete and in maintenance mode. Latest tagged release:
-> v4.17.0. No major platform ports are currently planned.
+> v4.17.0.
 
 ---
 
 ## 🔥 Why Rust?
 
-The original C++ IMG Editor worked well, but maintaining it meant fighting:
+| C++ pain point | Rust replacement |
+|----------------|------------------|
+| 💥 **Null pointers / use-after-free** | Ownership and borrow checking at compile time |
+| 🧵 **UI thread blocking on I/O** | Unified Tokio `async` runtime + `spawn_blocking` for save, export, and decoding |
+| 📦 **Vendored C++ libs** (FreeType, FreeImage, GLFW, GLM, GLEW) | Pure `cargo` build — single portable executable |
+| 🐛 **Memory corruption in format parsers** | `Result`-based error propagation with bounds-checked readers |
+| 🐌 **Slow rebuilds and exports** | Zero-copy memory-mapped reads, Rayon parallel export/scan/decode, and two-pass sequential save |
+| 🎨 **ImGui theming limits** | Iced 0.14 reactive UI with a full design-token system |
 
-| Problem | Rust fixes it |
-|---------|---------------|
-| 💥 **Null pointers / use-after-free** * | Ownership + borrow checker at compile time |
-| 🧵 **UI thread blocking on I/O** * | Tokio `async` + spawn blocking for save/export |
-| 📦 **Vendored C++ libs** (FreeType, FreeImage, GLFW, GLM, GLEW) | All dependencies via `cargo` — no manual setup |
-| 🐛 **Memory corruption in format parsers** | `Result`-based error propagation, no unsafe |
-| 🐌 **Slow exports on large archives** * | Zero-copy parallel export streams entries straight from the memory-mapped archive; two-pass sequential save/rebuild; UI stays responsive |
-| 🎨 **ImGui theming limitations** | Iced 0.14 reactive UI with a full design token system |
-
-\* *On a 12,000-entry Bully `World.img` benchmark, the default `ZeroCopy` engine beat the reference C++ parser in every interleaved round (median 22.4 s vs 23.3 s). Both are pinned by a Windows rate limit on rapid small-file creation (~500–600 files/s sustained on the test machine) — a measured, documented hard limit that no export code can bypass. Save/rebuild dodges that limiter by writing one large file and gained ~23 %. See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) and [docs/export-optimization-lessons.md](docs/export-optimization-lessons.md) for the full analysis.*
-\* *The Rust port is not a magical order-of-magnitude speedup. The workload is Windows I/O-bound, and the C++ parser was already close to the practical warm-cache ceiling. Rust's reimplementation wins on throughput only modestly; its larger advantages are **safety, responsiveness, cancellation, and maintainability**. See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) for the honest breakdown.*
-\* *See [docs/cpp-codebase-analysis.md](docs/cpp-codebase-analysis.md) for a source-level review of the original C++ codebase. The null-pointer and UI-blocking issues are real, but the analysis shows they are more nuanced than the one-line summary suggests (e.g. save/export were already threaded in C++; the main remaining UI blockers were Open and Import).*
-**Result**: a portable, single-binary editor that _won't_ segfault on a 10,000-entry archive.
+*Note: On Windows, small-file export speed is capped by an OS file-creation rate limit (~500–600 files/s, so Rust's `ZeroCopy` exporter edges out C++ modestly: 22.4 s vs 23.3 s on Bully `World.img`). Save/rebuild avoids that limit and runs ~23% faster (8.6 s → 6.6 s). See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md), [docs/export-optimization-lessons.md](docs/export-optimization-lessons.md), and [docs/cpp-codebase-analysis.md](docs/cpp-codebase-analysis.md).*
 
 ---
 
 ## ✨ Features
 
-### 📁 Archive Management
-- ✅ **IMG v1** — GTA III, Vice City, Bully Scholarship Edition
-- ✅ **Bully Xbox 360 IMG v1** — auto-detected big-endian `.dir`/`.img` pairs with validated sector ranges and round-trip saves
-- ✅ **IMG v2** — GTA San Andreas
-- ✅ **Create / Open / Save / Save As** with version selection
-- ✅ **Import files** — single, multiple, or replace mode
-- ✅ **Export all or selected entries** — async with progress bar + cancel
-- ✅ **Zero-copy exports** — mmap-direct writes with in-memory path resolution and a buffered parallel fallback when a memory map is unavailable
-- ✅ **Two-pass sequential save** — rebuilds stream entry data straight from the source memory map; ~23 % faster rebuilds on large archives
-- ✅ **Memory-mapped reads** — instant open on large archives
-- ✅ **Multiple archive tabs** with dirty-file indicator; middle-click a tab to close it
-- ✅ **Drag-and-drop** — open `.img`/`.dir` archives or import files from Explorer; paired v1 inputs are canonicalized automatically
+### 📁 Archive Management & I/O
+- **Supported formats** — IMG v1 (GTA III, Vice City, Bully PC & Xbox 360 big-endian `.dir`/`.img`) and IMG v2 (GTA San Andreas).
+- **Full editing workflow** — Create, Open, Save, Save As, Pack, multi-tab editing (middle-click to close), inline rename, single/folder/replace import, and multi-file drag-and-drop import from Explorer.
+- **Fast zero-copy I/O** — memory-mapped archive reads, Rayon parallel zero-copy export with live progress and cancellation, and two-pass sequential save/rebuild.
+- **Entry-list manifests** — export UTF-8 entry lists (`Ctrl+L`) and compare archives asynchronously (`Ctrl+P`) with duplicate and case-insensitive diagnostics ([docs/compare-feature.md](docs/compare-feature.md)).
+- **Explorer integration** — optional per-user `.img`/`.dir` registration and per-archive game-folder overrides.
 
-### 🎨 Embedded 3D Model Viewer (v3.4+)
-- ✅ **In-app wgpu renderer** — same wgpu device Iced uses, no second window or thread battle
-- ✅ **Tab split in the right pane** — `Model 3D` (new) | `Texture` (TXD/NFT preview)
-- ✅ **Orbit / pan / zoom camera** — LMB drag to orbit, MMB drag to pan, wheel to zoom
-- ✅ **Interactive axis navigation** — labeled ±X/±Y/±Z gizmo with hover feedback, exact orthographic views, and a perspective/orthographic button; axis colors follow the model's source coordinates and its visibility is saved under `View → Navigation gizmo`
-- ✅ **Adaptive model loading transition** — cache misses immediately show a theme-aware spinner while geometry and textures prepare; cached models restore without a distracting flash
-- ✅ **Lit + wireframe pipelines** — single WGSL shader, `W` cycles wireframe (toolbar)
-- ✅ **MSAA 4x anti-aliasing** — the scene pass renders into multisampled color + depth targets and resolves for smooth model edges
-- ✅ **Textured paths** — DFF/TXD diffuse mapping plus DXT1/2/3/4/5 decoding on `spawn_blocking` so the UI thread stays responsive
-- ✅ **Alpha-aware 3D materials** — RGBA cutouts and transparency use a standard alpha-blended render path, with an in-viewer toggle for opaque/debug inspection
-- ✅ **Bully NFT companion textures** — embedded Gamebryo pixel data and archive-backed source paths are previewed as RGBA
-- ✅ **External PLY viewer fallback** — right-click `Open in external viewer` for non-NIF formats (DFF / COL) and any user preference
-- ✅ **Configurable base orientation** — Y-up default, `B` cycles to Z-up / X-up. Persists in `settings.ini`.
+### 🛡️ Asset Compatibility Engine & Texture Converter
+- **Retail-verified profiles** — validates textures against GTA III, Vice City, San Andreas, and Bully dialects, tinting entry rows by verdict with pre-flight import checks and pre-save *Fix & Save* lossless header repair.
+- **Texture replacement & bulk conversion** — import PNG / DDS / BMP / TGA or bulk-convert selected TXDs to target dialects (DXT1/3/5, PAL8/PAL4 via Oklab k-means, 888/8888/565/1555/4444, full mip chains) with a true decoded-back preview and byte-preserving TXD splicing.
 
-**v3.5 viewer polish:**
-- ✅ **Blender-style orbit** — mouse-right moves the view left (matching Blender's turntable feel)
-- ✅ **Rotating navigation gizmo** — click an axis circle in the top-right to view along that axis; click the facing circle again for the opposite side. Drag the gizmo to orbit, or click `PERSP`/`ORTHO` below it to switch projection without changing framing. Orbiting returns to perspective; panning and zooming also work in orthographic views. `Reset view` restores the fitted perspective camera.
-- ✅ **AA grid floor** — derivative-based, screen-space-constant ~1px lines with sub-pixel fade (Blender/Golus style)
-- ✅ **Full turntable orbit** — camera can pitch all the way around; the floor stays as a guide by dimming itself to ~45% when seen from underneath instead of vanishing
-- ✅ **Automated regression tests** — cover parser, two-pass save, zero-copy export, inspector, scene3d mesh/camera/decode/pipeline, six-axis navigation, alpha rendering, session state, sorting, drag-and-drop, UV mapping, cache invalidation, and headless wgpu against real Bully and RenderWare fixtures
+### 🎨 Embedded 3D Model & Animation Viewer
+- **In-app `wgpu` renderer** — MSAA 4×, lit + wireframe (`W`), alpha-blended materials, Blender-style turntable orbit, interactive ±X/±Y/±Z navigation gizmo, perspective/orthographic toggle, AA grid floor, and configurable base orientation (`B`).
+- **Native format previews** — PC RenderWare **DFF** models (frame/atomic transforms, material splits, TXD diffuse resolution), Bully **NIF** models with companion **NFT** textures, and **COL** v1–v4 collision meshes (including Bully `COLL`/`COL2`/`COL3`), plus external PLY/OBJ viewer export.
+- **Animation player** — play, pause, scrub, and loop **Bully AGR** animations (all six PC variants, named `Anim/*.HXD` / `hxds.dat` catalogs, NIF CPU skinning — see [docs/bully-agr-research-record.md](docs/bully-agr-research-record.md)) and **GTA IFP** clips directly in the 3D viewport.
 
-**v4.6.0 release highlights:**
-- 📑 **Entry-list comparison** — Edit → Export as list (Ctrl+L) creates a compatible UTF-8 manifest, while Edit → Compare with list (Ctrl+P) compares it asynchronously with case-sensitive matching by default, optional case-insensitive/archive-only diagnostics, duplicate counts, and copyable missing names. See docs/compare-feature.md.
-- 🧰 **Bully animation player** - select a model in a Bully archive and play its animations: a transport bar plays, pauses, seeks and loops clips in the 3D viewer
-- 🧰 **Named clips via HXD catalogs** - `Anim/*.HXD` and `hxds.dat` are parsed so clips get real names (all 439 `C_Player` clips: RUN, GROUND_ONBACK, ...), with compound `MAINPED.HXD` records resolved to their owning AGR
-- 🧰 **AGR decoders** — all six Bully PC variants (999–1004) load into the animation player: linked 1000/1001 full-float or compact curves with sparse translation rows, packed 1002/1004 curves (bitfields recovered from the retail executable), and 999/1003 object transforms; loose `Anim/*.agr` files load through the View menu against the open model
-- 🧰 **NIF skinning** - `NiSkinInstance`/`NiSkinData`/`NiSkinPartition` are parsed and skinned meshes deform through linear blend skinning, so the player character animates instead of holding a T-pose
-- 🧰 **Known limitation** - observed character clips are authored rotation-only by design (the game grounds actors at runtime); the viewer offers constant per-clip floor planting for inspection, but does not claim to reproduce the game's runtime locomotion grounding
-- 🧪 **AGR research record** - the recovered layouts, HXD association rules, NIF skinning findings, validation corpus, and reverse-engineering lessons are preserved in [`docs/bully-agr-research-record.md`](docs/bully-agr-research-record.md)
+### 🖼️ Texture & Entry Inspector
+- **TXD & NFT preview** — PC D3D8/D3D9 + legacy RenderWare rasters (DXT1–5, PAL4/8, 1555/565/4444/8888, plus X8R8G8B8 mismatch detection — [docs/renderware-format-mismatches.md](docs/renderware-format-mismatches.md)) and Bully NFT catalogs, with synchronized zoom/pan, UV overlays, multi-texture switching, and PNG/TGA export.
+- **Entry metadata** — RenderWare chunk/version, COL version, text line counts (`.ipl`/`.ide`/`.dat`/`.scm`), and hex preview for unknown entries.
 
-**v4.5.0 release highlights:**
-- 🛡 **Asset compatibility engine** — retail-verified profiles for GTA III, Vice City, San Andreas and Bully. Pick the game an archive is for (or accept an advisory content hint): every texture is checked against that target's dialect, entry rows are tinted by verdict with an icon legend, and the choice is remembered per archive path. Imports get a pre-flight format check before touching the archive
-- 🔄 **Texture replacement & converter** — import **PNG / DDS / BMP / TGA** and re-encode to the target's native language: DXT1/3/5 (texpresso), PAL8/PAL4 with an alpha-aware k-means/Oklab palettizer, 888/8888/565/1555/4444, full mip chains. A plan dialog shows the chosen format, loss warnings and a **true preview decoded back from the encoded bytes** before anything is written
-- ✨ **Import image as TXD** — author a brand-new texture entry from any image, with a name and format picker
-- 🧰 **Convert selection to target dialect** — bulk re-encode selected TXDs (e.g. move content between games) with a before/after plan; one parse + one splice pass per entry, and non-TXD selections are explained instead of silently skipped
-- 💾 **Save-side validation & repair** — saving runs a pre-save report (native / convertible / incompatible / unknown counts, container mismatches, broken headers). "Fix & Save" applies lossless header repairs in the background
-- 🖼 **Texture tab verdicts** — per-texture compat chip with the classifier's notes, plus a "PAL8-ready" badge when the pixels fit an 8-bit palette
-- 🧭 **UX hardening** — byte-preserving edits (only the changed texture's section is re-serialized; untouched entries stay verbatim), ellipsized table names with wrapped tooltips, modals that fully block the background, and dialogs that can't be re-opened by stale background work
-- 🐛 **Correctness fixes** — Vice City's DXT1/DXT3 dialect classified correctly (its "565/4444" labels were DXT data), DXT5 alpha decoding fixed, Xbox 360 and Xbox 360-era texture quirks carried over
-
-**v4.2.0 release highlights:**
-- 🎮 **Bully Xbox 360 IMG v1** — auto-detected big-endian `.dir`/`.img` pairs with validated sector ranges, 24-byte filename preservation, export/import/rename, and round-trip saves
-- 🧠 **RenderWare texture correctness** — D3D9-platform rasters claiming 24-bit "888" are stored as 32-bit X8R8G8B8; 355 textures in a modded GTA III archive decoded as checkerboard noise and now render correctly. The decoder cross-checks the D3D format word, depth byte, and mip data length, and format labels report the true storage (see `docs/renderware-format-mismatches.md`)
-- 🖱 **Firefox-style middle-click autoscroll** — Iced's native autoscroll controller with an origin-anchored circular indicator, plus opt-in bounded momentum (`View → Autoscroll momentum`) that glides briefly after fast scrolling and can never run away
-- ✅ **Selection & sorting polish** — right-click selection toggle with a context-menu selection count, state-aware sort-header tooltips, literal Bully file-type labels, a centered sort-manager dialog, and refined themed sort controls
-- 🔍 **Search ergonomics** — inline clear button in the search box and caret-to-end after adopting a prediction
-- 📑 **Tab & scroll robustness** — middle-click closes archive tabs, scroll position survives notifications, and rapid repeated loads of the same entry are single-flighted through cache placeholders with a bounded inspection cache
-
-**v4.1.0 release highlights:**
-- ✅ **Fuzzy search** — the entry filter now matches scattered initials and partial names (`pld` → `police_car.dff`), ranks results by relevance (prefix and word-boundary hits, consecutive runs, shorter names first), and falls back to Jaro-Winkler typo matching when nothing matches (`policastr` still finds `police_car.dff`)
-- ✅ **Search prediction dropdown** — a floating overlay under the search box lists the top matches while you type; click a row or use `↑`/`↓` + `Enter` to jump straight to the entry (auto-selected with previews loaded) while keeping surrounding archive rows visible, `Esc` dismisses, and a **"Did you mean …"** suggestion appears for near-miss queries; `View → Search selection context` restores isolated-result mode when needed
-- ✅ **Hideable search bar** — `View → Search bar` toggles the strip to free vertical space for the table and info panels; hiding it clears any active filter, and `Ctrl+F` reveals and focuses it again (preference persists in `settings.ini`)
-
-**v4.0.0 release highlights:**
-- ✅ **Proper GTA IMG content rendering** — entries inside IMG v1/v2 archives now open natively in the in-app 3D viewer and texture viewer: PC DFF models with frame/atomic transforms and TXD diffuse resolution (GTA III/VC/SA-style RenderWare assets), Bully NIF/NFT models and texture catalogs, plus COL collision meshes
-- ✅ **UI overhaul** — full design-token refresh with Affinity-style shade hierarchy, hairline chrome dividers, inset log well, and a pane layout with custom split styling
-- ✅ **Motion effects suite** — floating toast snackbar (slide + fade), progress-bar shimmer, breathing empty-state hero, click ripples, selection pulses, and icon micro-motion; all toggleable under `View → Motion effects`
-- ✅ **Expanded keyboard shortcuts** — `Ctrl+D` deselect, `Ctrl+X` delete, `Ctrl+F` focus search, and `1`/`2`/`3` to jump to the Export / 3D viewer / Texture viewer tabs (numpad works too)
-- ✅ **Robust shortcut pipeline** — shortcut focus detection no longer deadlocks when the search or rename box is off-screen or absent, and shortcuts are correctly suppressed while typing, renaming, or when a dialog is open
-
-**v3.16.0 release highlights:**
-- ✅ **GTA RenderWare preview** — in-app PC DFF model parsing with frame/atomic transforms and TXD diffuse texture resolution for GTA III/VC/SA-style assets
-- ✅ **PC TXD raster coverage** — D3D8/D3D9 dictionaries, palette formats, DXT2/4, and bounded dimension-safe decoding
-- ✅ **Zero-copy export and two-pass save** — large archives stream directly from the memory map with a safe buffered fallback when needed
-- ✅ **Synchronized texture previews** — image, grid, and NIF UV overlays share the same full-panel zoom and pan viewport
-- ✅ **Portable mesh wire overlay** — inspect visible triangle edges in the in-app 3D viewer without changing the textured render
-- ✅ **Selection-aware previews** — switching entries updates the active 3D or texture view without requiring a manual scene reset
-- ✅ **Optional interaction feedback** — configurable row wobble, pulse, and ripple effects with theme-aware text contrast
-- ✅ **Responsive GUI polish** — adaptive context menus, repaired sorting, clearer tooltips, and a centered welcome presentation
-- ✅ **Smooth exponential camera zoom** — mouse-wheel lines and high-resolution pixel scrolling use one consistent, reversible zoom curve
-- ✅ **Refined Blender-style panning** — MMB camera movement is slightly more responsive while preserving the existing screen-space direction
-
----
-
-## 🐇 Export & Save Performance
-
-By default, exports use the **`ZeroCopy` engine**: entry data is written
-straight from the memory-mapped archive (no intermediate buffers, no per-entry
-allocations), output paths are pre-resolved in memory instead of per-file disk
-checks, and Rayon work-steals per entry. The GUI stays responsive and you can
-cancel mid-export. When a memory map is unavailable, the implementation
-automatically falls back to buffered parallel workers. There is no separate
-speed toggle to configure or persist.
-
-**Measured on Bully `World.img` (1.93 GB, 11,980 entries):** ZeroCopy beat the
-reference C++ benchmark in every interleaved round — median **22.4 s vs
-23.3 s**. The margin is deliberately honest: Windows globally rate-limits rapid
-small-file creation (~500–600 files/s sustained on the test machine), which
-sets a ~20–22 s floor for *any* exporter on this workload. Rebuilds dodge that
-limiter entirely — the two-pass sequential save is **~23 % faster** (8.6 s →
-6.6 s median) and writes entry data with zero copies.
-
-See [docs/rust-vs-cpp-merits.md](docs/rust-vs-cpp-merits.md) for the full
-head-to-head numbers and [docs/export-optimization-lessons.md](docs/export-optimization-lessons.md)
-for the engineering story.
-### 🔍 Entry Table
-- ✅ **Virtualised scrolling** — smooth even at 10,000+ entries
-- ✅ **Firefox-style middle-click autoscroll** — click MMB once for anchored, distance-controlled scrolling with Iced's circular up/down indicator; optional, bounded momentum adds a short glide after fast movement (`View → Autoscroll momentum`), while click, MMB, RMB, scroll, or a key stops in place
-- ✅ **Fuzzy search filter** — subsequence matching with relevance ranking, debounced input (150ms), and Jaro-Winkler typo fallback plus a "Did you mean …" prediction dropdown, an inline clear button, and caret-to-end after adopting a prediction
-- ✅ **Hideable search bar** — toggle from the View menu to reclaim screen space
-- ✅ **Sort by Name / Type / Size** with arrow indicators, state-aware header tooltips, and literal file-type labels (Bully `.nif` = Model, `.idb` = Definition, `.ipb` = Placement)
-- ✅ **Multi-selection** — Ctrl+click toggle, Shift+click range, right-click accumulation toggle, and a context-menu count of everything selected
-- ✅ **Inline rename** — double-click to edit
-- ✅ **Context menu** — Render, View textures, Export, Rename, Delete
-
-### 🖼️ 3D Model Viewer
-- ✅ **NIF** (Gamebryo 20.3.0.9) — Bully Scholarship Edition models, textured OBJ+MTL or PLY export → system viewer
-- ✅ **DFF** (RenderWare Clump) — GTA III/VC/SA-style PC models in the embedded viewer with frame/atomic transforms, material splits, and TXD diffuse textures; PLY fallback remains available
-- ✅ **COL** (Collision v1/v2/v3/v4) — embedded collision mesh preview with tessellated sphere/box debug shapes and shadow meshes; Bully Scholarship Edition's validated `COLL`/`COL2`/`COL3` dialect is supported too, including primitive-only files; PLY export → system viewer remains available
-
-### 🎨 Texture Viewer
-- ✅ **TXD** (RenderWare Texture Dictionary) — PC D3D8/D3D9 plus legacy platform-independent parser + bounded raster decoder (DXT1/2/3/4/5, 1555, 565, 4444, 8888, PAL4, PAL8, + more)
-- ✅ **NFT** (Bully/Gamebryo texture catalog) — embedded DXT1/DXT3/DXT5 payloads and archive-backed TGA/DDS/PNG sources
-- ✅ **Inline preview** — cached RGBA preview in the info panel, shared by TXD, NFT, and rendered NIF/DFF textures
-- ✅ **Multi-texture selector** — navigate textures within a TXD or NFT
-- ✅ **UV overlay** — toggle matching NIF/DFF triangle UVs over the fit-to-preview texture
-- ✅ **Texture-only guidance** — standalone TXD/NFT previews clearly explain when UV geometry is unavailable and how to enable it
-- ✅ **Export to TGA** — dump all textures to `.tga` files
-
-### 🧪 Entry Inspector
-- ✅ **Per-entry metadata** — name, type, size, offset, source
-- ✅ **RenderWare detection** — chunk type + version for `.txd`/`.dff`/`.ifp`
-- ✅ **Collision version detection** — COLL / COL2 / COL3 / COL4
-- ✅ **Text file line counts** — for `.ipl`/`.ide`/`.dat`/`.scm`
-- ✅ **Hex preview** — first 32 bytes for unknown formats
-- ✅ **Copy entry details** to clipboard
-
-### 🏗️ Design & UX
-- ✅ **8 theme modes** — Dark, Light, Catppuccin Mocha, Tokyo Night, Gruvbox, Everforest, **GitHub Dark**, **Ayu Dark**
-- ✅ **Design token system** — Tailwind-inspired color/spacing/radius/elevation scales, vendored in-tree
-- ✅ **Smooth animation engine** — 26 easing curves, animated progress bar, animated status-bar pulse
-- ✅ **Inter + Bricolage + Lucide icon fonts** — clean, modern typography
-- ✅ **Resizable master/detail panes** — drag the splitter
-- ✅ **Full keyboard shortcut set** — see table below
-- ✅ **DPI-aware** window sizing
-- ✅ **Six interface languages** — see [Languages](#-languages) below
+### 🔍 Search, Table & Desktop UX
+- **Virtualized 10,000+ entry table** — scored fuzzy subsequence search with Jaro-Winkler typo fallback and prediction dropdown, multi-column sorting, multi-select (`Ctrl`/`Shift`/right-click), and Firefox-style middle-click autoscroll.
+- **Polished native shell** — 8 themes, 6 interface languages, `View → Always on top`, hideable search bar, toggleable motion effects, window-parented native file dialogs, persistent `settings.ini`, and a GitHub update checker.
 
 ---
 
 ## 🌐 Languages
 
-The whole interface is translated: menus, dialogs, notifications, the inspector
-and 3D/texture panels, and the compatibility validator's verdicts and notes.
-
-> **AI-translated.** For transparency: every language other than English was
-> translated by an AI model (Claude), then reviewed and refined by it against
-> the English source and the app's context. None has been checked by a native
-> speaker yet, so expect the occasional awkward phrase. Corrections are very
-> welcome.
+The entire interface is translated with [Project Fluent](https://projectfluent.org/) (compiled to typed functions from [`i18n/`](i18n/)) with instant switching and proper plural rules. Non-English translations are AI-translated and welcome native-speaker corrections — see [`i18n/README.md`](i18n/README.md).
 
 | Language | Status |
 |----------|--------|
 | English | Source |
-| Deutsch | AI-translated, pending native review |
-| Español | AI-translated, pending native review |
-| Bahasa Indonesia | AI-translated, pending native review |
-| Português (Brasil) | AI-translated, pending native review |
-| Русский | AI-translated, pending native review |
-
-- **Instant switching** — pick a language from the **Language** menu (it keeps
-  its icon, so you can find it from any language); no restart needed. **System
-  language** follows the Windows display language and falls back to English.
-- **Proper plurals** — counts follow each language's rules, including Russian
-  one/few/many forms and Portuguese zero.
-- **Cyrillic-ready fonts** — the embedded Inter covers Cyrillic, and headings
-  switch to it automatically where the display font has no Cyrillic glyphs.
-- **Layouts that fit** — menus size themselves to the translation, and a test
-  measures every menu label in every language with the real font.
-- **Archive entry names stay ASCII**, as the games require. Importing or
-  renaming to a name with other characters is refused with an explanation
-  instead of producing an archive the games (and the editor) cannot read.
-
-Built on [Project Fluent](https://projectfluent.org/)'s Rust crates: each
-language is one `.ftl` file in [`i18n/`](i18n/), compiled into typed message
-functions at build time, so a missing or misnamed string is a build error.
-Corrections from native speakers are very welcome; see
-[`i18n/README.md`](i18n/README.md) for how to contribute.
+| Deutsch, Español, Bahasa Indonesia, Português (Brasil), Русский | AI-translated, pending native review |
 
 ---
 
 ## 🎨 Themes
 
-Pick your vibe from the **Themes** menu. Every theme is wired into a shared design-token system so buttons, tables, modals, and accents stay consistent.
+Switch anytime from the **Themes** menu (Dark, Light, Catppuccin Mocha, Tokyo Night, Gruvbox, Everforest, GitHub Dark, Ayu Dark).
 
 <details>
-<summary>Click to preview all themes</summary>
+<summary>Click to preview themes</summary>
 
 ### Default Light
-A clean, neutral workspace that keeps the focus on your archive contents.
-
 ![Default Light theme](asset/themes-images/Default_Light.png)
-*Bright surfaces, crisp text, and a friendly blue accent — perfect for daytime editing.*
 
 ### Default Dark
-The built-in dark mode for late-night archive work.
-
 ![Default Dark theme](asset/themes-images/Default_Dark.png)
-*Deep greys with subtle contrast and a calm purple primary — easy on the eyes in low light.*
 
 ### Catppuccin Mocha
-A cozy, pastel-rich dark theme with soft purples and blues.
-
 ![Catppuccin Mocha theme](asset/themes-images/Catppuccin_Mocha.png)
-*Warm, muted colors that feel like your favorite coffee shop playlist.*
 
 ### Tokyo Night
-A sleek, neon-tinged dark theme inspired by the city after dark.
-
 ![Tokyo Night theme](asset/themes-images/Tokyo_Night.png)
-*Cool purples and electric cyans for a modern, developer-centric look.*
 
 ### Gruvbox Dark
-A retro, low-contrast dark theme with earthy tones.
-
 ![Gruvbox Dark theme](asset/themes-images/Gruvbox.png)
-*Vintage amber and olive greens that hark back to classic terminal palettes.*
 
-### Everforest 🌲
-A comfortable green-based dark theme designed to be warm and soft.
-
+### Everforest
 ![Everforest theme](asset/themes-images/Everforest.png)
-*Muted sage greens and creamy text — the newest addition for users who want a natural, forest-inspired workspace.*
-
-### GitHub Dark
-GitHub's own dark look: a near-black blue-tinted canvas with the familiar blue accent.
-
-<!-- Screenshot pending: add asset/themes-images/GitHub_Dark.png, then uncomment:
-![GitHub Dark theme](asset/themes-images/GitHub_Dark.png)
-*Canvas #0D1117, subtle #161B22 surfaces, and the classic GitHub blue — perfect for a developer's toolbox.*
--->
-
-### Ayu Dark 🟠
-The Ayu theme's dark variant, tuned with a deeper terracotta-orange accent.
-
-<!-- Screenshot pending: add asset/themes-images/Ayu_Dark.png, then uncomment:
-![Ayu Dark theme](asset/themes-images/Ayu_Dark.png)
-*Near-black navy canvas #0B0E14, warm-grey text, and a burnt-orange #F29A4B accent — inspired by ayutheme.com.*
--->
 
 </details>
-
-### ⚙️ Configuration
-- ✅ **`settings.ini`** — persists theme, language, window geometry, last-used folders, update preferences
-- ✅ **Auto-update checker** — GitHub release tags, semver comparison
-- ✅ **Toggle update checks** — from the welcome dialog or Help menu
-- ✅ **"Don't show again"** — welcome screen toggle
 
 ---
 
 ## 🚀 Quick start
 
-Requires **Rust 1.96+** and a Windows desktop.
+Requires **Rust 1.96+** and Windows.
 
 ```powershell
 cargo build --release
-```
-
-Binary: `target\release\imgeditor.exe`
-
-Or package a release:
-
-```powershell
+# Or package dist\ (imgeditor.exe, README.md, LICENSE):
 .\package-release.ps1
 ```
-
-The `dist\` folder then contains the portable `.exe`, `README.md`, and `LICENSE`.
-
----
-
-## 🗺️ Roadmap
-
-**The sections below are retained as design notes rather than commitments.**
-
-### Cross-platform ports
-The codebase is architected so the core parsers and archive logic are platform-agnostic. A port would require:
-
-- **macOS** — gate the Windows console-hide and `.ico` resource logic, use `dirs` for config paths, and package as an `.app` bundle.
-- **Linux** — same core work plus `.desktop` entry and AppImage/flatpak packaging.
-
-The main UI layer uses Iced, which is cross-platform by design, so the desktop porting effort is mostly packaging and platform-specific window integration.
-
-### Platform-specific note on GTA support
-Version 4.0 was developed and tested primarily against **Bully Scholarship Edition** archives, with the embedded viewer now covering common PC RenderWare DFF/TXD assets used by GTA III, Vice City, and San Andreas. Genuine per-game fixtures would still be needed for broader compatibility claims; console-native geometry and advanced RenderWare material effects remain unimplemented. Bully AGR animation, HXD association, and NIF CPU skinning are documented in the AGR research record above. Broader GTA workflow polish — importing, exporting, and format edge cases — would be addressed only if representative archives become available.
 
 ---
 
@@ -335,59 +109,46 @@ Version 4.0 was developed and tested primarily against **Bully Scholarship Editi
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+N` | New archive |
-| `Ctrl+O` | Open archive |
-| `Ctrl+S` | Save in place |
-| `Ctrl+Shift+S` | Save as |
+| `Ctrl+N` / `Ctrl+O` | New / Open archive |
+| `Ctrl+S` / `Ctrl+Shift+S` | Save in place / Save as |
 | `Shift+X` | Close tab |
-| `Ctrl+I` | Import files |
-| `Ctrl+Shift+I` | Import and replace |
-| `Ctrl+E` | Export all |
-| `Ctrl+Shift+E` | Export selected |
-| `Ctrl+A` | Select all |
-| `Ctrl+Shift+A` | Invert selection |
-| `Ctrl+D` | Deselect all (`Esc` also works) |
-| `Delete` or `Ctrl+X` | Delete selected |
-| `Ctrl+F` | Focus the search box |
-| `1` / `2` / `3` | Switch to Export / 3D viewer / Texture viewer tab (numpad works too) |
+| `Ctrl+I` / `Ctrl+Shift+I` | Import / Import and replace |
+| `Ctrl+E` / `Ctrl+Shift+E` | Export all / Export selected |
+| `Ctrl+L` / `Ctrl+P` | Export entry list / Compare with list |
+| `Ctrl+A` / `Ctrl+Shift+A` / `Ctrl+D` (`Esc`) | Select all / Invert / Deselect |
+| `Delete` / `Ctrl+X` | Delete selected |
+| `Ctrl+F` | Focus search box |
+| `1` / `2` / `3` | Switch Export / 3D viewer / Texture tab |
 | `Ctrl+U` | Check for updates |
-
-Shortcuts are suppressed while you are typing in the search or rename box and while a dialog is open.
 
 ---
 
 ## 📦 Dependencies
 
-Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable crates:
-
 | Crate | Purpose |
 |-------|---------|
-| `iced 0.14` | Reactive GUI (image, svg, advanced, lazy) |
-| `iced_aw 0.14` | Menu bar, tabs, context menus |
-| `tokio 1.54` | Async runtime (`rt-multi-thread`, `time`), matching Iced's own executor feature set — reuses Iced's ambient runtime, runs blocking/external-viewer work on `spawn_blocking`, and gates idle timers — see [docs/rfd-tokio-runtime.md](docs/rfd-tokio-runtime.md) |
-| `memmap2 0.9.12` | Zero-copy read-only archive reads (`no_probe_handle` on Windows) across open, scan, export, 3D/animation loads, and texture resolution — see [docs/memmap2-io.md](docs/memmap2-io.md) |
-| `quick_cache` | Byte-budgeted LRU caches (3D scenes, texture previews, inspector summaries) — its placeholder guards also power single-flight decode dedup |
-| `rayon 1.12` | Work-stealing parallelism for archive export, compatibility scan, header normalize, TXD/NFT preview decode, bounded-pool bulk conversion, palette mapping, and batch import prep — see [docs/rayon-parallelism.md](docs/rayon-parallelism.md) |
-| `glam` | Vector/matrix math for the 3D viewer |
-| `compact_str 0.10.0` | Inline 24-byte strings for 10,000+ archive entries, TXD texture names (99.7% inline), and `IdeMap` lookups — see [docs/compact-str-inline-strings.md](docs/compact-str-inline-strings.md) |
-| `smallvec 1.16.6` | Union-backed inline storage for `SortChain`, `VertexSkin`, NIF `SkinPartition` weight/index rows & block ref lists, and mip-chain construction — see [docs/smallvec-inline-storage.md](docs/smallvec-inline-storage.md) |
-| `hashbrown` | SwissTable maps/sets with foldhash for internal collections — see [docs/hashmap-crate.md](docs/hashmap-crate.md) |
-| `image` | PNG encode/export plus PNG/DDS/BMP/TGA decoding for the texture converter |
-| `texpresso` | Pure-Rust BC1/BC2/BC3 (DXT1/3/5) compression for the texture converter |
-| `quantette` | Wu + k-means palette quantization (Oklab) for PAL8/PAL4 output |
-| `fuzzt` | Jaro-Winkler typo matching (search) |
-| `rfd 0.18` | Native window-parented async file/folder dialogs (`set_parent` via Iced window handle) — see [docs/rfd-tokio-runtime.md](docs/rfd-tokio-runtime.md) |
-| `ureq` | Update checker (HTTP) |
-| `fluent-bundle` / `fluent-syntax` | Interface translations (Project Fluent) |
-| `sys-locale` | Detects the Windows display language |
-| `rusty_alloc-api 2.6.0` | Process-wide global allocator: pure-Rust mimalloc remake, ~10–15 % faster on archive open / table rebuild / filter / sort with demand-committed arenas/segments and 10 ms delayed OS purge — see [docs/allocator-rusty-alloc.md](docs/allocator-rusty-alloc.md) |
+| `iced 0.14` / `iced_aw 0.14` | Reactive GUI, menus, tabs, context menus |
+| `tokio 1.54` | Unified async runtime (`rt-multi-thread`, `time`), `spawn_blocking`, and gated idle timers — [docs/rfd-tokio-runtime.md](docs/rfd-tokio-runtime.md) |
+| `rfd 0.18` | Native window-parented async file/folder dialogs (`set_parent`) — [docs/rfd-tokio-runtime.md](docs/rfd-tokio-runtime.md) |
+| `memmap2 0.9.12` | Zero-copy read-only archive reads (`no_probe_handle` on Windows) — [docs/memmap2-io.md](docs/memmap2-io.md) |
+| `rayon 1.12` | Work-stealing parallelism for export, scan, normalize, decode, bulk conversion, palette mapping, and batch import — [docs/rayon-parallelism.md](docs/rayon-parallelism.md) |
+| `rusty_alloc-api 2.6.0` | Process-wide pure-Rust mimalloc global allocator with 10 ms OS purge and teardown reclaim — [docs/allocator-rusty-alloc.md](docs/allocator-rusty-alloc.md) |
+| `hashbrown 0.17.2` | SwissTable maps/sets with foldhash and zero-alloc borrowed-key lookups — [docs/hashmap-crate.md](docs/hashmap-crate.md) |
+| `smallvec 1.16.6` | Union-backed inline storage for `SortChain`, `VertexSkin`, NIF skin/ref tables, and mip chains — [docs/smallvec-inline-storage.md](docs/smallvec-inline-storage.md) |
+| `compact_str 0.10.0` | Inline 24-byte strings for 10,000+ archive entries, TXD texture names, and `IdeMap` — [docs/compact-str-inline-strings.md](docs/compact-str-inline-strings.md) |
+| `quick_cache` | Byte-budgeted LRU caches (3D scenes, textures, inspector) with single-flight dedup |
+| `glam` / `wgpu` | 3D viewer math and GPU rendering |
+| `image` / `texpresso` / `quantette` | Image I/O, BC1–BC3 (DXT1/3/5) compression, and Oklab palette quantization |
+| `fuzzt` | Jaro-Winkler typo fallback for search |
+| `fluent-bundle` / `fluent-syntax` / `sys-locale` | Compile-time checked Project Fluent translations |
+| `ureq` / `webbrowser` / `winreg` | Update checker, external links, and Windows Explorer registration |
 
 ---
 
 ## 🙏 Credits
 
 - **Grinch_** — the original [IMG Editor](https://github.com/user-grinch/IMGEditor) that made this possible
-- **MexUK & the IMGF team** — the [IMG Factory](https://github.com/MexUK/IMGF) whose feature set inspired many of the Plus additions (TXD tools, orphan detection — adapted and reimplemented in Rust)
+- **MexUK & the IMGF team** — [IMG Factory](https://github.com/MexUK/IMGF), whose feature set inspired many Plus additions
 - **CloudyTabzy** — Rust port, parsers, design system, 3D viewers
 - **Claude, Command Code, OpenCode & Codex agents** — AI pair programming across the Rust port
 - **Iced team** — the reactive GUI framework this is built on
@@ -396,6 +157,4 @@ Built on the [Iced](https://iced.rs/) GUI framework with Tokio async. Notable cr
 
 ## 📄 License
 
-This project is **MIT licensed** © 2025 CloudyTabzy. See [LICENSE](LICENSE) for the full text.
-
-**Dependency licenses:** every crate this project depends on is permissively licensed (MIT or Apache-2.0 — Iced, Iced AW, Tokio, Rayon, texpresso, quantette, etc.). The bundled fonts — Inter, Bricolage Grotesque, and Lucide icons — are licensed under the SIL Open Font License 1.1.
+MIT licensed © 2025 CloudyTabzy. See [LICENSE](LICENSE). All crate dependencies use permissive licenses (MIT / Apache-2.0); bundled fonts (Inter, Bricolage Grotesque, Lucide) use SIL OFL 1.1.

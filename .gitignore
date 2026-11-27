@@ -1,6 +1,7 @@
 # Agent-only local notes (not for repo)
 AGENTS.md
 CHECKPOINT.md
+TODO.md
 
 # Rust build artifacts
 /target/

@@ -637,6 +637,10 @@ pub enum Message {
     /// Escape ends autoscroll and dismisses the search prediction dropdown.
     AutoScrollEscape,
 
+    /// Internal wrapper delivering a native OS file/folder dialog outcome so
+    /// `App::native_dialog_open` is always cleared before routing the payload.
+    NativeDialogFinished(Box<Message>),
+
     ShowAbout,
     HideAbout,
     ShowWelcome,
@@ -1426,6 +1430,10 @@ pub struct App {
     pub close_after_save: Option<usize>,
     /// Window being faded out before closing.
     pub quitting: Option<iced::window::Id>,
+    /// True while a native OS file/folder dialog is opening or displayed.
+    /// Serializes native pickers across the async `window::latest` / `window::run`
+    /// hops and keeps the owner window alive until the modal dialog closes.
+    pub native_dialog_open: bool,
     /// Working copy of the sort chain while the Sort Manager
     /// dialog is open. Edits land here first; "Apply" commits the
     /// draft to the live archive + config. `None` when the dialog
@@ -1758,6 +1766,7 @@ impl App {
             pending_close: None,
             close_after_save: None,
             quitting: None,
+            native_dialog_open: false,
             panes,
             context_menu: None,
             inspected_entry: None,
@@ -2541,6 +2550,10 @@ impl App {
             || self.toast.is_some()
             || self.toast_reveal_text.is_some()
             || self.viewer_load.is_some()
+            || self
+                .agr_playback
+                .as_ref()
+                .is_some_and(|playback| playback.pending)
             || self
                 .compare_state
                 .as_ref()
@@ -3520,23 +3533,93 @@ impl App {
         Task::batch(vec![task, Task::none()])
     }
 
+    fn can_open_native_dialog(&self) -> bool {
+        self.quitting.is_none() && !self.native_dialog_open
+    }
+
+    fn launch_native_dialog<T: Send + 'static>(
+        &mut self,
+        dialog_task: Task<T>,
+        map: impl Fn(T) -> Message + Send + 'static,
+    ) -> Task<Message> {
+        if !self.can_open_native_dialog() {
+            return Task::none();
+        }
+        self.native_dialog_open = true;
+        dialog_task.map(move |value| Message::NativeDialogFinished(Box::new(map(value))))
+    }
+
+    /// Release UI-owned memory maps targeting `target_path` before an in-place
+    /// save/pack so the worker's clone is the sole `Arc<Mmap>` and unmaps the
+    /// OS handle before `std::fs::rename`.
+    fn release_mmaps_for_path(&mut self, target_path: &std::path::Path) {
+        let canonical_target = crate::parser::canonical_img_path(target_path);
+        for archive in self.editor.archives_mut() {
+            let matches_target = archive.path.as_deref().is_some_and(|p| {
+                let canonical = crate::parser::canonical_img_path(p);
+                #[cfg(windows)]
+                {
+                    canonical
+                        .as_os_str()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(&canonical_target.as_os_str().to_string_lossy())
+                }
+                #[cfg(not(windows))]
+                {
+                    canonical == canonical_target
+                }
+            });
+            if matches_target {
+                archive.source_mmap = None;
+            }
+        }
+    }
+
+    /// Best-effort re-mapping for open tabs whose `source_mmap` was released
+    /// prior to a save/pack (e.g. after cancellation, failure, or cross-tab
+    /// overwrite). Readers automatically fall back to `File::open` if a path
+    /// cannot be remapped.
+    fn restore_missing_mmaps(&mut self) {
+        for archive in self.editor.archives_mut() {
+            if archive.source_mmap.is_some() {
+                continue;
+            }
+            let Some(path) = archive.path.as_deref() else {
+                continue;
+            };
+            if let Ok(file) = std::fs::File::open(path)
+                && let Ok(mmap) = crate::parser::map_archive_file(&file)
+            {
+                archive.source_mmap = Some(mmap);
+            }
+        }
+    }
+
     /// Route a save through the pre-save check: silent when the stored
     /// report is clean (or no target is set), a review dialog when the
     /// target or consistency has issues, and a validation scan first
     /// when no report exists yet.
     fn begin_save(
         &mut self,
+        index: usize,
         archive: ArchiveInfo,
         path: PathBuf,
         version: crate::parser::ImgVersion,
         remove_existing: bool,
     ) -> Task<Message> {
-        let index = self.editor.selected_archive().unwrap_or(0);
         if archive.target_game.is_none() {
-            return self.run_save(archive, path, version, remove_existing);
+            return self.run_save(index, archive, path, version, remove_existing);
         }
 
         let Some(report) = archive.compat_report.as_ref() else {
+            // Claim progress synchronously on the UI thread so Iced activates
+            // the progress/animation tickers immediately and refuses concurrent
+            // operations on this archive.
+            if !archive.progress.try_start() {
+                self.toast = Some(t::toast_operation_running());
+                return Task::none();
+            }
+            let progress_guard = archive.progress.clone();
             // No report yet: validate first, then resume the save.
             self.pending_save = Some(PendingSave {
                 index,
@@ -3548,6 +3631,7 @@ impl App {
             });
             return Task::perform(
                 async move {
+                    let _guard = FinishProgressOnDrop(progress_guard);
                     tokio::task::spawn_blocking(move || {
                         crate::compat::scan::validate_open_archive(
                             &archive,
@@ -3580,21 +3664,28 @@ impl App {
             });
             Task::none()
         } else {
-            self.run_save(archive, path, version, remove_existing)
+            self.run_save(index, archive, path, version, remove_existing)
         }
     }
 
     fn run_save(
-        &self,
+        &mut self,
+        index: usize,
         archive: ArchiveInfo,
         path: PathBuf,
         version: ImgVersion,
         remove_existing: bool,
     ) -> Task<Message> {
-        let index = self.editor.selected_archive().unwrap_or(0);
+        if !archive.progress.try_start() {
+            self.toast = Some(t::toast_operation_running());
+            return Task::none();
+        }
+        self.release_mmaps_for_path(&path);
+        let progress_guard = archive.progress.clone();
         let task = SaveTask::new(archive, path, version).remove_existing(remove_existing);
         Task::perform(
             async move {
+                let _guard = FinishProgressOnDrop(progress_guard);
                 tokio::task::spawn_blocking(move || task.run_blocking())
                     .await
                     .map_err(|e| format!("save task panicked: {e}"))?
@@ -3621,15 +3712,21 @@ impl App {
     }
 
     fn run_folder_import(
-        &self,
+        &mut self,
         index: usize,
         archive: ArchiveInfo,
         plan: FolderImportPlan,
         duplicate_policy: FolderDuplicatePolicy,
     ) -> Task<Message> {
+        if !archive.progress.try_start() {
+            self.toast = Some(t::toast_operation_running());
+            return Task::none();
+        }
+        let progress_guard = archive.progress.clone();
         let task = FolderImportTask::new(archive, plan, duplicate_policy);
         Task::perform(
             async move {
+                let _guard = FinishProgressOnDrop(progress_guard);
                 tokio::task::spawn_blocking(move || task.run_blocking())
                     .await
                     .map_err(|error| format!("folder import task panicked: {error}"))?
@@ -3650,11 +3747,23 @@ impl App {
         })
     }
 
-    fn run_pack(&self, archive: ArchiveInfo, path: PathBuf, version: ImgVersion) -> Task<Message> {
-        let index = self.editor.selected_archive().unwrap_or(0);
+    fn run_pack(
+        &mut self,
+        index: usize,
+        archive: ArchiveInfo,
+        path: PathBuf,
+        version: ImgVersion,
+    ) -> Task<Message> {
+        if !archive.progress.try_start() {
+            self.toast = Some(t::toast_operation_running());
+            return Task::none();
+        }
+        self.release_mmaps_for_path(&path);
+        let progress_guard = archive.progress.clone();
         let task = PackTask::new(archive, path, version);
         Task::perform(
             async move {
+                let _guard = FinishProgressOnDrop(progress_guard);
                 tokio::task::spawn_blocking(move || task.run_blocking())
                     .await
                     .map_err(|e| format!("pack task panicked: {e}"))?
@@ -3699,6 +3808,10 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Noop => Task::none(),
+            Message::NativeDialogFinished(inner) => {
+                self.native_dialog_open = false;
+                self.update(*inner)
+            }
 
             Message::ShortcutPressed(shortcut) => self.begin_shortcut_focus_check(shortcut),
 
@@ -3714,7 +3827,7 @@ impl App {
 
             Message::OpenArchive => {
                 self.toast = None;
-                dialogs::open_file().map(Message::OpenArchiveResult)
+                self.launch_native_dialog(dialogs::open_file(), Message::OpenArchiveResult)
             }
 
             Message::OpenArchiveResult(Some(path)) => self.open_archive_path(path),
@@ -3759,10 +3872,14 @@ impl App {
 
             Message::SaveArchive => {
                 self.toast = None;
-                let Some((_index, archive)) = self.editor.clone_selected_archive() else {
+                let Some((index, archive)) = self.editor.clone_selected_archive() else {
                     self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
+                if archive.progress.in_use() {
+                    self.toast = Some(t::toast_operation_running());
+                    return Task::none();
+                }
                 let Some(path) = archive.path.clone() else {
                     return Task::done(Message::SaveArchiveAs);
                 };
@@ -3770,7 +3887,7 @@ impl App {
                     return Task::done(Message::SaveArchiveAs);
                 }
                 let version = archive.version;
-                self.begin_save(archive, path, version, false)
+                self.begin_save(index, archive, path, version, false)
             }
 
             Message::SaveArchiveAs => {
@@ -3778,22 +3895,33 @@ impl App {
                     self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
+                if archive.progress.in_use() {
+                    self.toast = Some(t::toast_operation_running());
+                    return Task::none();
+                }
                 let default_path = archive
                     .path
                     .clone()
                     .unwrap_or_else(|| PathBuf::from(format!("{}.img", archive.file_name)));
                 let version = archive.version;
-                dialogs::save_archive(default_path, version).map(Message::SaveArchiveAsResult)
+                self.launch_native_dialog(
+                    dialogs::save_archive(default_path, version),
+                    Message::SaveArchiveAsResult,
+                )
             }
 
             Message::SaveArchiveAsResult(Some(choice)) => {
-                let Some((_index, archive)) = self.editor.clone_selected_archive() else {
+                let Some((index, archive)) = self.editor.clone_selected_archive() else {
                     self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
+                if archive.progress.in_use() {
+                    self.toast = Some(t::toast_operation_running());
+                    return Task::none();
+                }
                 // "Save as" writes a copy and keeps the source archive,
                 // matching the original editor's `SaveArchiveAs`.
-                self.begin_save(archive, choice.path, choice.version, false)
+                self.begin_save(index, archive, choice.path, choice.version, false)
             }
             Message::SaveArchiveAsResult(None) => Task::none(),
 
@@ -3836,6 +3964,7 @@ impl App {
                     );
                 }
                 self.run_save(
+                    pending.index,
                     archive,
                     pending.path,
                     pending.version,
@@ -3871,7 +4000,7 @@ impl App {
                     self.toast = Some(t::toast_headers_repaired(patched));
                 }
                 let archive = archive.clone();
-                self.run_save(archive, path, version, remove_existing)
+                self.run_save(index, archive, path, version, remove_existing)
             }
             Message::TextureReplaceRequested => {
                 // Ignore a second request while one is already in flight.
@@ -3905,11 +4034,15 @@ impl App {
                     self.toast = Some(t::toast_target_error(error.to_string()));
                     return self.open_validator_popup();
                 }
+                if !self.can_open_native_dialog() {
+                    return Task::none();
+                }
                 self.replace_request = Some((archive_index, entry_index));
                 self.replace_attempt = self.replace_attempt.wrapping_add(1);
                 let attempt = self.replace_attempt;
-                dialogs::pick_image_file()
-                    .map(move |path| Message::ReplaceImagePicked { attempt, path })
+                self.launch_native_dialog(dialogs::pick_image_file(), move |path| {
+                    Message::ReplaceImagePicked { attempt, path }
+                })
             }
             Message::ReplaceImagePicked { attempt, path } => {
                 if attempt != self.replace_attempt {
@@ -4179,11 +4312,15 @@ impl App {
                     self.toast = Some(t::toast_import_busy());
                     return Task::none();
                 }
+                if !self.can_open_native_dialog() {
+                    return Task::none();
+                }
                 self.new_txd_picker_open = true;
                 self.new_txd_attempt = self.new_txd_attempt.wrapping_add(1);
                 let attempt = self.new_txd_attempt;
-                dialogs::pick_image_file()
-                    .map(move |path| Message::NewTxdImagePicked { attempt, path })
+                self.launch_native_dialog(dialogs::pick_image_file(), move |path| {
+                    Message::NewTxdImagePicked { attempt, path }
+                })
             }
             Message::NewTxdImagePicked { attempt, path } => {
                 if attempt != self.new_txd_attempt {
@@ -4637,6 +4774,7 @@ impl App {
                 match result {
                     Ok(archive) => {
                         self.editor.replace_archive(index, archive);
+                        self.restore_missing_mmaps();
                         if let Some(archive) = self.editor.archives_mut().get_mut(index) {
                             Self::adopt_target(&self.config, archive);
                         }
@@ -4649,6 +4787,7 @@ impl App {
                         }
                     }
                     Err(err) => {
+                        self.restore_missing_mmaps();
                         self.close_after_save = None;
                         self.toast = Some(t::toast_save_failed(err.to_string()));
                     }
@@ -4657,7 +4796,7 @@ impl App {
             }
             Message::PackArchive => {
                 self.toast = None;
-                let Some((_index, archive)) = self.editor.clone_selected_archive() else {
+                let Some((index, archive)) = self.editor.clone_selected_archive() else {
                     self.toast = Some(t::toast_no_archive_selected());
                     return Task::none();
                 };
@@ -4674,7 +4813,7 @@ impl App {
                     return Task::none();
                 }
                 let version = archive.version;
-                self.run_pack(archive, path, version)
+                self.run_pack(index, archive, path, version)
             }
             Message::PackCompleted { index, result } => {
                 match result {
@@ -4682,6 +4821,7 @@ impl App {
                         let reclaimed = outcome.stats.reclaimed_bytes();
                         let packed = outcome.stats.packed_bytes;
                         self.editor.replace_archive(index, outcome.archive);
+                        self.restore_missing_mmaps();
                         self.toast = if reclaimed > 0 {
                             Some(t::toast_packed(
                                 format_byte_count(reclaimed),
@@ -4692,6 +4832,7 @@ impl App {
                         };
                     }
                     Err(err) => {
+                        self.restore_missing_mmaps();
                         self.toast = Some(t::toast_pack_failed(err.to_string()));
                     }
                 }
@@ -4704,6 +4845,7 @@ impl App {
     fn update_tail(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Noop
+            | Message::NativeDialogFinished(_)
             | Message::ShortcutPressed(_)
             | Message::NewArchive
             | Message::OpenArchive
@@ -4756,6 +4898,12 @@ impl App {
                 Task::none()
             }
             Message::WindowCloseRequested(window) => {
+                // Keep the owner HWND alive while a parented OS file dialog is
+                // open so we never destroy the window out from under
+                // `IFileDialog::Show(hwnd)`.
+                if self.native_dialog_open {
+                    return Task::none();
+                }
                 if self.editor.archives().iter().any(|archive| archive.dirty) {
                     self.pending_close = Some(PendingClose::Window(window));
                     Task::none()
@@ -4784,7 +4932,7 @@ impl App {
                             return Task::done(Message::SaveArchiveAs);
                         }
                         let version = archive.version;
-                        self.begin_save(archive, path, version, false)
+                        self.begin_save(index, archive, path, version, false)
                     }
                     PendingClose::Window(_) => {
                         // Quitting saves nothing by itself; the dialog
@@ -4868,7 +5016,7 @@ impl App {
 
             Message::ImportFiles => {
                 self.toast = None;
-                dialogs::import_files().map(Message::ImportFilesResult)
+                self.launch_native_dialog(dialogs::import_files(), Message::ImportFilesResult)
             }
             Message::ImportFilesResult(paths) => {
                 if paths.is_empty() {
@@ -4997,7 +5145,7 @@ impl App {
                     self.toast = Some(t::toast_open_archive_to_import_folder());
                     return Task::none();
                 }
-                dialogs::import_folder().map(Message::ImportFolderResult)
+                self.launch_native_dialog(dialogs::import_folder(), Message::ImportFolderResult)
             }
             Message::ImportFolderResult(Some(folder)) => {
                 let Some((index, archive)) = self.editor.clone_selected_archive() else {
@@ -5014,7 +5162,10 @@ impl App {
                     .and_then(|index| self.editor.archives().get(index))
                     .and_then(|archive| archive.path.as_deref())
                     .and_then(|path| self.config.game_root_for(path));
-                dialogs::pick_game_folder(current).map(Message::GameFolderPicked)
+                self.launch_native_dialog(
+                    dialogs::pick_game_folder(current),
+                    Message::GameFolderPicked,
+                )
             }
             Message::GameFolderPicked(Some(root)) => self.apply_game_folder(Some(root)),
             Message::GameFolderPicked(None) => Task::none(),
@@ -5103,6 +5254,10 @@ impl App {
                 let Some((index, archive)) = self.editor.clone_selected_archive() else {
                     return Task::none();
                 };
+                if !archive.progress.try_start() {
+                    self.toast = Some(t::toast_operation_running());
+                    return Task::none();
+                }
                 let mode = if self.last_export_selected_only {
                     ExportMode::Selected
                 } else {
@@ -5114,9 +5269,11 @@ impl App {
                 if let Some(archive) = self.editor.selected_archive_mut() {
                     archive.last_export_folder = Some(folder.clone());
                 }
+                let progress_guard = archive.progress.clone();
                 let task = ExportTask::new(archive, folder, mode);
                 Task::perform(
                     async move {
+                        let _guard = FinishProgressOnDrop(progress_guard);
                         tokio::task::spawn_blocking(move || task.run_blocking())
                             .await
                             .map_err(|e| format!("export task panicked: {e}"))?
@@ -5790,8 +5947,11 @@ impl App {
                     }
                     EntryAction::Export => {
                         self.last_export_selected_only = true;
-                        dialogs::save_folder(self.last_export_directory())
-                            .map(Message::ExportFolderResult)
+                        let dir = self.last_export_directory();
+                        self.launch_native_dialog(
+                            dialogs::save_folder(dir),
+                            Message::ExportFolderResult,
+                        )
                     }
                     EntryAction::ViewTextures => self.load_selected_texture(),
                     EntryAction::ExportEmbeddedTextures => {
@@ -6250,7 +6410,8 @@ impl App {
             Message::AnimationFrame(now) => self.on_animation_frame(now),
             Message::AnimationDemoStart => self.start_animation_demo(),
             Message::PickAgrFile => {
-                dialogs::open_agr_file(self.default_agr_directory()).map(Message::AgrFileChosen)
+                let dir = self.default_agr_directory();
+                self.launch_native_dialog(dialogs::open_agr_file(dir), Message::AgrFileChosen)
             }
             Message::AgrFileChosen(Some(path)) => self.load_loose_agr(path),
             Message::AgrFileChosen(None) => Task::none(),
@@ -6651,7 +6812,7 @@ impl App {
                     self.toast = Some(t::toast_open_archive_to_validate());
                     return Task::none();
                 };
-                if self.editor.archives()[archive_index].progress.in_use() {
+                if !self.editor.archives()[archive_index].progress.try_start() {
                     self.toast = Some(t::toast_task_running());
                     return Task::none();
                 }
@@ -6673,8 +6834,10 @@ impl App {
                 // the toolbar progress bar and its cancel button drive the
                 // background scan.
                 let snapshot = self.editor.archives()[archive_index].clone();
+                let progress_guard = snapshot.progress.clone();
                 Task::perform(
                     async move {
+                        let _guard = FinishProgressOnDrop(progress_guard);
                         tokio::task::spawn_blocking(move || {
                             crate::compat::scan::validate_open_archive(
                                 &snapshot,
@@ -6775,6 +6938,7 @@ impl App {
                                     _ => {
                                         let archive = self.editor.archives()[archive_index].clone();
                                         return self.run_save(
+                                            archive_index,
                                             archive,
                                             pending.path,
                                             pending.version,
@@ -6857,8 +7021,13 @@ impl App {
                 Task::none()
             }
 
-            Message::TextureExport => dialogs::save_folder(self.last_export_directory())
-                .map(Message::TextureExportFolderResult),
+            Message::TextureExport => {
+                let dir = self.last_export_directory();
+                self.launch_native_dialog(
+                    dialogs::save_folder(dir),
+                    Message::TextureExportFolderResult,
+                )
+            }
 
             Message::TextureExportFolderResult(Some(folder)) => {
                 let Some(archive_index) = self.editor.selected_archive() else {
@@ -7088,7 +7257,8 @@ impl App {
                 let _ = entry_index;
                 self.toast = Some(t::toast_pick_embedded_folder(nif_basename.as_str()));
                 let nb = nif_basename.clone();
-                dialogs::save_folder(self.last_export_directory()).map(move |folder| {
+                let dir = self.last_export_directory();
+                self.launch_native_dialog(dialogs::save_folder(dir), move |folder| {
                     Message::ExportEmbeddedTexturesFolderResult {
                         entry_index,
                         nif_basename: nb.clone(),
@@ -8188,6 +8358,7 @@ impl App {
         // copy to avoid silent overwrites. IMGF's drag-and-drop
         // does the same on conflict — we get it for free here.
         if let Some(target_archive) = self.editor.archives_mut().get_mut(target) {
+            let target_version = target_archive.version;
             for mut entry in entries {
                 if target_archive
                     .entries
@@ -8197,8 +8368,8 @@ impl App {
                     // Append ".bak" to disambiguate. We could
                     // prompt the user, but the IMGF behaviour
                     // is "just do it", so we follow that lead.
-                    entry.file_name = compact_str::format_compact!("{}.bak", entry.file_name);
-                    entry.file_name_lower = entry.file_name.to_ascii_lowercase();
+                    let bak_name = compact_str::format_compact!("{}.bak", entry.file_name);
+                    entry.rename_for_version(bak_name, target_version);
                 }
                 target_archive.entries.push(entry);
             }
@@ -8377,11 +8548,12 @@ impl App {
     fn start_export(&mut self, mode: ExportMode) -> Task<Message> {
         self.last_export_selected_only = matches!(mode, ExportMode::Selected);
         self.toast = None;
-        dialogs::save_folder(self.last_export_directory()).map(Message::ExportFolderResult)
+        let dir = self.last_export_directory();
+        self.launch_native_dialog(dialogs::save_folder(dir), Message::ExportFolderResult)
     }
 
     fn start_manifest_export(&mut self) -> Task<Message> {
-        if self.manifest_export_picker_open {
+        if self.manifest_export_picker_open || !self.can_open_native_dialog() {
             return Task::none();
         }
         let Some((_index, archive)) = self.editor.clone_selected_archive() else {
@@ -8407,12 +8579,17 @@ impl App {
             .unwrap_or_else(|| PathBuf::from(format!("{archive_name}.compare")));
         self.manifest_export_picker_open = true;
         dev_logger::breadcrumb("user: export archive entry list");
-        dialogs::save_compare_manifest(default_path, default_directory)
-            .map(Message::ExportEntryListResult)
+        self.launch_native_dialog(
+            dialogs::save_compare_manifest(default_path, default_directory),
+            Message::ExportEntryListResult,
+        )
     }
 
     fn start_manifest_compare(&mut self) -> Task<Message> {
-        if self.compare_picker_open || self.compare_state.is_some() {
+        if self.compare_picker_open
+            || self.compare_state.is_some()
+            || !self.can_open_native_dialog()
+        {
             return Task::none();
         }
         let Some((_index, archive)) = self.editor.clone_selected_archive() else {
@@ -8425,8 +8602,11 @@ impl App {
         }
         self.compare_picker_open = true;
         dev_logger::breadcrumb("user: compare archive with entry list");
-        dialogs::open_compare_manifest(self.config.last_compare_folder.clone())
-            .map(Message::CompareManifestResult)
+        let dir = self.config.last_compare_folder.clone();
+        self.launch_native_dialog(
+            dialogs::open_compare_manifest(dir),
+            Message::CompareManifestResult,
+        )
     }
 
     fn compare_archive_matches(
@@ -9582,6 +9762,16 @@ fn plan_bulk_entry(
     })
 }
 
+struct FinishProgressOnDrop(crate::archive::ProgressInfo);
+
+impl Drop for FinishProgressOnDrop {
+    fn drop(&mut self) {
+        if self.0.in_use() {
+            self.0.finish();
+        }
+    }
+}
+
 fn plan_bulk_convert(
     archive_index: usize,
     archive_generation: u64,
@@ -9606,7 +9796,10 @@ fn plan_bulk_convert(
         Vec::new()
     } else {
         // Fan out inside a bounded pool so peak transient memory stays capped
-        // while still saturating multiple cores across entries and textures.
+        // while still saturating multiple cores. Avoid a third nested par_iter
+        // layer when outer TXD count already fills the 4-worker pool.
+        let parallel_textures =
+            txd_selected.len() < crate::compat::convert::BULK_CONVERT_MAX_WORKERS;
         crate::compat::convert::run_in_bounded_convert_pool(|| {
             if txd_selected.len() >= 2 {
                 txd_selected
@@ -9619,7 +9812,7 @@ fn plan_bulk_convert(
                             source_mmap,
                             &source_label,
                             target,
-                            true,
+                            parallel_textures,
                         )
                     })
                     .collect()
@@ -11279,6 +11472,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.img");
         let _ = app.begin_save(
+            0,
             app.editor.archives()[0].clone(),
             path.clone(),
             crate::parser::ImgVersion::One,
@@ -11339,6 +11533,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.img");
         let _ = app.begin_save(
+            0,
             app.editor.archives()[0].clone(),
             path.clone(),
             crate::parser::ImgVersion::One,
@@ -11418,6 +11613,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.img");
         let task = app.begin_save(
+            0,
             app.editor.archives()[0].clone(),
             path,
             crate::parser::ImgVersion::One,
@@ -13256,5 +13452,89 @@ mod tests {
         }));
         assert_eq!(app.toast.as_deref(), Some("parse failed"));
         assert_eq!(app.editor.archives()[0].logs.len(), initial_logs + 2);
+    }
+
+    #[test]
+    fn progress_launchers_arm_progress_tick_synchronously_and_release_mmap_for_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("sample.img");
+        let mut archive = ArchiveInfo::new("sample", true, ImgVersion::Two);
+        let payload = dir.path().join("hello.dat");
+        std::fs::write(&payload, b"hello world").unwrap();
+        let mut entry = EntryInfo::new("hello.dat");
+        entry.imported = true;
+        entry.source_path = Some(payload);
+        archive.entries.push(entry);
+        crate::tasks::SaveTask::new(archive, img_path.clone(), ImgVersion::Two)
+            .run_blocking()
+            .unwrap();
+
+        let opened = ArchiveInfo::open(&img_path).unwrap();
+        assert!(opened.source_mmap.is_some());
+
+        let mut app = test_app_with_entries();
+        app.editor.replace_archive(0, opened);
+        assert!(!app.progress_tick_active());
+
+        // Launching SaveArchive synchronously claims progress (waking Iced's
+        // progress ticker) and drops the UI copy's mmap so the worker holds
+        // the sole Arc<Mmap> before rename.
+        let save_task = app.update(Message::SaveArchive);
+        assert!(app.progress_tick_active());
+        assert!(app.editor.archives()[0].progress.in_use());
+        assert!(app.editor.archives()[0].source_mmap.is_none());
+
+        // A concurrent SaveArchive must be refused while the slot is claimed.
+        let _ = app.update(Message::SaveArchive);
+        assert!(app.toast.is_some());
+
+        // Drain the save task and confirm completion restores the mmap and
+        // releases the progress slot.
+        let messages = drain_task(save_task);
+        let completed = messages
+            .into_iter()
+            .find(|m| matches!(m, Message::SaveCompleted { .. }))
+            .expect("SaveCompleted should be emitted");
+        let _ = app.update(completed);
+        assert!(!app.editor.archives()[0].progress.in_use());
+        assert!(app.editor.archives()[0].source_mmap.is_some());
+
+        // Launching ValidateArchiveFor also arms progress_tick_active immediately.
+        let val_task = app.update(Message::ValidateArchiveFor("sa"));
+        assert!(app.progress_tick_active());
+        assert!(app.editor.archives()[0].progress.in_use());
+        let val_msgs = drain_task(val_task);
+        for msg in val_msgs {
+            let _ = app.update(msg);
+        }
+        assert!(!app.editor.archives()[0].progress.in_use());
+    }
+
+    #[test]
+    fn native_dialog_guard_blocks_window_close_and_duplicate_launch() {
+        let mut app = test_app_with_entries();
+        let window = iced::window::Id::unique();
+        assert!(!app.native_dialog_open);
+
+        let _ = app.update(Message::OpenArchive);
+        assert!(app.native_dialog_open);
+
+        // Window close while a parented native dialog is open must be deferred.
+        let _ = app.update(Message::WindowCloseRequested(window));
+        assert!(app.quitting.is_none());
+        assert!(app.pending_close.is_none());
+
+        // Duplicate picker launch while one is open does not arm flow guards.
+        let _ = app.update(Message::ExportEntryList);
+        assert!(!app.manifest_export_picker_open);
+
+        // Completing the dialog clears the guard and allows closing again.
+        let _ = app.update(Message::NativeDialogFinished(Box::new(
+            Message::OpenArchiveResult(None),
+        )));
+        assert!(!app.native_dialog_open);
+
+        let _ = app.update(Message::WindowCloseRequested(window));
+        assert_eq!(app.quitting, Some(window));
     }
 }

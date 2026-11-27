@@ -241,7 +241,11 @@ fn parse_txd_inner(bytes: &[u8], copy_pixels: bool) -> Result<TxdFile, String> {
                             texture_count, MAX_TEXTURES
                         ));
                     }
-                    textures.reserve(usize::from(texture_count));
+                    // Cap upfront reservation to what can physically fit in
+                    // the remaining section bytes so a crafted tiny TXD cannot
+                    // pre-allocate ~2 MiB per parse.
+                    let max_possible = top.end.saturating_sub(child.end) / 100;
+                    textures.reserve(usize::from(texture_count).min(max_possible));
                 }
             }
             rw::TEXTURE_NATIVE => {
@@ -1064,5 +1068,24 @@ mod tests {
             std::mem::size_of::<compact_str::CompactString>(),
             std::mem::size_of::<String>()
         );
+    }
+
+    #[test]
+    fn crafted_tiny_txd_caps_upfront_texture_reservation() {
+        // 28-byte TXD claiming 16,384 textures with zero native texture sections.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&rw::TEXTURE_DICTIONARY.to_le_bytes());
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&0x1803_FFFFu32.to_le_bytes());
+        bytes.extend_from_slice(&rw::STRUCT.to_le_bytes());
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(&0x1803_FFFFu32.to_le_bytes());
+        bytes.extend_from_slice(&16_384u16.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+
+        let txd = parse_txd_headers(&bytes).expect("tiny crafted TXD parses");
+        assert_eq!(txd.texture_count, 16_384);
+        assert!(txd.textures.is_empty());
+        assert_eq!(txd.textures.capacity(), 0);
     }
 }

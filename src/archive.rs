@@ -195,6 +195,30 @@ impl ProgressInfo {
         self.inner.in_use.store(true, Ordering::Release);
     }
 
+    /// Atomically claim the progress slot if idle, resetting percentage and
+    /// cancel state. Returns `false` if another operation already owns it.
+    pub fn try_start(&self) -> bool {
+        if self
+            .inner
+            .in_use
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.inner.cancel.store(false, Ordering::Release);
+            self.inner.percentage.store(0, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Start the progress slot only if not already claimed by the caller.
+    /// Preserves an early cancel flag requested between UI launch and worker
+    /// execution.
+    pub fn ensure_started(&self) {
+        let _ = self.try_start();
+    }
+
     pub fn finish(&self) {
         self.inner.in_use.store(false, Ordering::Release);
         self.inner.cancel.store(false, Ordering::Release);
@@ -369,6 +393,34 @@ impl EntryInfo {
             rename: false,
             selected: false,
         }
+    }
+
+    /// Update the entry's filename along with all derived fields (`file_name_lower`,
+    /// `file_name_raw`, `file_type`, `file_ext`) for the target archive version.
+    pub fn rename_for_version(&mut self, new_name: impl Into<CompactString>, version: ImgVersion) {
+        let name_capacity = entry_name_capacity(version);
+        let file_name: CompactString = new_name.into();
+        let file_name_lower = crate::collections::compact_to_lowercase(&file_name);
+        let file_name_raw = if name_capacity == crate::parser::MAX_ENTRY_NAME_LEN {
+            encode_entry_name(&file_name)
+        } else {
+            encode_entry_name_with_limit(&file_name, name_capacity)
+        };
+        let file_type = infer_file_type_from_lower(&file_name_lower);
+        let file_ext = std::path::Path::new(file_name.as_str())
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| {
+                let mut out = CompactString::new(ext);
+                out.make_ascii_uppercase();
+                out
+            })
+            .unwrap_or_else(|| CompactString::const_new("FILE"));
+        self.file_name = file_name;
+        self.file_name_lower = file_name_lower;
+        self.file_name_raw = file_name_raw;
+        self.file_type = file_type;
+        self.file_ext = file_ext;
     }
 
     /// The type string shown in the table and used for type grouping:

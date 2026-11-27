@@ -62,8 +62,12 @@ Added `crate::collections::compact_to_lowercase(s: &str) -> CompactString`:
 - Fast path (`s.is_ascii()`): single copy into `CompactString::new(s)` followed
   by in-place `out.make_ascii_lowercase()` directly in the 24-byte inline
   buffer (zero heap allocations, zero per-char repr branching).
-- Fallback (`!s.is_ascii()`): `CompactString::from_str_to_lowercase(s)`,
-  preserving exact `str::to_lowercase()` / `LowerStr` equivalence.
+- Fallback (`!s.is_ascii()`): `CompactString::from(s.to_lowercase())` (reuses
+  the `String` allocation if `> 24 B`, inlines if `<= 24 B`), preserving exact
+  `str::to_lowercase()` / `LowerStr` equivalence across all Unicode inputs —
+  including avoiding a `compact_str 0.10.0` bug where `from_str_to_lowercase`
+  misclassifies a word-final Greek `'Σ'` immediately following a 16-byte ASCII
+  chunk.
 
 Adopted across the hot lowercase sites (`src/archive.rs`,
 `src/inspector/texture.rs`, `src/tasks.rs`) and replaced a redundant

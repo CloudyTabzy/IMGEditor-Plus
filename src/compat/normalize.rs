@@ -390,4 +390,38 @@ mod tests {
         assert_eq!(apply_fixes(&mut dxt5), 0);
         assert!(dxt5.entries[0].override_bytes.is_none());
     }
+
+    #[test]
+    fn parallel_normalize_preserves_order_and_matches_expected_fixes() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad_bytes = txd_with(0x0500, 0x3354_5844, 32);
+        let good_bytes = txd_with(0x0200, 0x3154_5844, 16);
+        let bad_path = dir.path().join("bad.txd");
+        let good_path = dir.path().join("good.txd");
+        std::fs::write(&bad_path, &bad_bytes).unwrap();
+        std::fs::write(&good_path, &good_bytes).unwrap();
+
+        let mut archive = ArchiveInfo::new("parallel_norm", true, ImgVersion::One);
+        for i in 0..40usize {
+            let is_bad = i % 2 == 0;
+            let mut entry = EntryInfo::new(format!("e_{i:02}.txd"));
+            entry.imported = true;
+            entry.source_path = Some(if is_bad {
+                bad_path.clone()
+            } else {
+                good_path.clone()
+            });
+            archive.entries.push(entry);
+        }
+
+        let fixes = plan_fixes(&archive);
+        assert_eq!(fixes.len(), 20);
+        let planned_indices: Vec<usize> = fixes.iter().map(|f| f.entry_index).collect();
+        let expected: Vec<usize> = (0..40).step_by(2).collect();
+        assert_eq!(planned_indices, expected);
+
+        let patches = collect_fixes(&archive);
+        let patch_indices: Vec<usize> = patches.iter().map(|(i, _)| *i).collect();
+        assert_eq!(patch_indices, expected);
+    }
 }

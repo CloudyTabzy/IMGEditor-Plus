@@ -41,9 +41,10 @@ between the sequential and parallel arms.
 | `des_nw.txd` | 36 | 3.79 ms | 1.14 ms | 3.3× |
 | `billbrdlod_lan.txd` | 4 | 0.002 ms | 0.015 ms | 0.16× (overhead only) |
 
-The last row is why the shipped policy is a **threshold**: fan out only at
-`TXD_PARALLEL_DECODE_MIN = 8` rasters. The hybrid arm measures 0.002 ms on
-the small catalog (no fork/join tax) and matches the parallel arm elsewhere.
+The last row is why the shipped policy is a **threshold**: fan out at
+`TXD_PARALLEL_DECODE_MIN = 8` rasters (or `>= 2` rasters totalling `>= 262,144`
+pixels). The hybrid arm measures 0.002 ms on the small catalog (no fork/join
+tax) and matches the parallel arm elsewhere.
 Effect: a large TXD's preview catalog decodes in ~1 ms instead of ~4 ms.
 
 ## Dependency optional features evaluated — no change

@@ -221,11 +221,10 @@ fn map_with_lut(
     let pixel_count = rgba.len() / 4;
     let row_len = width as usize;
 
-    if pixel_count >= PARALLEL_MAP_MIN_PIXELS && row_len > 0 && pixel_count.is_multiple_of(row_len)
-    {
+    if pixel_count >= PARALLEL_MAP_MIN_PIXELS {
         let mut out = vec![0u8; pixel_count];
         let rgba_aligned = &rgba[..pixel_count * 4];
-        if dither {
+        if dither && row_len > 0 && pixel_count.is_multiple_of(row_len) {
             out.par_chunks_exact_mut(row_len)
                 .zip(rgba_aligned.par_chunks_exact(row_len * 4))
                 .enumerate()
@@ -245,11 +244,13 @@ fn map_with_lut(
                         *slot = lut[cell_key(r, g, b)];
                     }
                 });
-        } else {
-            out.par_chunks_exact_mut(row_len)
-                .zip(rgba_aligned.par_chunks_exact(row_len * 4))
-                .for_each(|(out_row, rgba_row)| {
-                    for (slot, pixel) in out_row.iter_mut().zip(rgba_row.chunks_exact(4)) {
+            return out;
+        } else if !dither {
+            const CHUNK_PIXELS: usize = 1024;
+            out.par_chunks_mut(CHUNK_PIXELS)
+                .zip(rgba_aligned.par_chunks(CHUNK_PIXELS * 4))
+                .for_each(|(out_chunk, rgba_chunk)| {
+                    for (slot, pixel) in out_chunk.iter_mut().zip(rgba_chunk.chunks_exact(4)) {
                         *slot = if pixel[3] < TRANSPARENT_CUTOFF {
                             transparent_index
                         } else {
@@ -257,8 +258,8 @@ fn map_with_lut(
                         };
                     }
                 });
+            return out;
         }
-        return out;
     }
 
     let mut out = Vec::with_capacity(pixel_count);

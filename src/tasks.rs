@@ -59,7 +59,7 @@ impl SaveTask {
 
     pub fn run_blocking(self) -> anyhow::Result<ArchiveInfo> {
         let progress = self.archive.progress.clone();
-        progress.start();
+        progress.ensure_started();
 
         let mut archive = self.archive;
         let result: anyhow::Result<()> = match self.version {
@@ -226,7 +226,15 @@ impl PackTask {
     }
 
     pub fn run_blocking(self) -> anyhow::Result<PackOutcome> {
-        let estimate = self.archive.pack_stats()?;
+        let progress = self.archive.progress.clone();
+        progress.ensure_started();
+        let estimate = match self.archive.pack_stats() {
+            Ok(estimate) => estimate,
+            Err(err) => {
+                progress.finish();
+                return Err(err);
+            }
+        };
         let entry_count = estimate.entry_count;
         let original_bytes = estimate.original_bytes;
 
@@ -271,7 +279,7 @@ impl FolderImportTask {
             duplicate_policy,
         } = self;
         let progress = archive.progress.clone();
-        progress.start();
+        progress.ensure_started();
 
         let mut summary = FolderImportSummary {
             discovered: plan.discovered_count(),
@@ -396,7 +404,7 @@ impl ExportTask {
             progress,
         } = self;
 
-        progress.start();
+        progress.ensure_started();
 
         // Pointer-sized handles instead of cloning every entry: the task
         // already owns the archive, so a full `Vec<EntryInfo>` clone would

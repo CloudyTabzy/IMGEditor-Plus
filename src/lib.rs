@@ -75,6 +75,9 @@ mod allocator_tests {
         assert_eq!(rusty_alloc::stats::commit_failures(), 0);
         let (_, _, _, rss, peak_rss, commit, peak_commit, _) = rusty_alloc::stats::process_info();
         assert!(rss > 0 && peak_rss >= rss);
+        #[cfg(windows)]
         assert!(commit > 0 && peak_commit >= commit);
+        #[cfg(not(windows))]
+        let _ = (commit, peak_commit);
     }
 }

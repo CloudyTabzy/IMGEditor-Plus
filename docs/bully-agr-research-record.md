@@ -989,9 +989,8 @@ Useful local observations that must remain attached to the roadmap:
   shared byte layouts.
 
 The long-form work plan is
-[`bully-agr-cat-lip-lur-roadmap.md`](bully-agr-cat-lip-lur-roadmap.md). Its
-older phase prose is being reconciled with this record; the tracked checklist
-is [`TODO.md`](../TODO.md).
+`bully-agr-cat-lip-lur-roadmap.md` (local-only). Its older phase prose has been
+reconciled with this record.
 
 ## 10. Lessons learned for researching AGR
 
@@ -1251,11 +1250,10 @@ Primary raw evidence:
   byte layouts, corpus tables and retired hypotheses;
 - [`../../notes/bully-probe/CHECKPOINT.md`](../../notes/bully-probe/CHECKPOINT.md) — prior
   implementation handoff and reproduction commands;
-- [`bully-agr-cat-lip-lur-roadmap.md`](bully-agr-cat-lip-lur-roadmap.md) —
-  broader CAT/LIP/LUR plan;
-- [`animation-viewer-infrastructure-plan.md`](animation-viewer-infrastructure-plan.md) —
-  format-independent player architecture; and
-- [`../TODO.md`](../TODO.md) — tracked phase checklist.
+- `bully-agr-cat-lip-lur-roadmap.md` — broader CAT/LIP/LUR plan (local-only);
+- `animation-viewer-infrastructure-plan.md` — format-independent player
+  architecture (local-only); and
+- `TODO.md` — local backlog and phase checklist (untracked).
 
 The local probe suite is outside the authoritative Rust repository:
 

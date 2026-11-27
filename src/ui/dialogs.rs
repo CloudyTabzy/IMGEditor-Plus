@@ -91,7 +91,7 @@ pub fn open_file() -> Task<Option<PathBuf>> {
 
 #[cfg(not(feature = "native-dialogs"))]
 pub fn open_file() -> Task<Option<PathBuf>> {
-    Task::none()
+    Task::done(None)
 }
 
 /// Pick an entry-list manifest for archive comparison. The remembered
@@ -120,7 +120,7 @@ pub fn open_compare_manifest(directory: Option<PathBuf>) -> Task<Option<PathBuf>
 
 #[cfg(not(feature = "native-dialogs"))]
 pub fn open_compare_manifest(_directory: Option<PathBuf>) -> Task<Option<PathBuf>> {
-    Task::none()
+    Task::done(None)
 }
 
 /// Pick a loose Bully animation group (`Anim/*.agr`). The model still comes
@@ -145,7 +145,7 @@ pub fn open_agr_file(directory: Option<PathBuf>) -> Task<Option<PathBuf>> {
 
 #[cfg(not(feature = "native-dialogs"))]
 pub fn open_agr_file(_directory: Option<PathBuf>) -> Task<Option<PathBuf>> {
-    Task::none()
+    Task::done(None)
 }
 
 #[cfg(feature = "native-dialogs")]
@@ -176,7 +176,7 @@ pub fn import_files() -> Task<Vec<PathBuf>> {
 
 #[cfg(not(feature = "native-dialogs"))]
 pub fn import_files() -> Task<Vec<PathBuf>> {
-    Task::none()
+    Task::done(Vec::new())
 }
 
 #[cfg(feature = "native-dialogs")]
@@ -194,7 +194,7 @@ pub fn import_folder() -> Task<Option<PathBuf>> {
 
 #[cfg(not(feature = "native-dialogs"))]
 pub fn import_folder() -> Task<Option<PathBuf>> {
-    Task::none()
+    Task::done(None)
 }
 
 /// Pick the game folder used to resolve an archive's companion files,
@@ -217,7 +217,7 @@ pub fn pick_game_folder(current: Option<PathBuf>) -> Task<Option<PathBuf>> {
 
 #[cfg(not(feature = "native-dialogs"))]
 pub fn pick_game_folder(_current: Option<PathBuf>) -> Task<Option<PathBuf>> {
-    Task::none()
+    Task::done(None)
 }
 
 /// Pick a source image for texture replacement / TXD authoring.
@@ -243,7 +243,7 @@ pub fn pick_image_file() -> Task<Option<PathBuf>> {
 
 #[cfg(not(feature = "native-dialogs"))]
 pub fn pick_image_file() -> Task<Option<PathBuf>> {
-    Task::none()
+    Task::done(None)
 }
 
 #[cfg(feature = "native-dialogs")]
@@ -276,7 +276,7 @@ pub fn save_archive(
     _default_path: PathBuf,
     _version: ImgVersion,
 ) -> Task<Option<SaveArchiveChoice>> {
-    Task::none()
+    Task::done(None)
 }
 
 /// Pick the destination for an exported entry-list manifest.
@@ -315,7 +315,7 @@ pub fn save_compare_manifest(
     _default_path: PathBuf,
     _directory: Option<PathBuf>,
 ) -> Task<Option<PathBuf>> {
-    Task::none()
+    Task::done(None)
 }
 
 /// Pick a destination folder for exporting entries or textures, starting at
@@ -338,7 +338,7 @@ pub fn save_folder(directory: Option<PathBuf>) -> Task<Option<PathBuf>> {
 
 #[cfg(not(feature = "native-dialogs"))]
 pub fn save_folder(_directory: Option<PathBuf>) -> Task<Option<PathBuf>> {
-    Task::none()
+    Task::done(None)
 }
 
 #[cfg(all(test, feature = "native-dialogs"))]

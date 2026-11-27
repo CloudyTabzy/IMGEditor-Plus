@@ -119,15 +119,14 @@ pub fn validate_open_archive(
     archive: &ArchiveInfo,
     options: &ScanOptions,
 ) -> anyhow::Result<ScanReport> {
-    // Resolve the source *before* claiming the progress slot: an early
-    // return after start() would leave the archive stuck "in use" and
-    // block every later run.
-    let source = archive
-        .path
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("archive has no source path"))?;
     let progress = archive.progress.clone();
-    progress.start();
+    let Some(source) = archive.path.clone() else {
+        if progress.in_use() {
+            progress.finish();
+        }
+        anyhow::bail!("archive has no source path");
+    };
+    progress.ensure_started();
     let mut report = ScanReport {
         archive_path: source.display().to_string(),
         archive_kind: version_text(archive.version).to_string(),

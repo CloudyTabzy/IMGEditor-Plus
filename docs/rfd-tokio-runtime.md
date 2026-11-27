@@ -17,7 +17,9 @@ clarified three boundaries that were previously blurred in `Cargo.toml` and
    - In `rfd 0.15.4`, `features = ["tokio"]` only forwarded to `ashpd?/tokio`
      (Linux XDG Desktop Portal). In `rfd 0.18.0`, the Linux portal backend
      replaced `ashpd` with direct `libdbus` + `zenity`, dropping the `tokio`
-     feature and pruning `ashpd`, `mio`, and `socket2` from `Cargo.lock`.
+     feature and pruning `rfd`'s `ashpd` edge along with `mio` and `socket2`
+     from `Cargo.lock` (`ashpd 0.10.3` remains solely through `dark-light` on
+     Linux).
    - On Windows (`win_cid`), `rfd::AsyncFileDialog` deliberately spawns a
      dedicated short-lived OS thread (`std::thread::spawn`), calls
      `CoInitializeEx(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)`,
@@ -90,7 +92,8 @@ clarified three boundaries that were previously blurred in `Cargo.toml` and
 - **`Cargo.toml` / `Cargo.lock`:**
   - `tokio` `1.52.3` → `1.54.1` (`features = ["rt-multi-thread", "time"]`).
   - `rfd` `0.15.4` → `0.18.0` (default features, optional behind `native-dialogs`).
-  - Removed `ashpd`, `mio`, and `socket2` from `Cargo.lock`.
+  - Removed `rfd`'s `ashpd` dependency along with `mio` and `socket2` from
+    `Cargo.lock`.
 - **`src/runtime.rs`:**
   - `runtime::spawn_blocking` now checks `tokio::runtime::Handle::try_current()`
     first and runs directly on Iced's ambient Tokio runtime whenever entered,

@@ -36,8 +36,10 @@ it.
 
 ## Dependency candidates evaluated (all rejected)
 
-The audit was requested as a search for memory-efficient crates. Five
-candidates were evaluated against the current tree; **none was added**.
+The audit was requested as a search for memory-efficient crates. Six
+candidates were evaluated against the current tree; **no new crates were added**,
+and the two already in the tree (`smallvec`, `compact_str`) were later upgraded
+and audited.
 
 | Candidate | Outcome | Reason |
 |---|---|---|
@@ -377,11 +379,12 @@ already has.
   instead of reusing the `App::ide_maps` memo the 3D viewer uses.
 - **`parse_dff`'s bounds checks and `bounded_count` limits** (`dff.rs:40-45`) are
   why a malformed archive cannot become a 12 GB allocation.
-- **The `compat` conversion driver is serial** (`app.rs:9281`, `app.rs:9357`),
-  so conversion peak is 1× per texture, not threads×. rayon appears in
-  `src/` only in `compat/palette.rs` (LUT build) and `tasks.rs` (chunked export,
-  clamped to 8 workers). "Just add a `par_iter`" would be a new risk, not an
-  existing one.
+- **Bulk `compat` conversion is now bounded to 4 Rayon workers** (updated
+  2026-11-27; see [rayon-parallelism.md](rayon-parallelism.md)): at the time of
+  the original 2026-09-30 audit the driver was serial, and the later
+  parallelization deliberately kept peak scratch memory capped via
+  `run_in_bounded_convert_pool` (`BULK_CONVERT_MAX_WORKERS = 4`) instead of
+  unbounded `par_iter`.
 - **`raster.rs:389 pub type Counts<T> = BTreeMap<T, usize>`** is a dead alias
   with zero referents, not even re-exported from `compat/mod.rs`. It is not a
   per-pixel hot loop, contrary to a reasonable first reading. The live counters

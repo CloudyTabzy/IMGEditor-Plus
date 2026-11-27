@@ -131,9 +131,10 @@ hand (export path, texture resolution).
 Upgraded `hashbrown` from `0.17.1` → `0.17.2` (released 2026-11-22: fixes an
 allocator leak on dropping empty tables #751, switches `ProbeSeq::move_next`
 to wrapping arithmetic #736, relaxes default hasher/allocator bounds #732, and
-uses `std::hash::RandomState` #747). Default features (`default-hasher` via
-`foldhash 0.2.0`, `inline-more`, `allocator-api2`, `equivalent`, `raw-entry`)
-already cover everything needed; `serde`, `rayon`, and `nightly` remain off.
+cleans up doc/test `std::hash::RandomState` imports #747). Default features
+(`default-hasher` via `foldhash 0.2.0`, `inline-more`, `allocator-api2`,
+`equivalent`, `raw-entry`) already cover everything needed; `serde`, `rayon`,
+and `nightly` remain off.
 
 Audited every `HashMap`/`HashSet` site in `src/` and adopted `hashbrown`'s
 borrowed-lookup and entry APIs where they eliminate real allocations or passes:

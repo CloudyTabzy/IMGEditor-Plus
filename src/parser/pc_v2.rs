@@ -157,7 +157,10 @@ impl ImgParser for PcV2Parser {
         // map the file that was actually written.
         archive.source_mmap = None;
 
-        std::fs::rename(&temp_path, output_path).context("failed to write archive file")?;
+        if let Err(err) = std::fs::rename(&temp_path, output_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(err).context("failed to write archive file");
+        }
 
         if remove_existing
             && let Some(ref src) = source_path

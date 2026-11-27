@@ -11,9 +11,10 @@ inline-storage audit (2026-11-27). Companion to
 ## Version and feature decisions
 
 - **Upgraded `smallvec` from `1.15.2` → `1.16.6`** (latest stable `1.x`),
-  unifying cleanly across all 12 dependents in `Cargo.lock` (`wgpu`, `wgpu-core`,
-  `wgpu-hal`, `idna`, `icu_normalizer`, `fluent-bundle`, `harfrust`, `rustybuzz`,
-  `kurbo`, `exr`, `parking_lot_core`, `imgeditor`) with zero duplicate versions.
+  unifying cleanly across all 13 dependent crates in `Cargo.lock` (`wgpu`,
+  `wgpu-core`, `wgpu-hal`, `idna`, `icu_normalizer`, `fluent-bundle`,
+  `harfrust`, `rustybuzz`, `kurbo`, `exr`, `parking_lot_core`,
+  `wayland-backend`, `imgeditor`) with zero duplicate versions.
 - **Why not `2.0.0-beta.5`:** Pre-release beta with breaking API changes
   (`SmallVec<T, N>`) that would duplicate `smallvec` alongside every `1.x`
   crate in the dependency graph.
@@ -64,7 +65,7 @@ Under `features = ["union"]`, every alias below is **24 bytes (`== size_of::<Vec
 - `MaterialNameList = SmallVec<[u32; 4]>` for `MaterialData::names`.
 - `SkinWeightRow = SmallVec<[f32; 4]>` and `SkinBoneIndexRow = SmallVec<[u8; 4]>` for `SkinPartition::{weights, bone_indices}` (every Bully hardware-skinning partition stores `<= 4` weights per vertex).
 - Replaced `read_ni_texturing_property`'s transient heap `vec![None; texture_count.max(12)]` with a stack `[Option<TexDesc>; 12]`.
-- Switched `bully.rs::ModelBuilder::visit` to borrow `data.children.as_slice()` instead of cloning `children` at every scene-graph node during recursive traversal.
+- Switched `bully.rs::NifWalk::visit` to borrow `data.children.as_slice()` instead of cloning `children` at every scene-graph node during recursive traversal.
 - `VertexSkin = SmallVec<[(u32, f32); 4]>` (`src/inspector/animation/model.rs`) stays at `40 B` under `union` and benefits automatically from `1.16.6`'s Rust 1.93+ `empty()` and `push()` improvements.
 
 ### 4. Stack mip-chain builder (`src/compat/encode.rs`)
