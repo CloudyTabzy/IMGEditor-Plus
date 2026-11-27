@@ -3949,7 +3949,7 @@ fn build_update_status(app: &App) -> Option<Element<'_, Message>> {
             Space::new().height(Length::Fixed(8.0)),
             row![
                 button(fonts::body(t::update_open_releases()))
-                    .on_press(Message::VisitRepository)
+                    .on_press(Message::OpenReleases)
                     .style(button::primary),
                 Space::new().width(Length::Fixed(8.0)),
                 button(fonts::body(t::button_close())).on_press(Message::HideUpdateStatus),

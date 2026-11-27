@@ -651,6 +651,7 @@ pub enum Message {
     ShowUnsupported(PathBuf),
     HideUnsupported,
     VisitRepository,
+    OpenReleases,
     HideUpdateStatus,
 
     CheckUpdatesManual,
@@ -6133,6 +6134,14 @@ impl App {
             }
             Message::VisitRepository => {
                 App::visit_repository();
+                Task::none()
+            }
+            Message::OpenReleases => {
+                let url = match &self.update_state {
+                    UpdateState::Available { url, .. } => url.as_str(),
+                    _ => "https://github.com/CloudyTabzy/IMGEditor-Plus/releases",
+                };
+                let _ = webbrowser::open(url);
                 Task::none()
             }
             Message::HideUpdateStatus => {

@@ -22,9 +22,9 @@ pub fn check_updates_future(
     current_version: String,
 ) -> Pin<Box<dyn Future<Output = UpdateResult> + Send>> {
     Box::pin(async move {
-        let url = format!("https://api.github.com/repos/{repo}/tags");
+        let url = format!("https://api.github.com/repos/{repo}/releases/latest");
         match crate::runtime::spawn_blocking(move || {
-            fetch_tags_blocking(&url, &current_version, &repo)
+            fetch_latest_release_blocking(&url, &current_version, &repo)
         })
         .await
         {
@@ -34,9 +34,14 @@ pub fn check_updates_future(
     })
 }
 
-pub fn fetch_tags_blocking(url: &str, current_version: &str, repo: &str) -> UpdateResult {
-    let response = match ureq::get(url).set("User-Agent", "IMGEditor").call() {
+pub fn fetch_latest_release_blocking(url: &str, current_version: &str, repo: &str) -> UpdateResult {
+    let response = match ureq::get(url)
+        .set("User-Agent", "IMGEditor")
+        .set("Accept", "application/vnd.github+json")
+        .call()
+    {
         Ok(response) => response,
+        Err(ureq::Error::Status(404, _)) => return UpdateResult::UpToDate,
         Err(error) => return UpdateResult::Error(error.to_string()),
     };
 
@@ -45,29 +50,33 @@ pub fn fetch_tags_blocking(url: &str, current_version: &str, repo: &str) -> Upda
         Err(error) => return UpdateResult::Error(error.to_string()),
     };
 
-    let value: serde_json::Value = match serde_json::from_str(&body) {
+    parse_latest_release_response(&body, current_version, repo)
+}
+
+fn parse_latest_release_response(body: &str, current_version: &str, repo: &str) -> UpdateResult {
+    let value: serde_json::Value = match serde_json::from_str(body) {
         Ok(value) => value,
         Err(error) => return UpdateResult::Error(error.to_string()),
     };
 
-    let array = match value.as_array() {
-        Some(array) => array,
-        None => return UpdateResult::Error("unexpected GitHub response".to_string()),
+    let Some(object) = value.as_object() else {
+        return UpdateResult::Error("unexpected GitHub response".to_string());
     };
 
-    let first = match array.first() {
-        Some(first) => first,
-        None => return UpdateResult::UpToDate,
-    };
+    if object.get("draft").and_then(|v| v.as_bool()) == Some(true)
+        || object.get("prerelease").and_then(|v| v.as_bool()) == Some(true)
+    {
+        return UpdateResult::UpToDate;
+    }
 
-    let tag_name = match first.get("name").and_then(|name| name.as_str()) {
+    let tag_name = match object.get("tag_name").and_then(|name| name.as_str()) {
         Some(name) => name,
-        None => return UpdateResult::Error("missing tag name".to_string()),
+        None => return UpdateResult::Error("missing release tag name".to_string()),
     };
 
     let latest = match parse_version(tag_name) {
         Some(version) => version,
-        None => return UpdateResult::Error(format!("invalid tag version: {tag_name}")),
+        None => return UpdateResult::Error(format!("invalid release version: {tag_name}")),
     };
 
     let current = match parse_version(current_version) {
@@ -76,9 +85,15 @@ pub fn fetch_tags_blocking(url: &str, current_version: &str, repo: &str) -> Upda
     };
 
     if latest > current {
+        let release_url = object
+            .get("html_url")
+            .and_then(|u| u.as_str())
+            .filter(|u| u.starts_with("https://github.com/"))
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("https://github.com/{repo}/releases/latest"));
         UpdateResult::Available {
             version: tag_name.to_string(),
-            url: format!("https://github.com/{repo}/releases"),
+            url: release_url,
         }
     } else {
         UpdateResult::UpToDate
@@ -117,5 +132,65 @@ mod tests {
         let current = parse_version("3.3.0").unwrap();
         let latest = parse_version("v3.3.0").unwrap();
         assert!(latest <= current);
+    }
+
+    #[test]
+    fn latest_release_response_detects_newer_release_and_uses_html_url() {
+        let body = r#"{
+            "tag_name": "v4.18.0",
+            "html_url": "https://github.com/CloudyTabzy/IMGEditor-Plus/releases/tag/v4.18.0",
+            "draft": false,
+            "prerelease": false
+        }"#;
+        match parse_latest_release_response(body, "4.16.1", "CloudyTabzy/IMGEditor-Plus") {
+            UpdateResult::Available { version, url } => {
+                assert_eq!(version, "v4.18.0");
+                assert_eq!(
+                    url,
+                    "https://github.com/CloudyTabzy/IMGEditor-Plus/releases/tag/v4.18.0"
+                );
+            }
+            other => panic!("expected Available, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn latest_release_response_ignores_same_older_draft_and_prerelease() {
+        let same = r#"{"tag_name":"v4.18.0","draft":false,"prerelease":false}"#;
+        assert!(matches!(
+            parse_latest_release_response(same, "4.18.0", "CloudyTabzy/IMGEditor-Plus"),
+            UpdateResult::UpToDate
+        ));
+
+        let draft = r#"{"tag_name":"v4.19.0","draft":true,"prerelease":false}"#;
+        assert!(matches!(
+            parse_latest_release_response(draft, "4.18.0", "CloudyTabzy/IMGEditor-Plus"),
+            UpdateResult::UpToDate
+        ));
+
+        let prerelease = r#"{"tag_name":"v4.19.0","draft":false,"prerelease":true}"#;
+        assert!(matches!(
+            parse_latest_release_response(prerelease, "4.18.0", "CloudyTabzy/IMGEditor-Plus"),
+            UpdateResult::UpToDate
+        ));
+    }
+
+    #[test]
+    fn latest_release_response_rejects_non_github_html_url() {
+        let body = r#"{
+            "tag_name": "v4.19.0",
+            "html_url": "https://evil.example/payload",
+            "draft": false,
+            "prerelease": false
+        }"#;
+        match parse_latest_release_response(body, "4.18.0", "CloudyTabzy/IMGEditor-Plus") {
+            UpdateResult::Available { url, .. } => {
+                assert_eq!(
+                    url,
+                    "https://github.com/CloudyTabzy/IMGEditor-Plus/releases/latest"
+                );
+            }
+            other => panic!("expected Available, got {other:?}"),
+        }
     }
 }
