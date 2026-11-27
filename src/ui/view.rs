@@ -2957,10 +2957,10 @@ pub fn build(app: &App) -> Element<'_, Message> {
     if !app.window_maximized() {
         layers.push(crate::ui::title_bar::resize_edges(Message::WindowChrome));
     }
-    stack(layers)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    w::file_drop_catcher(
+        stack(layers).width(Length::Fill).height(Length::Fill),
+        Message::FilesDropped,
+    )
 }
 
 fn build_about(app: &App) -> Option<Element<'_, Message>> {
@@ -3810,9 +3810,8 @@ fn build_unsaved_dialog(app: &App) -> Option<Element<'_, Message>> {
 fn build_import_preflight(app: &App) -> Option<Element<'_, Message>> {
     let pending = app.pending_import.as_ref()?;
     let target = app
-        .editor
-        .archives()
-        .get(pending.index)
+        .resolve_import_target(&pending.target)
+        .and_then(|index| app.editor.archives().get(index))
         .and_then(|archive| archive.target_game)
         .and_then(crate::compat::games::profile_by_id)
         .map(|game| game.display.to_string())

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::archive::{ArchiveInfo, EntryInfo};
 use crate::i18n::t;
-use crate::parser::{ImgVersion, import_entry};
+use crate::parser::{ImgVersion, ImportEntryResult, PreparedImportBatch, import_entry_with_result};
 use crate::sort::SortChain;
 
 #[derive(Debug, Default)]
@@ -302,19 +302,7 @@ impl Editor {
             return;
         };
 
-        let mut count = 0;
-        for path in paths {
-            if import_entry(archive, path, replace).is_ok() {
-                count += 1;
-            }
-        }
-
-        if count > 0 {
-            archive.dirty = true;
-            archive.invalidate_entry_caches_keeping_report();
-        }
-        archive.add_log(t::log_imported_entries(count));
-        archive.update_search = true;
+        Self::append_import_to(archive, paths, replace);
     }
 
     pub fn update_filtered_list(&mut self, filter: &str) {
@@ -354,7 +342,10 @@ impl Editor {
     pub fn append_import_to(archive: &mut ArchiveInfo, paths: &[PathBuf], replace: bool) {
         let mut count = 0;
         for path in paths {
-            if import_entry(archive, path, replace).is_ok() {
+            if matches!(
+                import_entry_with_result(archive, path, replace),
+                Ok(ImportEntryResult::Imported)
+            ) {
                 count += 1;
             }
         }
@@ -364,6 +355,33 @@ impl Editor {
         }
         archive.add_log(t::log_imported_entries(count));
         archive.update_search = true;
+    }
+
+    pub fn apply_prepared_import(
+        archive: &mut ArchiveInfo,
+        batch: PreparedImportBatch,
+        replace: bool,
+    ) -> usize {
+        for line in batch.logs {
+            archive.add_log(line);
+        }
+        let count = batch.entries.len();
+        for entry in batch.entries {
+            if replace {
+                let file_name = entry.file_name.as_str();
+                archive
+                    .entries
+                    .retain(|existing| !existing.file_name.eq_ignore_ascii_case(file_name));
+            }
+            archive.entries.push(entry);
+        }
+        if count > 0 {
+            archive.dirty = true;
+            archive.invalidate_entry_caches_keeping_report();
+        }
+        archive.add_log(t::log_imported_entries(count));
+        archive.update_search = true;
+        count
     }
 
     pub fn has_active_progress(&self) -> bool {

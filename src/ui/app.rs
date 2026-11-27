@@ -469,7 +469,7 @@ pub enum Message {
     ImportFilesResult(Vec<PathBuf>),
     /// Pre-flight check finished for a candidate import.
     ImportPreflightCompleted {
-        index: usize,
+        target: ImportTarget,
         paths: Vec<PathBuf>,
         folder: Option<
             Box<(
@@ -484,11 +484,10 @@ pub enum Message {
     /// User cancelled the import at the pre-flight dialog.
     ImportCheckCancelled,
     ImportCompleted {
-        index: usize,
-        count: usize,
+        target: ImportTarget,
         /// Whether the pre-flight format check ran (a target was set).
         checked: bool,
-        result: Result<ArchiveInfo, String>,
+        result: Result<crate::parser::PreparedImportBatch, String>,
     },
     ImportFolder,
     ImportFolderResult(Option<PathBuf>),
@@ -668,6 +667,7 @@ pub enum Message {
     },
 
     FilesDropped(PathBuf),
+    FlushDroppedFiles,
 
     /// Toolbar "Validate textures": profile every TXD in the selected
     /// archive against the per-game compatibility tables.
@@ -1049,11 +1049,37 @@ pub enum Pane {
     Info,
 }
 
+/// Stable identity for an archive targeted by an asynchronous import.
+///
+/// Carrying name and path alongside the slot index lets completions and
+/// pre-flight confirmations survive another tab closing (which shifts
+/// indices) and discard safely if the target archive itself was closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportTarget {
+    pub index: usize,
+    pub file_name: String,
+    pub path: Option<PathBuf>,
+}
+
+impl ImportTarget {
+    fn from_archive(index: usize, archive: &ArchiveInfo) -> Self {
+        Self {
+            index,
+            file_name: archive.file_name.clone(),
+            path: archive.path.clone(),
+        }
+    }
+
+    fn matches(&self, archive: &ArchiveInfo) -> bool {
+        archive.file_name == self.file_name && archive.path == self.path
+    }
+}
+
 /// An import paused at the pre-flight format-check dialog because at
 /// least one file carries a format the target engine cannot consume.
 #[derive(Debug, Clone)]
 pub struct PendingImport {
-    pub index: usize,
+    pub target: ImportTarget,
     pub paths: Vec<PathBuf>,
     /// Folder imports resume through their plan + chosen duplicate policy.
     pub folder: Option<(FolderImportPlan, FolderDuplicatePolicy)>,
@@ -1361,6 +1387,10 @@ pub struct App {
     pub pending_folder_import: Option<(usize, FolderImportPlan)>,
     /// Import waiting on the pre-flight format check dialog.
     pub pending_import: Option<PendingImport>,
+    /// Paths accumulated from one OS drag-and-drop burst before flushing
+    /// them as a single batch.
+    pending_drop_paths: Vec<PathBuf>,
+    drop_flush_scheduled: bool,
     /// Save waiting on the pre-save report dialog (or on a validation
     /// scan that has to finish first).
     pub pending_save: Option<PendingSave>,
@@ -1714,6 +1744,8 @@ impl App {
             toast: None,
             pending_folder_import: None,
             pending_import: None,
+            pending_drop_paths: Vec::new(),
+            drop_flush_scheduled: false,
             pending_save: None,
             replace_request: None,
             replace_attempt: 0,
@@ -1936,22 +1968,40 @@ impl App {
         )
     }
 
+    pub(crate) fn resolve_import_target(&self, target: &ImportTarget) -> Option<usize> {
+        let archives = self.editor.archives();
+        if archives
+            .get(target.index)
+            .is_some_and(|archive| target.matches(archive))
+        {
+            return Some(target.index);
+        }
+        archives.iter().position(|archive| target.matches(archive))
+    }
+
     /// Start an import. When the archive has a validator target, run the
     /// pre-flight format check first; only flagged files open the dialog.
     fn begin_import(
         &mut self,
         index: usize,
-        archive: ArchiveInfo,
         paths: Vec<PathBuf>,
         folder: Option<(FolderImportPlan, FolderDuplicatePolicy)>,
     ) -> Task<Message> {
+        let Some(archive) = self.editor.archives().get(index) else {
+            return Task::none();
+        };
+        let target_info = ImportTarget::from_archive(index, archive);
+        let version = archive.version;
         let Some(target) = archive
             .target_game
             .and_then(crate::compat::games::profile_by_id)
         else {
             return match folder {
-                Some((plan, policy)) => self.run_folder_import(index, archive, plan, policy),
-                None => Self::import_archive_task(index, archive, paths, false),
+                Some((plan, policy)) => {
+                    let archive = archive.clone();
+                    self.run_folder_import(index, archive, plan, policy)
+                }
+                None => Self::import_archive_task(target_info, version, paths, false),
             };
         };
         let check_paths = paths.clone();
@@ -1967,7 +2017,7 @@ impl App {
                 .map_err(|error| error.to_string())
             },
             move |result| Message::ImportPreflightCompleted {
-                index,
+                target: target_info,
                 paths,
                 folder: folder.map(Box::new),
                 checks: result.unwrap_or_default(),
@@ -1976,29 +2026,71 @@ impl App {
     }
 
     fn import_archive_task(
-        index: usize,
-        archive: ArchiveInfo,
+        target: ImportTarget,
+        version: ImgVersion,
         paths: Vec<PathBuf>,
         checked: bool,
     ) -> Task<Message> {
-        let count = paths.len();
         Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || {
-                    let mut archive = archive;
-                    Editor::append_import_to(&mut archive, &paths, false);
-                    archive
+                    crate::parser::prepare_import_batch(&paths, version)
                 })
                 .await
                 .map_err(|error| format!("import task panicked: {error}"))
             },
             move |result| Message::ImportCompleted {
-                index,
-                count,
+                target,
                 checked,
                 result,
             },
         )
+    }
+
+    fn flush_dropped_files(&mut self) -> Task<Message> {
+        self.drop_flush_scheduled = false;
+        let paths = std::mem::take(&mut self.pending_drop_paths);
+        if paths.is_empty() {
+            return Task::none();
+        }
+        crate::dev_logger::breadcrumb(&format!("user: dropped {} path(s)", paths.len()));
+
+        let mut archive_paths: Vec<PathBuf> = Vec::new();
+        let mut import_paths: Vec<PathBuf> = Vec::new();
+
+        for path in paths {
+            if crate::parser::is_img_archive_path(&path) && !path.is_dir() {
+                let canonical = crate::parser::canonical_img_path(&path);
+                let duplicate = archive_paths.iter().any(|existing| {
+                    existing == &canonical
+                        || (cfg!(windows)
+                            && existing
+                                .as_os_str()
+                                .eq_ignore_ascii_case(canonical.as_os_str()))
+                });
+                if !duplicate {
+                    archive_paths.push(canonical);
+                }
+            } else {
+                import_paths.push(path);
+            }
+        }
+
+        let mut tasks =
+            Vec::with_capacity(archive_paths.len() + usize::from(!import_paths.is_empty()));
+        for archive_path in archive_paths {
+            tasks.push(self.open_archive_path(archive_path));
+        }
+
+        if !import_paths.is_empty() {
+            if let Some(index) = self.editor.selected_archive() {
+                tasks.push(self.begin_import(index, import_paths, None));
+            } else {
+                self.toast = Some(t::toast_drop_needs_archive());
+            }
+        }
+
+        Task::batch(tasks)
     }
 
     pub fn visit_repository() {
@@ -3402,6 +3494,13 @@ impl App {
             .map(|archive| (archive.file_name.clone(), archive.generation()));
         let in_flight = self.viewer_load.as_ref().map(|load| load.target);
         self.editor.close_archive(index);
+        if self
+            .pending_import
+            .as_ref()
+            .is_some_and(|pending| self.resolve_import_target(&pending.target).is_none())
+        {
+            self.pending_import = None;
+        }
         self.active_viewer_entry = None;
         self.clear_viewer_load();
         self.viewer3d_handle.clear();
@@ -4747,48 +4846,69 @@ impl App {
                 if paths.is_empty() {
                     return Task::none();
                 }
-                let Some((index, archive)) = self.editor.clone_selected_archive() else {
+                let Some(index) = self.editor.selected_archive() else {
                     self.toast = Some(t::toast_open_archive_to_import());
                     return Task::none();
                 };
-                self.begin_import(index, archive, paths, None)
+                self.begin_import(index, paths, None)
             }
             Message::ImportPreflightCompleted {
-                index,
+                target,
                 paths,
                 folder,
                 checks,
             } => {
+                let folder = folder.map(|boxed| *boxed);
                 if checks.iter().any(|check| check.has_issues()) {
-                    self.pending_import = Some(PendingImport {
-                        index,
-                        paths,
-                        folder: folder.map(|boxed| *boxed),
-                        checks,
-                    });
+                    if let Some(existing) = self.pending_import.as_mut()
+                        && existing.target == target
+                        && existing.folder.is_none()
+                        && folder.is_none()
+                    {
+                        existing.paths.extend(paths);
+                        existing.checks.extend(checks);
+                    } else {
+                        self.pending_import = Some(PendingImport {
+                            target,
+                            paths,
+                            folder,
+                            checks,
+                        });
+                    }
                     return Task::none();
                 }
-                let Some(archive) = self.editor.archives().get(index).cloned() else {
+                let Some(index) = self.resolve_import_target(&target) else {
+                    self.toast = Some(t::toast_target_archive_closed());
                     return Task::none();
                 };
-                match folder.map(|boxed| *boxed) {
-                    Some((plan, policy)) => self.run_folder_import(index, archive, plan, policy),
-                    None => Self::import_archive_task(index, archive, paths, true),
+                match folder {
+                    Some((plan, policy)) => {
+                        let archive = self.editor.archives()[index].clone();
+                        self.run_folder_import(index, archive, plan, policy)
+                    }
+                    None => {
+                        let version = self.editor.archives()[index].version;
+                        Self::import_archive_task(target, version, paths, true)
+                    }
                 }
             }
             Message::ImportCheckConfirmed => {
                 let Some(pending) = self.pending_import.take() else {
                     return Task::none();
                 };
-                let Some(archive) = self.editor.archives().get(pending.index).cloned() else {
+                let Some(index) = self.resolve_import_target(&pending.target) else {
                     self.toast = Some(t::toast_target_archive_closed());
                     return Task::none();
                 };
                 match pending.folder {
                     Some((plan, policy)) => {
-                        self.run_folder_import(pending.index, archive, plan, policy)
+                        let archive = self.editor.archives()[index].clone();
+                        self.run_folder_import(index, archive, plan, policy)
                     }
-                    None => Self::import_archive_task(pending.index, archive, pending.paths, true),
+                    None => {
+                        let version = self.editor.archives()[index].version;
+                        Self::import_archive_task(pending.target, version, pending.paths, true)
+                    }
                 }
             }
             Message::ImportCheckCancelled => {
@@ -4797,22 +4917,31 @@ impl App {
                 Task::none()
             }
             Message::ImportCompleted {
-                index,
-                count,
+                target,
                 checked,
                 result,
             } => {
                 match result {
-                    Ok(archive) => {
-                        self.editor.replace_archive(index, archive);
-                        if let Some(archive) = self.editor.archives_mut().get_mut(index) {
-                            archive
-                                .update_selected_list(&self.search, self.config.literal_file_types);
+                    Ok(batch) => {
+                        let Some(index) = self.resolve_import_target(&target) else {
+                            self.toast = Some(t::toast_target_archive_closed());
+                            return Task::none();
+                        };
+                        let count = {
+                            let archive = &mut self.editor.archives_mut()[index];
+                            let count = Editor::apply_prepared_import(archive, batch, false);
+                            if count > 0 {
+                                archive.update_selected_list(
+                                    &self.search,
+                                    self.config.literal_file_types,
+                                );
+                                Self::adopt_target(&self.config, archive);
+                            }
+                            count
+                        };
+                        if count > 0 {
+                            self.refresh_imported_verdicts(index);
                         }
-                        if let Some(archive) = self.editor.archives_mut().get_mut(index) {
-                            Self::adopt_target(&self.config, archive);
-                        }
-                        self.refresh_imported_verdicts(index);
                         self.toast = Some(if checked {
                             t::toast_imported(count)
                         } else {
@@ -4890,7 +5019,7 @@ impl App {
                     self.toast = Some(t::toast_target_archive_deselected());
                     return Task::none();
                 }
-                let Some(archive) = self.editor.archives().get(index).cloned() else {
+                let Some(archive) = self.editor.archives().get(index) else {
                     self.toast = Some(t::toast_target_archive_closed());
                     return Task::none();
                 };
@@ -4898,12 +5027,7 @@ impl App {
                     self.toast = Some(t::toast_operation_running());
                     return Task::none();
                 }
-                self.begin_import(
-                    index,
-                    archive,
-                    plan.files.clone(),
-                    Some((plan, duplicate_policy)),
-                )
+                self.begin_import(index, plan.files.clone(), Some((plan, duplicate_policy)))
             }
             Message::CancelFolderImport => {
                 self.pending_folder_import = None;
@@ -6599,15 +6723,14 @@ impl App {
             }
 
             Message::FilesDropped(path) => {
-                if crate::parser::is_img_archive_path(&path) {
-                    return self.open_archive_path(path);
+                self.pending_drop_paths.push(path);
+                if !self.drop_flush_scheduled {
+                    self.drop_flush_scheduled = true;
+                    return Task::done(Message::FlushDroppedFiles);
                 }
-                let Some((index, archive)) = self.editor.clone_selected_archive() else {
-                    self.toast = Some(t::toast_drop_needs_archive());
-                    return Task::none();
-                };
-                self.begin_import(index, archive, vec![path], None)
+                Task::none()
             }
+            Message::FlushDroppedFiles => self.flush_dropped_files(),
 
             Message::TextureDecodeRequested => {
                 let Some(entry_index) = self.editor.selected_entry() else {
@@ -8374,8 +8497,10 @@ impl App {
 
         let debounce = iced::time::every(Duration::from_millis(150)).map(|_| Message::DebounceTick);
 
+        // `FileDropped` is observed directly by the root `file_drop_catcher`
+        // widget so large multi-file drops bypass the bounded subscription
+        // channel and arrive in a single synchronous batch.
         let window = iced::window::events().map(|(id, event)| match event {
-            iced::window::Event::FileDropped(path) => Message::FilesDropped(path),
             iced::window::Event::CloseRequested => Message::WindowCloseRequested(id),
             iced::window::Event::Resized(_) => Message::WindowChrome(ChromeMessage::Resized),
             _ => Message::Noop,
@@ -11331,7 +11456,7 @@ mod tests {
         app.editor.archives_mut()[0].target_game = Some("gta3");
 
         // Not blocked while the check runs.
-        let task = app.begin_import(0, app.editor.archives()[0].clone(), vec![nft.clone()], None);
+        let task = app.begin_import(0, vec![nft.clone()], None);
         let messages = drain_task(task);
         assert!(matches!(
             messages.as_slice(),
@@ -11358,7 +11483,7 @@ mod tests {
 
         let mut app = test_app_with_entries();
         assert!(app.editor.archives()[0].target_game.is_none());
-        let task = app.begin_import(0, app.editor.archives()[0].clone(), vec![nft], None);
+        let task = app.begin_import(0, vec![nft], None);
         // No pre-flight task is scheduled: the import goes straight in.
         let messages = drain_task(task);
         assert!(
@@ -12154,7 +12279,8 @@ mod tests {
             iced::advanced::widget::Tree::new(&view)
         };
         let root_tag = tree.tag;
-        let base_tag = tree.children[0].tag;
+        let stack_tag = tree.children[0].tag;
+        let base_tag = tree.children[0].children[0].tag;
 
         // A toast is rendered as a temporary layer. Its appearance must not
         // replace the base workspace, because that would discard native
@@ -12167,11 +12293,13 @@ mod tests {
         }
 
         assert_eq!(tree.tag, root_tag);
-        assert_eq!(tree.children[0].tag, base_tag);
-        assert!(tree.children.len() > 1);
+        assert_eq!(tree.children[0].tag, stack_tag);
+        assert_eq!(tree.children[0].children[0].tag, base_tag);
+        assert!(tree.children[0].children.len() > 1);
 
-        // Dismissing the toast must preserve the same root and base slots as
-        // well; otherwise the scroll position would jump when the fade ends.
+        // Dismissing the toast must preserve the same root, stack, and base
+        // slots as well; otherwise the scroll position would jump when the
+        // fade ends.
         app.toast = None;
         app.toast_reveal_text = None;
         {
@@ -12180,7 +12308,8 @@ mod tests {
         }
 
         assert_eq!(tree.tag, root_tag);
-        assert_eq!(tree.children[0].tag, base_tag);
+        assert_eq!(tree.children[0].tag, stack_tag);
+        assert_eq!(tree.children[0].children[0].tag, base_tag);
     }
 
     #[test]
@@ -12462,5 +12591,322 @@ mod tests {
         app.config.motion_enabled = false;
         let _ = tick_n(&mut app, start, 2);
         assert_eq!(app.empty_state_phase, 0.0);
+    }
+
+    /// Drive an initial wave of messages through `App::update` and drain
+    /// each wave's follow-up tasks in waves, matching how Iced processes all
+    /// currently queued messages before handling their spawned actions.
+    fn run_message_waves(app: &mut App, mut wave: Vec<Message>) {
+        let mut guard = 0;
+        while !wave.is_empty() {
+            guard += 1;
+            assert!(guard <= 16, "message wave loop did not settle");
+            let tasks: Vec<_> = wave.into_iter().map(|msg| app.update(msg)).collect();
+            wave = tasks.into_iter().flat_map(drain_task).collect();
+        }
+    }
+
+    fn build_flagged_nft_bytes() -> Vec<u8> {
+        crate::inspector::nif::tests::build_nif(&[("NiPixelData", &{
+            let mut block = Vec::new();
+            block.extend_from_slice(&4_u32.to_le_bytes()); // DXT1
+            block.push(0);
+            block.extend_from_slice(&(-1_i32).to_le_bytes());
+            block.extend_from_slice(&0_u32.to_le_bytes());
+            block.push(1);
+            block.extend_from_slice(&0_u32.to_le_bytes());
+            block.push(0);
+            block.extend_from_slice(&[4, 0, 0, 0]);
+            block.extend_from_slice(&(-1_i32).to_le_bytes());
+            block.extend_from_slice(&1_u32.to_le_bytes());
+            block.extend_from_slice(&0_u32.to_le_bytes());
+            block.extend_from_slice(&8_u32.to_le_bytes());
+            block.extend_from_slice(&8_u32.to_le_bytes());
+            block.extend_from_slice(&0_u32.to_le_bytes());
+            block.extend_from_slice(&32_u32.to_le_bytes());
+            block.extend_from_slice(&1_u32.to_le_bytes());
+            block.extend(std::iter::repeat_n(0x8A_u8, 32));
+            block
+        })])
+    }
+
+    #[test]
+    fn dropping_multiple_files_imports_every_file_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = ["alpha.dff", "beta.txd", "gamma.col"];
+        let paths: Vec<PathBuf> = files
+            .iter()
+            .map(|name| {
+                let path = dir.path().join(name);
+                std::fs::write(&path, b"payload").unwrap();
+                path
+            })
+            .collect();
+
+        let mut app = test_app_with_entries();
+        let before = app.editor.archives()[0].entries.len();
+
+        run_message_waves(
+            &mut app,
+            paths.into_iter().map(Message::FilesDropped).collect(),
+        );
+
+        let archive = &app.editor.archives()[0];
+        assert_eq!(archive.entries.len(), before + files.len());
+        for name in files {
+            assert!(
+                archive
+                    .entries
+                    .iter()
+                    .any(|entry| entry.file_name == name && entry.imported),
+                "missing dropped entry {name}"
+            );
+        }
+        assert!(archive.dirty);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("Imported 3 files")),
+            "expected multi-file toast, got {:?}",
+            app.toast
+        );
+    }
+
+    #[test]
+    fn dropping_multiple_flagged_files_batches_one_preflight_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad1 = dir.path().join("skin_a.nft");
+        let bad2 = dir.path().join("skin_b.nft");
+        let ok = dir.path().join("readme.dff");
+        let nft_bytes = build_flagged_nft_bytes();
+        std::fs::write(&bad1, &nft_bytes).unwrap();
+        std::fs::write(&bad2, &nft_bytes).unwrap();
+        std::fs::write(&ok, b"not a texture").unwrap();
+
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0].target_game = Some("gta3");
+        let before = app.editor.archives()[0].entries.len();
+
+        run_message_waves(
+            &mut app,
+            vec![
+                Message::FilesDropped(bad1),
+                Message::FilesDropped(bad2),
+                Message::FilesDropped(ok),
+            ],
+        );
+
+        assert_eq!(
+            app.editor.archives()[0].entries.len(),
+            before,
+            "unflagged files in the same drop must wait for the preflight confirmation"
+        );
+        let pending = app
+            .pending_import
+            .as_ref()
+            .expect("multi-file drop with flagged files must open preflight dialog");
+        assert_eq!(pending.paths.len(), 3);
+        assert_eq!(pending.flagged().len(), 2);
+
+        run_message_waves(&mut app, vec![Message::ImportCheckConfirmed]);
+        assert!(app.pending_import.is_none());
+        assert_eq!(app.editor.archives()[0].entries.len(), before + 3);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("Imported 3 files")),
+            "expected confirmed multi-file toast, got {:?}",
+            app.toast
+        );
+    }
+
+    #[test]
+    fn concurrent_imports_append_without_clobbering_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first_drop.dff");
+        let second = dir.path().join("second_drop.txd");
+        std::fs::write(&first, b"one").unwrap();
+        std::fs::write(&second, b"two").unwrap();
+
+        let mut app = test_app_with_entries();
+        let before = app.editor.archives()[0].entries.len();
+
+        let task_one = app.update(Message::ImportFilesResult(vec![first]));
+        let task_two = app.update(Message::ImportFilesResult(vec![second]));
+
+        for msg in drain_task(task_one) {
+            let _ = app.update(msg);
+        }
+        for msg in drain_task(task_two) {
+            let _ = app.update(msg);
+        }
+
+        let entries = &app.editor.archives()[0].entries;
+        assert_eq!(entries.len(), before + 2);
+        assert!(entries.iter().any(|e| e.file_name == "first_drop.dff"));
+        assert!(entries.iter().any(|e| e.file_name == "second_drop.txd"));
+    }
+
+    #[test]
+    fn dropping_paired_dir_and_img_opens_archive_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("pair.img");
+        let dir_path = dir.path().join("pair.dir");
+        // Minimal valid IMG v1 pair with one 1-sector entry.
+        let mut dir_bytes = [0u8; 32];
+        dir_bytes[0..4].copy_from_slice(&0u32.to_le_bytes());
+        dir_bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+        dir_bytes[8..17].copy_from_slice(b"test.dff\0");
+        std::fs::write(&dir_path, dir_bytes).unwrap();
+        std::fs::write(&img_path, vec![0u8; 2048]).unwrap();
+
+        let mut app = test_app();
+        run_message_waves(
+            &mut app,
+            vec![
+                Message::FilesDropped(dir_path),
+                Message::FilesDropped(img_path),
+            ],
+        );
+
+        assert_eq!(app.editor.archives().len(), 1);
+        assert!(
+            app.toast.is_none(),
+            "paired .dir/.img drop should not warn Already open: {:?}",
+            app.toast
+        );
+    }
+
+    #[test]
+    fn dropping_mixed_archive_and_assets_opens_archive_and_imports_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("extra.img");
+        let dir_path = dir.path().join("extra.dir");
+        let mut dir_bytes = [0u8; 32];
+        dir_bytes[0..4].copy_from_slice(&0u32.to_le_bytes());
+        dir_bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+        dir_bytes[8..17].copy_from_slice(b"base.dff\0");
+        std::fs::write(&dir_path, dir_bytes).unwrap();
+        std::fs::write(&img_path, vec![0u8; 2048]).unwrap();
+
+        let asset_a = dir.path().join("mod_a.dff");
+        let asset_b = dir.path().join("mod_b.txd");
+        std::fs::write(&asset_a, b"aaa").unwrap();
+        std::fs::write(&asset_b, b"bbb").unwrap();
+
+        let mut app = test_app_with_entries();
+        let before = app.editor.archives()[0].entries.len();
+
+        run_message_waves(
+            &mut app,
+            vec![
+                Message::FilesDropped(img_path),
+                Message::FilesDropped(asset_a),
+                Message::FilesDropped(asset_b),
+            ],
+        );
+
+        assert_eq!(app.editor.archives().len(), 2);
+        let original = &app.editor.archives()[0];
+        assert_eq!(original.entries.len(), before + 2);
+        assert!(original.entries.iter().any(|e| e.file_name == "mod_a.dff"));
+        assert!(original.entries.iter().any(|e| e.file_name == "mod_b.txd"));
+    }
+
+    #[test]
+    fn dropping_assets_without_open_archive_warns_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dff");
+        let b = dir.path().join("b.txd");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+
+        let mut app = test_app();
+        run_message_waves(
+            &mut app,
+            vec![Message::FilesDropped(a), Message::FilesDropped(b)],
+        );
+
+        assert!(app.editor.archives().is_empty());
+        assert_eq!(
+            app.toast.as_deref(),
+            Some(t::toast_drop_needs_archive().as_str())
+        );
+    }
+
+    #[test]
+    fn dropping_directory_named_img_is_skipped_and_does_not_dirty_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake_img_dir = dir.path().join("folder.img");
+        std::fs::create_dir(&fake_img_dir).unwrap();
+
+        let mut app = test_app_with_entries();
+        let before = app.editor.archives()[0].entries.len();
+
+        run_message_waves(&mut app, vec![Message::FilesDropped(fake_img_dir)]);
+
+        assert_eq!(app.editor.archives().len(), 1);
+        assert_eq!(app.editor.archives()[0].entries.len(), before);
+        assert!(!app.editor.archives()[0].dirty);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|toast| toast.contains("Imported 0 files")),
+            "expected 0 imported count toast, got {:?}",
+            app.toast
+        );
+    }
+
+    #[test]
+    fn import_completion_tracks_target_archive_across_tab_index_shift() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = dir.path().join("shifted.dff");
+        std::fs::write(&asset, b"data").unwrap();
+
+        let mut app = test_app_with_entries();
+        app.editor.new_archive();
+        assert_eq!(app.editor.archives().len(), 2);
+        assert_eq!(app.editor.selected_archive(), Some(1));
+        let target_name = app.editor.archives()[1].file_name.clone();
+
+        let task = app.update(Message::ImportFilesResult(vec![asset]));
+        // Close tab 0 while the import into tab 1 is still in flight.
+        let _ = app.close_archive_at(0);
+        assert_eq!(app.editor.archives().len(), 1);
+        assert_eq!(app.editor.archives()[0].file_name, target_name);
+
+        for msg in drain_task(task) {
+            let _ = app.update(msg);
+        }
+
+        assert!(
+            app.editor.archives()[0]
+                .entries
+                .iter()
+                .any(|entry| entry.file_name == "shifted.dff" && entry.imported)
+        );
+    }
+
+    #[test]
+    fn second_flagged_drop_merges_into_open_preflight_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad1 = dir.path().join("batch1.nft");
+        let bad2 = dir.path().join("batch2.nft");
+        let nft_bytes = build_flagged_nft_bytes();
+        std::fs::write(&bad1, &nft_bytes).unwrap();
+        std::fs::write(&bad2, &nft_bytes).unwrap();
+
+        let mut app = test_app_with_entries();
+        app.editor.archives_mut()[0].target_game = Some("gta3");
+
+        run_message_waves(&mut app, vec![Message::FilesDropped(bad1)]);
+        run_message_waves(&mut app, vec![Message::FilesDropped(bad2)]);
+
+        let pending = app
+            .pending_import
+            .as_ref()
+            .expect("preflight dialog should stay open");
+        assert_eq!(pending.paths.len(), 2);
+        assert_eq!(pending.flagged().len(), 2);
     }
 }

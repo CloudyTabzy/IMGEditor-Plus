@@ -376,10 +376,234 @@ pub fn root_column<'a, Message: 'a>() -> Column<'a, Message> {
         .height(Length::Fill)
 }
 
+/// Transparent root wrapper that observes `window::Event::FileDropped`
+/// synchronously during `UserInterface::update`.
+///
+/// Routing file drops through `iced::window::events()` goes through a
+/// bounded 100-slot subscription channel (`try_send`), which silently drops
+/// files past #100 in large multi-file drops and can split a single OS drop
+/// across multiple event-loop turns. Observing the event at the widget root
+/// delivers every dropped path synchronously in the same update batch.
+pub fn file_drop_catcher<'a, Message, Theme, Renderer, F>(
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+    on_drop: F,
+) -> Element<'a, Message, Theme, Renderer>
+where
+    Message: 'a,
+    Theme: 'a,
+    Renderer: iced::advanced::Renderer + 'a,
+    F: Fn(std::path::PathBuf) -> Message + 'a,
+{
+    Element::new(FileDropCatcher {
+        content: content.into(),
+        on_drop,
+    })
+}
+
+struct FileDropCatcherTag;
+
+struct FileDropCatcher<'a, Message, Theme, Renderer, F> {
+    content: Element<'a, Message, Theme, Renderer>,
+    on_drop: F,
+}
+
+impl<Message, Theme, Renderer, F> iced::advanced::Widget<Message, Theme, Renderer>
+    for FileDropCatcher<'_, Message, Theme, Renderer, F>
+where
+    Renderer: iced::advanced::Renderer,
+    F: Fn(std::path::PathBuf) -> Message,
+{
+    fn tag(&self) -> iced::advanced::widget::tree::Tag {
+        iced::advanced::widget::tree::Tag::of::<FileDropCatcherTag>()
+    }
+
+    fn size(&self) -> iced::Size<Length> {
+        self.content.as_widget().size()
+    }
+
+    fn size_hint(&self) -> iced::Size<Length> {
+        self.content.as_widget().size_hint()
+    }
+
+    fn children(&self) -> Vec<iced::advanced::widget::Tree> {
+        vec![iced::advanced::widget::Tree::new(&self.content)]
+    }
+
+    fn diff(&self, tree: &mut iced::advanced::widget::Tree) {
+        tree.diff_children(std::slice::from_ref(&self.content));
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut iced::advanced::widget::Tree,
+        renderer: &Renderer,
+        limits: &iced::advanced::layout::Limits,
+    ) -> iced::advanced::layout::Node {
+        self.content
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut iced::advanced::widget::Tree,
+        layout: iced::advanced::Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn iced::advanced::widget::Operation,
+    ) {
+        self.content
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut iced::advanced::widget::Tree,
+        event: &iced::Event,
+        layout: iced::advanced::Layout<'_>,
+        cursor: iced::mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn iced::advanced::Clipboard,
+        shell: &mut iced::advanced::Shell<'_, Message>,
+        viewport: &iced::Rectangle,
+    ) {
+        if let iced::Event::Window(iced::window::Event::FileDropped(path)) = event {
+            shell.publish((self.on_drop)(path.clone()));
+        }
+        self.content.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &iced::advanced::widget::Tree,
+        layout: iced::advanced::Layout<'_>,
+        cursor: iced::mouse::Cursor,
+        viewport: &iced::Rectangle,
+        renderer: &Renderer,
+    ) -> iced::mouse::Interaction {
+        self.content.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+
+    fn draw(
+        &self,
+        tree: &iced::advanced::widget::Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &iced::advanced::renderer::Style,
+        layout: iced::advanced::Layout<'_>,
+        cursor: iced::mouse::Cursor,
+        viewport: &iced::Rectangle,
+    ) {
+        self.content.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut iced::advanced::widget::Tree,
+        layout: iced::advanced::Layout<'b>,
+        renderer: &Renderer,
+        viewport: &iced::Rectangle,
+        translation: iced::Vector,
+    ) -> Option<iced::advanced::overlay::Element<'b, Message, Theme, Renderer>> {
+        self.content.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{readable_text_color, smooth_color_mix, stable_readable_text_color};
+    use super::{
+        file_drop_catcher, readable_text_color, smooth_color_mix, stable_readable_text_color,
+    };
     use iced::Color;
+    use iced::widget::Space;
+
+    struct TestRenderer;
+
+    impl iced::advanced::Renderer for TestRenderer {
+        fn start_layer(&mut self, _bounds: iced::Rectangle) {}
+        fn end_layer(&mut self) {}
+        fn start_transformation(&mut self, _transformation: iced::Transformation) {}
+        fn end_transformation(&mut self) {}
+        fn fill_quad(
+            &mut self,
+            _quad: iced::advanced::renderer::Quad,
+            _background: impl Into<iced::Background>,
+        ) {
+        }
+        fn reset(&mut self, _new_bounds: iced::Rectangle) {}
+        fn allocate_image(
+            &mut self,
+            _handle: &iced::advanced::image::Handle,
+            _callback: impl FnOnce(
+                Result<iced::advanced::image::Allocation, iced::advanced::image::Error>,
+            ) + Send
+            + 'static,
+        ) {
+        }
+    }
+
+    #[test]
+    fn file_drop_catcher_publishes_more_than_100_dropped_files_synchronously() {
+        let mut element: iced::Element<'_, std::path::PathBuf, iced::Theme, TestRenderer> =
+            file_drop_catcher(Space::new(), |path| path);
+        let mut tree = iced::advanced::widget::Tree::new(&element);
+        let layout_node = iced::advanced::layout::Node::new(iced::Size::new(800.0, 600.0));
+        let layout = iced::advanced::Layout::new(&layout_node);
+        let viewport = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(800.0, 600.0));
+        let renderer = TestRenderer;
+        let mut clipboard = iced::advanced::clipboard::Null;
+        let mut messages = Vec::new();
+
+        for i in 0..150 {
+            let event = iced::Event::Window(iced::window::Event::FileDropped(
+                std::path::PathBuf::from(format!("mod_{i:03}.dff")),
+            ));
+            let mut shell = iced::advanced::Shell::new(&mut messages);
+            element.as_widget_mut().update(
+                &mut tree,
+                &event,
+                layout,
+                iced::mouse::Cursor::Unavailable,
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &viewport,
+            );
+        }
+
+        assert_eq!(messages.len(), 150);
+        assert_eq!(messages[0], std::path::PathBuf::from("mod_000.dff"));
+        assert_eq!(messages[149], std::path::PathBuf::from("mod_149.dff"));
+    }
 
     #[test]
     fn readable_text_color_handles_light_and_dark_highlights() {
