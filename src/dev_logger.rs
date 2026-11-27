@@ -228,6 +228,16 @@ pub fn write_crash_report(info: &std::panic::PanicInfo<'_>) -> std::io::Result<P
         }
     )?;
     writeln!(f, "os: {} {}", std::env::consts::OS, std::env::consts::ARCH)?;
+    let (_, _, _, rss, peak_rss, commit, peak_commit, _) = rusty_alloc::stats::process_info();
+    writeln!(
+        f,
+        "memory: rss {} MiB (peak {} MiB), commit {} MiB (peak {} MiB), failed commits {}",
+        rss / (1024 * 1024),
+        peak_rss / (1024 * 1024),
+        commit / (1024 * 1024),
+        peak_commit / (1024 * 1024),
+        rusty_alloc::stats::commit_failures(),
+    )?;
     writeln!(f, "backtrace:")?;
     writeln!(f, "{}", std::backtrace::Backtrace::capture())?;
     Ok(path)

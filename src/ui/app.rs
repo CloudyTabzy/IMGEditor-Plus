@@ -3516,6 +3516,7 @@ impl App {
             self.drop_scene_cache_for_archive(&name);
             self.drop_agr_cache_for_archive(&name);
             self.drop_in_flight_placeholder(&name, generation, in_flight, index);
+            crate::reclaim_allocator_memory();
         }
         let task = self.refresh_inspection();
         Task::batch(vec![task, Task::none()])

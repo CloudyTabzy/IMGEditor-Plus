@@ -1,7 +1,8 @@
 # Allocator: rusty_alloc as the process-wide global heap
 
-Adopted 2026-09-30: the entire process allocates through
-[`rusty_alloc`](https://crates.io/crates/rusty_alloc) 2.2.1 — a pure-Rust
+Adopted 2026-09-30 (initially 2.2.1; upgraded to **2.6.0** on 2026-11-27):
+the entire process allocates through
+[`rusty_alloc`](https://crates.io/crates/rusty_alloc) 2.6.0 — a pure-Rust
 remake of mimalloc v2.4.5 — via the `RustyAlloc` `GlobalAlloc` veneer in
 `rusty_alloc-api`, installed once in `src/lib.rs`:
 
@@ -10,9 +11,15 @@ remake of mimalloc v2.4.5 — via the `RustyAlloc` `GlobalAlloc` veneer in
 static ALLOC: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 ```
 
-`main` calls `imgeditor::init_allocator()` first, which sets the crate's
-`purge_delay` option to 0 — see "Memory retention and the purge decision"
-below for why that matters and the evidence behind it.
+`main` calls `imgeditor::init_allocator()` first so `RUSTY_ALLOC_*` /
+`MIMALLOC_*` environment options are parsed once on the main thread before
+worker pools start, keeping `2.6.0`'s shipped `purge_delay = 10` ms default.
+Archive teardown (`App::close_archive_at`) calls
+`imgeditor::reclaim_allocator_memory()` (`rusty_alloc::alloc::collect(true)`),
+and panic reports (`src/dev_logger.rs`) record OS working set, private commit,
+and failed-commit counts through `rusty_alloc::stats::process_info()` and
+`stats::commit_failures()`. See the `2.6.0` upgrade record below for why
+these choices supersede the original `2.2.1` workaround.
 
 There is no C mimalloc anywhere in the graph; the core crate is dependency-free
 on every target this project ships. Binary cost measured at +50 KB per
@@ -112,22 +119,66 @@ wins. Evidence:
   remain for reuse. Commit is pagefile headroom, not RAM; the resident
   number — the one that mattered for low-spec machines — is fixed.
 
+## Upgrade to 2.6.0 (2026-11-27)
+
+Upgrading from 2.2.1 to 2.6.0 resolves the Windows private-commit asymmetry
+and replaces the 2.2.1 `purge_delay = 0` workaround:
+
+- **Demand-committed arenas and segments (2.3.1 / 2.4.0):** the default
+  1 GiB arena reserves address space (`MEM_RESERVE`) without committing it,
+  and per-thread segments commit slices on demand in steps up to 4 MiB
+  instead of committing 32 MiB per live thread. On the same 60-TXD /
+  2,000-DFF `examples/benchmark_memory.rs` session on `gta3.img` (fresh
+  `Get-Process -Id` sampler every 150 ms):
+
+  | arm | peak WS | end WS | peak private commit | end private commit |
+  |---|---:|---:|---:|---:|
+  | CRT heap (2026-09-30) | 255 MiB | 13 MiB | 198 MiB | 6 MiB |
+  | rusty_alloc 2.2.1, purge off | 289 MiB | 236 MiB | 1,030 MiB | 1,029 MiB |
+  | rusty_alloc 2.2.1, `purge_delay=0` | 286 MiB | 16 MiB | 1,030 MiB | 896 MiB |
+  | **rusty_alloc 2.6.0, `purge_delay=0`** | **287 MiB** | **17 MiB** | **245 MiB** | **15 MiB** |
+  | **rusty_alloc 2.6.0, `purge_delay=10` (default)** | **287 MiB** | **17 MiB** | **245 MiB** | **15 MiB** |
+
+  Private commit after teardown drops from **896 MiB → 15 MiB** (−98.3 %),
+  and peak private commit drops from **1,030 MiB → 245 MiB**.
+- **Shipped `purge_delay = 10` ms default restored:** in 2.4+, `purge_delay`
+  defaults to 10 ms on Windows and Unix and honours the millisecond delay
+  rather than purging immediately on every ≥512 KiB free. Forcing `0`
+  disables the large-span cache and refaults reused buffers on every
+  iteration, while `10` matches `0`'s teardown footprint (17 MiB WS /
+  15 MiB private commit). `init_allocator()` therefore drops the
+  `set_default(15, 0)` override and only reads option 15 to parse
+  `RUSTY_ALLOC_*` / `MIMALLOC_*` env overrides once before threads spawn.
+- **Active teardown collection (`reclaim_allocator_memory()`):** unlike
+  2.2.1, `rusty_alloc::alloc::collect(true)` in 2.4+ runs the free-slot
+  purge (`MEM_RESET` on Windows for free 8–64 KiB slots on partially-used
+  medium pages), flushes pending scheduled span purges, and calls
+  `arena::purge_due(true)` process-wide to decommit returned chunks
+  immediately. Wired into `App::close_archive_at` after evicting the closed
+  archive's caches.
+- **Crash-report telemetry (`src/dev_logger.rs`):** `write_crash_report`
+  logs `stats::process_info()` (current/peak RSS and commit) and
+  `stats::commit_failures()` so `imgeditor-panic.log` distinguishes OOM /
+  commit exhaustion from logic panics at zero hot-path cost.
+- **Fast paths gained automatically (2.5.0 / 2.6.0):** 16-byte
+  `NATURAL_ALIGN` now uses the size-class path instead of the aligned
+  fallback (directly benefiting `hashbrown`'s 16-byte SSE2 control groups),
+  alongside Vein census 4 fast-path reductions across `alloc`, `free`, and
+  `realloc`.
+
 ## Studied and rejected surfaces
 
-- **First-class `Heap` / destroyable heaps.** Attractive for burst scopes
-  (decode scratch, export workers): `Drop` releases everything at once. But
-  the crate has no stable `Allocator`-trait impl (upstream plans it after
-  `allocator_api` stabilizes), so using a `Heap` means hand-plumbing
-  `alloc`/`dealloc` through the decode and export paths — new `unsafe` at
-  every hotspot against this repo's unsafe policy, for a gain the global
-  allocator's per-thread heaps already approximate.
-- **`alloc::collect(true)` at burst boundaries.** Sweeps only the *calling*
-  thread's heap: drains cross-thread frees, adopts abandoned segments, retires
-  empty pages back into their segments — but it deliberately does not purge
-  (the forced-everything-purge variant is the one that faults on un-recommitted
-  small spans), so it does not lower RSS. Our worker threads never die, so
-  orphan adoption finds almost nothing. No measurable benefit; not wired.
-  The startup `purge_delay = 0` setting is the lever that works.
+- **First-class `Heap` / destroyable heaps (`allocator-api`).** 2.6.0 fixes
+  the cross-thread adoption UAF on destroyable heaps and adds a safe
+  `core::alloc::Allocator` impl behind `rusty_alloc-api`'s `allocator-api`
+  feature (`Vec::new_in(&heap)`), but that feature requires **Rust 1.100+**
+  while this crate targets `rust-version = "1.96"` (dev toolchain 1.99.1).
+  Without `allocator-api`, using `Heap` still requires raw `unsafe`
+  plumbing against this repo's unsafe policy. Revisit once MSRV reaches
+  1.100+.
+- **Periodic `alloc::collect` during active decode loops.** Only archive
+  teardown (`close_archive_at`) calls `collect(true)`; active bursts keep
+  the 10 ms reuse window intact so short-lived scratch buffers stay warm.
 - **`arena` module.** Supplies memory *to* the allocator (bare-metal regions,
   guarded sampling); it is not a consumer-side feature. Irrelevant on Windows
   desktop.
