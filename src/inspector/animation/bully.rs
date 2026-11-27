@@ -1983,11 +1983,11 @@ impl<'n> NifWalk<'n> {
         let block = nif.blocks.get(block_index as usize)?;
         let payload = nif.payloads.get(block_index as usize)?.as_ref()?;
         let id = NodeId(self.nodes.len() as u32);
-        let (local, mesh, children): (NodeTransform, Option<usize>, Vec<i32>) = match payload {
+        let (local, mesh, children): (NodeTransform, Option<usize>, &[i32]) = match payload {
             BlockPayload::NiNode(data) => (
                 nif_local(&data.translation, &data.rotation.m, data.scale),
                 None,
-                data.children.clone(),
+                data.children.as_slice(),
             ),
             BlockPayload::NiTriShape(data) => {
                 let texture_name = crate::inspector::viewer3d::diffuse_texture_for_properties(
@@ -2004,7 +2004,7 @@ impl<'n> NifWalk<'n> {
                 (
                     nif_local(&data.translation, &data.rotation.m, data.scale),
                     mesh_index,
-                    Vec::new(),
+                    &[],
                 )
             }
             BlockPayload::NiTriStrips(data) => {
@@ -2026,7 +2026,7 @@ impl<'n> NifWalk<'n> {
                         data.base.scale,
                     ),
                     mesh_index,
-                    Vec::new(),
+                    &[],
                 )
             }
             _ => return None,
@@ -2072,7 +2072,7 @@ impl<'n> NifWalk<'n> {
         });
         self.source_names.push(original_name);
         self.node_ids.insert(block_index, id);
-        for child in children {
+        for &child in children {
             self.visit(child, Some(id));
         }
         Some(id)
@@ -2939,7 +2939,7 @@ mod tests {
                 offset: 0,
             })
             .collect();
-        let shape = |properties: Vec<i32>| {
+        let shape = |properties: crate::inspector::nif::BlockRefList| {
             Some(BlockPayload::NiTriShape(NiTriShapeData {
                 properties,
                 data_ref: 3,
@@ -2951,12 +2951,12 @@ mod tests {
         };
         let payloads = vec![
             Some(BlockPayload::NiNode(NiNodeData {
-                children: vec![1],
+                children: smallvec::smallvec![1],
                 rotation: crate::inspector::nif::Matrix33::identity(),
                 scale: 1.0,
                 ..Default::default()
             })),
-            shape(vec![2]),
+            shape(smallvec::smallvec![2]),
             Some(BlockPayload::NiTexturingProperty(Box::new(
                 NiTexturingPropertyData {
                     base: Some(TexDesc {
@@ -3017,7 +3017,7 @@ mod tests {
         // NIF-wide fallback: the same layout without the shape's own
         // texturing property still picks up the orphan source texture.
         let mut fallback = nif;
-        fallback.payloads[1] = shape(Vec::new());
+        fallback.payloads[1] = shape(crate::inspector::nif::BlockRefList::new());
         let model = model_from_nif(&fallback, "fallback", "fallback").expect("model builds");
         assert_eq!(
             model.meshes[0].texture_name.as_deref(),
@@ -3849,8 +3849,11 @@ mod tests {
                 num_weights_per_vertex: 2,
                 bones: vec![4, 1, 3],
                 vertex_map: vec![2, 0],
-                weights: vec![vec![0.75, 0.25], vec![1.0, 0.0]],
-                bone_indices: vec![vec![1, 2], vec![0, 1]],
+                weights: vec![
+                    smallvec::smallvec![0.75, 0.25],
+                    smallvec::smallvec![1.0, 0.0],
+                ],
+                bone_indices: vec![smallvec::smallvec![1, 2], smallvec::smallvec![0, 1]],
                 ..Default::default()
             }],
         };
@@ -3868,8 +3871,8 @@ mod tests {
             num_weights_per_vertex: 1,
             bones: vec![0, 1],
             vertex_map: vec![0],
-            weights: vec![vec![weight]],
-            bone_indices: vec![vec![u8::from(weight < 0.75)]],
+            weights: vec![smallvec::smallvec![weight]],
+            bone_indices: vec![smallvec::smallvec![u8::from(weight < 0.75)]],
             ..Default::default()
         };
         let partition = crate::inspector::nif::NiSkinPartitionPayload {
@@ -3888,7 +3891,7 @@ mod tests {
                 num_weights_per_vertex: 1,
                 bones: vec![0],
                 vertex_map: vec![0],
-                weights: vec![vec![1.0]],
+                weights: vec![smallvec::smallvec![1.0]],
                 bone_indices: Vec::new(),
                 ..Default::default()
             }],

@@ -317,10 +317,13 @@ pub fn mip_chain(rgba: &[u8], width: u32, height: u32) -> Vec<(u32, u32, Vec<u8>
         .collect()
 }
 
+type BorrowedMipChain<'a> = smallvec::SmallVec<[(u32, u32, Cow<'a, [u8]>); 14]>;
+
 /// Borrows level 0 directly from `rgba` so encoding a 1024² texture never
-/// duplicates its 4 MiB base buffer alongside the source image.
-fn mip_chain_borrowed(rgba: &[u8], width: u32, height: u32) -> Vec<(u32, u32, Cow<'_, [u8]>)> {
-    let mut levels = vec![(
+/// duplicates its 4 MiB base buffer alongside the source image. Textures up to
+/// 8192×8192 produce at most 14 mip levels, so the outer list stays on stack.
+fn mip_chain_borrowed(rgba: &[u8], width: u32, height: u32) -> BorrowedMipChain<'_> {
+    let mut levels: BorrowedMipChain<'_> = smallvec::smallvec![(
         width,
         height,
         Cow::Borrowed(&rgba[..width as usize * height as usize * 4]),

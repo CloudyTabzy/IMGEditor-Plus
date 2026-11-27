@@ -160,9 +160,9 @@ pub const SORT_CHAIN_MAX: usize = 10;
 /// broken by entry name ascending.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SortChain {
-    /// Slots in priority order. Length is always `<= SORT_CHAIN_MAX`.
-    /// Slots beyond `len()` are considered disabled-empty.
-    priorities: Vec<SortPriority>,
+    /// Slots in priority order. Length is always `<= SORT_CHAIN_MAX`, so the
+    /// inline `SmallVec` buffer never spills to the heap.
+    priorities: smallvec::SmallVec<[SortPriority; SORT_CHAIN_MAX]>,
 }
 
 impl Default for SortChain {
@@ -170,20 +170,19 @@ impl Default for SortChain {
         // IMGF's default: Name AZ. Stable, predictable, and matches
         // what most modders expect when nothing has been configured.
         Self {
-            priorities: vec![SortPriority::new(SortKey::Name, SortDirection::Ascending)],
+            priorities: smallvec::smallvec![SortPriority::new(
+                SortKey::Name,
+                SortDirection::Ascending,
+            )],
         }
     }
 }
 
 impl SortChain {
-    /// Construct from a fixed-size array of priorities, dropping any
-    /// slots beyond `SORT_CHAIN_MAX` so callers can't accidentally
-    /// blow up the UI.
-    pub fn new(priorities: Vec<SortPriority>) -> Self {
-        let priorities = priorities
-            .into_iter()
-            .take(SORT_CHAIN_MAX)
-            .collect::<Vec<_>>();
+    /// Construct from any priority sequence, dropping slots beyond
+    /// `SORT_CHAIN_MAX` so callers can't accidentally blow up the UI.
+    pub fn new(priorities: impl IntoIterator<Item = SortPriority>) -> Self {
+        let priorities = priorities.into_iter().take(SORT_CHAIN_MAX).collect();
         Self { priorities }
     }
 
@@ -696,5 +695,24 @@ mod tests {
         // Final tiebreaker kicks in: name ascending.
         assert_eq!(entries[0].file_name.as_str(), "a");
         assert_eq!(entries[1].file_name.as_str(), "z");
+    }
+
+    #[test]
+    fn sort_chain_stays_inline_up_to_max_without_spilling() {
+        let mut chain = SortChain::new(
+            (0..SORT_CHAIN_MAX + 4)
+                .map(|_| SortPriority::new(SortKey::Name, SortDirection::Ascending)),
+        );
+        assert_eq!(chain.len(), SORT_CHAIN_MAX);
+        assert!(
+            !chain.priorities.spilled(),
+            "SortChain must never heap-spill within SORT_CHAIN_MAX"
+        );
+        assert!(!chain.push(SortPriority::disabled()));
+        assert!(!chain.priorities.spilled());
+        assert!(
+            std::mem::size_of::<SortChain>() <= 48,
+            "SortChain should stay compact under smallvec/union"
+        );
     }
 }

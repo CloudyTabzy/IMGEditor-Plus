@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use anyhow::Context;
 use compact_str::CompactString;
 use memmap2::Mmap;
-use smallvec::SmallVec;
 
 use crate::parser::{
     DecodedTexture, EntryInspection, ImgVersion, MAX_ENTRY_NAME_BYTES, SECTOR_SIZE,
@@ -387,7 +386,7 @@ pub struct ArchiveInfo {
     pub path: Option<PathBuf>,
     pub file_name: String,
     pub entries: Vec<EntryInfo>,
-    pub selected_indices: SmallVec<[usize; 8]>,
+    pub selected_indices: Vec<usize>,
     pub logs: Vec<String>,
     pub progress: ProgressInfo,
     pub export_status: ExportStatus,
@@ -469,7 +468,7 @@ impl ArchiveInfo {
             path: None,
             file_name: file_name.into(),
             entries: Vec::new(),
-            selected_indices: SmallVec::new(),
+            selected_indices: Vec::new(),
             logs: Vec::new(),
             progress: ProgressInfo::default(),
             export_status: ExportStatus::Idle,
@@ -519,7 +518,7 @@ impl ArchiveInfo {
                 .unwrap_or("Untitled")
                 .to_string(),
             entries: Vec::new(),
-            selected_indices: SmallVec::new(),
+            selected_indices: Vec::new(),
             logs: Vec::new(),
             progress: ProgressInfo::default(),
             export_status: ExportStatus::Idle,
@@ -609,7 +608,6 @@ impl ArchiveInfo {
                 .iter()
                 .enumerate()
                 .map(|(i, e)| (i, e, None))
-                .filter(|(_, e, _)| e.file_name_lower.contains(&filter))
                 .collect()
         } else {
             // Fuzzy filter: scored subsequence matches first. When the
@@ -674,6 +672,7 @@ impl ArchiveInfo {
             },
         );
 
+        self.selected_indices.reserve(matches.len());
         for (display_row, (entry_index, _, _)) in matches.into_iter().enumerate() {
             self.selected_lookup[entry_index] = display_row as u32;
             self.selected_indices.push(entry_index);

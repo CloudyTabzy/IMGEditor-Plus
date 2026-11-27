@@ -245,6 +245,21 @@ pub struct NiTransform {
 
 // ---- Block payload types -------------------------------------------------
 
+/// Inline-optimized NIF block reference list (24 B under `smallvec/union`,
+/// matching `Vec<i32>` with zero struct bloat while keeping <=4 refs stack-inline).
+pub type BlockRefList = smallvec::SmallVec<[i32; 4]>;
+
+/// Inline-optimized material name index list (24 B under `smallvec/union`).
+pub type MaterialNameList = smallvec::SmallVec<[u32; 4]>;
+
+/// Inline-optimized per-vertex skin partition weights (24 B under
+/// `smallvec/union`, eliminating per-vertex heap allocations for <=4 weights).
+pub type SkinWeightRow = smallvec::SmallVec<[f32; 4]>;
+
+/// Inline-optimized per-vertex skin partition bone indices (24 B under
+/// `smallvec/union`, matching `SkinWeightRow`).
+pub type SkinBoneIndexRow = smallvec::SmallVec<[u8; 4]>;
+
 /// Fields specific to `NiNode` (the rest are inherited from
 /// `NiAVObject` and `NiObjectNET` and are exposed as part of the
 /// scene graph in `nif::Scene`).
@@ -255,11 +270,11 @@ pub struct NiNodeData {
     pub rotation: Matrix33,
     pub scale: f32,
     pub flags: u16,
-    pub properties: Vec<i32>,
+    pub properties: BlockRefList,
     pub collision_object: i32,
-    pub children: Vec<i32>,
-    pub effects: Vec<i32>,
-    pub extra_data: Vec<i32>,
+    pub children: BlockRefList,
+    pub effects: BlockRefList,
+    pub extra_data: BlockRefList,
     pub controller: i32,
 }
 
@@ -273,12 +288,12 @@ pub struct NiTriShapeData {
     pub rotation: Matrix33,
     pub scale: f32,
     pub flags: u16,
-    pub properties: Vec<i32>,
+    pub properties: BlockRefList,
     pub collision_object: i32,
     pub data_ref: i32,
     pub skin_instance_ref: i32,
     pub material_data: MaterialData,
-    pub extra_data: Vec<i32>,
+    pub extra_data: BlockRefList,
     pub controller: i32,
 }
 
@@ -291,8 +306,8 @@ pub struct NiTriStripsData {
 /// 20.2.0.5.
 #[derive(Debug, Clone, Default)]
 pub struct MaterialData {
-    pub names: Vec<u32>,
-    pub extra: Vec<i32>,
+    pub names: MaterialNameList,
+    pub extra: BlockRefList,
     pub active: i32,
     pub needs_update: bool,
 }
@@ -509,9 +524,9 @@ pub struct SkinPartition {
     /// Partition vertex index -> shape vertex index (may be empty).
     pub vertex_map: Vec<u16>,
     /// Per partition vertex: `num_weights_per_vertex` weights.
-    pub weights: Vec<Vec<f32>>,
+    pub weights: Vec<SkinWeightRow>,
     /// Per partition vertex: palette indices parallel to `weights`.
-    pub bone_indices: Vec<Vec<u8>>,
+    pub bone_indices: Vec<SkinBoneIndexRow>,
     pub triangles: Vec<Triangle>,
 }
 
@@ -683,6 +698,24 @@ impl<'a> Reader<'a> {
             .ok_or_else(|| NifError::InvalidField(what, format!("array length {len} overflows")))?;
         self.require(bytes, what)?;
         let mut out = Vec::with_capacity(len);
+        for _ in 0..len {
+            out.push(self.read_i32(what)?);
+        }
+        Ok(out)
+    }
+
+    /// Read a small array of `i32` references directly into an inline-capable
+    /// [`BlockRefList`] (avoids heap allocations for <=4 references).
+    pub(crate) fn read_i32_smallvec(
+        &mut self,
+        len: usize,
+        what: &'static str,
+    ) -> NifResult<BlockRefList> {
+        let bytes = len
+            .checked_mul(4)
+            .ok_or_else(|| NifError::InvalidField(what, format!("array length {len} overflows")))?;
+        self.require(bytes, what)?;
+        let mut out = BlockRefList::with_capacity(len);
         for _ in 0..len {
             out.push(self.read_i32(what)?);
         }
@@ -1045,7 +1078,7 @@ fn read_ni_object_net(r: &mut Reader<'_>, target: &mut NiNodeData) -> NifResult<
     };
     target.extra_data = {
         let n = r.read_u32("num_extra_data")? as usize;
-        r.read_i32_array(n, "extra_data")?
+        r.read_i32_smallvec(n, "extra_data")?
     };
     target.controller = r.read_i32("controller")?;
     Ok(())
@@ -1058,7 +1091,7 @@ fn read_ni_av_object(r: &mut Reader<'_>, target: &mut NiNodeData) -> NifResult<(
     target.scale = r.read_f32("scale")?;
     target.properties = {
         let n = r.read_u32("num_properties")? as usize;
-        r.read_i32_array(n, "property")?
+        r.read_i32_smallvec(n, "property")?
     };
     target.collision_object = r.read_i32("collision_object")?;
     Ok(())
@@ -1070,11 +1103,11 @@ fn read_ni_node(r: &mut Reader<'_>) -> NifResult<NiNodeData> {
     read_ni_av_object(r, &mut node)?;
     node.children = {
         let n = r.read_u32("num_children")? as usize;
-        r.read_i32_array(n, "child")?
+        r.read_i32_smallvec(n, "child")?
     };
     node.effects = {
         let n = r.read_u32("num_effects")? as usize;
-        r.read_i32_array(n, "effect")?
+        r.read_i32_smallvec(n, "effect")?
     };
     Ok(node)
 }
@@ -1087,11 +1120,11 @@ fn read_material_data(r: &mut Reader<'_>) -> NifResult<MaterialData> {
             format!("{num_materials} material pairs exceed the block size"),
         ));
     }
-    let mut names = Vec::with_capacity(num_materials);
+    let mut names = MaterialNameList::with_capacity(num_materials);
     for _ in 0..num_materials {
         names.push(r.read_u32("material_name")?);
     }
-    let extra = r.read_i32_array(num_materials, "material_extra")?;
+    let extra = r.read_i32_smallvec(num_materials, "material_extra")?;
     let active = r.read_i32("active_material")?;
     let needs_update = r.read_bool("material_needs_update")?;
     Ok(MaterialData {
@@ -1117,7 +1150,7 @@ fn read_geometry_block(r: &mut Reader<'_>) -> NifResult<NiTriShapeData> {
     };
     tri.extra_data = {
         let n = r.read_u32("num_extra_data")? as usize;
-        r.read_i32_array(n, "extra_data")?
+        r.read_i32_smallvec(n, "extra_data")?
     };
     tri.controller = r.read_i32("controller")?;
     // NiAVObject
@@ -1127,7 +1160,7 @@ fn read_geometry_block(r: &mut Reader<'_>) -> NifResult<NiTriShapeData> {
     tri.scale = r.read_f32("scale")?;
     tri.properties = {
         let n = r.read_u32("num_properties")? as usize;
-        r.read_i32_array(n, "property")?
+        r.read_i32_smallvec(n, "property")?
     };
     tri.collision_object = r.read_i32("collision_object")?;
     // NiGeometry
@@ -1328,11 +1361,14 @@ fn read_ni_texturing_property(r: &mut Reader<'_>) -> NifResult<NiTexturingProper
     // Bully's stream uses: base, dark, detail, gloss, glow, bump,
     // normal, parallax, then four decal slots. The bump and parallax
     // records carry extra values immediately after their descriptors.
-    let mut slots = vec![None; texture_count.max(12) as usize];
-    for (index, slot) in slots.iter_mut().enumerate().take(texture_count as usize) {
+    let mut slots: [Option<TexDesc>; 12] = Default::default();
+    for index in 0..texture_count as usize {
         let has = r.read_bool("has_tex")?;
         if has {
-            *slot = Some(read_tex_desc(r)?);
+            let desc = read_tex_desc(r)?;
+            if index < slots.len() {
+                slots[index] = Some(desc);
+            }
             if index == 5 {
                 out.bump_luma_scale = r.read_f32("bump_luma_scale")?;
                 out.bump_luma_offset = r.read_f32("bump_luma_offset")?;
@@ -1603,7 +1639,7 @@ fn read_skin_partition_entry(r: &mut Reader<'_>) -> NifResult<SkinPartition> {
         }
         weights.reserve(num_vertices);
         for _ in 0..num_vertices {
-            let mut row = Vec::with_capacity(width);
+            let mut row = SkinWeightRow::with_capacity(width);
             for _ in 0..width {
                 row.push(r.read_f32("partition_weight")?);
             }
@@ -1666,7 +1702,7 @@ fn read_skin_partition_entry(r: &mut Reader<'_>) -> NifResult<SkinPartition> {
         }
         bone_indices.reserve(num_vertices);
         for _ in 0..num_vertices {
-            let mut row = Vec::with_capacity(width);
+            let mut row = SkinBoneIndexRow::with_capacity(width);
             for _ in 0..width {
                 row.push(r.read_u8("partition_bone_index")?);
             }
@@ -1985,7 +2021,13 @@ pub(crate) mod tests {
         let partition = read_skin_partition_entry(&mut reader).expect("partition parses");
         assert_eq!(partition.bones, vec![4, 7]);
         assert_eq!(partition.vertex_map, vec![5, 9]);
-        assert_eq!(partition.weights, vec![vec![0.75, 0.25], vec![1.0, 0.0]]);
+        assert_eq!(
+            partition.weights,
+            vec![
+                SkinWeightRow::from_slice(&[0.75, 0.25]),
+                SkinWeightRow::from_slice(&[1.0, 0.0]),
+            ]
+        );
         assert_eq!(
             partition.triangles,
             vec![Triangle {
@@ -1994,7 +2036,13 @@ pub(crate) mod tests {
                 v2: 0
             }]
         );
-        assert_eq!(partition.bone_indices, vec![vec![1, 0], vec![0, 1]]);
+        assert_eq!(
+            partition.bone_indices,
+            vec![
+                SkinBoneIndexRow::from_slice(&[1, 0]),
+                SkinBoneIndexRow::from_slice(&[0, 1]),
+            ]
+        );
         assert_eq!(reader.remaining(), 0);
     }
 
@@ -2087,5 +2135,29 @@ pub(crate) mod tests {
         assert!(property.parallax.is_none());
         assert_eq!(property.num_shader_textures, 0);
         assert_eq!(reader.remaining(), 0);
+    }
+
+    #[test]
+    fn smallvec_union_layouts_add_zero_size_overhead_over_vec() {
+        assert_eq!(
+            std::mem::size_of::<BlockRefList>(),
+            std::mem::size_of::<Vec<i32>>()
+        );
+        assert_eq!(
+            std::mem::size_of::<MaterialNameList>(),
+            std::mem::size_of::<Vec<u32>>()
+        );
+        assert_eq!(
+            std::mem::size_of::<SkinWeightRow>(),
+            std::mem::size_of::<Vec<f32>>()
+        );
+        assert_eq!(
+            std::mem::size_of::<SkinBoneIndexRow>(),
+            std::mem::size_of::<Vec<u8>>()
+        );
+        assert_eq!(
+            std::mem::size_of::<crate::inspector::animation::model::VertexSkin>(),
+            40
+        );
     }
 }

@@ -972,18 +972,14 @@ impl SortPreset {
             direction: dir,
         };
         match self {
-            SortPreset::NameAZ => SortChain::new(vec![p(SortKey::Name, SortDirection::Ascending)]),
-            SortPreset::NameZA => SortChain::new(vec![p(SortKey::Name, SortDirection::Descending)]),
-            SortPreset::TypeThenName => SortChain::new(vec![
+            SortPreset::NameAZ => SortChain::new([p(SortKey::Name, SortDirection::Ascending)]),
+            SortPreset::NameZA => SortChain::new([p(SortKey::Name, SortDirection::Descending)]),
+            SortPreset::TypeThenName => SortChain::new([
                 p(SortKey::Type, SortDirection::Ascending),
                 p(SortKey::Name, SortDirection::Ascending),
             ]),
-            SortPreset::SizeDesc => {
-                SortChain::new(vec![p(SortKey::Size, SortDirection::Descending)])
-            }
-            SortPreset::OffsetAsc => {
-                SortChain::new(vec![p(SortKey::Offset, SortDirection::Ascending)])
-            }
+            SortPreset::SizeDesc => SortChain::new([p(SortKey::Size, SortDirection::Descending)]),
+            SortPreset::OffsetAsc => SortChain::new([p(SortKey::Offset, SortDirection::Ascending)]),
         }
     }
 
@@ -6579,15 +6575,15 @@ impl App {
                     }
 
                     archive.sort_chain = match archive.sort.column {
-                        SortColumn::Name => SortChain::new(vec![SortPriority::new(
+                        SortColumn::Name => SortChain::new([SortPriority::new(
                             SortKey::Name,
                             archive.sort.direction,
                         )]),
-                        SortColumn::Type => SortChain::new(vec![
+                        SortColumn::Type => SortChain::new([
                             SortPriority::new(SortKey::Type, SortDirection::Ascending),
                             SortPriority::new(SortKey::Name, SortDirection::Ascending),
                         ]),
-                        SortColumn::Size => SortChain::new(vec![SortPriority::new(
+                        SortColumn::Size => SortChain::new([SortPriority::new(
                             SortKey::Size,
                             archive.sort.direction,
                         )]),

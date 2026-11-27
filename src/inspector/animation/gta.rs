@@ -116,7 +116,7 @@ fn skin_binding(skin: &DffSkin, vertex_count: usize) -> Result<SkinBinding, Mode
 
     let mut weights: Vec<VertexSkin> = Vec::with_capacity(vertex_count);
     for (indices, vertex_weights) in skin.vertex_indices.iter().zip(skin.vertex_weights.iter()) {
-        let mut influences: VertexSkin = smallvec::smallvec![];
+        let mut influences = VertexSkin::new();
         for (slot, &bone_slot) in indices.iter().enumerate() {
             let weight = vertex_weights[slot];
             if weight <= 0.0 {
